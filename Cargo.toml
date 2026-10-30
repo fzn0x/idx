@@ -49,7 +49,7 @@ dirs = "5"
 futures = "0.3"
 hex = "0.4"
 pdf-extract = "0.12"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "http2"] }
 rss = "2"
 rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server", "schemars"] }
