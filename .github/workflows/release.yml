@@ -139,7 +139,7 @@ jobs:
           if blank; then echo "Release $tag" > notes.md; fi
           echo "Install: \`curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh\`" >> notes.md
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           body_path: notes.md
