@@ -24,6 +24,7 @@ pub mod table_exchange;
 pub mod table_news;
 pub mod table_ownership;
 pub mod table_ownership_analytics;
+pub mod table_ownership_sync;
 pub mod table_reports;
 
 #[derive(

@@ -1343,6 +1343,7 @@ dependencies = [
  "clap_complete",
  "comfy-table",
  "dirs",
+ "flate2",
  "futures",
  "hex",
  "http-body-util",

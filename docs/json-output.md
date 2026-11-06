@@ -18,8 +18,9 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `ownership-import`, `ownership-discover`, `ownership-search`,
 `ownership-cross-holders`, `ownership-concentration`, `ownership-graph`,
 `ownership-resolve-candidates`, `ownership-resolution`,
-`ownership-resolutions`, `ownership-composition`, `watchlist`, `error`,
-`quote`, `candle`.
+`ownership-resolutions`, `ownership-composition`, `ownership-snapshot-sync`,
+`ownership-status`, `ownership-snapshot`, `watchlist`, `error`, `quote`,
+`candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -519,6 +520,36 @@ decimals, `null` when it is 0); `scripless_pct` is `shares_scripless` over
 `CP`, `PF`, `IB`, `ID`, `MF`, `SC`, `FD`, `OT`). `history` is every imported
 month for the stock, oldest first; `foreign_change_pp` is the change from the
 previous imported month. `price` is `null` when KSEI left it blank.
+
+## `idx.ownership.snapshot-sync.v1` (`ownership sync`) and `idx.ownership.status.v1` (`ownership status`)
+
+`sync` (provider `github-mirror`): `action` (`installed`, `updated`,
+`imported` or `up_to_date`), `database`, `snapshot` (the mirror's snapshot for
+this idx's schema: `file`, `generated_at`, `db_schema_version`, `oldest`,
+`newest`, `releases`, `bytes`; `null` when the mirror has none), the months
+`installed` from it, `imported` from the monthly files (missing or
+re-published months), `kept` (only in the
+local database, kept without `--force`) and `dropped` (replaced with
+`--force`), `backup` (the `.bak` path or `null`), and `releases` / `newest`
+after the sync. The name is not `idx.ownership.sync.v1` because the web
+terminal's `/api/ownership/status` already answers with that one (the state of
+its D1 loader).
+
+`status` (provider `local-db`): `database`, `exists`, `bytes`,
+`db_schema_version`, `supported_schema_version`, `releases`, `oldest`,
+`newest`, `installed_snapshot` (from the file's `snapshot_info` table, `null`
+for a database built by local imports), `remote` (`mirror`,
+`index_generated_at`, `releases`, `newest`, `snapshot`; `null` offline, with
+`IDX_OWNERSHIP_MIRROR=off` or when the mirror cannot be read), `missing`,
+`outdated` (months held as the installed snapshot carried them while
+`index.json` lists a re-published file; sync imports them again),
+`local_only` and `sync` (`up_to_date`, `install`, `update`, `import` or `null`
+without `remote`). Status never creates the database file.
+
+`idx.ownership.snapshot.v1` is the manifest CI publishes as
+`snapshot-v{V}.json` next to the snapshot file (and the `data` of the hidden
+`ownership build-snapshot -o json`); see
+[ownership.md](ownership.md#snapshot-and-sync).
 
 ## `idx.watchlist.v1` (`watch add|rm|list|clear`)
 

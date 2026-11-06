@@ -23,6 +23,7 @@ pub mod news;
 pub mod orderbook;
 pub mod ownership;
 pub mod ownership_analytics;
+pub mod ownership_sync;
 pub mod returns;
 pub mod screen;
 pub mod technical;
@@ -65,6 +66,10 @@ pub use ownership_analytics::{
     GraphReport, HolderOrigin, IssuerMonth, RenameEvidence, Resolution, ResolutionAction,
     ResolutionKind, ResolutionReport, ResolveCandidate, ResolveCandidates, SearchMatch,
     SearchMatchKind, SearchReport,
+};
+pub use ownership_sync::{
+    InstalledSnapshot, MirrorState, SnapshotManifest, SnapshotRelease, SnapshotSummary,
+    StatusReport, SyncAction, SyncNeeded, SyncReport,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};
 pub use screen::{ScreenReport, ScreenRow};

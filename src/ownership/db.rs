@@ -469,6 +469,11 @@ impl OwnershipDb {
         &mut self.conn
     }
 
+    /// The open connection (the snapshot check compares schemas with it).
+    pub(super) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     /// `PRAGMA user_version` of the open file ([`SCHEMA_VERSION`] once open).
     pub fn schema_version(&self) -> Result<i64> {
         user_version(&self.conn)
@@ -743,7 +748,7 @@ impl OwnershipDb {
                     .map(|r| r.as_of.to_string())
                     .collect();
                 Err(IdxError::NotFound(if available.is_empty() {
-                    "no ownership data imported yet; run `idx ownership import --latest` or `--file <xlsx>`".into()
+                    "no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`, `--file <xlsx>`)".into()
                 } else {
                     format!(
                         "no ownership release for {}; available: {}",
@@ -1151,7 +1156,7 @@ impl OwnershipDb {
                     .last()
                     .ok_or_else(|| {
                         IdxError::NotFound(
-                            "no ownership data imported yet; run `idx ownership import --latest`"
+                            "no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`)"
                                 .into(),
                         )
                     })?

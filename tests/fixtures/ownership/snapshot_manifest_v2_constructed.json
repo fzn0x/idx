@@ -1,0 +1,42 @@
+{
+  "schema": "idx.ownership.snapshot.v1",
+  "generated_at": "2026-11-06T01:17:40Z",
+  "built_by": "idx 0.8.2",
+  "db_schema_version": 2,
+  "file": "ownership-v2-2026-09-30-3f9a2c7e5b1d.sqlite.gz",
+  "compression": "gzip",
+  "bytes": 6890866,
+  "sha256": "3f9a2c7e5b1d0486a7e2c9f1b3d5e7a9c0b2d4f6a8e1c3b5d7f9a0c2e4b6d8f1",
+  "sqlite_bytes": 20234240,
+  "sqlite_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+  "content_sha256": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+  "tables": {
+    "aliases": 6293,
+    "entities": 5740,
+    "holding_lines": 57505,
+    "holdings": 57451,
+    "releases": 8
+  },
+  "releases": [
+    {
+      "as_of": "2026-09-30",
+      "format": "xlsx",
+      "sha256": "804b3bb705860c8cee22addf63649c890d8cd66f8ae5e8a5d02730aec86bdd60",
+      "source_url": "https://www.idx.co.id/Media/yqjhhsee/peng-2026-09-00024-satu-persen.xlsx",
+      "rows": 7154,
+      "holdings": 7151,
+      "issuers": 961,
+      "entities": 5145
+    },
+    {
+      "as_of": "2026-08-31",
+      "format": "xlsx",
+      "sha256": "1d7cdb636054ce45c516666741f168348f97aba91771f4d0398ff84eae7c5e8f",
+      "source_url": "https://www.idx.co.id/Media/fahlw1o2/peng-2026-08-00023-satu-persen.xlsx",
+      "rows": 7158,
+      "holdings": 7157,
+      "issuers": 961,
+      "entities": 5157
+    }
+  ]
+}

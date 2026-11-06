@@ -98,8 +98,9 @@ ordinary (home or office) connection:
    `OWNERSHIP_RUNNER` = `self-hosted`.
 
 Without that variable the job runs on `ubuntu-latest`, cannot reach
-idx.co.id, and only rebuilds the parts from the files already mirrored (so a
-newer idx parser still reaches the web terminal); it fails once the newest
+idx.co.id, and only rebuilds the parts and the snapshot from the files
+already mirrored (so a newer idx parser still reaches the web terminal and
+`idx ownership sync`); it fails once the newest
 register is 45 days old, so a stale mirror shows up as a red run. Each run of
 the script:
 
@@ -137,9 +138,19 @@ the script:
 }
 ```
 
-5. uploads only what changed, `index.json` last, and deletes assets the new
-   index no longer lists. The release is a prerelease so it never becomes the
-   repository's "latest" release.
+5. builds the prebuilt snapshot of the same database with the hidden
+   `idx ownership build-snapshot`: `ownership-v{V}-{newest}-{sha12}.sqlite.gz`
+   and `snapshot-v{V}.json` (see Snapshot and sync). It is published when its
+   content digest differs from the published manifest's, also when idx.co.id
+   was unreachable, so GitHub-hosted runners keep it current after a parser
+   or schema change; the script refuses a file above 100 MiB;
+6. uploads only what changed: raw files and parts, then `index.json`, then
+   the snapshot file; it checks GitHub's SHA-256 digest of the uploaded file
+   and only then uploads the manifest. It deletes assets nothing references
+   any more, keeping the manifests of the three newest schema versions, the
+   file each names and, for one more run, the file the replaced manifest
+   named. The release is a prerelease so it never becomes the repository's
+   "latest" release.
 
 The web terminal's Worker (`web/src/ownership-sync.js`) loads the parts into
 D1 on its minute cron, newest month first, one part per minute, within a daily
@@ -235,6 +246,131 @@ ksei.co.id has no bot protection (nginx and S3, any user agent). The web
 terminal does not carry the composition yet: a Worker has not been checked
 against ksei.co.id, so the tool is CLI and MCP only.
 
+## Snapshot and sync
+
+`idx ownership sync` fills or refreshes the local database with one download:
+a prebuilt SQLite file CI builds from the mirrored IDX files, instead of
+downloading and parsing every month.
+
+```sh
+idx ownership sync                  # install the snapshot, then any newer month
+idx ownership sync --force          # replace a database holding months the snapshot lacks
+idx ownership status                # local database, installed snapshot, mirror, what sync would do
+idx --offline ownership status      # the local part only
+```
+
+The mirror release carries, per database schema version `V` (`PRAGMA
+user_version`, 4 today):
+
+| asset | content |
+| --- | --- |
+| `snapshot-v{V}.json` | the manifest, schema `idx.ownership.snapshot.v1`, uploaded last |
+| `ownership-v{V}-{newest as_of}-{sha12}.sqlite.gz` | the database, vacuumed and gzipped; `sha12` is the start of its SHA-256, so a published file never changes |
+
+```json
+{
+  "schema": "idx.ownership.snapshot.v1",
+  "generated_at": "2026-11-06T03:10:55Z",
+  "built_by": "idx 0.8.2",
+  "db_schema_version": 4,
+  "file": "ownership-v4-2026-09-30-d4b3c324d27f.sqlite.gz",
+  "compression": "gzip",
+  "bytes": 6736237,
+  "sha256": "d4b3c324d27f…",
+  "sqlite_bytes": 20283392,
+  "sqlite_sha256": "…",
+  "content_sha256": "…",
+  "tables": { "aliases": 6293, "entities": 5740, "holding_lines": 57505, "holdings": 57451, "releases": 8 },
+  "releases": [
+    { "as_of": "2026-09-30", "format": "xlsx", "sha256": "804b3bb7…",
+      "source_url": "https://www.idx.co.id/Media/yqjhhsee/peng-2026-09-00024-satu-persen.xlsx",
+      "rows": 7154, "holdings": 7151, "issuers": 961, "entities": 5145 }
+  ]
+}
+```
+
+`sha256` and `bytes` describe the `.sqlite.gz`, `sqlite_sha256` and
+`sqlite_bytes` the decompressed file, `releases[].sha256` the IDX file each
+month came from (the same as in `index.json`), `rows` its register lines and
+`holdings` the positions stored. `content_sha256` is a digest of every table
+with import times left out: two builds of the same files by the same parser
+give the same digest, so CI republishes only when the data, the parser or the
+schema changed. For the 8 months from February to September 2026 the file is
+20.3 MB, 6.7 MB gzipped (the register lines and the summed positions are both
+stored).
+
+What `sync` does, first match wins:
+
+| local database | action |
+| --- | --- |
+| written by a newer idx (schema above `V`) | refused (exit 6) unless `--force` |
+| the mirror has no `snapshot-v{V}.json`, or one of a kind this idx cannot read (a later manifest schema or compression; a warning says so) | import the monthly files it lacks (`imported`) |
+| missing or without releases | install the snapshot (`installed`) |
+| has months neither the snapshot nor `index.json` has, a month re-imported from another file since the install, or rows in a table the snapshot leaves empty | keep it, import the months it lacks (`imported` or `up_to_date`, the months in `kept`); `--force` replaces it (`updated`, the months in `dropped`) |
+| installed from this very snapshot and still holding its months | nothing (`up_to_date`) |
+| anything else: the snapshot has more months, a re-published file, a parser fix or a new schema, or the database was built by local imports | replace it with the snapshot (`updated`) |
+
+After installing, `sync` imports any month `index.json` lists that the
+snapshot does not have yet (a snapshot built before the newest file, or an
+older idx installing a frozen older version), from the raw files with their
+SHA-256 checked. It also imports again a month the database holds exactly as
+its snapshot carried it while `index.json` lists another file for it (IDX
+re-published the month after that snapshot was built); `status` lists those
+in `outdated`. A month imported locally from another file is never touched.
+Files are compared by the SHA-256 of the IDX file, never the SQLite files
+themselves: idx rewrites a database's header when it opens it.
+
+Safety:
+
+- Nothing is written before every check passed: the manifest (schema,
+  version, file name, sizes, hashes, at most 1 MiB), the download (at most
+  `bytes`, then size and SHA-256), the decompressed file (size, SHA-256,
+  `PRAGMA quick_check`, schema version, page size, rows per table, each
+  release's date, file hash, lines and positions, and the recorded content
+  digest). Its schema must be exactly this idx's tables and indexes plus
+  `snapshot_info`: a view, a trigger or any other object is refused, so
+  nothing in a download runs in the database later. A failed check is a
+  provider error (exit 3) and leaves the database untouched.
+- The download URL is always the mirror's base plus the manifest's `file`, a
+  bare asset name: a manifest cannot point anywhere else.
+- Replacing a database first copies it to `<database>.bak` (overwriting an
+  older one), then copies the snapshot in with SQLite's online backup API: one
+  write transaction into the live file. Other idx processes reading it (an
+  `idx mcp` call) keep their view until they finish; nothing is renamed or
+  deleted under them.
+- One sync of a database runs at a time: parallel calls of one `idx mcp`
+  wait for each other, and other idx processes wait on an exclusive SQLite
+  lock on `<database>.sync.lock`, an empty file left in place. A sync that
+  waited finds the database up to date instead of installing it twice.
+- The installed file keeps the snapshot's `snapshot_info` table (generated_at,
+  built_by, content digest, the months and file hashes it held), which is how
+  `sync` and `status` recognise it later. Queries ignore it.
+
+`--offline` makes `sync` fail with exit 5 and `status` report the local part
+(exit 0, `remote: null`, a warning). `IDX_OWNERSHIP_MIRROR=<url>` points both
+at another mirror (`file://` works), `off` disables them (`sync` exit 6).
+`IDX_OWNERSHIP_SOURCE` does not apply: sync is a mirror operation. In MCP the
+same is one tool, `idx_ownership_snapshot`, with `action: "sync"` or
+`"status"` and `force`.
+
+When `V` changes, the manifests of the three newest versions and their files
+stay on the release: an idx that knows an older schema keeps installing its
+own (older) snapshot and imports the newer months from the raw files.
+
+Building one by hand (what the mirror script does, from any database whose
+months were all imported by idx 0.8.2 or later):
+
+```sh
+IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite \
+  idx ownership build-snapshot --out build/snap --sources build/ownership/out/index.json
+```
+
+`build-snapshot` is hidden from `--help`. It never changes the database it
+reads: one of another schema version is refused, not migrated. `--sources`
+records each month's idx.co.id URL from the mirror's `index.json` (when the
+file's SHA-256 matches) and `--generated-at` sets the build time (default
+now), which also replaces every `imported_at`.
+
 ## Database
 
 Default path: `%LOCALAPPDATA%\idx\ownership.sqlite` on Windows,
@@ -273,6 +409,8 @@ Tables (schema version 4, kept in `PRAGMA user_version`; version 3 adds
   out.
 - `composition` one row per (month, stock): shares listed, price, the nine
   local and nine foreign investor-type counts and both totals, as printed.
+- `snapshot_info` (only in a database installed by `idx ownership sync`):
+  key/value rows naming the snapshot it came from. Queries never read it.
 
 Why one holder has several lines: KSEI computes holdings per SID, and per
 account for scrip held without an SID (the register's own disclaimer). A
@@ -343,7 +481,8 @@ JSON schemas: `idx schema ownership-holders|ownership-entity|ownership-changes|
 ownership-foreign|ownership-foreign-flow|ownership-releases|ownership-import|
 ownership-discover|ownership-search|ownership-cross-holders|
 ownership-concentration|ownership-graph|ownership-resolve-candidates|
-ownership-resolution|ownership-resolutions|ownership-composition`.
+ownership-resolution|ownership-resolutions|ownership-composition|
+ownership-snapshot-sync|ownership-status|ownership-snapshot`.
 
 ## Finding a holder
 

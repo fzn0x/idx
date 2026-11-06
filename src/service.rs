@@ -607,7 +607,7 @@ pub async fn brief(
         }
         None => {
             out.warnings
-                .push("ownership: no register imported (idx ownership import --latest)".into());
+                .push("ownership: no register imported (idx ownership sync)".into());
             failed.push("ownership".into());
             None
         }

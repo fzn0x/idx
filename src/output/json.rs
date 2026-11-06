@@ -10,7 +10,8 @@ use crate::model::{
     CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
     ForeignFlowReport, ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport,
     IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance,
-    Profile, Quote, Release, ScreenReport, SentimentReport, StaleReason, Technical, Watchlist,
+    Profile, Quote, Release, ScreenReport, SentimentReport, SnapshotManifest, StaleReason,
+    StatusReport, SyncReport, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::model::{
@@ -105,6 +106,13 @@ pub const SCHEMA_OWNERSHIP_RESOLVE_CANDIDATES: &str = "idx.ownership.resolve-can
 pub const SCHEMA_OWNERSHIP_RESOLUTION: &str = "idx.ownership.resolution.v1";
 pub const SCHEMA_OWNERSHIP_RESOLUTIONS: &str = "idx.ownership.resolutions.v1";
 pub const SCHEMA_OWNERSHIP_COMPOSITION: &str = "idx.ownership.composition.v1";
+/// `ownership sync`. Not `idx.ownership.sync.v1`: the web terminal's
+/// `/api/ownership/status` already answers with that name (its D1 loader).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT_SYNC: &str = "idx.ownership.snapshot-sync.v1";
+pub const SCHEMA_OWNERSHIP_STATUS: &str = "idx.ownership.status.v1";
+/// The snapshot manifest (`snapshot-v{V}.json` on the mirror, and the data
+/// of `ownership build-snapshot -o json`).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT: &str = "idx.ownership.snapshot.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
@@ -152,6 +160,9 @@ pub type OwnershipResolveCandidatesEnvelope = Envelope<ResolveCandidates>;
 pub type OwnershipResolutionEnvelope = Envelope<Vec<ResolutionReport>>;
 pub type OwnershipResolutionsEnvelope = Envelope<Vec<Resolution>>;
 pub type OwnershipCompositionEnvelope = Envelope<CompositionReport>;
+pub type OwnershipSnapshotSyncEnvelope = Envelope<SyncReport>;
+pub type OwnershipStatusEnvelope = Envelope<StatusReport>;
+pub type OwnershipSnapshotEnvelope = Envelope<SnapshotManifest>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -235,6 +246,9 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-resolution",
         "ownership-resolutions",
         "ownership-composition",
+        "ownership-snapshot-sync",
+        "ownership-status",
+        "ownership-snapshot",
         "error",
         "quote",
         "candle",
@@ -291,6 +305,9 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-resolution" => schemars::schema_for!(OwnershipResolutionEnvelope),
         "ownership-resolutions" => schemars::schema_for!(OwnershipResolutionsEnvelope),
         "ownership-composition" => schemars::schema_for!(OwnershipCompositionEnvelope),
+        "ownership-snapshot-sync" => schemars::schema_for!(OwnershipSnapshotSyncEnvelope),
+        "ownership-status" => schemars::schema_for!(OwnershipStatusEnvelope),
+        "ownership-snapshot" => schemars::schema_for!(OwnershipSnapshotEnvelope),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),

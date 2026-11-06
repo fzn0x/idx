@@ -1,8 +1,9 @@
 //! KSEI shareholder register ("Pemegang Saham di Atas 1%") as published
-//! monthly by IDX: discovery and download (`discover`), parsing (`ingest`),
-//! name normalisation (`normalize`) and the local SQLite store (`db`). KSEI's
-//! own monthly composition archive ("Kepemilikan Efek", ksei.co.id) is a
-//! second dataset in the same file: listing and download (`ksei`), parser,
+//! monthly by IDX: discovery and download (`discover`, `mirror`), parsing
+//! (`ingest`), name normalisation (`normalize`), the local SQLite store
+//! (`db`) and the prebuilt copy of it published on the mirror (`snapshot`).
+//! KSEI's own monthly composition archive ("Kepemilikan Efek", ksei.co.id) is
+//! a second dataset in the same file: listing and download (`ksei`), parser,
 //! tables and report (`composition`).
 //!
 //! Unlike the quote providers, this data is not fetched on demand: a monthly
@@ -40,6 +41,7 @@ pub mod ingest;
 pub mod ksei;
 pub mod mirror;
 pub mod normalize;
+pub mod snapshot;
 
 pub use db::{OwnershipDb, SCHEMA_VERSION};
 
@@ -154,7 +156,7 @@ pub fn releases(db: &OwnershipDb) -> Result<Sourced<Vec<Release>>> {
     let mut s = sourced(db, list, &dates)?;
     if s.data.is_empty() {
         s.warnings
-            .push("no ownership data imported yet; run `idx ownership import --latest`".into());
+            .push("no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`)".into());
     }
     Ok(s)
 }

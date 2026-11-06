@@ -3082,3 +3082,308 @@ fn a_cloudflare_refusal_is_blocked_and_an_outage_is_not() {
     );
     server.join().unwrap();
 }
+
+/// A `file://` URL for a local directory, as `IDX_OWNERSHIP_MIRROR` takes it.
+fn file_url(dir: &std::path::Path) -> String {
+    let p = dir.display().to_string().replace('\\', "/");
+    if p.starts_with('/') {
+        format!("file://{p}")
+    } else {
+        format!("file:///{p}")
+    }
+}
+
+fn json_out(out: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(out).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(out)))
+}
+
+#[test]
+fn ownership_snapshot_sync_and_status_work_offline() {
+    let sb = sandbox();
+    let root = sb.cache.parent().unwrap().join("snap");
+    let fx = |name: &str| {
+        std::path::PathBuf::from(format!(
+            "{}/tests/fixtures/ownership/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+    };
+    let july = fx("above1_20260731_synthetic.xlsx");
+    let august = fx("above1_20260831_excerpt.xlsx");
+    let manifest = format!("snapshot-v{}.json", idx::ownership::SCHEMA_VERSION);
+    let with_db = |db: &std::path::Path| {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", db);
+        c
+    };
+    // A sync reads a file:// mirror: no network, so the offline safety net
+    // is lifted for those calls only.
+    let sync_cmd = |db: &std::path::Path, mirror: &std::path::Path| {
+        let mut c = with_db(db);
+        c.env_remove("IDX_OFFLINE")
+            .env("IDX_OWNERSHIP_MIRROR", file_url(mirror));
+        c
+    };
+    let import = |db: &std::path::Path, files: &[&std::path::Path]| {
+        for f in files {
+            with_db(db)
+                .args(["ownership", "import", "--file"])
+                .arg(f)
+                .assert()
+                .success();
+        }
+    };
+    // A mirror directory: the snapshot of the first `in_snapshot` files, all
+    // `files` as raw files and index.json.
+    let make_mirror_lagging = |name: &str,
+                               files: &[(&str, &std::path::Path)],
+                               in_snapshot: usize|
+     -> std::path::PathBuf {
+        let dir = root.join(name);
+        let src = root.join(format!("{name}-src.sqlite"));
+        let paths: Vec<&std::path::Path> =
+            files.iter().map(|(_, p)| *p).take(in_snapshot).collect();
+        import(&src, &paths);
+        with_db(&src)
+            .args(["ownership", "build-snapshot", "--out"])
+            .arg(&dir)
+            .args(["--generated-at", "2026-11-06T00:00:00Z"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Built ownership-v"));
+        let mut releases = Vec::new();
+        for (as_of, path) in files {
+            let bytes = std::fs::read(path).unwrap();
+            let file = format!("ksei-above1-{as_of}.xlsx");
+            std::fs::write(dir.join(&file), &bytes).unwrap();
+            releases.push(serde_json::json!({
+                "as_of": as_of, "format": "xlsx", "file": file,
+                "sha256": idx::ownership::sha256_hex(&bytes),
+            }));
+        }
+        let index = serde_json::json!({
+            "schema": "idx.ownership.mirror.v1",
+            "generated_at": "2026-11-06T00:00:00Z",
+            "releases": releases,
+        });
+        std::fs::write(dir.join("index.json"), index.to_string()).unwrap();
+        dir
+    };
+    let make_mirror = |name: &str, files: &[(&str, &std::path::Path)]| {
+        make_mirror_lagging(name, files, files.len())
+    };
+    let both = make_mirror("both", &[("2026-07-31", &july), ("2026-08-31", &august)]);
+
+    // Fresh database: one sync installs every month, a second does nothing.
+    let live = root.join("live").join("ownership.sqlite");
+    let out = sync_cmd(&live, &both)
+        .args(["-o", "json", "ownership", "sync"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json_out(&out.stdout);
+    assert_eq!(v["schema"], "idx.ownership.snapshot-sync.v1");
+    assert_eq!(v["provider"], "github-mirror");
+    assert_eq!(v["data"]["action"], "installed");
+    assert_eq!(v["data"]["releases"], 2);
+    assert_eq!(v["data"]["newest"], "2026-08-31");
+    assert_eq!(
+        v["data"]["installed"],
+        serde_json::json!(["2026-07-31", "2026-08-31"])
+    );
+    assert!(v["data"]["backup"].is_null());
+    with_db(&live)
+        .args(["ownership", "ticker", "AADI"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADARO STRATEGIC INVESTMENTS"));
+    sync_cmd(&live, &both)
+        .args(["ownership", "sync"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("is up to date"));
+
+    // Status: installed snapshot, the mirror's state, nothing to do.
+    let out = sync_cmd(&live, &both)
+        .args(["-o", "json", "ownership", "status"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v = json_out(&out.stdout);
+    assert_eq!(v["schema"], "idx.ownership.status.v1");
+    assert_eq!(v["data"]["exists"], true);
+    assert_eq!(v["data"]["releases"], 2);
+    assert_eq!(v["data"]["installed_snapshot"]["releases"], 2);
+    assert_eq!(v["data"]["remote"]["newest"], "2026-08-31");
+    assert_eq!(v["data"]["remote"]["snapshot"]["newest"], "2026-08-31");
+    assert_eq!(v["data"]["sync"], "up_to_date");
+    // Offline: the local part only, still exit 0; sync refuses (5); no mirror (6).
+    let out = with_db(&live)
+        .args(["-o", "json", "ownership", "status"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v = json_out(&out.stdout);
+    assert!(v["data"]["remote"].is_null());
+    assert!(v["data"]["sync"].is_null());
+    assert!(v["warnings"][0].as_str().unwrap().contains("offline"));
+    with_db(&live).args(["ownership", "sync"]).assert().code(5);
+    sync_cmd(&live, &both)
+        .env("IDX_OWNERSHIP_MIRROR", "off")
+        .args(["ownership", "sync"])
+        .assert()
+        .code(6);
+    // Status never creates a database.
+    let nothing = root.join("nothing.sqlite");
+    with_db(&nothing)
+        .args(["ownership", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not created yet"));
+    assert!(!nothing.exists());
+
+    // A database holding a month the snapshot lacks is kept, unless --force.
+    let july_only = make_mirror("july", &[("2026-07-31", &july)]);
+    let mine = root.join("mine.sqlite");
+    import(&mine, &[&july, &august]);
+    let out = sync_cmd(&mine, &july_only)
+        .args(["-o", "json", "ownership", "sync"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v = json_out(&out.stdout);
+    assert_eq!(v["data"]["action"], "up_to_date");
+    assert_eq!(v["data"]["kept"], serde_json::json!(["2026-08-31"]));
+    assert_eq!(v["data"]["releases"], 2);
+    assert!(v["warnings"][0].as_str().unwrap().contains("--force"));
+    let out = sync_cmd(&mine, &july_only)
+        .args(["-o", "json", "ownership", "sync", "--force"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v = json_out(&out.stdout);
+    assert_eq!(v["data"]["action"], "updated");
+    assert_eq!(v["data"]["dropped"], serde_json::json!(["2026-08-31"]));
+    assert_eq!(v["data"]["releases"], 1);
+    let bak = std::path::PathBuf::from(v["data"]["backup"].as_str().unwrap());
+    assert!(bak.ends_with("mine.sqlite.bak"));
+    let out = with_db(&bak)
+        .args(["-o", "json", "ownership", "status"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        json_out(&out.stdout)["data"]["releases"],
+        2,
+        "the backup holds both months"
+    );
+
+    // A database built by local imports of the same files: replaced once, then up to date.
+    let local = root.join("local.sqlite");
+    import(&local, &[&july, &august]);
+    for expected in ["updated", "up_to_date"] {
+        let out = sync_cmd(&local, &both)
+            .args(["-o", "json", "ownership", "sync"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(json_out(&out.stdout)["data"]["action"], expected);
+    }
+
+    // A snapshot behind the mirror: installed, then the newer month imported.
+    let lag = make_mirror_lagging("lag", &[("2026-07-31", &july), ("2026-08-31", &august)], 1);
+    let behind = root.join("behind.sqlite");
+    let out = sync_cmd(&behind, &lag)
+        .args(["-o", "json", "ownership", "sync"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json_out(&out.stdout);
+    assert_eq!(v["data"]["action"], "installed");
+    assert_eq!(v["data"]["installed"], serde_json::json!(["2026-07-31"]));
+    assert_eq!(v["data"]["imported"], serde_json::json!(["2026-08-31"]));
+    assert_eq!(v["data"]["newest"], "2026-08-31");
+    let out = sync_cmd(&behind, &lag)
+        .args(["-o", "json", "ownership", "sync"])
+        .output()
+        .unwrap();
+    let v = json_out(&out.stdout);
+    assert_eq!(v["data"]["action"], "up_to_date");
+    assert_eq!(v["data"]["kept"], serde_json::json!([]));
+
+    // A corrupt download: provider error (exit 3), database untouched.
+    let corrupt = root.join("corrupt");
+    std::fs::create_dir_all(&corrupt).unwrap();
+    for e in std::fs::read_dir(&both).unwrap() {
+        let p = e.unwrap().path();
+        let mut bytes = std::fs::read(&p).unwrap();
+        if p.to_string_lossy().ends_with(".sqlite.gz") {
+            let mid = bytes.len() / 2;
+            bytes[mid] ^= 0xff;
+        }
+        std::fs::write(corrupt.join(p.file_name().unwrap()), bytes).unwrap();
+    }
+    let older = root.join("older.sqlite");
+    import(&older, &[&july]);
+    let before = std::fs::read(&older).unwrap();
+    sync_cmd(&older, &corrupt)
+        .args(["ownership", "sync"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("SHA-256"));
+    assert_eq!(std::fs::read(&older).unwrap(), before);
+    assert!(!root.join("older.sqlite.bak").exists());
+
+    // No snapshot for this schema on the mirror: the monthly files are imported.
+    std::fs::remove_file(corrupt.join(&manifest)).unwrap();
+    let raw = root.join("raw.sqlite");
+    let out = sync_cmd(&raw, &corrupt)
+        .args(["-o", "json", "ownership", "sync"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json_out(&out.stdout);
+    assert_eq!(v["data"]["action"], "imported");
+    assert!(v["data"]["snapshot"].is_null());
+    assert_eq!(
+        v["data"]["imported"],
+        serde_json::json!(["2026-07-31", "2026-08-31"])
+    );
+    assert!(v["warnings"][0].as_str().unwrap().contains("no snapshot"));
+
+    // The shapes are published; build-snapshot stays out of --help.
+    for name in [
+        "ownership-status",
+        "ownership-snapshot-sync",
+        "ownership-snapshot",
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(["schema", name])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("\"$schema\""));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sync"))
+        .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("build-snapshot").not());
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "sync", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains("Examples"));
+}

@@ -1,8 +1,10 @@
-// The 40 MCP tools, each with its CLI command and, where the web terminal can
+// The 41 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
-// composition one (its archive is imported into the CLI's local database) and
-// the Stockbit realtime ones (they carry a personal account session).
+// composition one (its archive is imported into the CLI's local database), the
+// Stockbit realtime ones (they carry a personal account session) and the
+// ownership snapshot tool (it acts on the machine's own SQLite file). `why`,
+// when set, is the reason the terminal gives instead of CLI_ONLY_REASON.
 // The landing page table and test/tools.test.mjs keep to this list, and the
 // test checks it against docs/mcp.md.
 
@@ -43,7 +45,8 @@ export const TOOLS = [
   { tool: "idx_ownership_search", cli: "idx ownership search salim", web: "ownership search salim", what: "find a holder by name: key, spellings, issuers held" },
   { tool: "idx_ownership_rankings", cli: "idx ownership cross-holders", web: "ownership cross-holders", what: "holders in the most issuers, or issuers by concentration (HHI)" },
   { tool: "idx_ownership_graph", cli: "idx ownership graph BBCA", web: "ownership graph BBCA", what: "network of holders and issuers around a ticker or holder" },
-  { tool: "idx_ownership_composition", cli: "idx ownership composition BBCA", web: null, what: "local vs foreign shares by investor type (KSEI monthly archive)" },
+  { tool: "idx_ownership_composition", cli: "idx ownership composition BBCA", web: null, what: "local vs foreign shares by investor type (KSEI monthly archive)", why: "KSEI's composition archive is downloaded from ksei.co.id into the CLI's local ownership database, so this tool runs in the CLI and the MCP server only for now." },
+  { tool: "idx_ownership_snapshot", cli: "idx ownership sync", web: null, what: "install or check the prebuilt ownership database (action sync or status)", why: "This tool installs and checks the ownership database file on your own machine; the web terminal keeps its own copy of the register in step with the same GitHub mirror, so there is nothing to sync here." },
   { tool: "idx_orderbook", cli: "idx stockbit orderbook BBCA", web: null, what: "realtime order book: full depth ladder and foreign flow (your Stockbit session)" },
   { tool: "idx_stockbit_status", cli: "idx stockbit status", web: null, what: "is a Stockbit session stored, and when its tokens expire" },
   { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in your browser, once" },

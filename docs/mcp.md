@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 40 tools; several
+plain `GET /healthz`. It is the same server and the same 41 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -332,6 +332,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_rankings` | `view?` (`holders` default \| `issuers`); holders: `min_issuers?` (default 2), `investor_type?`, `origin?` (`foreign` \| `local`); issuers: `symbols?`, `by?` (`hhi` default \| `top1` \| `top3`), `ascending?`; `limit?` (default 25, 0 = all), `as_of?` | `idx.ownership.cross-holders.v1` (holders by the issuers they own above 1 %) or `idx.ownership.concentration.v1` (issuers by HHI, top-1 and top-3 stakes, undisclosed percent, controller stake) |
 | `idx_ownership_graph` | `root` (ticker or holder), `depth?` (1-6, default 2), `min_pct?`, `max_nodes?` (default 100, at most 1000), `holder?`, `as_of?` | `idx.ownership.graph.v1`: issuers and holders with hop counts and the links between them; `truncated` when `max_nodes` stopped the walk |
 | `idx_ownership_composition` | `symbol`, `as_of?` | `idx.ownership.composition.v1`: KSEI's monthly archive, local vs foreign shares in nine investor types as a percent of the scripless shares, `scripless_pct`, and every imported month. Downloads the newest month from ksei.co.id on first use (not with `--offline`) |
+| `idx_ownership_snapshot` | `action` (`status` \| `sync`), `force?` (sync only) | `status`: `idx.ownership.status.v1`, the local database, the snapshot it came from, the mirror and what sync would do (writes nothing). `sync`: `idx.ownership.snapshot-sync.v1`, installs the prebuilt snapshot or imports the missing months; months only the local database has are kept unless `force` (a `.bak` copy is kept) |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current, seen during trading). Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
@@ -367,6 +368,14 @@ much of the listed shares that is). The first call downloads the newest month
 (about 125 KB) into the same local database; later calls read it and ask
 ksei.co.id again only once a newer month can exist. `provider` is `ksei` when
 the call imported a month, `local-db` otherwise.
+
+An empty ownership database is filled by `idx_ownership_snapshot` with
+`action: "sync"`: one download of the SQLite file CI builds from the mirrored
+IDX files (SHA-256 checked, swapped in as one SQLite transaction, so other
+calls reading the file are not disturbed), then any newer monthly file. It
+needs the network (an `offline_miss` error with `--offline`); `action:
+"status"` works offline and reports the local part. See
+[ownership.md](ownership.md#snapshot-and-sync).
 
 ## Harness compatibility
 
