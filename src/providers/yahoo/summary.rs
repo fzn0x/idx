@@ -359,13 +359,13 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
                 .get("isEarningsDateEstimate")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            eps_avg: raw(cal_e, "earningsAverage"),
-            eps_low: raw(cal_e, "earningsLow"),
-            eps_high: raw(cal_e, "earningsHigh"),
+            eps_avg: amount(cal_e, "earningsAverage"),
+            eps_low: amount(cal_e, "earningsLow"),
+            eps_high: amount(cal_e, "earningsHigh"),
             eps_growth_pct: current_q.and_then(|t| pct(t, "growth")),
-            revenue_avg: raw(cal_e, "revenueAverage"),
-            revenue_low: raw(cal_e, "revenueLow"),
-            revenue_high: raw(cal_e, "revenueHigh"),
+            revenue_avg: amount(cal_e, "revenueAverage"),
+            revenue_low: amount(cal_e, "revenueLow"),
+            revenue_high: amount(cal_e, "revenueHigh"),
             analysts: current_q
                 .and_then(|t| raw(module(t, "earningsEstimate"), "numberOfAnalysts"))
                 .map(|x| x.max(0.0) as u32),
@@ -584,6 +584,24 @@ mod tests {
         };
         assert!(estimates(&row(0)).is_empty());
         assert_eq!(estimates(&row(2))[0].revenue_analysts, Some(2));
+    }
+
+    #[test]
+    fn padded_next_consensus_is_null() {
+        // calendarEvents follows the same padding rule as the trend rows.
+        let body = r#"{"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+            "earningsAverage":{"raw":12.5,"fmt":"12.50"},
+            "revenueAverage":{"raw":0,"fmt":null},"revenueLow":{"raw":0,"fmt":null}}}}],
+            "error":null}}"#;
+        let n = parse_earnings(body, &sym("TLKM")).unwrap().next.unwrap();
+        assert_eq!(n.eps_avg, Some(12.5));
+        assert_eq!((n.revenue_avg, n.revenue_low), (None, None));
+        // Reported next consensus is untouched.
+        let n = parse_earnings(EARN_TLKM, &sym("TLKM"))
+            .unwrap()
+            .next
+            .unwrap();
+        assert!(n.revenue_avg.is_some_and(|r| r > 0.0));
     }
 
     #[test]

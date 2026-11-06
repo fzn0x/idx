@@ -367,9 +367,9 @@ export function parseEarnings(r, symbol) {
     next: (!cal.earnings && !cur) ? null : {
       date: nextDate ? new Date(nextDate * 1000).toISOString().slice(0, 10) : null,
       date_is_estimate: !!ce.isEarningsDateEstimate,
-      eps_avg: raw(ce, "earningsAverage"), eps_low: raw(ce, "earningsLow"), eps_high: raw(ce, "earningsHigh"),
+      eps_avg: amount(ce, "earningsAverage"), eps_low: amount(ce, "earningsLow"), eps_high: amount(ce, "earningsHigh"),
       eps_growth_pct: cur ? pct(cur, "growth") : null,
-      revenue_avg: raw(ce, "revenueAverage"), revenue_low: raw(ce, "revenueLow"), revenue_high: raw(ce, "revenueHigh"),
+      revenue_avg: amount(ce, "revenueAverage"), revenue_low: amount(ce, "revenueLow"), revenue_high: amount(ce, "revenueHigh"),
       analysts: cur ? raw(cur.earningsEstimate || {}, "numberOfAnalysts") : null,
     },
     ex_dividend_date: dateOf(cal, "exDividendDate"), dividend_date: dateOf(cal, "dividendDate"),

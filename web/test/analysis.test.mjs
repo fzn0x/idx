@@ -101,6 +101,10 @@ test("earnings estimates: a ticker no analyst covers has no consensus rows (reco
   const row = (n) => ({ trend: [{ period: "0q", earningsEstimate: {}, revenueEstimate: { avg: { raw: 0, fmt: null }, numberOfAnalysts: { raw: n, fmt: null } } }] });
   assert.deepEqual(y.parseEstimates(row(0)), []);
   assert.equal(y.parseEstimates(row(2))[0].revenue_analysts, 2);
+  // Padded consensus amounts in calendarEvents are null too, as in the Rust parser.
+  const padded = y.parseEarnings({ calendarEvents: { earnings: { revenueAverage: { raw: 0, fmt: null }, earningsAverage: { raw: 12.5, fmt: "12.50" } } } }, "X");
+  assert.equal(padded.next.revenue_avg, null);
+  assert.equal(padded.next.eps_avg, 12.5);
 });
 
 test("timeseries pivot", () => {

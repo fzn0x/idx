@@ -428,8 +428,8 @@ Symbols that failed are listed in `warnings`.
   covers has an empty list.
 - Yahoo pads figures it has not loaded as zeros; idx reports those as `null`
   (a quarter's `revenue`, `earnings` and `profit_margin_pct`, a consensus
-  amount), never as `0`. `profit_margin_pct` is set only when both revenue and
-  earnings are.
+  amount in `estimates[]` or `next`), never as `0`. Analyst counts keep their
+  zero. `profit_margin_pct` is set only when both revenue and earnings are.
 - `scope` is `null` unless rows were filtered out (`stocks earnings --annual
   --quarterly --reported --estimates`, MCP `period` and `kind`). Then it is
   `{ "annual", "quarterly", "reported", "estimates" }`, each `true` when those
