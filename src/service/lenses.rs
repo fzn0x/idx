@@ -11,17 +11,26 @@ use crate::model::{
 };
 use crate::providers::{Provider, Sourced};
 
+/// One essential input that failed. `names_ticker` marks the inputs whose
+/// "not found" means the ticker is unknown (the fundamentals, the stock's
+/// candles); annual statements also answer "not found" for a listed ticker
+/// that has none.
+struct Failure {
+    error: IdxError,
+    names_ticker: bool,
+}
+
 /// The error a lens reports when every essential input failed: a "not
-/// found" from any side wins (the ticker is unknown), else the first error.
-fn pick(errors: Vec<IdxError>) -> IdxError {
-    let mut errors = errors;
-    match errors
+/// found" from an input that names the ticker wins, else the first error
+/// (the fundamentals come first), so a statements-side "not found" cannot
+/// hide a provider failure or an offline cache miss.
+fn pick(failures: Vec<Failure>) -> IdxError {
+    let mut failures = failures;
+    let i = failures
         .iter()
-        .position(|e| matches!(e, IdxError::NotFound(_)))
-    {
-        Some(i) => errors.swap_remove(i),
-        None => errors.swap_remove(0),
-    }
+        .position(|f| f.names_ticker && matches!(f.error, IdxError::NotFound(_)))
+        .unwrap_or(0);
+    failures.swap_remove(i).error
 }
 
 /// The provenance of one input, without its data.
@@ -67,13 +76,19 @@ pub async fn growth(p: &dyn Provider, symbol: &Symbol) -> Result<Sourced<GrowthL
     let f = f
         .map_err(|e| {
             warnings.push(format!("fundamentals: {e}"));
-            errors.push(e);
+            errors.push(Failure {
+                error: e,
+                names_ticker: true,
+            });
         })
         .ok();
     let a = a
         .map_err(|e| {
             warnings.push(format!("annual statements: {e}"));
-            errors.push(e);
+            errors.push(Failure {
+                error: e,
+                names_ticker: false,
+            });
         })
         .ok();
     let Some(mut out) = provenance([f.as_ref().map(meta), a.as_ref().map(meta)]) else {
@@ -103,13 +118,19 @@ pub async fn risk(p: &dyn Provider, symbol: &Symbol) -> Result<Sourced<RiskLens>
     let f = f
         .map_err(|e| {
             warnings.push(format!("fundamentals: {e}"));
-            errors.push(e);
+            errors.push(Failure {
+                error: e,
+                names_ticker: true,
+            });
         })
         .ok();
     let h = h
         .map_err(|e| {
             warnings.push(format!("price history: {e}"));
-            errors.push(e);
+            errors.push(Failure {
+                error: e,
+                names_ticker: true,
+            });
         })
         .ok();
     let b = b
@@ -157,12 +178,16 @@ mod tests {
     use async_trait::async_trait;
 
     /// Fundamentals and statements work for TLKM; the history of the stock
-    /// and of the index fail in configurable ways.
+    /// and of the index fail in configurable ways. A failing side answers
+    /// with its `*_error` (an offline miss for the fundamentals, unsupported
+    /// for the statements, unless a test sets another).
     struct Fake {
         fundamentals: bool,
         statements: bool,
         stock_history: bool,
         index_history: bool,
+        fundamentals_error: fn(&Symbol) -> IdxError,
+        statements_error: fn(&Symbol) -> IdxError,
     }
 
     const TLKM: &str =
@@ -201,9 +226,7 @@ mod tests {
         }
         async fn fundamentals(&self, s: &Symbol) -> Result<Sourced<Fundamentals>> {
             if !self.fundamentals {
-                return Err(IdxError::OfflineMiss(format!(
-                    "no cached fundamentals for {s}"
-                )));
+                return Err((self.fundamentals_error)(s));
             }
             let mut out = Sourced::fresh(
                 crate::providers::yahoo::summary::parse_fundamentals(TLKM, s)?,
@@ -218,7 +241,7 @@ mod tests {
             period: StatementPeriod,
         ) -> Result<Sourced<crate::model::Financials>> {
             if !self.statements {
-                return Err(IdxError::unsupported("fake", "financial statements"));
+                return Err((self.statements_error)(s));
             }
             Ok(Sourced::fresh(
                 crate::providers::yahoo::timeseries::parse_timeseries(TS_TLKM, s, period)?,
@@ -233,6 +256,10 @@ mod tests {
             statements,
             stock_history: stock,
             index_history: index,
+            fundamentals_error: |s| {
+                IdxError::OfflineMiss(format!("no cached fundamentals for {s}"))
+            },
+            statements_error: |_| IdxError::unsupported("fake", "financial statements"),
         }
     }
 
@@ -274,6 +301,29 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(e.code(), "offline_miss", "{e}");
+    }
+
+    /// Yahoo answers "not found" for the statements of a listed ticker that
+    /// has none: that must not hide why the fundamentals failed.
+    #[tokio::test]
+    async fn a_statements_not_found_does_not_hide_the_fundamentals_error() {
+        let no_statements =
+            |s: &Symbol| IdxError::NotFound(format!("no annual financial statements for {s}"));
+        let mut p = fake(false, false, true, true);
+        p.statements_error = no_statements;
+        p.fundamentals_error = |_| IdxError::provider("fake", "quoteSummary HTTP 502");
+        let e = growth(&p, &tlkm()).await.unwrap_err();
+        assert_eq!(e.code(), "provider", "{e}");
+        assert!(e.to_string().contains("HTTP 502"), "{e}");
+        // Offline, with only the statements cached as "none".
+        p.fundamentals_error = |s| IdxError::OfflineMiss(format!("no cached fundamentals for {s}"));
+        let e = growth(&p, &tlkm()).await.unwrap_err();
+        assert_eq!(e.code(), "offline_miss", "{e}");
+        // An unknown ticker is still not_found when the fundamentals say so.
+        p.fundamentals_error = |s| IdxError::NotFound(format!("{s}: quote not found"));
+        p.statements_error = |_| IdxError::provider("fake", "timeseries HTTP 500");
+        let e = growth(&p, &tlkm()).await.unwrap_err();
+        assert_eq!(e.code(), "not_found", "{e}");
     }
 
     #[tokio::test]

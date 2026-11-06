@@ -101,3 +101,25 @@ test("a missing input is a warning; the call fails only without the essential on
     await assert.rejects(get(memoryDb([]), "symbol=ZZZZ&lens=risk"), (e) => e.code === "not_found");
   });
 });
+
+test("a statements not_found does not hide why the fundamentals failed", async () => {
+  // A listed ticker with no annual statements (Yahoo answers with an empty
+  // result) while quoteSummary is unreachable: the summary's error is reported.
+  const fetchFn = async (u) => {
+    const url = decodeURIComponent(String(u));
+    if (url.includes("fundamentals-timeseries")) return new Response(fixture("timeseries_not_found.json"), { status: 200 });
+    return new Response("{}", { status: 502 });
+  };
+  await withFetch(fetchFn, async () => {
+    await assert.rejects(get(memoryDb([]), "symbol=TLKM&lens=growth"), (e) => {
+      assert.notEqual(e.code, "not_found", e.message);
+      return true;
+    });
+  });
+  // With the fundamentals cached, the same missing statements are only a warning.
+  await withFetch(fetchFn, async () => {
+    const out = await get(memoryDb(["TLKM"]), "symbol=TLKM&lens=growth");
+    assert.match(out.warnings.join(" | "), /annual statements: /);
+    assert.equal(out.data.annual.length, 0);
+  });
+});

@@ -437,8 +437,11 @@ from them, a `reading` and `sources`:
 - A lens that needs several inputs fetches them concurrently. A missing one
   is named in `warnings` and the reading runs with fewer rules; the call
   fails only when the essential inputs all fail (growth: fundamentals and
-  statements; risk: fundamentals and the stock's candles), with `not_found`
-  when any side says the ticker is unknown.
+  statements; risk: fundamentals and the stock's candles). It fails with
+  `not_found` when the fundamentals or the stock's candles say the ticker is
+  unknown; a statements "not found" (a listed ticker can have none) does not
+  count, so the fundamentals' own error (a provider failure, an offline cache
+  miss) is the one reported.
 
 ### `idx.valuation.v1`: points favour cheapness
 

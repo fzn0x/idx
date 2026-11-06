@@ -243,7 +243,9 @@ export async function fundamentals(env, symbolRaw, lensRaw = null) {
 // Growth, valuation and risk lenses, as service::lenses does in the CLI:
 // growth adds the annual statements, risk a year of daily candles for the
 // stock and for IHSG. A missing input becomes a warning; the call fails only
-// when the essential inputs all fail (a not_found among them wins).
+// when the essential inputs all fail. A not_found wins only from an input
+// that names the ticker (fundamentals, the stock's candles): a listed ticker
+// can have no statements, and that must not hide why the fundamentals failed.
 const LENSES = ["growth", "valuation", "risk"];
 async function lensReading(env, symbol, lens) {
   const settle = (p) => p.then((ok) => ({ ok }), (err) => ({ err }));
@@ -259,7 +261,7 @@ async function lensReading(env, symbol, lens) {
     const r = await job;
     if (r.err) {
       warnings.push(`${label}: ${r.err.message}`);
-      if (key !== "benchmark") errors.push(r.err);
+      if (key !== "benchmark") errors.push({ err: r.err, namesTicker: key !== "statements" });
       continue;
     }
     got[key] = r.ok.data;
@@ -268,7 +270,7 @@ async function lensReading(env, symbol, lens) {
     for (const w of r.ok.warnings || []) if (!warnings.includes(w)) warnings.push(w);
   }
   const essential = lens === "risk" ? got.fundamentals || got.history : got.fundamentals || got.statements;
-  if (!any || !essential) throw errors.find((e) => e.code === "not_found") || errors[0];
+  if (!any || !essential) throw (errors.find((e) => e.namesTicker && e.err.code === "not_found") || errors[0]).err;
   const data = lens === "valuation" ? an.valuationLens(got.fundamentals)
     : lens === "growth" ? an.growthLens(symbol, got.fundamentals || null, got.statements || null)
     : an.riskLens(symbol, got.fundamentals || null, got.history || null, got.benchmark || null);
