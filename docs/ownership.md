@@ -204,9 +204,10 @@ downloads. The envelope's `provider` is `ksei` when the call imported,
 `local-db` otherwise, and a warning names what was imported. The report gives
 the stock's local and foreign shares and percents, the nine types in KSEI's
 order, and every imported month with the foreign percent's change in
-percentage points (`idx.ownership.composition.v1`). `-o csv` writes the
-largest list: `by_type`, or `history` once more months than types are
-imported.
+percentage points (`idx.ownership.composition.v1`). `-o csv` writes one row
+per investor type (`symbol, as_of, code, investor_type, local_shares,
+foreign_shares, local_pct, foreign_pct`) however many months are imported;
+the history is in the table and the JSON.
 
 Composition imports never touch the register: `releases`, `ticker`,
 `entity`, `changes` and `foreign` read exactly what they read before, and a

@@ -354,7 +354,10 @@ other security types left out). For a composition month `release.rows` and
 
 KSEI's monthly "Kepemilikan Efek" archive for one stock (see
 [ownership.md](ownership.md#ksei-composition-kepemilikan-efek)). `provider` is
-`ksei` when the call downloaded the month, `local-db` otherwise.
+`ksei` when the call downloaded the month, `local-db` otherwise. With `-o csv`
+the rows are the nine investor types, whatever the number of imported months:
+`symbol, as_of, code, investor_type, local_shares, foreign_shares, local_pct,
+foreign_pct`.
 
 ```json
 {

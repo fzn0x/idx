@@ -1446,7 +1446,8 @@ fn ownership_composition_and_families_work_offline() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with(
-            "code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct\n",
+            "symbol,as_of,code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct\n\
+             BBCA,2026-10-30,IS,INSURANCE,",
         ));
     own(&sb)
         .args(["ownership", "composition", "ZZZZ"])
@@ -1524,6 +1525,60 @@ fn ownership_composition_and_families_work_offline() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v["$schema"].as_str().unwrap().contains("json-schema.org"));
     assert!(v.to_string().contains("scripless_pct"));
+}
+
+#[test]
+fn ownership_composition_csv_keeps_its_columns_however_many_months() {
+    let sb = sandbox();
+    let db = sb.cache.join("composition.sqlite");
+    let sep = include_str!("fixtures/ownership/ksei_balancepos_20260930_excerpt.txt");
+    let dir = sb.cache.join("months");
+    std::fs::create_dir_all(&dir).unwrap();
+    // Ten months, one more than the nine investor types: September's excerpt
+    // dated January to October.
+    let months = [
+        ("20260130", "30-JAN-2026"),
+        ("20260227", "27-FEB-2026"),
+        ("20260331", "31-MAR-2026"),
+        ("20260430", "30-APR-2026"),
+        ("20260529", "29-MAY-2026"),
+        ("20260630", "30-JUN-2026"),
+        ("20260731", "31-JUL-2026"),
+        ("20260831", "31-AUG-2026"),
+        ("20260930", "30-SEP-2026"),
+        ("20261030", "30-OCT-2026"),
+    ];
+    for (name, cell) in months {
+        let path = dir.join(format!("Balancepos{name}.txt"));
+        std::fs::write(&path, sep.replace("30-SEP-2026", cell)).unwrap();
+        idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(["ownership", "import", "--file"])
+            .arg(&path)
+            .assert()
+            .success();
+    }
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "json", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["history"].as_array().unwrap().len(), 10);
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "csv", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(
+        lines[0],
+        "symbol,as_of,code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct"
+    );
+    assert_eq!(lines.len(), 10, "a header and the nine types:\n{csv}");
+    assert!(lines[9].starts_with("BBCA,2026-10-30,OT,OTHERS,"), "{csv}");
 }
 
 /// A one-shot HTTP server on 127.0.0.1 answering every request with the

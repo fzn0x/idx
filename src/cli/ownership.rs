@@ -5,20 +5,21 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
+use serde_json::{json, Value};
 
 use crate::error::{IdxError, Result};
-use crate::model::Symbol;
+use crate::model::{CompositionReport, Symbol};
 use crate::output::json::{
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_OWNERSHIP_DISCOVER,
     SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
     SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
 };
-use crate::output::{self, table_composition, table_ownership as tbl};
+use crate::output::{self, table_composition, table_ownership as tbl, OutputFormat};
 use crate::ownership::discover::Family;
 use crate::ownership::{self, composition, ksei, OwnershipDb};
 use crate::providers::Sourced;
 
-use super::{emit, Context};
+use super::{emit, notices, Context};
 
 #[derive(Debug, Subcommand)]
 pub enum OwnershipCmd {
@@ -186,6 +187,29 @@ fn discovery_provider(files: &[crate::model::DiscoveredFile]) -> &'static str {
     }
 }
 
+/// `-o csv` of `ownership composition`: one row per investor type, whatever
+/// the number of imported months (the generic rule would switch to
+/// `history` once it is the longer list).
+fn composition_csv(r: &CompositionReport) -> Value {
+    Value::Array(
+        r.by_type
+            .iter()
+            .map(|t| {
+                json!({
+                    "symbol": r.symbol,
+                    "as_of": r.as_of,
+                    "code": t.code,
+                    "investor_type": t.investor_type,
+                    "local_shares": t.local_shares,
+                    "foreign_shares": t.foreign_shares,
+                    "local_pct": t.local_pct,
+                    "foreign_pct": t.foreign_pct,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn open(ctx: &Context) -> Result<OwnershipDb> {
     OwnershipDb::open(&ctx.settings.ownership_db)
 }
@@ -327,6 +351,10 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 crate::service::today_wib(),
             )
             .await?;
+            if ctx.settings.output == OutputFormat::Csv {
+                notices(ctx, &s);
+                return output::print_stdout(&output::csv::render(&composition_csv(&s.data)));
+            }
             emit(ctx, SCHEMA_OWNERSHIP_COMPOSITION, s, |r| {
                 table_composition::composition(r, ctx.color)
             })
