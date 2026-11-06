@@ -771,7 +771,7 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
     let mut out = String::new();
     match &m.index {
         Some(ix) => out.push_str(&format!(
-            "{} {} · {} ({}) · {}{}{}\n",
+            "{} {} · {} ({}) · {}{}\n",
             ix.name.clone().unwrap_or_else(|| ix.symbol.to_string()),
             f::price(ix.price),
             f::change(ix.change),
@@ -782,13 +782,15 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
             m.as_of
                 .map(|t| format!(" · last trade {}", t.format("%Y-%m-%d %H:%M WIB")))
                 .unwrap_or_default(),
-            if m.behind_session == Some(true) {
-                " · behind the latest IDX session"
-            } else {
-                ""
-            }
         )),
         None => out.push_str("Index quote unavailable\n"),
+    }
+    // The board's own flag, so it shows even without the index quote.
+    if let (Some(true), Some(t)) = (m.behind_session, m.as_of) {
+        out.push_str(&format!(
+            "Behind the latest IDX session: the newest quote is from {}\n",
+            t.format("%Y-%m-%d")
+        ));
     }
     out.push_str(&format!(
         "Breadth · {} advancing · {} declining · {} unchanged · {} of {} quoted · turnover {}\n",
@@ -1236,11 +1238,22 @@ mod tests {
         };
         let s = market(&m, false);
         assert!(
-            s.contains("last trade 2026-11-05 16:14 WIB · behind the latest IDX session\n"),
+            s.contains(
+                "PREPRE · last trade 2026-11-05 16:14 WIB\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
+            "{s}"
+        );
+        // Without the index quote the board still says it lags.
+        m.index = None;
+        let s = market(&m, false);
+        assert!(
+            s.starts_with(
+                "Index quote unavailable\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
             "{s}"
         );
         m.behind_session = Some(false);
-        assert!(!market(&m, false).contains("behind the latest"));
+        assert!(!market(&m, false).contains("Behind the latest"));
     }
 
     #[test]
