@@ -147,7 +147,7 @@ pub struct OwnershipEntityArgs {
 pub struct OwnershipSearchArgs {
     /// Part of a holder's name (person or institution), at least 2 letters or digits; words in any order, e.g. "salim" or "lo kheng hong".
     pub query: String,
-    /// Matches returned (default 20, at most 100).
+    /// Matches returned (default 20; 0 = all, at most 100; total_matches counts every match).
     #[serde(default)]
     pub limit: Option<u32>,
     /// Release date YYYY-MM-DD in which issuers are counted (default: newest imported).
@@ -1530,7 +1530,12 @@ impl IdxServer {
             async {
                 ownership::analytics::search_key(&a.query)?;
                 let as_of = parse_date(&a.as_of)?;
-                let limit = a.limit.unwrap_or(20).clamp(1, 100) as usize;
+                // 0 means all, as for every idx limit, within the cap of 100.
+                let limit = match a.limit {
+                    Some(0) => 100,
+                    Some(n) => n.min(100),
+                    None => 20,
+                } as usize;
                 let report = ownership::search(&self.db()?, &a.query, as_of, Some(limit))?;
                 ok(SCHEMA_OWNERSHIP_SEARCH, report)
             }
@@ -2171,6 +2176,18 @@ mod tests {
         assert_eq!(v["provider"], "local-db");
         assert_eq!(v["data"]["matches"][0]["entity_key"], "T PERMADI RACHMAT");
         assert_eq!(v["data"]["matches"][1]["last_seen"], "2026-08-31");
+        // limit 0 is every match (within the cap), as for the other limits.
+        for (limit, shown) in [(Some(1), 1), (Some(0), 2), (None, 2)] {
+            let mut args = search("permadi");
+            args.limit = limit;
+            let v = json_of(&s.ownership_search(Parameters(args)).await.unwrap());
+            assert_eq!(v["data"]["total_matches"], 2);
+            assert_eq!(
+                v["data"]["matches"].as_array().unwrap().len(),
+                shown,
+                "{limit:?}"
+            );
+        }
 
         let v = json_of(
             &s.ownership_rankings(Parameters(rankings(None, None, None, None)))
