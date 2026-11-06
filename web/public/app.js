@@ -161,50 +161,34 @@ export function el(tag, attrs = {}, children = []) {
 
 const SVG = "http://www.w3.org/2000/svg";
 const svgEl = (tag, attrs = {}) => { const n = document.createElementNS(SVG, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
-let dotGrids = 0;
 
 /**
- * A tape from [[ts, price], ...] drawn as a lit line on a dot-matrix grid:
- * one column of dots per `pitch` pixels, the last close of each column lit,
- * steep moves filled in like a departure board's LEDs, and the first value
- * marked across as the reference row. Redraws at its own width.
+ * A small chart of [[ts, value], ...]: the line over a light fill, rising
+ * in the up colour and falling in the down colour, with the first value
+ * dashed across as the reference. Redraws at its own width.
  */
-export function sparkline(points, { height = 36, cls = "tape", pitch = 4, label } = {}) {
-  const svg = svgEl("svg", { class: `${cls} dotline`, role: "img", preserveAspectRatio: "none" });
+export function sparkline(points, { height = 48, cls = "tape", label } = {}) {
+  const svg = svgEl("svg", { class: `${cls} tapeline`, role: "img", preserveAspectRatio: "none" });
   if (points.length < 2) { svg.setAttribute("aria-label", "not enough points to draw"); return svg; }
   const ys = points.map((p) => p[1]);
   const min = Math.min(...ys), max = Math.max(...ys), span = max - min || 1;
   svg.classList.add(ys[ys.length - 1] >= ys[0] ? "rise" : "fall");
   svg.setAttribute("aria-label", label || `from ${fmt.price(ys[0])} to ${fmt.price(ys[ys.length - 1])}, low ${fmt.price(min)}, high ${fmt.price(max)}`);
-  const id = `dots-${++dotGrids}`;
   let drawn = 0;
   const draw = () => {
     const w = Math.round(svg.getBoundingClientRect().width);
     if (!w || w === drawn) return;
     drawn = w;
-    const cols = Math.max(2, Math.floor(w / pitch)), rows = Math.max(3, Math.floor(height / pitch));
-    const W = cols * pitch, Hh = rows * pitch, r = pitch * 0.32;
-    svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
-    const row = (v) => rows - 1 - Math.round(((v - min) / span) * (rows - 1));
-    const cx = (c) => c * pitch + pitch / 2;
-    const pattern = svgEl("pattern", { id, width: pitch, height: pitch, patternUnits: "userSpaceOnUse" });
-    pattern.append(svgEl("circle", { class: "ghost", cx: pitch / 2, cy: pitch / 2, r }));
-    const defs = svgEl("defs");
-    defs.append(pattern);
-    const grid = svgEl("rect", { width: W, height: Hh, fill: `url(#${id})` });
-    const ref = svgEl("g", { class: "ref" });
-    const base = row(ys[0]);
-    for (let c = 0; c < cols; c += 2) ref.append(svgEl("circle", { cx: cx(c), cy: base * pitch + pitch / 2, r }));
-    const lit = svgEl("g", { class: "lit" });
-    let prev = null;
-    for (let c = 0; c < cols; c++) {
-      const i = Math.min(points.length - 1, Math.floor(((c + 1) * points.length) / cols) - 1);
-      const y = row(ys[Math.max(0, i)]);
-      const [lo, hi] = prev == null ? [y, y] : [Math.min(prev, y), Math.max(prev, y)];
-      for (let k = lo; k <= hi; k++) if (prev == null || k !== prev || k === y) lit.append(svgEl("circle", { cx: cx(c), cy: k * pitch + pitch / 2, r }));
-      prev = y;
-    }
-    svg.replaceChildren(defs, grid, ref, lit);
+    const pad = 3;
+    const x = (i) => (i / (points.length - 1)) * w;
+    const y = (v) => pad + (1 - (v - min) / span) * (height - 2 * pad);
+    svg.setAttribute("viewBox", `0 0 ${w} ${height}`);
+    const line = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(p[1]).toFixed(1)}`).join("");
+    svg.replaceChildren(
+      svgEl("path", { class: "area", d: `${line}L${w} ${height}L0 ${height}Z` }),
+      svgEl("line", { class: "ref", x1: 0, x2: w, y1: y(ys[0]), y2: y(ys[0]) }),
+      svgEl("path", { class: "ln", d: line }),
+    );
   };
   svg.style.height = `${height}px`;
   const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(draw) : null;
