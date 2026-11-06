@@ -27,8 +27,8 @@ use async_trait::async_trait;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    DividendHistory, Earnings, Financials, Fundamentals, History, Interval, Period, Profile, Quote,
-    StatementPeriod, Symbol,
+    DividendHistory, Earnings, Financials, Fundamentals, History, Insights, InstitutionalOwnership,
+    Interval, MarketReturns, Period, Profile, Quote, StatementPeriod, Symbol,
 };
 
 use super::{
@@ -229,6 +229,18 @@ impl Provider for HistoryRouted {
     async fn dividends(&self, symbol: &Symbol) -> Result<Sourced<DividendHistory>> {
         self.inner.dividends(symbol).await
     }
+
+    async fn insights(&self, symbol: &Symbol) -> Result<Sourced<Insights>> {
+        self.inner.insights(symbol).await
+    }
+
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        self.inner.market_returns().await
+    }
+
+    async fn institutions(&self, symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        self.inner.institutions(symbol).await
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +391,56 @@ mod tests {
             );
             s.warnings.push(format!("{} own warning", self.name));
             Ok(s)
+        }
+    }
+
+    /// The MSN provider over recorded responses, inside a `Chain` as
+    /// `providers::build` makes it.
+    fn msn_chain() -> (Box<dyn Provider>, tempfile::TempDir) {
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        const AS_BBCA: &str = include_str!("../../tests/fixtures/msn/autosuggest_bbca.json");
+        const INSIGHTS: &str = include_str!("../../tests/fixtures/msn/insights_bbca.json");
+        const PEERS: &str = include_str!("../../tests/fixtures/msn/quotes_bbca_insight_peers.json");
+        const SCREENER: &str =
+            include_str!("../../tests/fixtures/msn/screener_52wkhi_id_complete.json");
+        const AS_JTPE: &str = include_str!("../../tests/fixtures/msn/autosuggest_jtpe.json");
+        const JTPE: &str = include_str!("../../tests/fixtures/msn/equities_jtpe_all_signals.json");
+        let be = FixtureBackend::new()
+            .route("csautosuggest/api/v1/Query?query=BBCA", 200, AS_BBCA)
+            .route("finance/insights?ids=bn91jc", 200, INSIGHTS)
+            .route("Finance/Quotes?ids=bkfmar,bkfgqh,cj53lh,bkgttc", 200, PEERS)
+            .route("Finance/Screener", 200, SCREENER)
+            .route("csautosuggest/api/v1/Query?query=JTPE", 200, AS_JTPE)
+            .route("Finance/Equities?ids=bkgwu2", 200, JTPE);
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(be),
+            Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let msn = super::super::msn::Msn::new(fetcher, super::super::Ttls::default(), None);
+        (Box::new(Chain::new(vec![Box::new(msn)])), dir)
+    }
+
+    /// Every capability but candles goes to the wrapped provider untouched,
+    /// whichever routing wrapped it (`--provider msn`, `history_provider
+    /// stockbit`).
+    #[tokio::test]
+    async fn every_other_capability_reaches_the_wrapped_chain() {
+        for (kind, mode) in [(P::Msn, H::Auto), (P::Auto, H::Stockbit)] {
+            let (chain, _dir) = msn_chain();
+            let r = HistoryRouted::new(chain, kind, mode, None, None);
+            let i = r.insights(&sym()).await.unwrap();
+            assert_eq!((i.provider, i.data.symbol.as_str()), ("msn", "BBCA"));
+            let m = r.market_returns().await.unwrap();
+            assert_eq!(m.provider, "msn");
+            assert!(!m.data.is_empty());
+            let h = r
+                .institutions(&Symbol::parse("JTPE").unwrap())
+                .await
+                .unwrap();
+            assert_eq!((h.provider, h.data.holders.len()), ("msn", 9));
         }
     }
 
