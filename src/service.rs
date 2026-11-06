@@ -1016,7 +1016,7 @@ async fn broker_one(
         return latest_broker_day(fetcher, &symbol, q, today).await;
     };
     let mut s =
-        ipot::broker_summary(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
+        ipot::broker_summary_range(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
     if s.data.is_empty() {
         s.warnings
             .push(format!("{symbol}: no trades from {from} to {to}"));
@@ -1216,7 +1216,7 @@ async fn bandar_one(
                 latest
             } else {
                 let end = latest.data.to;
-                let mut r = ipot::broker_summary(
+                let mut r = ipot::broker_summary_range(
                     fetcher,
                     &symbol,
                     q.period.start(end),
@@ -1231,11 +1231,20 @@ async fn bandar_one(
             }
         }
     };
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        let (from, to) = (s.data.from, s.data.to);
+        if let Err(e) = with_value_traded(fetcher, &symbol, from, to, q.board, today, &mut s).await
+        {
+            s.warnings.push(format!(
+                "{symbol}: no value traded from {from} to {to}, so no percentages ({e})"
+            ));
+        }
+    }
     let mut sessions = Vec::new();
     if q.daily {
         let days = bd::weekdays(s.data.from, s.data.to);
         let got: Vec<Result<Sourced<BrokerSummary>>> = stream::iter(days)
-            .map(|d| ipot::broker_summary(fetcher, &symbol, d, d, q.investor, q.board, today))
+            .map(|d| bandar_session(fetcher, &symbol, d, q, today))
             .buffered(3)
             .collect()
             .await;
@@ -1252,6 +1261,42 @@ async fn bandar_one(
         }
     }
     Ok((s, sessions))
+}
+
+/// For one investor side the source publishes that side's buying, not the
+/// value traded, while bandar's percentages are shares of the stock's value
+/// traded: take `total_value` and `total_lots` from the all-investor summary
+/// of the same range and board (one more request, cached).
+async fn with_value_traded(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    from: NaiveDate,
+    to: NaiveDate,
+    board: BrokerBoard,
+    today: NaiveDate,
+    side: &mut Sourced<BrokerSummary>,
+) -> Result<()> {
+    let all =
+        ipot::broker_summary(fetcher, symbol, from, to, BrokerInvestor::All, board, today).await?;
+    side.absorb(&all);
+    side.data.total_value = all.data.total_value;
+    side.data.total_lots = all.data.total_lots;
+    Ok(())
+}
+
+/// One session of the daily series, with the value traded for one side.
+async fn bandar_session(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    day: NaiveDate,
+    q: BandarQuery,
+    today: NaiveDate,
+) -> Result<Sourced<BrokerSummary>> {
+    let mut s = ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today).await?;
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        with_value_traded(fetcher, symbol, day, day, q.board, today, &mut s).await?;
+    }
+    Ok(s)
 }
 
 /// Bandarmology for each ticker: the top 1/3/5/10 buyers against the top
@@ -1377,24 +1422,23 @@ pub struct BandarScreenOptions {
 }
 
 /// One scanned ticker's range summary; owned arguments keep the stream's
-/// future general over lifetimes.
+/// future general over lifetimes. `foreign_net`: rebuild the range's foreign
+/// net from single sessions (see `ipot::broker_summary_range`); a caller
+/// that never shows the net reads the range page alone.
 async fn screen_summary(
     fetcher: &Arc<Fetcher>,
     symbol: Symbol,
     from: NaiveDate,
     to: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> (Symbol, Result<Sourced<BrokerSummary>>) {
-    let r = ipot::broker_summary(
-        fetcher,
-        &symbol,
-        from,
-        to,
-        BrokerInvestor::All,
-        BrokerBoard::All,
-        today,
-    )
-    .await;
+    let (investor, board) = (BrokerInvestor::All, BrokerBoard::All);
+    let r = if foreign_net {
+        ipot::broker_summary_range(fetcher, &symbol, from, to, investor, board, today).await
+    } else {
+        ipot::broker_summary(fetcher, &symbol, from, to, investor, board, today).await
+    };
     (symbol, r)
 }
 
@@ -1492,17 +1536,19 @@ async fn scan_end(
 }
 
 /// Every candidate's summary over `from..=end`, three at a time, then one
-/// sequential pass over provider failures (not unknown codes).
+/// sequential pass over provider failures (not unknown codes). `foreign_net`
+/// as for [`screen_summary`].
 async fn scan_summaries(
     fetcher: &Arc<Fetcher>,
     candidates: &[Symbol],
     from: NaiveDate,
     end: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> Vec<(Symbol, Result<Sourced<BrokerSummary>>)> {
     let mut fetched: Vec<(Symbol, Result<Sourced<BrokerSummary>>)> =
         stream::iter(candidates.to_vec())
-            .map(|s| screen_summary(fetcher, s, from, end, today))
+            .map(|s| screen_summary(fetcher, s, from, end, today, foreign_net))
             .buffer_unordered(3)
             .collect()
             .await;
@@ -1514,7 +1560,7 @@ async fn scan_summaries(
     if !retry.is_empty() {
         tokio::time::sleep(ipot::RECOVER_PAUSE).await;
         for sym in retry {
-            let again = screen_summary(fetcher, sym.clone(), from, end, today).await;
+            let again = screen_summary(fetcher, sym.clone(), from, end, today, foreign_net).await;
             if let Some(slot) = fetched.iter_mut().find(|(s, _)| *s == sym) {
                 *slot = again;
             }
@@ -1526,8 +1572,10 @@ async fn scan_summaries(
 /// Bandarmology screener: reads the most traded stocks (or the given ones)
 /// over the period ending on the latest session and keeps those matching
 /// the preset and filters. One broker-summary request per scanned ticker;
-/// on multi-day periods one history request per row the other filters
-/// left.
+/// on multi-day periods usually three more for the rebuilt foreign net (up
+/// to six when the latest sessions had no trades; see
+/// `ipot::broker_summary_range`) and one history request per row the other
+/// filters left.
 pub async fn bandar_screen(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
@@ -1549,7 +1597,7 @@ pub async fn bandar_screen(
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
     let period = opts.period.as_str();
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, true).await;
     let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
     let mut failed = 0usize;
     let mut reports: Vec<BandarReport> = Vec::new();
@@ -1715,7 +1763,8 @@ pub async fn bandar_broker(
     }
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    // The rows carry no foreign net: the range pages alone.
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, false).await;
 
     let mut failed = 0usize;
     let mut checked = 0usize;
@@ -2328,10 +2377,58 @@ mod tests {
             list.iter().map(|s| Symbol::parse(s).unwrap()).collect()
         }
 
+        /// BRPT and TLKM over the week: the range page (its foreign net
+        /// counts the 16th twice), plus the pages the net is rebuilt from.
+        fn others(be: FixtureBackend) -> FixtureBackend {
+            be.route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
+                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM)
+                .route(
+                    "code=BRPT&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_brpt_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=BRPT&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261015.html"),
+                )
+                .route(
+                    "code=BRPT&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261016.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_tlkm_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=TLKM&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261015.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261016.html"),
+                )
+        }
+
         fn days() -> FixtureBackend {
             let mut be = FixtureBackend::new()
                 .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK);
+                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
+                .route(
+                    "code=BBCA&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_bbca_20261012_20261014.html"
+                    ),
+                );
             for (day, html) in [
                 (
                     "12",
@@ -2391,6 +2488,18 @@ mod tests {
                 Some("CLSA SEKURITAS INDONESIA")
             );
             assert!(r.daily.is_none());
+            // The week page says -4.1 T (the 16th counted twice); the five
+            // sessions one by one give -1.82 T, -18.4% of the 9.9 T traded.
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -1_823.1 / 9_900.0 * 100.0).abs() < 1e-9, "{fpct}");
+            assert!(
+                r.reasons
+                    .iter()
+                    .any(|x| x == "Foreign investors net sold 1.82T (-18.4% of value)."),
+                "{:?}",
+                r.reasons
+            );
 
             // One session: the quote's previous close is the base.
             let got = super::super::bandar(
@@ -2424,9 +2533,61 @@ mod tests {
             assert_eq!(daily.days.len(), 5);
             assert_eq!(daily.days[4].date, d(10, 16));
             assert!(daily.streak < 0);
-            assert_eq!(be.call_count(), 6, "range + five sessions");
+            assert_eq!(
+                be.call_count(),
+                7,
+                "the range, the 16th, the 15th and the rest for the foreign net, then the three other sessions"
+            );
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
             // Base for a range that starts on the 12th is the close of the 9th.
             assert!((r.price_change_pct.unwrap() - (5_175.0 / 6_050.0 - 1.0) * 100.0).abs() < 1e-9);
+        }
+
+        #[tokio::test]
+        async fn one_investor_side_reads_against_the_value_traded() {
+            let (f, be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=F&",
+                        200,
+                        include_str!(
+                            "../tests/fixtures/ipot/brokersummary_bbca_20261016_foreign.html"
+                        ),
+                    )
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=all&",
+                        200,
+                        DAY,
+                    ),
+            );
+            let mut query = q(BandarPeriod::Day1);
+            query.investor = BrokerInvestor::Foreign;
+            query.daily = true;
+            let got = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), query, d(10, 17))
+                .await
+                .unwrap();
+            let r = &got.data[0];
+            assert_eq!(r.investor, BrokerInvestor::Foreign);
+            // The foreign page's T. Val (1.7 T) is their buying; the
+            // percentages are of the 6.6 T BBCA traded.
+            assert_eq!(r.total_value, Some(6_600_000_000_000.0));
+            assert_eq!(r.total_lots, Some(12_600_000.0));
+            let head = r.tiers.iter().find(|t| t.top == 5).unwrap();
+            let pct = head.net_pct.unwrap();
+            assert!(
+                (pct - head.net_value / 6.6e12 * 100.0).abs() < 1e-9,
+                "{pct}"
+            );
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -2.3 / 6.6 * 100.0).abs() < 1e-9, "{fpct}");
+            let daily = r.daily.as_ref().unwrap();
+            assert_eq!(daily.days[0].total_value, Some(6_600_000_000_000.0));
+            assert_eq!(
+                be.call_count(),
+                2,
+                "the side's page and the all-investor page, cached"
+            );
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
         }
 
         #[tokio::test]
@@ -2456,13 +2617,7 @@ mod tests {
 
         #[tokio::test]
         async fn the_screen_keeps_big_distribution_heaviest_first() {
-            let (f, be, _d) = fetcher(
-                FixtureBackend::new()
-                    .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                    .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
-                    .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                    .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM),
-            );
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BandarScreenOptions {
                 period: BandarPeriod::Week1,
                 top: 5,
@@ -2485,6 +2640,15 @@ mod tests {
             let order: Vec<&str> = s.rows.iter().map(|r| r.symbol.as_str()).collect();
             assert_eq!(order, ["BBCA", "TLKM"]);
             assert_eq!(s.rows[0].phase, Some(BandarPhase::Markdown));
+            // Rebuilt from single sessions: TLKM -96.6 B - 17.9 B - 90.2 B
+            // where its week page says -319.8 B.
+            assert_eq!(s.rows[0].foreign_net_value, Some(-1_823_100_000_000.0));
+            assert_eq!(s.rows[1].foreign_net_value, Some(-204_700_000_000.0));
+            assert!(
+                !got.warnings.iter().any(|w| w.contains("no foreign net")),
+                "{:?}",
+                got.warnings
+            );
             assert!(
                 got.warnings
                     .iter()
@@ -2510,10 +2674,7 @@ mod tests {
 
         #[tokio::test]
         async fn broker_activity_finds_one_member_across_the_scan() {
-            let be = days()
-                .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM);
-            let (f, _be, _d) = fetcher(be);
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BrokerActivityOptions {
                 code: " yp ".into(),
                 period: BandarPeriod::Week1,
@@ -2561,6 +2722,11 @@ mod tests {
             assert_eq!(tb.net_value, Some(v(tb) - v(ts)));
             let total: f64 = a.bought.iter().map(v).sum();
             assert!((a.bought_value - total).abs() < 1e-6);
+            // No foreign net in these rows: the week pages alone, none of the
+            // pages the screen rebuilds its net from.
+            assert_eq!(be.calls_matching("start=10/12/2026&end=10/14/2026"), 0);
+            assert_eq!(be.calls_matching("start=10/15/2026&end=10/15/2026"), 0);
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
 
             let bad = BrokerActivityOptions {
                 code: "MIRAE".into(),

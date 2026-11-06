@@ -188,6 +188,10 @@ expect "$TMP/bk.json" '"code":' "broker json has broker rows"
 expect "$TMP/bk.json" '"name": "MANDIRI SEKURITAS"' "broker codes are named from the IDX member list"
 "$IDX" broker BBRI --investor foreign -n 3 >"$TMP/bk.txt" || fail "broker table"
 expect "$TMP/bk.txt" "Top sellers" "broker table has both sides"
+expect "$TMP/bk.txt" "Foreign investors bought" "one investor side says what it bought and sold"
+"$IDX" -o json stocks foreign BBCA --source ipot --days 3 >"$TMP/sfi.json" || fail "stocks foreign --source ipot"
+expect "$TMP/sfi.json" '"schema": "idx.foreign.value.v1"' "ipot foreign flow schema"
+expect "$TMP/sfi.json" '"foreign_sell_value":' "ipot foreign flow has foreign selling in rupiah"
 set +e
 "$IDX" broker ZZZZ --date 2026-10-16 >/dev/null 2>"$TMP/bke.txt"; code=$?
 set -e

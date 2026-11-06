@@ -55,6 +55,26 @@ fn tool_body(r: &serde_json::Value) -> serde_json::Value {
     serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// BBCA's recorded IPOT pages of 10-12..10-16 (all investors and foreign)
+/// in the server's cache, under the URLs it asks for.
+fn seed_ipot_week(dir: &std::path::Path) {
+    let cache = idx::cache::Cache::new(dir.join("cache"));
+    for day in ["12", "13", "14", "15", "16"] {
+        for (fd, suffix) in [("all", ""), ("F", "_foreign")] {
+            let body = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/ipot")
+                    .join(format!("brokersummary_bbca_202610{day}{suffix}.html")),
+            )
+            .unwrap();
+            let url = format!(
+                "https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=10/{day}/2026&end=10/{day}/2026&fd={fd}&board=all"
+            );
+            cache.put(&url, 200, &body).unwrap();
+        }
+    }
+}
+
 #[test]
 fn mcp_server_speaks_json_rpc_over_stdio() {
     let dir = tempfile::tempdir().unwrap();
@@ -68,6 +88,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         "https://query1.finance.yahoo.com/v7/finance/quote?symbols=WIKA.JK,KAEF.JK,BBCA.JK",
         "yahoo/quote_v7_wika_suspended_kaef_bbca.json",
     );
+    seed_ipot_week(dir.path());
     let mut child = spawn_server(dir.path());
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -391,6 +412,56 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["error"]["code"], "offline_miss", "{body}");
     assert_eq!(body["exit_code"], 5);
+
+    // Foreign flow from IPOT, read from the seeded cache.
+    let foreign = tools.iter().find(|t| t["name"] == "idx_foreign").unwrap();
+    for arg in ["days", "from", "to", "source"] {
+        assert!(
+            foreign["inputSchema"]["properties"][arg].is_object(),
+            "idx_foreign takes {arg}"
+        );
+    }
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+        "params": {"name": "idx_foreign", "arguments": {
+            "symbol": "BBCA", "source": "ipot", "from": "2026-10-12", "to": "2026-10-16"
+        }}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 14);
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["schema"], "idx.foreign.value.v1");
+    assert_eq!(body["provider"], "ipot");
+    assert_eq!(body["data"]["days"].as_array().unwrap().len(), 5);
+    assert_eq!(body["data"]["totals"]["foreign_net_value"], -1.8231e12);
+    assert_eq!(body["data"]["rounded"], true);
+
+    for (id, args) in [
+        (15, serde_json::json!({"symbol": "BBCA", "source": "rti"})),
+        (
+            16,
+            serde_json::json!({"symbol": "BBCA", "days": 3, "from": "2026-10-12"}),
+        ),
+        (
+            17,
+            serde_json::json!({"symbol": "BBCA", "source": "ipot", "days": 61}),
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_foreign", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+    }
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

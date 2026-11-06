@@ -246,7 +246,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 43 MCP tools, the CLI command behind each, and 32 that run in the web terminal</p><p class="age">Static</p></header>
+    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 43 MCP tools, the CLI command behind each, and 33 that run in the web terminal</p><p class="age">Static</p></header>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -268,7 +268,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">lexicon sentiment over the headlines</td></tr>
             <tr><td>idx_insights</td><td><code>idx stocks insights BBCA</code></td><td><a href="/terminal?cmd=insights%20BBCA">insights BBCA</a></td><td class="muted">MSN Money's rated statements vs peers and industry</td></tr>
             <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividends, splits, bonus, rights, RUPS, warrants</td></tr>
-            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">foreign buying and selling per session</td></tr>
+            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><a href="/terminal?cmd=foreign%20BBCA">foreign BBCA</a></td><td class="muted">foreign buying and selling per session (the web reads IPOT, in rupiah)</td></tr>
             <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">listed stocks (the web lists codes and names)</td></tr>
             <tr><td>idx_market_foreign</td><td><code>idx market foreign</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">top foreign net buying and selling</td></tr>
             <tr><td>idx_market_brokers</td><td><code>idx market brokers</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">exchange members ranked by the day's value</td></tr>
@@ -297,7 +297,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
         </tbody>
       </table>
     </div>
-    <p class="tools-foot"><span>The 5 idx.co.id tools (foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
+    <p class="tools-foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
     <p class="mline" id="tools-m"><span class="sr-only">The MCP tools, the CLI command behind each and the web terminal command.</span><span aria-hidden="true">IDX&lt;MCP&lt;&lt;TOOLS&lt;&lt;CLI&lt;&lt;WEB</span></p>
   </section>
 </div>

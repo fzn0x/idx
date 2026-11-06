@@ -66,6 +66,37 @@ fn filters(s: &BrokerSummary) -> String {
     format!("{who} · {board}")
 }
 
+fn signed_compact(v: Option<f64>) -> String {
+    match v {
+        Some(x) if x > 0.0 => format!("+{}", f::compact(Some(x))),
+        other => f::compact(other),
+    }
+}
+
+/// The range totals; for one investor side what that side bought and sold
+/// (the source's totals there are its buying, not the value traded).
+fn totals_line(s: &BrokerSummary) -> String {
+    let side = match s.investor {
+        BrokerInvestor::All => {
+            return format!(
+                "Value {} · lots {} · avg {} · foreign net {}\n",
+                f::compact(s.total_value),
+                f::compact(s.total_lots),
+                f::price(s.average_price),
+                f::compact(s.foreign_net_value),
+            )
+        }
+        BrokerInvestor::Foreign => "Foreign",
+        BrokerInvestor::Domestic => "Domestic",
+    };
+    format!(
+        "{side} investors bought {} · sold {} · foreign net {}\n",
+        f::compact(s.buy_value),
+        f::compact(s.sell_value),
+        signed_compact(s.foreign_net_value),
+    )
+}
+
 /// One block per ticker; `top` limits rows per side.
 pub fn broker(list: &[BrokerSummary], top: usize, color: bool) -> String {
     let mut out = String::new();
@@ -87,13 +118,7 @@ pub fn broker(list: &[BrokerSummary], top: usize, color: bool) -> String {
             out.push_str(&format!("No trades from {} to {}.\n", s.from, s.to));
             continue;
         }
-        out.push_str(&format!(
-            "Value {} · lots {} · avg {} · foreign net {}\n",
-            f::compact(s.total_value),
-            f::compact(s.total_lots),
-            f::price(s.average_price),
-            f::compact(s.foreign_net_value),
-        ));
+        out.push_str(&totals_line(s));
         side(&mut out, "Top buyers", &s.buyers, top, true, color);
         side(&mut out, "Top sellers", &s.sellers, top, false, color);
     }
@@ -102,6 +127,11 @@ pub fn broker(list: &[BrokerSummary], top: usize, color: bool) -> String {
     );
     if list.iter().any(|s| s.rounded) {
         out.push_str(" The source rounds figures of a million and more to one decimal.");
+    }
+    if list.iter().any(|s| s.board != BrokerBoard::All) {
+        out.push_str(
+            " The source's foreign net covers every board, so a board filter leaves it out.",
+        );
     }
     out.push('\n');
     out
@@ -140,8 +170,29 @@ mod tests {
             total_lots: Some(12.6e6),
             foreign_net_value: Some(-2.3e12),
             average_price: Some(5_228.0),
+            buy_value: Some(6.6e12),
+            sell_value: Some(6.6e12),
             rounded: true,
         }
+    }
+
+    #[test]
+    fn one_investor_side_says_what_it_bought_and_sold() {
+        let mut s = summary(vec![flow(1, "AK", None, BrokerKind::Foreign)], vec![]);
+        s.investor = BrokerInvestor::Foreign;
+        (s.total_value, s.total_lots, s.average_price) = (None, None, None);
+        (s.buy_value, s.sell_value, s.foreign_net_value) =
+            (Some(605.4e9), Some(301.5e9), Some(303.9e9));
+        let out = broker(&[s.clone()], 10, false);
+        assert!(
+            out.contains("Foreign investors bought 605.4B · sold 301.5B · foreign net +303.9B\n"),
+            "{out}"
+        );
+        assert!(!out.contains("· lots"), "no value-traded line: {out}");
+        s.board = BrokerBoard::Regular;
+        (s.sell_value, s.foreign_net_value) = (None, None);
+        let out = broker(&[s], 10, false);
+        assert!(out.contains("a board filter leaves it out"), "{out}");
     }
 
     #[test]

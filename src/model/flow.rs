@@ -6,6 +6,12 @@
 //! IDX publishes foreign trading in shares only. `foreign_net_value_at_close`
 //! multiplies the net shares by the closing price to give a rupiah scale; it
 //! is not the value foreigners actually traded at, and is named so.
+//!
+//! `idx stocks foreign --source ipot` reads Indo Premier's broker summary
+//! instead: foreign buying, selling and net in rupiah across all boards
+//! ([`ForeignValueFlow`], its own schema). The two sources answer different
+//! questions (shares on the regular board against rupiah on every board) and
+//! share no field names.
 
 use chrono::NaiveDate;
 use schemars::JsonSchema;
@@ -61,6 +67,97 @@ pub struct ForeignFlow {
     /// Oldest first.
     pub days: Vec<ForeignDay>,
     pub totals: ForeignTotals,
+}
+
+/// Where a stock's foreign flow comes from.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ForeignSource {
+    /// idx.co.id's daily stock summary: shares on the regular board.
+    Idx,
+    /// IPOT's broker summary: rupiah across all boards.
+    Ipot,
+}
+
+impl ForeignSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ForeignSource::Idx => "idx",
+            ForeignSource::Ipot => "ipot",
+        }
+    }
+}
+
+impl std::str::FromStr for ForeignSource {
+    type Err = crate::error::IdxError;
+    fn from_str(s: &str) -> crate::error::Result<Self> {
+        <ForeignSource as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            crate::error::IdxError::Usage(format!("invalid source {s:?}; use idx or ipot"))
+        })
+    }
+}
+
+/// One stock on one session from IPOT's broker summary: foreign investors'
+/// trading in rupiah across all boards (negotiated trades included). Figures
+/// of a million and more carry the source's one-decimal rounding (see
+/// [`ForeignValueFlow::rounded`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ForeignValueDay {
+    pub date: NaiveDate,
+    /// Value traded by all investors on all boards, IDR.
+    pub value: Option<f64>,
+    /// Lots traded on all boards; one lot is 100 shares.
+    pub lots: Option<f64>,
+    /// Average traded price, IDR.
+    pub average_price: Option<f64>,
+    /// Value foreign investors bought, IDR, as published.
+    pub foreign_buy_value: Option<f64>,
+    /// Value foreign investors sold, IDR: `foreign_buy_value -
+    /// foreign_net_value`, computed by idx.
+    pub foreign_sell_value: Option<f64>,
+    /// Foreign buy minus sell value, IDR, as published.
+    pub foreign_net_value: Option<f64>,
+    /// `(foreign_buy_value + foreign_sell_value) / (2 * value) * 100`: foreign
+    /// investors' share of the session's trading, computed by idx.
+    pub foreign_share_pct: Option<f64>,
+}
+
+/// Sums over the sessions shown, of the values present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ForeignValueTotals {
+    pub sessions: usize,
+    pub value: f64,
+    pub foreign_buy_value: f64,
+    pub foreign_sell_value: f64,
+    pub foreign_net_value: f64,
+    /// Foreign share of all the sessions' trading, as for one session;
+    /// `null` when nothing was traded.
+    pub foreign_share_pct: Option<f64>,
+    /// Sessions with more foreign buying than selling.
+    pub net_buy_sessions: usize,
+    /// Sessions with more foreign selling than buying.
+    pub net_sell_sessions: usize,
+    /// Same meaning as [`ForeignTotals::streak`].
+    pub streak: i32,
+}
+
+/// Foreign flow of one stock from IPOT, in rupiah (`idx.foreign.value.v1`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ForeignValueFlow {
+    pub symbol: Symbol,
+    pub name: Option<String>,
+    /// First session shown (WIB).
+    pub from: NaiveDate,
+    /// Last session shown (WIB).
+    pub to: NaiveDate,
+    /// Sessions the stock traded, oldest first.
+    pub days: Vec<ForeignValueDay>,
+    pub totals: ForeignValueTotals,
+    /// `true` when the source abbreviated at least one figure (`1.6 M`), so
+    /// those numbers carry only its one-decimal precision.
+    pub rounded: bool,
 }
 
 /// One stock in the market-wide foreign ranking.

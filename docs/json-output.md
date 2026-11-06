@@ -300,10 +300,37 @@ ranked by lots, most first: `rank`, `code`, `name` from the bundled IDX member
 list or `null`, `kind` = `local` | `foreign` | `state_owned` or `null`, `lots`
 (1 lot = 100 shares), `value` in IDR, `average_price`), and the range totals
 `total_value`, `total_lots`, `foreign_net_value` (foreign buy minus sell),
-`average_price` (`null` when nothing traded). The source abbreviates figures
+`average_price` (`null` when nothing traded), `buy_value` and `sell_value`
+(what the selected investors bought and sold, IDR). What the source's
+totals mean depends on the filters:
+
+- All investors: `total_value`, `total_lots` and `average_price` are the
+  range's; `buy_value` and `sell_value` both equal the value traded.
+- One side (`investor` `foreign` or `domestic`): the source's totals are that
+  side's buying, so `total_value`, `total_lots` and `average_price` are
+  `null`, `buy_value` is the side's buying as published, and `sell_value` is
+  computed by idx from the foreign net: foreign `buy_value -
+  foreign_net_value`, domestic `buy_value + foreign_net_value`. BBCA on
+  2026-11-05: foreign investors bought 605.4 B and sold 301.5 B, domestic
+  investors bought 242.8 B, of 848.3 B traded.
+- A board filter: the source's foreign net covers every board whatever the
+  filter, so `foreign_net_value` is `null`, and so is a side's `sell_value`.
+
+The source abbreviates figures
 of a million and more to one decimal (`1.6 M`); those arrive as plain numbers
 at that precision and the summary carries `rounded: true`. Nothing is netted
 per broker or estimated. A range without trades has empty lists and a warning.
+Over a range that starts before the source's latest session and contains it,
+the source's foreign net counts that session twice (its value, lots and lists
+are right). When a range reached the last two trading days at the time it
+was read, `foreign_net_value` is therefore the sum of the last two sessions
+with trades, each read on its own, and of the rest of the range. That is
+usually three more requests (four when the range reaches a session still
+trading), up to six when the latest sessions had no trades (single sessions
+are read back from the end, at most five, until two had trades), and more
+only when a part of the range cached while it was current has to be split
+again; most of them are cached. If those cannot be read it is `null` with a
+warning.
 With `-o csv` the rows are one broker per side: `symbol, from, to, investor,
 board, side (buy|sell), rank, code, name, kind, lots, value, average_price`.
 
@@ -332,7 +359,14 @@ top N, shaped as in `idx.broker.v1`), `daily` (`null` unless `--daily`:
 `distribution_days`, `neutral_days`, `streak` (+3 = three accumulation
 sessions in a row, -2 = two distribution sessions) and
 `cumulative_net_value`), `reasons[]` and `rounded`. A range without trades
-reads `neutral` with a single reason.
+reads `neutral` with a single reason. `foreign_net_value` over several
+sessions is rebuilt from single sessions as described for `idx.broker.v1`;
+`bandar screen` reads its ranges the same way, while `bandar broker`, which
+shows no foreign net, reads only the range pages. With an
+`investor` filter the brokers are that side's, while `total_value`,
+`total_lots` and every percentage stay those of the stock's value traded,
+read from the all-investor summary of the same range and board (one more
+request per range, and per session with `--daily`).
 
 ## `idx.bandar.screen.v1` (`bandar screen`)
 
@@ -387,7 +421,39 @@ sessions in a row, -2 = two net-sell sessions, 0 when the latest was flat).
 IDX publishes foreign trading in shares only; `foreign_net_value_at_close` is
 net shares × close, a rupiah scale for comparing stocks, not the value
 foreigners traded at. `volume` and `value` exclude non-regular (negotiated)
-trades, as the source reports them.
+trades, as the source reports them. `--days N` (MCP `days`) gives the latest
+N sessions; `--from D [--to D]` (MCP `from`, `to`) the sessions of a range
+among the latest 250. `--source ipot` (MCP `source: "ipot"`) answers with
+`idx.foreign.value.v1` instead.
+
+## `idx.foreign.value.v1` (`stocks foreign --source ipot`)
+
+An object, from Indo Premier's broker summary (`idx schema foreign-value`):
+`symbol`, `name`, `from` and `to` (first and last session shown), `days[]`
+oldest first, one per session the stock traded: `date`, `value` (traded by
+all investors on all boards, IDR), `lots`, `average_price`,
+`foreign_buy_value` (as published), `foreign_sell_value`
+(`foreign_buy_value - foreign_net_value`, computed by idx),
+`foreign_net_value` (as published) and `foreign_share_pct` (`(buy + sell) /
+(2 × value) × 100`, computed by idx); `totals` (`sessions`, `value`,
+`foreign_buy_value`, `foreign_sell_value`, `foreign_net_value`,
+`foreign_share_pct` over all the sessions, `net_buy_sessions`,
+`net_sell_sessions`, `streak` as in `idx.foreign.v1`) and `rounded`. Every
+figure is in rupiah across all boards, negotiated trades included, so it is
+not comparable field by field with `idx.foreign.v1`'s regular-board shares;
+the two share no field names. Each session costs two single-session requests
+(all investors and foreign investors; a range's own foreign net is not used,
+see `idx.broker.v1`), cached, at most 60 sessions. A day without trades is
+skipped; a traded day on which no foreigner traded has zeros. The source
+publishes a session after the close: while today trades it is left out with
+a warning, and so is any day whose page shows trades without broker lists
+(not published yet; such a page is cached for minutes, not the week). A
+range with no published session with trades is not found (exit 4), and says
+so when a session was left out for that reason; when a day failed, that
+failure is the error instead, since the day may have traded. `--days N` with
+fewer sessions with trades in the days read gives those, with a warning. It
+rounds figures of a million and more to one decimal (`1.2 T` is ±4 %), and
+`foreign_sell_value` carries the error of both its terms.
 
 ## `idx.market.foreign.v1` (`market foreign`)
 

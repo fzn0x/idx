@@ -159,7 +159,12 @@ pub enum Command {
 Source: Indo Premier (IPOT) broker summary, the top 10 buyers and sellers ranked by lots, with
 lots, value, average price and each broker's class (local, foreign, BUMN). Broker names come from
 the IDX member list bundled with idx. The source rounds figures of a million and more to one
-decimal (1.6 M); JSON marks those summaries with rounded=true.")]
+decimal (1.6 M); JSON marks those summaries with rounded=true.
+
+With --investor foreign or domestic the source's totals are that side's buying, so idx prints what
+the side bought and sold (buy_value, sell_value) instead of the value traded. The source's foreign
+net covers every board, so a --board filter leaves it out. Over a range that reaches the latest
+sessions the foreign net is rebuilt from single sessions (the source counts the latest one twice).")]
     Broker(broker::BrokerArgs),
 
     /// Bandarmology: are the top brokers accumulating or distributing? `detect` per ticker, `screen` across the most traded, `broker` for one broker.

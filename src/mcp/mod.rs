@@ -24,8 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, EarningsFilter, HolderOrigin,
-    Interval, Lens, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
+    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, EarningsFilter, ForeignSource,
+    HolderOrigin, Interval, Lens, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -38,8 +38,8 @@ use crate::output::json::{
     SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::json::{
-    SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
-    SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
+    SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_INDICES,
+    SCHEMA_INSTRUMENTS, SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
 };
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
@@ -393,9 +393,18 @@ pub struct IndicesArgs {
 pub struct ForeignArgs {
     /// One IDX ticker, e.g. "BBCA".
     pub symbol: String,
-    /// Latest sessions to return, 1-250 (default 20).
+    /// Latest sessions to return (default 20; source idx at most 250, ipot at most 60). Not with from/to.
     #[serde(default)]
     pub days: Option<u32>,
+    /// First session of a date range, YYYY-MM-DD.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Last session of the range, YYYY-MM-DD. Default: today; not in the future.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// "idx" (default): idx.co.id, shares on the regular board, returns idx.foreign.v1. "ipot": Indo Premier, rupiah across all boards, returns idx.foreign.value.v1.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -952,7 +961,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_foreign",
-        description = "Foreign investors' buying and selling of one IDX stock over its latest sessions (default 20, at most 250) from idx.co.id's daily stock summary, oldest first: close, change, volume, value, foreign buy and sell (shares), net shares and net shares times the close (a rupiah scale, not the traded value; IDX publishes foreign trading in shares only). Totals give the sums, how many sessions were net buying or net selling and the current streak (+3 = three net-buy sessions in a row). Returns the idx.foreign.v1 envelope."
+        description = "Foreign investors' buying and selling of one IDX stock over its latest sessions (default 20, at most 250) or a from/to date range, oldest first. Default source idx: idx.co.id's daily stock summary with close, change, volume, value, foreign buy and sell (shares), net shares and net shares times the close (a rupiah scale, not the traded value; IDX publishes foreign trading in shares only); returns the idx.foreign.v1 envelope. With source=ipot the flow comes from Indo Premier's broker summary instead: foreign buy, sell and net value in rupiah across all boards, the value traded, average price and foreign investors' share of the trading, two requests per session (cached), at most 60 sessions, figures of a million and more rounded by the source (rounded=true); returns the idx.foreign.value.v1 envelope, and works where idx.co.id refuses the connection. Totals give the sums, how many sessions were net buying or net selling and the current streak (+3 = three net-buy sessions in a row)."
     )]
     async fn foreign(
         &self,
@@ -961,12 +970,26 @@ impl IdxServer {
         finish(
             async {
                 let symbol = Symbol::parse(&a.symbol)?;
+                let source = parse_opt(&a.source, ForeignSource::Idx)?;
                 let list = universe::load(None).unwrap_or_default();
-                let days = a.days.unwrap_or(service::FOREIGN_DEFAULT_DAYS as u32) as usize;
-                ok(
-                    SCHEMA_FOREIGN,
-                    service::foreign_flow(&self.fetcher, &list, &symbol, days).await?,
-                )
+                let today = service::today_wib();
+                let range = service::ForeignRange::from_args(
+                    a.days.map(|d| d as usize),
+                    parse_date(&a.from)?,
+                    parse_date(&a.to)?,
+                    today,
+                )?;
+                match source {
+                    ForeignSource::Idx => ok(
+                        SCHEMA_FOREIGN,
+                        service::foreign_flow(&self.fetcher, &list, &symbol, range, today).await?,
+                    ),
+                    ForeignSource::Ipot => ok(
+                        SCHEMA_FOREIGN_VALUE,
+                        service::foreign_flow_ipot(&self.fetcher, &list, &symbol, range, today)
+                            .await?,
+                    ),
+                }
             }
             .await,
         )
@@ -1258,7 +1281,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_broker",
-        description = "Broker summary for one or more IDX tickers (Indo Premier / IPOT): which brokers bought and sold the stock over one day or a date range. Top 10 buyers and top 10 sellers as the source ranks them (by lots), each with the broker code, name (IDX member list), class (local, foreign, state_owned = BUMN), lots, value in IDR and average price, plus total value, total lots, average price and foreign net value. Without dates each ticker gets its latest session with trades. The source rounds figures of a million and more to one decimal; such summaries carry rounded=true. Returns the idx.broker.v1 envelope; failed tickers are listed in warnings."
+        description = "Broker summary for one or more IDX tickers (Indo Premier / IPOT): which brokers bought and sold the stock over one day or a date range. Top 10 buyers and top 10 sellers as the source ranks them (by lots), each with the broker code, name (IDX member list), class (local, foreign, state_owned = BUMN), lots, value in IDR and average price, plus total value, total lots, average price, foreign net value, buy_value and sell_value. With investor foreign or domestic the source's totals are that side's buying, so total_value, total_lots and average_price are null and buy_value/sell_value say what the side bought and sold; with a board filter foreign_net_value is null (the source's net covers every board). Over a range the foreign net is rebuilt from single sessions (the source counts its latest session twice there). Without dates each ticker gets its latest session with trades. The source rounds figures of a million and more to one decimal; such summaries carry rounded=true. Returns the idx.broker.v1 envelope; failed tickers are listed in warnings."
     )]
     async fn broker(
         &self,
@@ -1296,7 +1319,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_bandar",
-        description = "Bandarmology (bandar detector) for one or more IDX tickers, from the IPOT broker summary: are the top brokers accumulating or distributing? For N = 1, 3, 5 and 10 the top N buyers' value minus the top N sellers' value (bandar value; in lots bandar volume) as a percent of all value traded: +15% or more big_accumulation, +5% accumulation, -5% distribution, -15% or less big_distribution, otherwise neutral. The headline signal uses top (default 5). phase reads it against the price move over the range (accumulation with the price within +2% = quiet_accumulation, distribution with the price within -2% = quiet_distribution, else markup/markdown). bandar_average is the top buyers' average price and bandar_gain_pct the last price against it; foreign_net_pct the foreign flow. Default period 1w ending at the latest session; daily=true adds the session-by-session movement and streak. reasons explain the reading. Heuristic, not advice. Returns the idx.bandar.v1 envelope; failed tickers are listed in warnings."
+        description = "Bandarmology (bandar detector) for one or more IDX tickers, from the IPOT broker summary: are the top brokers accumulating or distributing? For N = 1, 3, 5 and 10 the top N buyers' value minus the top N sellers' value (bandar value; in lots bandar volume) as a percent of all value traded: +15% or more big_accumulation, +5% accumulation, -5% distribution, -15% or less big_distribution, otherwise neutral. The headline signal uses top (default 5). phase reads it against the price move over the range (accumulation with the price within +2% = quiet_accumulation, distribution with the price within -2% = quiet_distribution, else markup/markdown). bandar_average is the top buyers' average price and bandar_gain_pct the last price against it; foreign_net_pct the foreign flow. With investor foreign or domestic the brokers are that side's and every percentage stays a share of the stock's value traded. Default period 1w ending at the latest session; daily=true adds the session-by-session movement and streak. reasons explain the reading. Heuristic, not advice. Returns the idx.bandar.v1 envelope; failed tickers are listed in warnings."
     )]
     async fn bandar(
         &self,
@@ -1389,7 +1412,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_bandar_screen",
-        description = "Bandarmology screener: scans the most traded IDX stocks by value (default 100, or the given symbols) over a period ending at the latest session and returns the ones whose top brokers accumulate or distribute, as defined by idx_bandar. Presets: big-accumulation (acc>=15), accumulation (acc>=5), distribution (acc<=-5), big-distribution (acc<=-15), quiet-accumulation (top brokers buying while the price is flat or down), quiet-distribution, foreign-accumulation (acc>=5 and foreign net >=5% of value), below-bandar (accumulation with the price under the top buyers' average). filter adds clauses on acc, net, lots, fnet, fpct, gain, chg, turnover, conc, price, signal, phase. Rows carry signal, phase, net_pct, net_value, price move, foreign flow, bandar average and gain, and the top buyer codes. One broker-summary request per scanned stock (cached). Heuristic, not advice. Returns the idx.bandar.screen.v1 envelope."
+        description = "Bandarmology screener: scans the most traded IDX stocks by value (default 100, or the given symbols) over a period ending at the latest session and returns the ones whose top brokers accumulate or distribute, as defined by idx_bandar. Presets: big-accumulation (acc>=15), accumulation (acc>=5), distribution (acc<=-5), big-distribution (acc<=-15), quiet-accumulation (top brokers buying while the price is flat or down), quiet-distribution, foreign-accumulation (acc>=5 and foreign net >=5% of value), below-bandar (accumulation with the price under the top buyers' average). filter adds clauses on acc, net, lots, fnet, fpct, gain, chg, turnover, conc, price, signal, phase. Rows carry signal, phase, net_pct, net_value, price move, foreign flow, bandar average and gain, and the top buyer codes. One broker-summary request per scanned stock, and on 1w/1m/3m usually three more for its foreign net (up to six when the latest sessions had no trades), which is rebuilt from single sessions because the source counts its latest session twice over a range (cached). Heuristic, not advice. Returns the idx.bandar.screen.v1 envelope."
     )]
     async fn bandar_screen(
         &self,
@@ -2560,6 +2583,9 @@ mod tests {
             .foreign(Parameters(ForeignArgs {
                 symbol: "BBCA".into(),
                 days: None,
+                from: None,
+                to: None,
+                source: None,
             }))
             .await
             .unwrap();

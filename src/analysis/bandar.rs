@@ -748,6 +748,10 @@ mod tests {
         assert!(t10.buy_share_pct.unwrap() > t5.buy_share_pct.unwrap());
     }
 
+    /// The arithmetic of `report` on the raw week page. That page's foreign
+    /// net (-4.1 T) counts the 16th twice; the service rebuilds it from
+    /// single sessions (-1.82 T, see `ipot::broker_summary_range` and the
+    /// service's bandar tests), but `report` reads whatever summary it gets.
     #[test]
     fn report_reads_the_week() {
         let s = load(WEEK, "BBCA");

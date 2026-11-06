@@ -35,7 +35,9 @@ src/
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
     msn/             autosuggest lookup -> Quotes / Equities (public web key); insights.rs (api.msn.com
                      insights, peers via Quotes), screener.rs (whole-market return windows, one cached POST)
-    ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried) and
+    ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried; a range's
+                     foreign net rebuilt from single sessions, broker_summary_range; one session's
+                     foreign flow in rupiah from the fd=all and fd=F pages, foreign_day) and
                      corporate actions, RUPS, warrants/rights (actions.rs; nested announcement tables)
     idx/             idx.co.id JSON endpoints: stock/broker/index daily summaries, per-stock history,
                      exchange calendar (parse.rs classifies entries), securities, members; Cloudflare
