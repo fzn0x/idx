@@ -8,6 +8,7 @@ import * as ex from "./extras.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
+import * as astroLib from "./astro.js";
 import { fetchWithin } from "./net.js";
 import { scanRows, scanStatus } from "./bandar-scan.js";
 import { syncStatus } from "./ownership-sync.js";
@@ -543,6 +544,45 @@ export function holidays(yearRaw, allRaw, upcomingRaw) {
   return envelope("idx.holidays.v1", data, { provider: "bundled", cached: true, warnings });
 }
 
+// ---- astro --------------------------------------------------------------
+
+/** The web lists up to 90 days of events; the CLI takes 366. */
+const ASTRO_WEB_MAX_DAYS = 90;
+/** The web backtests up to 10y (default 5y); max is CLI-only (9,000+ sessions). */
+const ASTRO_WEB_PERIODS = ["1y", "2y", "5y", "10y"];
+
+/** idx.astro.v1: the sky for a date (computed here) and, with backtest, IHSG's daily returns by factor. */
+export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, periodRaw) {
+  const truthy = (v) => v === "1" || v === "true" || v === true;
+  const date = isoDate(dateRaw, "date") || wibToday();
+  if (date < astroLib.FIRST_DATE || date > astroLib.LAST_DATE) throw usage(`astro covers ${astroLib.FIRST_DATE} to ${astroLib.LAST_DATE}, the range of the planetary elements; got ${date}`);
+  const days = daysRaw == null || daysRaw === "" ? 30 : Number(daysRaw);
+  if (!Number.isInteger(days) || days < 1 || days > ASTRO_WEB_MAX_DAYS) throw usage(`days must be 1 to ${ASTRO_WEB_MAX_DAYS} in the web terminal (the CLI takes 366); got ${daysRaw}`);
+  const natal = String(natalRaw || "launch").trim().toLowerCase();
+  if (!["launch", "base", "none"].includes(natal)) throw usage(`invalid natal chart "${natalRaw}"; use launch, base or none`);
+  const period = String(periodRaw || "5y").trim().toLowerCase();
+  if (period === "max") throw usage("the web terminal backtests up to 10y; the CLI runs max (idx market astro --backtest)");
+  if (!ASTRO_WEB_PERIODS.includes(period)) throw usage(`invalid backtest period "${periodRaw}"; use ${ASTRO_WEB_PERIODS.join(", ")}`);
+  const { data, warnings } = astroLib.sky(date, days, natal);
+  if (!truthy(backtestRaw)) return envelope("idx.astro.v1", data, { provider: "computed", warnings });
+  // The result, not the candles, is cached: one D1 row per period, refreshed every 6 hours.
+  const r = await cached(env, `astro_backtest:${period}`, 6 * 3600, async () => {
+    const h = await history(env, "^JKSE", period, "1d", 0);
+    const hist = { ...h.data };
+    const leftOut = astroLib.dropUnfinished(hist);
+    try {
+      return { backtest: astroLib.backtest(hist, period), left_out: leftOut };
+    } catch (e) {
+      if (e instanceof astroLib.BacktestError) throw e.code === "not_found" ? notFound(e.message) : provider(`backtest: ${e.message}`);
+      throw e;
+    }
+  });
+  data.backtest = r.value.backtest;
+  if (r.value.left_out) warnings.push(`the backtest leaves out ${r.value.left_out}, a session that has not closed yet`);
+  if (r.warning) warnings.push(r.warning);
+  return envelope("idx.astro.v1", data, { provider: "yahoo", cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
+}
+
 // ---- bandarmology ------------------------------------------------------
 
 const BANDAR_WEB_MAX_SYMBOLS = 5;
@@ -923,6 +963,7 @@ export async function route(env, url) {
     case "/bandar/broker": return bandarBroker(env, q.get("code"), q.get("period"), q.get("limit"));
     case "/actions": return actions(env, q.get("symbol"), q.get("since"));
     case "/holidays": return holidays(q.get("year"), q.get("all"), q.get("upcoming"));
+    case "/astro": return astro(env, q.get("date"), q.get("days"), q.get("natal"), q.get("backtest"), q.get("period"));
     case "/instruments": return instruments(q.get("search"), q.get("board"));
     case "/members": return members(q.get("search"));
     case "/ownership/ticker": return ownershipTicker(env, q.get("symbol"), q.get("as_of"));
