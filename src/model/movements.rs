@@ -31,6 +31,19 @@ pub enum MovementFilter {
     CorporateAction,
 }
 
+impl MovementFilter {
+    /// The JSON name (`corporate_action`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MovementFilter::Buy => "buy",
+            MovementFilter::Sell => "sell",
+            MovementFilter::Transfer => "transfer",
+            MovementFilter::Cross => "cross",
+            MovementFilter::CorporateAction => "corporate_action",
+        }
+    }
+}
+
 /// Which filings to ask the source for.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, clap::ValueEnum,

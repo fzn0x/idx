@@ -91,7 +91,7 @@ pub fn holder_movements(r: &HolderMovements, color: bool) -> String {
         filters.push(format!("holder {h}"));
     }
     if let Some(a) = r.action {
-        filters.push(format!("{a:?}").to_ascii_lowercase());
+        filters.push(a.as_str().replace('_', " "));
     }
     if let Some(s) = r.source {
         filters.push(format!("{s:?}").to_ascii_uppercase());
@@ -203,6 +203,27 @@ mod tests {
             ),
             "{t}"
         );
+        // The filter reads as words, not the enum's Debug form.
+        let ca = HolderMovements {
+            action: Some(crate::model::MovementFilter::CorporateAction),
+            source: None,
+            ..r.clone()
+        };
+        assert!(
+            holder_movements(&ca, false)
+                .lines()
+                .next()
+                .unwrap()
+                .ends_with(" · corporate action"),
+            "{}",
+            holder_movements(&ca, false)
+        );
+        for f in [
+            crate::model::MovementFilter::Buy,
+            crate::model::MovementFilter::CorporateAction,
+        ] {
+            assert_eq!(serde_json::to_value(f).unwrap(), f.as_str());
+        }
         for cell in [
             "-10,000,000",
             "40.65% (-0.16)",
