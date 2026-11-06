@@ -371,8 +371,9 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
   `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`,
   `idx_compare`) also take a ticker from another Yahoo Finance market with its
   suffix (`D05.SI`), returned with that suffix; every other tool refuses one
-  with a `usage` error. The server ignores `IDX_EXCHANGE`, so a bare code
-  always means IDX.
+  with a `usage` error. The server does not use `IDX_EXCHANGE`, so a bare
+  code always means IDX, though an invalid value fails startup like any
+  other invalid setting (exit 6).
 
 ## Verifying
 

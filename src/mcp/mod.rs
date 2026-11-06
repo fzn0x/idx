@@ -70,15 +70,25 @@ Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
+// Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolsArg {
-    /// One or more IDX tickers, comma or space separated, e.g. "BBCA,BBRI,TLKM".
+    /// One or more tickers, comma or space separated, e.g. "BBCA,BBRI,TLKM". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbols: String,
 }
 
+// One ticker for an IDX-only tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolArg {
     /// One IDX ticker, e.g. "BBCA".
+    pub symbol: String,
+}
+
+// One ticker for a Yahoo-backed tool (idx_profile, idx_earnings,
+// idx_dividends, idx_fundamental).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct YahooSymbolArg {
+    /// One ticker, e.g. "BBCA". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
 }
 
@@ -91,7 +101,7 @@ pub struct StockbitLoginArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HistoryArgs {
-    /// One IDX ticker, e.g. "TLKM".
+    /// One ticker, e.g. "TLKM". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// Look-back window: 1d, 5d, 1mo, 3mo, 6mo, 1y (default), 2y, 5y, 10y, ytd, max.
     #[serde(default)]
@@ -106,7 +116,7 @@ pub struct HistoryArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FinancialsArgs {
-    /// One IDX ticker, e.g. "BBCA".
+    /// One ticker, e.g. "BBCA". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// annual (default, ~4 fiscal years), quarterly (~5 quarters) or ttm (trailing twelve months).
     #[serde(default)]
@@ -115,7 +125,7 @@ pub struct FinancialsArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TechnicalArgs {
-    /// One IDX ticker, e.g. "BBRI".
+    /// One ticker, e.g. "BBRI". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// Daily candles to analyse: 6mo, 1y (default), 2y, 5y. Shorter windows leave the 200-day averages null.
     #[serde(default)]
@@ -322,7 +332,7 @@ pub struct HolidaysArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReturnsArgs {
-    /// One or more IDX tickers, comma or space separated, e.g. "BBCA,BBRI".
+    /// One or more tickers, comma or space separated, e.g. "BBCA,BBRI". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbols: String,
     /// Index for excess returns: "^JKSE" (IHSG, default), "^JKLQ45", or "none" to skip it.
     #[serde(default)]
@@ -598,7 +608,7 @@ impl IdxServer {
     )]
     async fn profile(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
@@ -645,7 +655,7 @@ impl IdxServer {
     )]
     async fn earnings(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
@@ -662,7 +672,7 @@ impl IdxServer {
     )]
     async fn dividends(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
@@ -992,7 +1002,7 @@ impl IdxServer {
     )]
     async fn fundamental(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
@@ -1863,7 +1873,7 @@ mod tests {
     async fn fundamental_tool_adds_a_verdict() {
         let s = server();
         let r = s
-            .fundamental(Parameters(SymbolArg {
+            .fundamental(Parameters(YahooSymbolArg {
                 symbol: "BBCA".into(),
             }))
             .await

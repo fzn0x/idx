@@ -46,7 +46,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history D05.SI --period 5d             # another Yahoo Finance market, by its suffix"
     )]
     History {
-        /// IDX ticker, e.g. BBCA.
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Look-back window.
@@ -65,6 +65,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks profile BBCA\n  idx -o json stocks profile TLKM | jq .data.sector"
     )]
     Profile {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -74,6 +75,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx -o json stocks financials ASII --period ttm"
     )]
     Financials {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Reporting series.
@@ -89,6 +91,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks earnings BBCA\n  idx -o json stocks earnings BBRI | jq .data.next"
     )]
     Earnings {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -98,6 +101,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks dividends BBCA\n  idx stocks dividends TLKM --limit 20\n  idx -o json stocks dividends BBRI | jq '.data | {ttm_total, ttm_yield_pct, consecutive_years}'\n\nAmounts are per share as reported by the source (split-adjusted on Yahoo), keyed by ex-date.\nThe yearly totals, TTM yield (TTM total / last price) and streak are computed by idx."
     )]
     Dividends {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Most recent payments listed in table mode (JSON, JSONL and CSV carry all).
@@ -110,7 +114,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks returns BBCA\n  idx stocks returns BBCA BBRI BMRI BBNI          # side by side, plus IHSG\n  idx stocks returns TLKM --benchmark ^JKLQ45\n  idx stocks returns ASII --no-benchmark\n  idx -o json stocks returns BBCA | jq '.data[0] | {returns, benchmark}'\n  idx stocks returns - < tickers.txt              # tickers from stdin\n\nComputed by idx from five years of daily closes (total price return, dividends excluded).\nIndex codes keep their caret: ^JKSE is IHSG, ^JKLQ45 is LQ45."
     )]
     Returns {
-        /// One or more IDX tickers, comma or space separated; `-` reads them from stdin.
+        /// One or more tickers, comma or space separated: IDX codes, or another Yahoo Finance market's with its suffix (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
         /// Index to measure excess returns against.
@@ -135,6 +139,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). It is not investment advice."
     )]
     Fundamental {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -144,6 +149,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks technical BBRI\n  idx stocks technical TLKM --period 2y\n  idx -o json stocks technical BBCA | jq '.data.signal'\n\nIndicators are computed locally from daily candles; the signal is a rule score, not investment advice."
     )]
     Technical {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Daily candles to analyse (1y gives the 200-day average room to work).
@@ -252,7 +258,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks compare BBCA BBRI BMRI BBNI\n  idx -o json stocks compare TLKM,ISAT,EXCL | jq '.data[].valuation.pe_trailing'\n  idx -o jsonl stocks screen -f \"pe<10,roe>15\" -n 5 | idx stocks compare -   # the screen's rows"
     )]
     Compare {
-        /// Two or more IDX tickers, comma or space separated; `-` reads them from stdin.
+        /// Two or more tickers, comma or space separated: IDX codes, or another Yahoo Finance market's with its suffix (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
