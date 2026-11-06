@@ -168,14 +168,46 @@ fn add_column(tx: &Transaction, table: &str, column: &str, ty: &str) -> Result<(
     Ok(())
 }
 
-/// Brings the file to [`SCHEMA_VERSION`]. The common case (already current)
-/// reads one pragma and takes no write lock; otherwise the steps run in one
-/// `BEGIN IMMEDIATE` transaction that re-reads the version, so two processes
-/// opening an old file at once migrate it once. A file from a newer idx is
-/// refused rather than altered.
+/// Every table this idx's schema defines, read from the DDL itself.
+fn schema_tables() -> Vec<&'static str> {
+    [
+        SCHEMA_V1,
+        V2_TABLES,
+        resolve::V3_TABLES,
+        super::composition::TABLES,
+    ]
+    .iter()
+    .flat_map(|ddl| ddl.split("CREATE TABLE IF NOT EXISTS ").skip(1))
+    .filter_map(|rest| rest.split_whitespace().next())
+    .collect()
+}
+
+/// `true` when a table of the current schema is missing: a file stamped
+/// current by a pre-release build that numbered the steps differently
+/// (composition as 3, so the `resolutions` step was skipped).
+fn missing_tables(conn: &Connection) -> Result<bool> {
+    let want = schema_tables();
+    let mut st = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .map_err(db_err)?;
+    let have = st
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(db_err)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_err)?;
+    Ok(want.iter().any(|t| !have.iter().any(|h| h == t)))
+}
+
+/// Brings the file to [`SCHEMA_VERSION`]. The common case (already current,
+/// every table present) reads one pragma and the table list and takes no
+/// write lock; otherwise the steps run in one `BEGIN IMMEDIATE` transaction
+/// that re-reads the version, so two processes opening an old file at once
+/// migrate it once. Every step is `IF NOT EXISTS`, and all of them run for
+/// any file that is older or lacks a table, so a file stamped by another
+/// numbering heals. A file from a newer idx is refused rather than altered.
 fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
     let v = user_version(conn)?;
-    if v == SCHEMA_VERSION {
+    if v == SCHEMA_VERSION && !missing_tables(conn)? {
         return Ok(());
     }
     if v > SCHEMA_VERSION {
@@ -188,21 +220,19 @@ fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
     if v > SCHEMA_VERSION {
         return Err(newer_schema(path, v));
     }
-    if v < SCHEMA_VERSION {
+    if v < SCHEMA_VERSION || missing_tables(&tx)? {
         tx.execute_batch(SCHEMA_V1).map_err(db_err)?;
+        tx.execute_batch(V2_TABLES).map_err(db_err)?;
         if v < 2 {
-            tx.execute_batch(V2_TABLES).map_err(db_err)?;
             for (table, column, ty) in V2_COLUMNS {
                 add_column(&tx, table, column, ty)?;
             }
         }
-        if v < 3 {
-            tx.execute_batch(resolve::V3_TABLES).map_err(db_err)?;
-        }
-        if v < 4 {
-            tx.execute_batch(super::composition::TABLES)
-                .map_err(db_err)?;
-        }
+        // 3: the `resolutions` rules; 4: the composition tables. Both run for
+        // any older file: a pre-release build stamped composition as 3.
+        tx.execute_batch(resolve::V3_TABLES).map_err(db_err)?;
+        tx.execute_batch(super::composition::TABLES)
+            .map_err(db_err)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(db_err)?;
     }
@@ -2013,7 +2043,7 @@ mod tests {
             db.conn
                 .execute_batch(
                     "DROP TABLE composition; DROP TABLE composition_releases;
-                     PRAGMA user_version = 2;",
+                     DROP TABLE resolutions; PRAGMA user_version = 2;",
                 )
                 .unwrap();
         }
@@ -2023,12 +2053,70 @@ mod tests {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
-                 WHERE name IN ('composition', 'composition_releases', 'composition_symbol')",
+                 WHERE name IN ('composition', 'composition_releases', 'composition_symbol',
+                                'resolutions')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 3);
+        assert_eq!(tables, 4);
         assert_eq!(db.releases().unwrap()[0].positions, Some(43));
+    }
+
+    /// A file a pre-release build left: the composition tables but no
+    /// `resolutions`, stamped `stamp` (3 when that build numbered composition
+    /// 3, 4 once a build that skipped the rules step had opened it). Opening
+    /// heals it, and the import (which reads the rules) works.
+    fn heals_a_file_without_resolutions(stamp: i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ownership.sqlite");
+        {
+            let db = OwnershipDb::open(&path).unwrap();
+            db.conn
+                .execute_batch(&format!(
+                    "DROP TABLE resolutions; PRAGMA user_version = {stamp};"
+                ))
+                .unwrap();
+        }
+        let mut db = OwnershipDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'resolutions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "stamped {stamp}");
+        db.import(&parse_xlsx(SEP).unwrap(), "xlsx", "sep.xlsx", "s")
+            .unwrap();
+        assert_eq!(db.releases().unwrap()[0].positions, Some(43));
+    }
+
+    #[test]
+    fn a_version_3_file_with_composition_but_no_rules_heals() {
+        heals_a_file_without_resolutions(3);
+    }
+
+    #[test]
+    fn a_file_stamped_current_without_the_rules_table_heals() {
+        heals_a_file_without_resolutions(SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn schema_tables_come_from_the_ddl() {
+        let t = schema_tables();
+        for name in [
+            "releases",
+            "holding_lines",
+            "resolutions",
+            "composition_releases",
+            "composition",
+        ] {
+            assert!(t.contains(&name), "{name} in {t:?}");
+        }
+        let db = OwnershipDb::in_memory().unwrap();
+        assert!(!missing_tables(&db.conn).unwrap());
     }
 }
