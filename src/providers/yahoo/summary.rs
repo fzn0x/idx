@@ -244,9 +244,32 @@ fn count(v: &Value, key: &str) -> Option<u32> {
     raw(v, key).map(|x| x.max(0.0) as u32)
 }
 
+/// `true` when a consensus row carries a figure. For a ticker no analyst
+/// covers Yahoo still sends the four trend rows, every amount empty or padded
+/// and every count zero; those rows say nothing and are left out.
+fn has_consensus(e: &EarningsEstimate) -> bool {
+    [
+        e.eps_avg,
+        e.eps_low,
+        e.eps_high,
+        e.eps_year_ago,
+        e.eps_growth_pct,
+        e.revenue_avg,
+        e.revenue_low,
+        e.revenue_high,
+        e.revenue_year_ago,
+        e.revenue_growth_pct,
+    ]
+    .iter()
+    .any(Option::is_some)
+        || e.eps_analysts.is_some_and(|n| n > 0)
+        || e.revenue_analysts.is_some_and(|n| n > 0)
+}
+
 /// The consensus rows of `earningsTrend.trend[]` for this and next quarter and
 /// fiscal year (`0q`, `+1q`, `0y`, `+1y`), in source order. Long-term growth
-/// rows (`+5y`, `-5y`), when present, are not period estimates and are left out.
+/// rows (`+5y`, `-5y`), when present, are not period estimates and are left
+/// out, and so are rows with no figure at all ([`has_consensus`]).
 fn estimates(trend: &Value) -> Vec<EarningsEstimate> {
     let Some(rows) = trend.get("trend").and_then(Value::as_array) else {
         return vec![];
@@ -282,6 +305,7 @@ fn estimates(trend: &Value) -> Vec<EarningsEstimate> {
                 revenue_analysts: count(rev, "numberOfAnalysts"),
             })
         })
+        .filter(has_consensus)
         .collect()
 }
 
@@ -384,6 +408,8 @@ mod tests {
         include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm.json");
     const EARN_TLKM_20261106: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm_20261106.json");
+    const EARN_BEEF_20261106: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_beef_20261106.json");
     const NOT_FOUND: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_not_found.json");
 
@@ -537,6 +563,27 @@ mod tests {
         let e = parse_earnings(EARN_BBCA, &sym("BBCA")).unwrap();
         assert_eq!(e.estimates.len(), 4);
         assert_eq!(e.estimates[3].eps_avg, Some(526.90076));
+    }
+
+    #[test]
+    fn uncovered_ticker_has_no_consensus_rows() {
+        // Recorded 2026-11-06: BEEF has no analyst coverage, yet Yahoo sends
+        // the four trend rows with empty EPS, padded revenue and zero counts.
+        let e = parse_earnings(EARN_BEEF_20261106, &sym("BEEF")).unwrap();
+        assert_eq!(e.estimates, vec![]);
+        assert!(e.quarters.is_empty() && e.yearly.is_empty() && e.quarterly.is_empty());
+        assert_eq!(e.name.as_deref(), Some("PT Estika Tata Tiara Tbk"));
+        let n = e.next.unwrap();
+        assert_eq!((n.eps_avg, n.revenue_avg, n.analysts), (None, None, None));
+        // A row with only its revenue analysts' count is kept: zero is padding,
+        // a positive count is coverage.
+        let row = |n: u32| {
+            serde_json::json!({"trend": [{"period": "0q", "earningsEstimate": {},
+                "revenueEstimate": {"avg": {"raw": 0, "fmt": null},
+                    "numberOfAnalysts": {"raw": n, "fmt": null}}}]})
+        };
+        assert!(estimates(&row(0)).is_empty());
+        assert_eq!(estimates(&row(2))[0].revenue_analysts, Some(2));
     }
 
     #[test]

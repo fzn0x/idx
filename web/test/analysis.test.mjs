@@ -92,6 +92,17 @@ test("earnings estimates: this and next quarter and year, same numbers as the Ru
   assert.equal(nq.revenue_analysts, 0);
 });
 
+test("earnings estimates: a ticker no analyst covers has no consensus rows (recorded 2026-11-06)", () => {
+  const e = y.parseEarnings(JSON.parse(fixture("yahoo/quote_summary_earnings_beef_20261106.json")).quoteSummary.result[0], "BEEF");
+  assert.deepEqual(e.estimates, []);
+  assert.equal(e.name, "PT Estika Tata Tiara Tbk");
+  assert.equal(e.next.eps_avg, null);
+  assert.equal(e.next.revenue_avg, null);
+  const row = (n) => ({ trend: [{ period: "0q", earningsEstimate: {}, revenueEstimate: { avg: { raw: 0, fmt: null }, numberOfAnalysts: { raw: n, fmt: null } } }] });
+  assert.deepEqual(y.parseEstimates(row(0)), []);
+  assert.equal(y.parseEstimates(row(2))[0].revenue_analysts, 2);
+});
+
 test("timeseries pivot", () => {
   const body = JSON.parse(fixture("yahoo/timeseries_bbca.json"));
   const f = y.parseTimeseries(body, "BBCA", "annual");

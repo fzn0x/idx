@@ -964,6 +964,39 @@ fn earnings_filters_apply_to_every_format() {
 }
 
 #[test]
+fn uncovered_ticker_has_no_consensus_rows() {
+    // Recorded 2026-11-06: Yahoo sends BEEF four empty consensus rows.
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query2.finance.yahoo.com/v10/finance/quoteSummary/BEEF.JK?modules=earnings,earningsHistory,earningsTrend,calendarEvents,price",
+        "yahoo/quote_summary_earnings_beef_20261106.json",
+    );
+    let run = |args: &[&str]| -> String {
+        let out = idx(&sb.cache, &sb.config)
+            .args(args)
+            .args(["stocks", "earnings", "BEEF"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let v: serde_json::Value = serde_json::from_str(&run(&["-o", "json"])).unwrap();
+    assert_eq!(v["data"]["estimates"], serde_json::json!([]));
+    let t = run(&[]);
+    assert!(!t.contains("Consensus"), "{t}");
+    // CSV keeps its one flattened row of the payload when no list has rows.
+    let csv = run(&["-o", "csv"]);
+    let mut lines = csv.lines();
+    assert!(lines.next().unwrap().starts_with("symbol,"), "{csv}");
+    assert_eq!(lines.count(), 1, "{csv}");
+}
+
+#[test]
 fn financials_show_several_statements() {
     let sb = sandbox();
     seed(

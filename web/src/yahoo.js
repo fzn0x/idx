@@ -322,8 +322,11 @@ export function parseFundamentals(r, symbol) {
 
 // earningsTrend rows for this and next quarter and fiscal year (port of
 // estimates() in src/providers/yahoo/summary.rs). Counts keep a zero; amounts
-// padded as {raw: 0, fmt: null} are null.
+// padded as {raw: 0, fmt: null} are null. A ticker no analyst covers still gets
+// the four rows with nothing in them; those are left out (has_consensus).
 const ESTIMATE_KINDS = { "0q": "quarterly", "+1q": "quarterly", "0y": "annual", "+1y": "annual" };
+const ESTIMATE_FIGURES = ["eps_avg", "eps_low", "eps_high", "eps_year_ago", "eps_growth_pct", "revenue_avg", "revenue_low", "revenue_high", "revenue_year_ago", "revenue_growth_pct"];
+const hasConsensus = (r) => ESTIMATE_FIGURES.some((k) => r[k] != null) || r.eps_analysts > 0 || r.revenue_analysts > 0;
 export function parseEstimates(trend) {
   return (trend?.trend || []).filter((t) => ESTIMATE_KINDS[t?.period]).map((t) => {
     const eps = t.earningsEstimate || {}, rev = t.revenueEstimate || {};
@@ -336,7 +339,7 @@ export function parseEstimates(trend) {
       revenue_avg: amount(rev, "avg"), revenue_low: amount(rev, "low"), revenue_high: amount(rev, "high"), revenue_year_ago: amount(rev, "yearAgoRevenue"),
       revenue_growth_pct: pct(rev, "growth"), revenue_analysts: raw(rev, "numberOfAnalysts"),
     };
-  });
+  }).filter(hasConsensus);
 }
 
 export function parseEarnings(r, symbol) {

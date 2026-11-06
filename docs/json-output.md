@@ -423,7 +423,9 @@ Symbols that failed are listed in `warnings`.
   `eps_year_ago`, `eps_growth_pct` (percent, versus a year earlier),
   `eps_analysts`, `revenue_avg`/`revenue_low`/`revenue_high`,
   `revenue_year_ago`, `revenue_growth_pct`, `revenue_analysts`. An optional
-  addition to `idx.earnings.v1`: envelopes from older versions lack it.
+  addition to `idx.earnings.v1`: envelopes from older versions lack it. A
+  period with no figure and no analyst is left out, so a ticker no analyst
+  covers has an empty list.
 - Yahoo pads figures it has not loaded as zeros; idx reports those as `null`
   (a quarter's `revenue`, `earnings` and `profit_margin_pct`, a consensus
   amount), never as `0`. `profit_margin_pct` is set only when both revenue and
