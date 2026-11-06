@@ -87,8 +87,11 @@ bandar, foreign, actions, market, ownership, stockbit) reads IDX tickers only
 and refuses `D05.SI` with exit 2. MSN and Stockbit cover IDX only, so with
 `--provider auto` Yahoo answers for other markets. Saved watchlist entries
 keep their suffix (`D05.SI`), so changing `exchange` later does not change
-them. MCP tools take explicit suffixes but ignore `IDX_EXCHANGE`: a bare code
-is always IDX there.
+them. For the same reason idx's own output piped back through `-` (`-o json`,
+`-o jsonl`, a watchlist file) reads a bare code as IDX; only typed text on
+stdin follows `exchange`. MCP tools take explicit suffixes but do not use
+`IDX_EXCHANGE`: a bare code is always IDX there. An invalid value still stops
+`idx mcp` from starting, as any invalid setting does.
 
 ## Cache
 

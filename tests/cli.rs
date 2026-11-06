@@ -1502,6 +1502,74 @@ fn symbols_from_stdin() {
 }
 
 #[test]
+fn idx_output_piped_back_ignores_the_default_exchange() {
+    // idx writes IDX tickers bare, so its own output read back through `-`
+    // stays on IDX even with another market as the default for typed codes.
+    let sb = seeded();
+    let file = sb.cache.join("watchlist.txt");
+    let watch = |args: &[&str], stdin: Vec<u8>| -> serde_json::Value {
+        let out = idx(&sb.cache, &sb.config)
+            .env("IDX_WATCHLIST", &file)
+            .env("IDX_EXCHANGE", "SI")
+            .arg("-o")
+            .arg("json")
+            .args(args)
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let add = |args: &[&str]| watch(&[&["watch", "add"], args].concat(), vec![]);
+    // Typed arguments follow IDX_EXCHANGE, so the IDX ones say .JK.
+    let v = add(&["BBCA.JK", "TLKM.JK", "D05.SI"]);
+    assert_eq!(
+        v["data"]["symbols"],
+        serde_json::json!(["BBCA", "TLKM", "D05.SI"])
+    );
+    // `-o jsonl watch list | watch rm -` empties the list.
+    let listed = idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["-o", "jsonl", "watch", "list"])
+        .output()
+        .unwrap();
+    let v = watch(&["watch", "rm", "-"], listed.stdout);
+    assert_eq!(v["data"]["symbols"], serde_json::json!([]));
+    // So does the watchlist file itself.
+    add(&["BBCA.JK", "TLKM.JK", "D05.SI"]);
+    let saved = std::fs::read(&file).unwrap();
+    let v = watch(&["watch", "rm", "-"], saved);
+    assert_eq!(v["data"]["symbols"], serde_json::json!([]));
+    // Typed text follows IDX_EXCHANGE, as the arguments do.
+    let v = watch(&["watch", "add", "-"], b"D05\n".to_vec());
+    assert_eq!(v["data"]["symbols"], serde_json::json!(["D05.SI"]));
+
+    // A quotes envelope with BBCA quotes IDX's BBCA (the .JK quote is seeded).
+    let envelope = r#"{"schema":"idx.quotes.v1","data":[
+        {"symbol":"BBCA"},{"symbol":"BBRI"},{"symbol":"TLKM"}]}"#;
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_EXCHANGE", "SI")
+        .args(["-o", "jsonl", "stocks", "quote", "-"])
+        .write_stdin(envelope)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let symbols: Vec<String> = json_lines(&out.stdout)
+        .iter()
+        .map(|r| r["symbol"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(symbols, ["BBCA", "BBRI", "TLKM"]);
+}
+
+#[test]
 fn quiet_silences_notes_but_not_the_payload_or_errors() {
     let sb = seeded();
     let run = |args: &[&str]| idx(&sb.cache, &sb.config).args(args).output().unwrap();

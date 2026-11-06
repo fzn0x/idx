@@ -75,7 +75,10 @@ The same rule reads idx's own output back: `-` in a ticker list accepts an
 `-o json` envelope or `-o jsonl` lines on stdin and takes each row's `symbol`
 (JSON strings are tickers), so
 `idx -o jsonl stocks screen -f "pe<10" -n 5 | idx stocks compare -` works
-without jq.
+without jq. A bare ticker read this way is an IDX one whatever `IDX_EXCHANGE`
+says, because that is what idx meant when it wrote it (`D05.SI` keeps its
+suffix); the same holds for a watchlist file (first line `# idx watchlist`).
+Other text on stdin is read like typed arguments and follows `IDX_EXCHANGE`.
 
 ## Envelope
 

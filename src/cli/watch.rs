@@ -17,6 +17,10 @@ use crate::service;
 
 use super::{emit, input, Context};
 
+/// How the watchlist file starts. `-` input that starts with it is read as
+/// saved entries (a bare code is IDX), see `cli/input.rs`.
+pub const HEADER_TAG: &str = "# idx watchlist";
+
 #[derive(Debug, Args)]
 pub struct WatchArgs {
     #[command(subcommand)]
@@ -83,7 +87,7 @@ fn save(path: &std::path::Path, symbols: &[Symbol]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut text = String::from("# idx watchlist: one ticker per line\n");
+    let mut text = format!("{HEADER_TAG}: one ticker per line\n");
     for s in symbols {
         text.push_str(s.as_str());
         text.push('\n');

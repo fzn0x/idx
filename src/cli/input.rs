@@ -9,13 +9,22 @@
 //! rows `-o jsonl` prints, [`jsonl::rows`]), an array its items, anything else
 //! is itself a row; a row that is a string is a ticker, an object gives its
 //! `symbol`.
+//!
+//! Exchange: idx writes an IDX ticker bare (`BBCA`) and another market's with
+//! its suffix (`D05.SI`), and reads JSON input and a watchlist file (first line
+//! `# idx watchlist`) the same way: a bare code there is IDX whatever
+//! `IDX_EXCHANGE` says. Other text is what a person typed, so on the
+//! Yahoo-backed commands it follows `IDX_EXCHANGE` like the arguments do.
 
 use std::io::{IsTerminal, Read};
 
 use serde_json::Value;
 
 use crate::error::{IdxError, Result};
+use crate::model::IDX_EXCHANGE;
 use crate::output::jsonl;
+
+use super::watch::HEADER_TAG;
 
 /// The symbol arguments with a `-` replaced by the tickers on stdin. Leaves
 /// the list untouched (and stdin unread) when there is no `-`.
@@ -34,7 +43,7 @@ pub fn expand(
 ) -> Result<Vec<String>> {
     let pieces: Vec<&str> = raw
         .iter()
-        .flat_map(|r| r.split(|c: char| c == ',' || c.is_whitespace()))
+        .flat_map(|r| r.split(is_separator))
         .filter(|p| !p.is_empty())
         .collect();
     match pieces.iter().filter(|p| **p == "-").count() {
@@ -74,15 +83,17 @@ pub fn symbols_from_input(text: &str) -> Result<Vec<String>> {
     let out = if json {
         symbols_from_json(text)?
     } else {
+        let watchlist = text.trim_start().starts_with(HEADER_TAG);
         text.lines()
-            .flat_map(|line| {
-                line.split('#')
-                    .next()
-                    .unwrap_or("")
-                    .split(|c: char| c == ',' || c.is_whitespace())
-            })
+            .flat_map(|line| line.split('#').next().unwrap_or("").split(is_separator))
             .filter(|p| !p.is_empty())
-            .map(str::to_string)
+            .map(|p| {
+                if watchlist {
+                    canonical(p)
+                } else {
+                    p.to_string()
+                }
+            })
             .collect()
     };
     if out.is_empty() {
@@ -114,12 +125,30 @@ fn symbols_from_json(text: &str) -> Result<Vec<String>> {
                 Value::Object(m) => m.get("symbol").and_then(Value::as_str),
                 _ => None,
             };
-            if let Some(s) = sym.map(str::trim).filter(|s| !s.is_empty()) {
-                out.push(s.to_string());
-            }
+            let pieces = sym.into_iter().flat_map(|s| s.split(is_separator));
+            out.extend(pieces.filter(|p| !p.is_empty()).map(canonical));
         }
     }
     Ok(out)
+}
+
+fn is_separator(c: char) -> bool {
+    c == ',' || c.is_whitespace()
+}
+
+/// A code read as idx writes it, made explicit: a bare code is IDX, so it gets
+/// `.JK` and the default exchange of the Yahoo-backed commands cannot turn it
+/// into another market's (`Symbol::parse` drops the `.JK` again). `D05.SI`,
+/// `^JKSE` and anything that is not a plain code stay as they are, so a bad
+/// one is reported as it was written.
+fn canonical(code: &str) -> String {
+    let bare = code.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if bare {
+        format!("{code}.{IDX_EXCHANGE}")
+    } else {
+        code.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -142,31 +171,69 @@ mod tests {
         assert_eq!(from("BBCA\nBBRI, TLKM\n"), ["BBCA", "BBRI", "TLKM"]);
         assert_eq!(from("bbca bbri\r\ntlkm\r\n"), ["bbca", "bbri", "tlkm"]);
         assert_eq!(from("\u{feff}BBCA\n"), ["BBCA"]);
-        let watchlist = "# idx watchlist: one ticker per line\nBBCA\nBBRI   # banks\n\nTLKM\n";
-        assert_eq!(from(watchlist), ["BBCA", "BBRI", "TLKM"]);
+        // A watchlist file holds saved entries: a bare code there is IDX.
+        let watchlist =
+            "# idx watchlist: one ticker per line\nBBCA\nBBRI   # banks\n\nTLKM\nD05.SI\n";
+        assert_eq!(from(watchlist), ["BBCA.JK", "BBRI.JK", "TLKM.JK", "D05.SI"]);
+        // Only that first line marks one: other text stays as typed.
+        assert_eq!(from("# my picks\nD05\n"), ["D05"]);
     }
 
     #[test]
     fn json_envelopes_lines_and_strings() {
         let quotes = vec![
             Quote::empty(Symbol::parse("BBCA").unwrap(), "t"),
-            Quote::empty(Symbol::parse("BBRI").unwrap(), "t"),
+            Quote::empty(Symbol::parse_on("D05.SI", "JK").unwrap(), "t"),
         ];
         let env = Envelope::from_sourced(SCHEMA_QUOTES, Sourced::fresh(quotes, "t"));
-        assert_eq!(from(&to_pretty(&env).unwrap()), ["BBCA", "BBRI"]);
+        // idx writes an IDX ticker bare; read back it is made explicit.
+        assert_eq!(from(&to_pretty(&env).unwrap()), ["BBCA.JK", "D05.SI"]);
         // JSON Lines: objects with a symbol, and plain strings.
         assert_eq!(
             from("{\"symbol\":\"TLKM\",\"price\":1}\n{\"symbol\":\"ASII\"}\n"),
-            ["TLKM", "ASII"]
+            ["TLKM.JK", "ASII.JK"]
         );
-        assert_eq!(from("\"BBCA\"\n\"TLKM\"\n"), ["BBCA", "TLKM"]);
-        assert_eq!(from("[\"BBCA\", {\"symbol\": \"BMRI\"}]"), ["BBCA", "BMRI"]);
+        assert_eq!(from("\"BBCA\"\n\"TLKM\"\n"), ["BBCA.JK", "TLKM.JK"]);
+        assert_eq!(
+            from("[\"BBCA\", {\"symbol\": \"BMRI\"}, \"^JKSE\"]"),
+            ["BBCA.JK", "BMRI.JK", "^JKSE"]
+        );
+        // A string holding a list splits like an argument does.
+        assert_eq!(from("[\" bbca, BBRI \"]"), ["bbca.JK", "BBRI.JK"]);
+        // What is not a plain code is left for the parser to report as written.
+        assert_eq!(from("[\"B$CA\", \"-\"]"), ["B$CA", "-"]);
         // An envelope's rows follow the schema's JSONL rule.
         let screen = r#"{"schema":"idx.screen.v1","data":{"total_matches":2,
             "rows":[{"symbol":"BBCA"},{"symbol":"BBNI"}]}}"#;
-        assert_eq!(from(screen), ["BBCA", "BBNI"]);
+        assert_eq!(from(screen), ["BBCA.JK", "BBNI.JK"]);
         let watch = r#"{"schema":"idx.watchlist.v1","data":{"path":"x","symbols":["TLKM"]}}"#;
-        assert_eq!(from(watch), ["TLKM"]);
+        assert_eq!(from(watch), ["TLKM.JK"]);
+    }
+
+    #[test]
+    fn idx_output_read_back_ignores_the_default_exchange() {
+        // With `IDX_EXCHANGE=SI`, typed text takes the default, while idx's
+        // own output (JSON, a watchlist file) keeps meaning what it meant.
+        let read = |text: &str| -> Vec<String> {
+            let raw = expand(&args(&["-"]), false, || Ok(text.to_string())).unwrap();
+            Symbol::parse_list_on(raw, "SI")
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().to_string())
+                .collect()
+        };
+        assert_eq!(read("D05 BBCA.JK"), ["D05.SI", "BBCA"]);
+        assert_eq!(
+            read("{\"symbol\":\"BBCA\"}\n{\"symbol\":\"D05.SI\"}\n"),
+            ["BBCA", "D05.SI"]
+        );
+        assert_eq!(
+            read("# idx watchlist: one ticker per line\nBBCA\nD05.SI\n"),
+            ["BBCA", "D05.SI"]
+        );
+        // The IDX-only commands read the same input as plain IDX codes.
+        let raw = expand(&args(&["-"]), false, || Ok("[\"bbca\"]".into())).unwrap();
+        assert_eq!(Symbol::parse_list(raw).unwrap()[0].as_str(), "BBCA");
     }
 
     #[test]
