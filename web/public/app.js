@@ -26,33 +26,46 @@ export async function api(path) {
   return body;
 }
 
-const DASH = "—";
+/** What a table or a line shows where the source has no value (the JSON says null). */
+export const NA = "n/a";
 const nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export const fmt = {
-  price(v) { if (v == null) return DASH; return Number.isInteger(v) || Math.abs(v - Math.round(v)) < 1e-9 ? nf0.format(v) : nf2.format(v); },
-  int(v) { return v == null ? DASH : nf0.format(v); },
-  num(v, d = 2) { return v == null ? DASH : new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }).format(v); },
-  ratio(v) { return v == null ? DASH : nf2.format(v); },
-  pct(v) { if (v == null) return DASH; const s = nf2.format(v); return v > 0 ? `+${s}%` : `${s}%`; },
-  pctPlain(v) { return v == null ? DASH : `${nf2.format(v)}%`; },
-  change(v) { if (v == null) return DASH; const s = fmt.price(Math.abs(v)); return v > 0 ? `+${s}` : v < 0 ? `-${s}` : s; },
+  price(v) { if (v == null) return NA; return Number.isInteger(v) || Math.abs(v - Math.round(v)) < 1e-9 ? nf0.format(v) : nf2.format(v); },
+  int(v) { return v == null ? NA : nf0.format(v); },
+  num(v, d = 2) { return v == null ? NA : new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }).format(v); },
+  ratio(v) { return v == null ? NA : nf2.format(v); },
+  pct(v) { if (v == null) return NA; const s = nf2.format(v); return v > 0 ? `+${s}%` : `${s}%`; },
+  pctPlain(v) { return v == null ? NA : `${nf2.format(v)}%`; },
+  change(v) { if (v == null) return NA; const s = fmt.price(Math.abs(v)); return v > 0 ? `+${s}` : v < 0 ? `-${s}` : s; },
   compact(v) {
-    if (v == null) return DASH;
+    if (v == null) return NA;
     const a = Math.abs(v);
     const [n, s] = a >= 1e12 ? [v / 1e12, "T"] : a >= 1e9 ? [v / 1e9, "B"] : a >= 1e6 ? [v / 1e6, "M"] : a >= 1e3 ? [v / 1e3, "K"] : [v, ""];
     return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: Math.abs(n) >= 100 ? 1 : 2 }).format(n)}${s}`;
   },
-  wib(iso) { if (!iso) return DASH; const m = String(iso).match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} WIB` : iso; },
-  time(iso) { if (!iso) return DASH; const m = String(iso).match(/T(\d{2}):(\d{2})/); return m ? `${m[1]}:${m[2]} WIB` : iso; },
-  date(iso) { return iso ? String(iso).slice(0, 10) : DASH; },
-  text(v) { return v == null || v === "" ? DASH : String(v); },
+  wib(iso) { if (!iso) return NA; const m = String(iso).match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} WIB` : iso; },
+  time(iso) { if (!iso) return NA; const m = String(iso).match(/T(\d{2}):(\d{2})/); return m ? `${m[1]}:${m[2]} WIB` : iso; },
+  date(iso) { return iso ? String(iso).slice(0, 10) : NA; },
+  /** An instant (UTC ISO or Date) as Jakarta wall time: 2026-11-06 07:45 WIB. */
+  wibAt(t) { const ms = t instanceof Date ? t.getTime() : Date.parse(t); return Number.isFinite(ms) ? `${new Date(ms + 7 * 3600e3).toISOString().slice(0, 16).replace("T", " ")} WIB` : NA; },
+  text(v) { return v == null || v === "" ? NA : String(v); },
+  /** Elapsed seconds as 00:42, 12:05 or 3h 05m. */
+  age(secs) {
+    if (secs == null || !Number.isFinite(secs)) return NA;
+    const s = Math.max(0, Math.floor(secs)), p = (n) => String(n).padStart(2, "0");
+    return s < 3600 ? `${p(Math.floor(s / 60))}:${p(s % 60)}` : `${Math.floor(s / 3600)}h ${p(Math.floor((s % 3600) / 60))}m`;
+  },
 };
 
 export const signClass = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 
-/** Builds a table. cols: [{h, k|f, cls, l}] ; rows: objects. */
+/** An IDX ticker as a link that runs `quote` in the web terminal. */
+export const TICKER = /^[A-Z]{4}$/;
+export const quoteHref = (symbol) => `/terminal?cmd=${encodeURIComponent(`quote ${symbol}`)}`;
+
+/** Builds a table. cols: [{h, k|f, cls, l}] ; rows: objects. Ticker cells in a `sym` column link to their quote. */
 export function table(cols, rows, opts = {}) {
   const t = document.createElement("table");
   t.className = "tbl";
@@ -73,7 +86,9 @@ export function table(cols, rows, opts = {}) {
       const td = tr.insertCell();
       const val = c.f ? c.f(row) : row[c.k];
       if (val instanceof Node) td.appendChild(val);
-      else td.textContent = val == null ? DASH : val;
+      else if (val == null || val === NA) { td.textContent = NA; td.classList.add("na"); }
+      else if (typeof c.cls === "string" && c.cls.split(" ").includes("sym") && TICKER.test(val)) td.appendChild(el("a", { href: quoteHref(val), text: val }));
+      else td.textContent = val;
       if (c.l) td.classList.add("l");
       if (c.cls) { const cl = typeof c.cls === "function" ? c.cls(row) : c.cls; if (cl) td.className += ` ${cl}`; }
       if (c.name) td.dataset.col = c.name;
@@ -89,17 +104,21 @@ export function wrapScroll(node) {
   d.className = "tbl-wrap";
   d.appendChild(node);
   const frag = document.createDocumentFragment();
-  const cue = el("p", { class: "scroll-cue", text: "scroll \u2192 for more columns" });
+  const cue = el("p", { class: "scroll-cue", text: "scroll for more columns" });
   frag.append(d, cue);
+  scrollCue(d, cue);
+  return frag;
+}
+
+/** Fades the right edge of a sideways-scrolling table while more columns remain, and shows its cue. */
+export function scrollCue(d, cue) {
   const check = () => {
-    const more = d.scrollWidth - d.clientWidth - d.scrollLeft > 4;
-    d.classList.toggle("scrollable", more);
-    cue.classList.toggle("on", d.scrollWidth > d.clientWidth + 4);
+    d.classList.toggle("scrollable", d.scrollWidth - d.clientWidth - d.scrollLeft > 4);
+    cue?.classList.toggle("on", d.scrollWidth > d.clientWidth + 4);
   };
   requestAnimationFrame(check);
   d.addEventListener("scroll", check, { passive: true });
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(check).observe(d);
-  return frag;
 }
 
 export function el(tag, attrs = {}, children = []) {
@@ -115,53 +134,109 @@ export function el(tag, attrs = {}, children = []) {
   return n;
 }
 
-/** Sparkline from [[ts, price], ...]. */
-export function sparkline(points, { width = 600, height = 44, cls = "tape" } = {}) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("preserveAspectRatio", "none");
-  svg.setAttribute("class", cls);
-  svg.setAttribute("role", "img");
-  if (points.length < 2) return svg;
+const SVG = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs = {}) => { const n = document.createElementNS(SVG, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+let dotGrids = 0;
+
+/**
+ * A tape from [[ts, price], ...] drawn as a lit line on a dot-matrix grid:
+ * one column of dots per `pitch` pixels, the last close of each column lit,
+ * steep moves filled in like a departure board's LEDs, and the first value
+ * marked across as the reference row. Redraws at its own width.
+ */
+export function sparkline(points, { height = 36, cls = "tape", pitch = 4, label } = {}) {
+  const svg = svgEl("svg", { class: `${cls} dotline`, role: "img", preserveAspectRatio: "none" });
+  if (points.length < 2) { svg.setAttribute("aria-label", "not enough points to draw"); return svg; }
   const ys = points.map((p) => p[1]);
   const min = Math.min(...ys), max = Math.max(...ys), span = max - min || 1;
-  const x = (i) => (i / (points.length - 1)) * width;
-  const y = (v) => height - 2 - ((v - min) / span) * (height - 4);
-  const d = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
-  const up = ys[ys.length - 1] >= ys[0];
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", d);
-  path.setAttribute("fill", "none");
-  path.setAttribute("stroke", up ? "#0f6b31" : "#b3122f");
-  path.setAttribute("stroke-width", "1.6");
-  path.setAttribute("vector-effect", "non-scaling-stroke");
-  svg.appendChild(path);
-  const base = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  base.setAttribute("x1", 0); base.setAttribute("x2", width);
-  base.setAttribute("y1", y(ys[0])); base.setAttribute("y2", y(ys[0]));
-  base.setAttribute("stroke", "#b9bcb5"); base.setAttribute("stroke-dasharray", "3 4"); base.setAttribute("vector-effect", "non-scaling-stroke");
-  svg.insertBefore(base, path);
-  svg.setAttribute("aria-label", `index tape from ${fmt.price(ys[0])} to ${fmt.price(ys[ys.length - 1])}`);
+  svg.classList.add(ys[ys.length - 1] >= ys[0] ? "rise" : "fall");
+  svg.setAttribute("aria-label", label || `from ${fmt.price(ys[0])} to ${fmt.price(ys[ys.length - 1])}, low ${fmt.price(min)}, high ${fmt.price(max)}`);
+  const id = `dots-${++dotGrids}`;
+  let drawn = 0;
+  const draw = () => {
+    const w = Math.round(svg.getBoundingClientRect().width);
+    if (!w || w === drawn) return;
+    drawn = w;
+    const cols = Math.max(2, Math.floor(w / pitch)), rows = Math.max(3, Math.floor(height / pitch));
+    const W = cols * pitch, Hh = rows * pitch, r = pitch * 0.32;
+    svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
+    const row = (v) => rows - 1 - Math.round(((v - min) / span) * (rows - 1));
+    const cx = (c) => c * pitch + pitch / 2;
+    const pattern = svgEl("pattern", { id, width: pitch, height: pitch, patternUnits: "userSpaceOnUse" });
+    pattern.append(svgEl("circle", { class: "ghost", cx: pitch / 2, cy: pitch / 2, r }));
+    const defs = svgEl("defs");
+    defs.append(pattern);
+    const grid = svgEl("rect", { width: W, height: Hh, fill: `url(#${id})` });
+    const ref = svgEl("g", { class: "ref" });
+    const base = row(ys[0]);
+    for (let c = 0; c < cols; c += 2) ref.append(svgEl("circle", { cx: cx(c), cy: base * pitch + pitch / 2, r }));
+    const lit = svgEl("g", { class: "lit" });
+    let prev = null;
+    for (let c = 0; c < cols; c++) {
+      const i = Math.min(points.length - 1, Math.floor(((c + 1) * points.length) / cols) - 1);
+      const y = row(ys[Math.max(0, i)]);
+      const [lo, hi] = prev == null ? [y, y] : [Math.min(prev, y), Math.max(prev, y)];
+      for (let k = lo; k <= hi; k++) if (prev == null || k !== prev || k === y) lit.append(svgEl("circle", { cx: cx(c), cy: k * pitch + pitch / 2, r }));
+      prev = y;
+    }
+    svg.replaceChildren(defs, grid, ref, lit);
+  };
+  svg.style.height = `${height}px`;
+  const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(draw) : null;
+  if (ro) ro.observe(svg); else requestAnimationFrame(draw);
+  /** Stops redrawing; call before dropping a tape that is replaced. */
+  svg.stop = () => ro?.disconnect();
   return svg;
 }
 
-/** Marks cells whose text changed since the last render (the re-ink moment). */
-export function reink(oldTable, newTable) {
-  if (!oldTable) return;
-  const prev = new Map();
-  for (const tr of oldTable.tBodies[0]?.rows || []) prev.set(tr.dataset.key, [...tr.cells].map((c) => c.textContent));
-  for (const tr of newTable.tBodies[0]?.rows || []) {
-    const was = prev.get(tr.dataset.key);
-    if (!was) continue;
-    [...tr.cells].forEach((c, i) => { if (was[i] !== c.textContent) c.classList.add("reink"); });
-  }
+const motionOk = () => !matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * The board's flip: a changed cell shows one frame of inverted dots, then
+ * its new value. No tween; under reduced motion the value just changes.
+ */
+export function flip(node) {
+  if (!node || !motionOk()) return;
+  node.classList.remove("flip");
+  void node.offsetWidth;
+  node.classList.add("flip");
+  node.addEventListener("animationend", () => node.classList.remove("flip"), { once: true });
 }
 
-export function copyButton(text) {
-  const b = el("button", { class: "copy", type: "button", text: "Copy" });
+/** Sets a node's text and class, flipping it when the text changed. */
+export function setLive(node, text, cls) {
+  if (!node) return;
+  const changed = node.textContent !== text;
+  node.textContent = text;
+  if (cls != null) node.className = cls;
+  if (changed && node.dataset.live === "1") flip(node);
+  node.dataset.live = "1";
+}
+
+/**
+ * A panel's machine line: the provenance fields read as a passport's
+ * machine-readable zone. Screen readers get the plain sentence.
+ */
+export function machineLine(node, fields, sentence) {
+  const mrz = fields.filter((f) => f != null && f !== "").map((f) => String(f).toUpperCase().replace(/\s+/g, "<")).join("<<");
+  node.replaceChildren(el("span", { class: "sr-only", text: sentence }), el("span", { "aria-hidden": "true", text: mrz }));
+}
+
+export function copyButton(text, label = "Copy") {
+  const b = el("button", { class: "copy", type: "button", text: label, "aria-label": `${label}: ${text}` });
   b.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1400); }
-    catch { b.textContent = "Select & copy"; }
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => (b.textContent = label), 1400); }
+    catch { b.textContent = "Select and copy"; }
   });
   return b;
 }
+
+let universe = null;
+/** Listed tickers with names, [{ symbol, name }], loaded once for the typeahead. */
+export function loadUniverse() {
+  universe ??= api("universe").then((e) => e.data).catch(() => { universe = null; return []; });
+  return universe;
+}
+
+/** "PT Bank Central Asia Tbk" as the board prints it: without the PT and Tbk. */
+export const shortName = (name) => String(name || "").replace(/^PT\.?\s+/i, "").replace(/,?\s+Tbk\.?$/i, "").trim();

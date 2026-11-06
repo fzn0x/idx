@@ -165,7 +165,7 @@ export async function market(env) {
     gainers: liquidByChg.slice(0, 10).map(trim),
     losers: liquidByChg.slice(-10).reverse().map(trim),
     most_active: byValue.slice(0, 10).map(trim),
-    heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 12).map(trim),
+    heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 16).map(trim),
     universe: SYMBOLS.length,
   };
   return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, warnings: b.value.warnings || [] });
