@@ -1684,6 +1684,8 @@ mod tests {
         let s = server();
         let mut names = s.tool_names();
         names.sort();
+        // The count `idx mcp setup` prints.
+        assert_eq!(names.len(), clients::TOOL_COUNT);
         assert_eq!(
             names,
             [

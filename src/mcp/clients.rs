@@ -8,6 +8,10 @@
 use serde::Serialize;
 use serde_json::json;
 
+/// Tools the server lists, as the recipes tell the user (a unit test in
+/// `mcp` checks it against the server).
+pub const TOOL_COUNT: usize = 37;
+
 /// How the client should launch or reach idx.
 #[derive(Debug, Clone)]
 pub enum Launcher {
@@ -362,9 +366,9 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
                     wrapped("mcpServers", stdio_entry(l, json!({}))),
                 ));
             }
-            notes.push(
-                "Check with `claude mcp list`; inside a session `/mcp` shows the 36 tools.".into(),
-            );
+            notes.push(format!(
+                "Check with `claude mcp list`; inside a session `/mcp` shows the {TOOL_COUNT} tools."
+            ));
         }
         "claude-desktop" => {
             if http {
@@ -906,7 +910,7 @@ pub fn render(s: &Setup) -> String {
             out.push_str(&format!("Note: {n}\n"));
         }
     }
-    out.push_str("\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists 37 tools; idx_brief is the one-call starting point.\n");
+    out.push_str(&format!("\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists {TOOL_COUNT} tools; idx_brief is the one-call starting point.\n"));
     out
 }
 
