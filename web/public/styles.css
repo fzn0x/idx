@@ -312,7 +312,7 @@ kbd {
 /* ---- about, developers, notes --------------------------------------------- */
 /* The reference sections below the board read as the page's articles: an ink rule over a
    plain head, like the IHSG lead, so only the two live tables wear the navy band. */
-.about, .dev { border-top: 4px solid var(--ink); }
+.about, .dev { border-top: 4px solid var(--ink); border-radius: 0 0 var(--radius) var(--radius); }
 .about .sec-h, .dev .sec-h { padding: 14px 18px 12px; background: none; color: var(--ink); border-bottom: 1px solid var(--rule); border-radius: 0; }
 .about .sec-h h2, .dev .sec-h h2 { font-size: 1.35rem; }
 .about .sec-h .sub, .dev .sec-h .sub, .dev .sec-h .age { color: var(--ink-2); }

@@ -8,6 +8,15 @@
         "rule": "design-system-color",
         "value": "#475569",
         "createdAt": "2026-11-06T12:09:14.914Z"
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "web/public/styles.css"
+        ],
+        "createdAt": "2026-11-06T18:01:12.883Z",
+        "reason": "Claude, 2026-11-07: .about/.dev set border-radius 0 0 4px 4px under the 4px ink rule (computed 0px 0px 4px 4px in Chrome); the static scan reads .module's radius without the override"
       }
     ]
   }
