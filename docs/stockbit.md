@@ -48,7 +48,21 @@ Once logged in, point any quote/history command at the provider:
 idx --provider stockbit stocks quote BBCA BBRI      # realtime, not delayed
 idx --provider stockbit stocks history BBCA --period 1mo
 idx config set provider stockbit                    # make it the default
+idx config set history_provider stockbit            # or: candles only, free providers for the rest
 ```
+
+`history_provider` (`--history-provider`, `IDX_HISTORY_PROVIDER`) picks where
+candles come from apart from `provider`. With `history_provider = "stockbit"`
+the free providers keep serving quotes, fundamentals, financials and the rest
+while history, technicals, returns and the brief take Stockbit's candles. Under
+`provider = "stockbit"` the default `history_provider = "auto"` keeps on
+Stockbit only the requests whose bars Stockbit returns as asked (daily over
+`1mo` to `1y`, hourly over `5d`, weekly over `5y`, same-day intraday) and sends
+the rest (`2y` or `5y` daily, `1y` weekly, any monthly bars) to Yahoo with a
+note; when
+the session fails it falls back to Yahoo with a warning. `history_provider =
+"stockbit"` keeps every window on Stockbit. See
+[configuration.md](configuration.md#history-provider).
 
 And read the live order book (Stockbit-only — the free sources have no depth):
 
@@ -60,10 +74,15 @@ idx -o json stockbit orderbook TLKM | jq '.data.bids[0]'
 
 Sizes in the order book are **shares** (one IDX lot is 100 shares); values are
 IDR. History candle volumes are converted from Stockbit's lots to shares so they
-match the other providers. Stockbit chooses the candle granularity from the
-window — `1mo`/`3mo`/`1y` are daily, `5d`/intraday is hourly, `5y` is weekly —
-and a warning says so when it is not the daily bars the interval nominally asks
-for.
+match the other providers. Stockbit chooses the candle granularity and span from
+the window (`1d` is one-minute; `5d`, and intraday intervals over any longer
+period, hourly over one week; `1mo` to `1y` daily; `2y` weekly over three years;
+`5y` and longer weekly over five years), and a warning says so whenever those
+bars are not the `--interval` asked for or that span is not the `--period`
+(`--period 1y --interval 1wk` gets daily bars and a warning; `--period 1mo
+--interval 1h` gets one week of hourly bars and a warning, since the candles
+are not trimmed to the period; `--period 5d --interval 1h` gets the hourly bars
+it asked for and none).
 
 Foreign flow in the order book (`foreign_buy`, `foreign_sell`, `foreign_net`)
 comes with a flag, `has_foreign_bs`. While it is `false` the figures are not the
@@ -81,7 +100,8 @@ the flag, so either way the figures show only when Stockbit marks them current.
 
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run
-them without `--provider stockbit`.
+them without `--provider stockbit`, or keep `provider` on `auto` and set only
+`history_provider = "stockbit"`.
 
 ## MCP
 
@@ -96,7 +116,9 @@ The MCP server exposes three Stockbit tools alongside the rest:
   `idx stockbit login` in a terminal themselves.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
-provider: `idx --provider stockbit mcp`.
+provider: `idx --provider stockbit mcp`. For Stockbit candles with the free
+providers for everything else, register it with
+`-e IDX_HISTORY_PROVIDER=stockbit` instead.
 
 ## Where the session lives
 

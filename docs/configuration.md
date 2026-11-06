@@ -15,6 +15,7 @@ Override the location with `--config PATH` or `IDX_CONFIG=PATH`.
 ```sh
 idx config init                       # write a commented template
 idx config set provider yahoo
+idx config set history_provider stockbit   # candles from your Stockbit session
 idx config set cache.quote_ttl_secs 120
 idx config get                        # effective settings after all layers
 idx config get provider               # one key, as stored in the file
@@ -23,6 +24,7 @@ idx config path
 
 ```toml
 provider = "auto"      # auto | yahoo | msn | stockbit
+history_provider = "auto"  # auto | yahoo | stockbit: where candles come from
 output = "table"       # auto | table | json | jsonl | csv
 color = "auto"         # auto | always | never
 timeout_secs = 15
@@ -42,6 +44,7 @@ history_ttl_secs = 3600
 | variable | flag | meaning |
 | --- | --- | --- |
 | `IDX_PROVIDER` | `--provider` | `auto`, `yahoo`, `msn`, `stockbit` |
+| `IDX_HISTORY_PROVIDER` | `--history-provider` | `auto` (default), `yahoo`, `stockbit`: where candles come from, see below |
 | `IDX_OUTPUT` | `-o, --output` | `table` (default), `json`, `jsonl`, `csv`, or `auto`: a table when stdout is a terminal, `json` when it is piped or captured |
 | `IDX_QUIET` | `-q, --quiet` | `1`/`true`/`yes`/`on`: stderr carries errors only (no warnings, notes or loading line); ignored when `-v` is given. No config key |
 | `IDX_EXCHANGE` | | Yahoo Finance suffix a bare ticker gets in `stocks quote`, `history`, `profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`, `technical`, `compare` and `watch`: `JK` (default, IDX), `SI`, `HK`, ... One to four letters, an optional leading dot, any case; `IDX` means `JK`. Config key `exchange` |
@@ -92,6 +95,32 @@ them. For the same reason idx's own output piped back through `-` (`-o json`,
 stdin follows `exchange`. MCP tools take explicit suffixes but do not use
 `IDX_EXCHANGE`: a bare code is always IDX there. An invalid value still stops
 `idx mcp` from starting, as any invalid setting does.
+
+## History provider
+
+`history_provider` decides where candles come from, separately from
+`provider`. Every command that reads candles follows it: `stocks history`,
+`technical`, `returns`, `brief`, `bandar` price moves, `watch returns` and the
+MCP tools behind them.
+
+| `provider` | `history_provider` | candles from |
+| --- | --- | --- |
+| `auto`, `yahoo` | `auto`, `yahoo` | Yahoo (unchanged) |
+| `msn` | `auto`, `yahoo` | Yahoo: MSN has no price history |
+| `stockbit` | `auto` | Stockbit where its bars are the ones asked for (daily over `1mo` to `1y`, hourly over `5d`, weekly over `5y`, and same-day intraday), Yahoo otherwise; Yahoo also when Stockbit fails (no session, expired token, network) |
+| `stockbit` | `yahoo` | Yahoo |
+| any | `stockbit` | Stockbit, no fallback (needs `idx stockbit login`, exit 2 without it) |
+
+Stockbit picks the bar size from the window, so under `provider = "stockbit"`
+a `2y` or `5y` daily request would come back weekly and feed weekly returns
+into daily analytics; `auto` sends those to Yahoo and says so in a warning.
+A fallback after a Stockbit failure is a warning too
+(`stockbit history failed (...); candles from yahoo`), and the JSON envelope's
+`provider` names the source the candles came from. `history_provider =
+"stockbit"` with the default `provider = "auto"` keeps the free providers for
+quotes and fundamentals and takes only candles from Stockbit; a request it does
+not serve as asked then carries a warning naming the bars and span it returned
+(`--period 1mo --interval 1h` comes back as one week of hourly bars).
 
 ## Cache
 

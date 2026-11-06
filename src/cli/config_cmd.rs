@@ -77,6 +77,7 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 }
             ));
             s.push_str(&format!("provider    : {}\n", settings.provider));
+            s.push_str(&format!("history     : {}\n", settings.history_provider));
             if settings.output_setting == crate::output::OutputSetting::Auto {
                 s.push_str("output      : auto (table on a terminal, json when piped)\n");
             } else {

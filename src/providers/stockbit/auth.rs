@@ -105,7 +105,8 @@ pub struct Status {
 }
 
 /// Reads and writes the session file and performs the refresh. One per
-/// provider instance; the inflight lock collapses concurrent refreshes.
+/// session file per process (`StockbitOptions::store` hands out the same
+/// one); the inflight lock collapses concurrent refreshes.
 pub struct SessionStore {
     path: PathBuf,
     /// Seed tokens from the environment, used only when the file is empty.

@@ -16,7 +16,7 @@ use crate::model::Symbol;
 use crate::output::json::SCHEMA_ORDERBOOK;
 use crate::output::{self, table};
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
-use crate::providers::Ttls;
+use crate::providers::{StockbitOptions, Ttls};
 
 use super::{emit, Context};
 
@@ -58,12 +58,15 @@ pub enum StockbitCmd {
     },
 }
 
+/// The process-wide store for the configured session file (shared with the
+/// provider `--provider stockbit` builds).
 fn store(ctx: &Context) -> Arc<SessionStore> {
-    Arc::new(SessionStore::new(
-        ctx.settings.stockbit_session.clone(),
-        ctx.settings.stockbit_access_seed.clone(),
-        ctx.settings.stockbit_refresh_seed.clone(),
-    ))
+    StockbitOptions {
+        session_path: ctx.settings.stockbit_session.clone(),
+        access_seed: ctx.settings.stockbit_access_seed.clone(),
+        refresh_seed: ctx.settings.stockbit_refresh_seed.clone(),
+    }
+    .store()
 }
 
 fn provider(ctx: &Context, store: Arc<SessionStore>) -> Stockbit {

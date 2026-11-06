@@ -854,15 +854,40 @@ Symbols that failed are listed in `warnings`.
   outflows are negative.
 - Banks have no EBITDA, gross profit or operating income series at the source,
   so those are `null`.
+- Every period carries all three statements. `--statement income,cash` narrows
+  the table only: JSON and CSV keep the three, since a blanked statement would
+  read as data the source does not have.
 
 ## `idx.earnings.v1` (`stocks earnings`)
 
-`data`: `quarters[]` (`period` like `3Q2025`, `end_date`, `reported_date`,
-`eps_actual`, `eps_estimate`, `surprise_pct`), `yearly[]` and `quarterly[]`
-(`period`, `revenue`, `earnings`, `profit_margin_pct`), `next` (`date`,
-`date_is_estimate`, `eps_avg`/`eps_low`/`eps_high`, `eps_growth_pct`,
+`data`: `estimates[]`, `quarters[]` (`period` like `3Q2025`, `end_date`,
+`reported_date`, `eps_actual`, `eps_estimate`, `surprise_pct`), `yearly[]` and
+`quarterly[]` (`period`, `revenue`, `earnings`, `profit_margin_pct`), `next`
+(`date`, `date_is_estimate`, `eps_avg`/`eps_low`/`eps_high`, `eps_growth_pct`,
 `revenue_avg`/`revenue_low`/`revenue_high`, `analysts`), `ex_dividend_date`,
-`dividend_date`, `source`.
+`dividend_date`, `source`, `scope`.
+
+- `estimates[]` is the analyst consensus for this and next quarter and fiscal
+  year, in source order: `period` (`0q`, `+1q`, `0y`, `+1y`), `period_type`
+  (`quarterly` or `annual`), `end_date`, `eps_avg`/`eps_low`/`eps_high`,
+  `eps_year_ago`, `eps_growth_pct` (percent, versus a year earlier),
+  `eps_analysts`, `revenue_avg`/`revenue_low`/`revenue_high`,
+  `revenue_year_ago`, `revenue_growth_pct`, `revenue_analysts`. An optional
+  addition to `idx.earnings.v1`: envelopes from older versions lack it. A
+  period with no figure and no analyst is left out, so a ticker no analyst
+  covers has an empty list.
+- Yahoo pads figures it has not loaded as zeros; idx reports those as `null`
+  (a quarter's `revenue`, `earnings` and `profit_margin_pct`, a consensus
+  amount in `estimates[]` or `next`), never as `0`. Analyst counts keep their
+  zero. `profit_margin_pct` is set only when both revenue and earnings are.
+- `scope` is `null` unless rows were filtered out (`stocks earnings --annual
+  --quarterly --reported --estimates`, MCP `period` and `kind`). Then it is
+  `{ "annual", "quarterly", "reported", "estimates" }`, each `true` when those
+  rows were kept, and an empty list or a `null` `next` comes from the filter,
+  not the source. Giving neither flag of a pair keeps both. `quarters[]` and
+  `quarterly[]` are reported quarterly rows, `yearly[]` reported annual rows,
+  `estimates[]` follow their `period_type`, and `next` counts as a quarterly
+  estimate. The filter applies to JSON and CSV alike.
 
 ## `idx.technical.v1` (`stocks technical`)
 

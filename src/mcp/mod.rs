@@ -24,8 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, HolderOrigin, Interval, Lens,
-    Period, StatementPeriod, Symbol, IDX_EXCHANGE,
+    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, EarningsFilter, HolderOrigin,
+    Interval, Lens, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -146,6 +146,18 @@ pub struct FinancialsArgs {
     /// annual (default, ~4 fiscal years), quarterly (~5 quarters) or ttm (trailing twelve months).
     #[serde(default)]
     pub period: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EarningsArgs {
+    /// One ticker, e.g. "TLKM". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
+    pub symbol: String,
+    /// Keep only annual (fiscal-year) or quarterly rows. Leave it out (or "all") for both.
+    #[serde(default)]
+    pub period: Option<String>,
+    /// Keep only reported figures or analyst estimates (consensus and the next date). Leave it out (or "all") for both.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -702,7 +714,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_history",
-        description = "OHLCV candles for one IDX ticker, oldest first, with a summary (first/last close, change %, high, low, average volume). Returns the idx.history.v1 envelope. Use limit to bound the payload; the summary always covers the whole period."
+        description = "OHLCV candles for one IDX ticker, oldest first, with a summary (first/last close, change %, high, low, average volume). Returns the idx.history.v1 envelope. Use limit to bound the payload; the summary always covers the whole period. The envelope's provider names the source the candles came from (the server's history_provider setting)."
     )]
     async fn history(
         &self,
@@ -747,7 +759,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_financials",
-        description = "Income statement, balance sheet and cash flow for one IDX ticker, oldest period first, amounts in reporting currency (IDR). Returns the idx.financials.v1 envelope. Banks have no EBITDA/gross profit series (null)."
+        description = "Income statement, balance sheet and cash flow for one IDX ticker, oldest period first, amounts in reporting currency (IDR). Returns the idx.financials.v1 envelope. Every period carries all three statements (the CLI's --statement only narrows its table). Banks have no EBITDA/gross profit series (null)."
     )]
     async fn financials(
         &self,
@@ -777,16 +789,20 @@ impl IdxServer {
 
     #[tool(
         name = "idx_earnings",
-        description = "Reported quarterly EPS versus analyst estimates with surprise %, fiscal-year and quarterly revenue/earnings, the next earnings date with consensus, and dividend dates for one IDX ticker. Returns the idx.earnings.v1 envelope."
+        description = "Reported quarterly EPS versus analyst estimates with surprise %, fiscal-year and quarterly revenue and earnings, analyst consensus for this and next quarter and fiscal year, the next earnings date, and dividend dates for one IDX ticker. period (annual | quarterly) and kind (reported | estimates) keep only those rows; data.scope says what was kept. Returns the idx.earnings.v1 envelope."
     )]
     async fn earnings(
         &self,
-        Parameters(a): Parameters<YahooSymbolArg>,
+        Parameters(a): Parameters<EarningsArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
                 let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
-                ok(SCHEMA_EARNINGS, self.provider.earnings(&symbol).await?)
+                let filter = EarningsFilter::from_names(a.period.as_deref(), a.kind.as_deref())?;
+                ok(
+                    SCHEMA_EARNINGS,
+                    service::earnings(self.provider.as_ref(), &symbol, filter).await?,
+                )
             }
             .await,
         )
@@ -2277,6 +2293,32 @@ mod tests {
 
     fn json_of(r: &CallToolResult) -> serde_json::Value {
         serde_json::from_str(&text(r)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn earnings_tool_checks_its_filters_before_fetching() {
+        let s = server();
+        let args = |period: Option<&str>, kind: Option<&str>| EarningsArgs {
+            symbol: "TLKM".into(),
+            period: period.map(Into::into),
+            kind: kind.map(Into::into),
+        };
+        for bad in [args(Some("weekly"), None), args(None, Some("forecasts"))] {
+            let r = s.earnings(Parameters(bad)).await.unwrap();
+            assert_eq!(r.is_error, Some(true));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+        // Valid filters reach the provider (the fake has no earnings).
+        for good in [
+            args(Some("annual"), Some("estimates")),
+            args(Some("all"), None),
+            args(None, Some("reported")),
+        ] {
+            let r = s.earnings(Parameters(good)).await.unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], "unsupported", "{v}");
+        }
     }
 
     #[tokio::test]

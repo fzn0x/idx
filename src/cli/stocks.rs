@@ -5,7 +5,7 @@ use clap::Subcommand;
 use crate::analysis::screen::{parse_filters, Key, ScreenPreset};
 use crate::error::IdxError;
 use crate::error::Result;
-use crate::model::{Interval, Lens, Period, StatementPeriod, Symbol};
+use crate::model::{EarningsFilter, Interval, Lens, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_GROWTH, SCHEMA_HISTORY,
@@ -29,7 +29,20 @@ pub enum Statement {
     All,
     Income,
     Balance,
+    #[value(alias = "cashflow", alias = "cash-flow")]
     Cash,
+}
+
+impl Statement {
+    /// The table sections a `--statement` list asks for (`all` anywhere means all three).
+    pub fn flags(list: &[Statement]) -> StatementFlags {
+        let all = list.is_empty() || list.contains(&Statement::All);
+        StatementFlags {
+            income: all || list.contains(&Statement::Income),
+            balance: all || list.contains(&Statement::Balance),
+            cash_flow: all || list.contains(&Statement::Cash),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,7 +88,7 @@ pub enum StocksCmd {
 
     /// Income statement, balance sheet and cash flow (annual, quarterly or TTM).
     #[command(
-        after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx -o json stocks financials ASII --period ttm"
+        after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx stocks financials TLKM -s income,cash\n  idx -o json stocks financials ASII --period ttm\n\n--statement (income, balance, cash or all; comma-separated or repeated) narrows the table.\nJSON and CSV always carry all three statements, which are columns of each period."
     )]
     Financials {
         /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
@@ -84,19 +97,38 @@ pub enum StocksCmd {
         /// Reporting series.
         #[arg(long, short = 'p', value_enum, default_value = "annual")]
         period: StatementPeriod,
-        /// Which statement to show in table mode (JSON, JSONL and CSV carry all three).
-        #[arg(long, short = 's', value_enum, default_value = "all")]
-        statement: Statement,
+        /// Statements shown in table mode, comma-separated or repeated (JSON, JSONL and CSV always carry all three).
+        #[arg(
+            long,
+            short = 's',
+            value_enum,
+            value_delimiter = ',',
+            default_value = "all",
+            value_name = "STATEMENT"
+        )]
+        statement: Vec<Statement>,
     },
 
-    /// Reported quarterly EPS vs estimates, yearly revenue and earnings, next earnings date.
+    /// Reported quarterly EPS vs estimates, yearly and quarterly revenue and earnings, analyst consensus, next earnings date.
     #[command(
-        after_help = "Examples:\n  idx stocks earnings BBCA\n  idx -o json stocks earnings BBRI | jq .data.next"
+        after_help = "Examples:\n  idx stocks earnings BBCA\n  idx stocks earnings TLKM --annual --estimates\n  idx stocks earnings BBRI --quarterly --reported\n  idx -o json stocks earnings BBRI | jq .data.next\n\nWith neither --annual nor --quarterly every period is shown; with neither --reported nor\n--estimates both are (--history and --forecast are aliases). The filters apply to JSON and\nCSV too, and data.scope records what was kept."
     )]
     Earnings {
         /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        /// Only fiscal-year rows: yearly revenue and earnings, this and next year's consensus.
+        #[arg(long)]
+        annual: bool,
+        /// Only quarterly rows: reported quarters, quarterly revenue and earnings, the quarter consensus and the next report date.
+        #[arg(long)]
+        quarterly: bool,
+        /// Only reported figures (no consensus).
+        #[arg(long, visible_alias = "history")]
+        reported: bool,
+        /// Only analyst consensus: the estimates and the next earnings date.
+        #[arg(long, visible_alias = "forecast")]
+        estimates: bool,
     },
 
     /// Cash dividend and split history with yearly totals, trailing-twelve-month yield and the payout streak.
@@ -334,8 +366,22 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             symbol,
             period,
             statement,
-        } => financials(ctx, &symbol, period, statement).await,
-        StocksCmd::Earnings { symbol } => earnings(ctx, &symbol).await,
+        } => financials(ctx, &symbol, period, &statement).await,
+        StocksCmd::Earnings {
+            symbol,
+            annual,
+            quarterly,
+            reported,
+            estimates,
+        } => {
+            let filter = EarningsFilter {
+                annual,
+                quarterly,
+                reported,
+                estimates,
+            };
+            earnings(ctx, &symbol, filter).await
+        }
         StocksCmd::Dividends { symbol, limit } => dividends(ctx, &symbol, limit).await,
         StocksCmd::Brief { symbol } => brief(ctx, &symbol).await,
         StocksCmd::Returns {
@@ -494,23 +540,19 @@ async fn financials(
     ctx: &Context,
     raw: &str,
     period: StatementPeriod,
-    statement: Statement,
+    statement: &[Statement],
 ) -> Result<()> {
     let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.financials(&symbol, period).await?;
-    let flags = StatementFlags {
-        income: matches!(statement, Statement::All | Statement::Income),
-        balance: matches!(statement, Statement::All | Statement::Balance),
-        cash_flow: matches!(statement, Statement::All | Statement::Cash),
-    };
+    let flags = Statement::flags(statement);
     emit(ctx, SCHEMA_FINANCIALS, result, |d| {
         reports::financials(d, &flags, ctx.color)
     })
 }
 
-async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
+async fn earnings(ctx: &Context, raw: &str, filter: EarningsFilter) -> Result<()> {
     let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
-    let result = ctx.provider.earnings(&symbol).await?;
+    let result = service::earnings(ctx.provider.as_ref(), &symbol, filter).await?;
     emit(ctx, SCHEMA_EARNINGS, result, |d| {
         reports::earnings(d, ctx.color)
     })

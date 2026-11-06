@@ -156,6 +156,13 @@ const text = (o, k) => {
   const v = o?.[k];
   return typeof v === "string" && v.trim() ? v.trim() : null;
 };
+// Yahoo pads amounts it has not loaded as {raw: 0, fmt: null}; a reported
+// figure carries its formatted form. Padded means missing, not zero.
+const amount = (o, k) => {
+  const v = o?.[k];
+  if (v && typeof v === "object" && v.fmt === null && v.raw === 0) return null;
+  return raw(o, k);
+};
 const dateOf = (o, k) => {
   const v = raw(o, k);
   return v == null ? null : new Date(v * 1000).toISOString().slice(0, 10);
@@ -318,6 +325,28 @@ export function parseFundamentals(r, symbol) {
   };
 }
 
+// earningsTrend rows for this and next quarter and fiscal year (port of
+// estimates() in src/providers/yahoo/summary.rs). Counts keep a zero; amounts
+// padded as {raw: 0, fmt: null} are null. A ticker no analyst covers still gets
+// the four rows with nothing in them; those are left out (has_consensus).
+const ESTIMATE_KINDS = { "0q": "quarterly", "+1q": "quarterly", "0y": "annual", "+1y": "annual" };
+const ESTIMATE_FIGURES = ["eps_avg", "eps_low", "eps_high", "eps_year_ago", "eps_growth_pct", "revenue_avg", "revenue_low", "revenue_high", "revenue_year_ago", "revenue_growth_pct"];
+const hasConsensus = (r) => ESTIMATE_FIGURES.some((k) => r[k] != null) || r.eps_analysts > 0 || r.revenue_analysts > 0;
+export function parseEstimates(trend) {
+  return (trend?.trend || []).filter((t) => ESTIMATE_KINDS[t?.period]).map((t) => {
+    const eps = t.earningsEstimate || {}, rev = t.revenueEstimate || {};
+    const growth = pct(eps, "growth");
+    const end = typeof t.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.endDate.trim()) ? t.endDate.trim() : null;
+    return {
+      period: t.period, period_type: ESTIMATE_KINDS[t.period], end_date: end,
+      eps_avg: amount(eps, "avg"), eps_low: amount(eps, "low"), eps_high: amount(eps, "high"), eps_year_ago: amount(eps, "yearAgoEps"),
+      eps_growth_pct: growth ?? pct(t, "growth"), eps_analysts: raw(eps, "numberOfAnalysts"),
+      revenue_avg: amount(rev, "avg"), revenue_low: amount(rev, "low"), revenue_high: amount(rev, "high"), revenue_year_ago: amount(rev, "yearAgoRevenue"),
+      revenue_growth_pct: pct(rev, "growth"), revenue_analysts: raw(rev, "numberOfAnalysts"),
+    };
+  }).filter(hasConsensus);
+}
+
 export function parseEarnings(r, symbol) {
   const price = r?.price || {}, e = r?.earnings || {}, cal = r?.calendarEvents || {}, trend = r?.earningsTrend || {};
   const label = (x) => (typeof x?.date === "string" ? x.date : x?.date != null ? String(x.date) : "");
@@ -327,10 +356,10 @@ export function parseEarnings(r, symbol) {
     surprise_pct: typeof q.surprisePct === "string" ? (parseFloat(q.surprisePct) || null) : num(q.surprisePct),
   }));
   const re = (arr) => (arr || []).map((x) => {
-    const revenue = raw(x, "revenue");
-    let earnings = raw(x, "earnings");
+    const revenue = amount(x, "revenue");
+    let earnings = amount(x, "earnings");
     if (earnings === 0 && revenue) earnings = null;
-    return { period: label(x), revenue, earnings, profit_margin_pct: earnings == null ? null : pct(x, "profitMargin") };
+    return { period: label(x), revenue, earnings, profit_margin_pct: earnings != null && revenue ? pct(x, "profitMargin") : null };
   });
   const ce = cal.earnings || {};
   const cur = (trend.trend || []).find((t) => t.period === "0q");
@@ -338,17 +367,19 @@ export function parseEarnings(r, symbol) {
   return {
     symbol, name: text(price, "longName") || text(price, "shortName"),
     currency: text(e, "financialCurrency") || text(price, "currency"),
+    estimates: parseEstimates(trend),
     quarters, yearly: re(e.financialsChart?.yearly), quarterly: re(e.financialsChart?.quarterly),
     next: (!cal.earnings && !cur) ? null : {
       date: nextDate ? new Date(nextDate * 1000).toISOString().slice(0, 10) : null,
       date_is_estimate: !!ce.isEarningsDateEstimate,
-      eps_avg: raw(ce, "earningsAverage"), eps_low: raw(ce, "earningsLow"), eps_high: raw(ce, "earningsHigh"),
+      eps_avg: amount(ce, "earningsAverage"), eps_low: amount(ce, "earningsLow"), eps_high: amount(ce, "earningsHigh"),
       eps_growth_pct: cur ? pct(cur, "growth") : null,
-      revenue_avg: raw(ce, "revenueAverage"), revenue_low: raw(ce, "revenueLow"), revenue_high: raw(ce, "revenueHigh"),
+      revenue_avg: amount(ce, "revenueAverage"), revenue_low: amount(ce, "revenueLow"), revenue_high: amount(ce, "revenueHigh"),
       analysts: cur ? raw(cur.earningsEstimate || {}, "numberOfAnalysts") : null,
     },
     ex_dividend_date: dateOf(cal, "exDividendDate"), dividend_date: dateOf(cal, "dividendDate"),
     source: "yahoo:quoteSummary",
+    scope: null,
   };
 }
 

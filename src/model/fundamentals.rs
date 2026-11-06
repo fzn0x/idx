@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::Symbol;
+use crate::error::{IdxError, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Director {
@@ -538,11 +539,51 @@ pub struct NextEarnings {
     pub analysts: Option<u32>,
 }
 
+/// Whether an earnings row covers a fiscal year or a quarter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PeriodKind {
+    Annual,
+    Quarterly,
+}
+
+/// Analyst consensus for one period, as the source publishes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EarningsEstimate {
+    /// Source label: `0q` this quarter, `+1q` next quarter, `0y` this fiscal
+    /// year, `+1y` next fiscal year.
+    pub period: String,
+    pub period_type: PeriodKind,
+    /// Last day of the period.
+    pub end_date: Option<NaiveDate>,
+    pub eps_avg: Option<f64>,
+    pub eps_low: Option<f64>,
+    pub eps_high: Option<f64>,
+    /// EPS of the same period a year earlier.
+    pub eps_year_ago: Option<f64>,
+    /// Consensus EPS versus a year earlier, in percent (`19.98`).
+    pub eps_growth_pct: Option<f64>,
+    /// Analysts behind the EPS consensus.
+    pub eps_analysts: Option<u32>,
+    pub revenue_avg: Option<f64>,
+    pub revenue_low: Option<f64>,
+    pub revenue_high: Option<f64>,
+    pub revenue_year_ago: Option<f64>,
+    /// Consensus revenue versus a year earlier, in percent.
+    pub revenue_growth_pct: Option<f64>,
+    /// Analysts behind the revenue consensus.
+    pub revenue_analysts: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Earnings {
     pub symbol: Symbol,
     pub name: Option<String>,
     pub currency: Option<String>,
+    /// Analyst consensus for this and next quarter and fiscal year, in source
+    /// order (`0q`, `+1q`, `0y`, `+1y`).
+    #[serde(default)]
+    pub estimates: Vec<EarningsEstimate>,
     /// Reported quarters, oldest first.
     pub quarters: Vec<EarningsQuarter>,
     /// Fiscal-year revenue and earnings, oldest first.
@@ -553,6 +594,113 @@ pub struct Earnings {
     pub ex_dividend_date: Option<NaiveDate>,
     pub dividend_date: Option<NaiveDate>,
     pub source: String,
+    /// What a filtered call kept (`stocks earnings --annual --quarterly
+    /// --reported --estimates`, MCP `period` and `kind`); `null` when nothing
+    /// was filtered. An empty list or a `null` next under a scope comes from
+    /// the filter, not the source.
+    #[serde(default)]
+    pub scope: Option<EarningsScope>,
+}
+
+/// The rows a filtered earnings call kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EarningsScope {
+    /// Fiscal-year rows: `yearly` and the `0y`/`+1y` consensus.
+    pub annual: bool,
+    /// Quarterly rows: `quarters`, `quarterly`, the `0q`/`+1q` consensus and `next`.
+    pub quarterly: bool,
+    /// Reported figures: `quarters`, `yearly` and `quarterly`.
+    pub reported: bool,
+    /// Analyst consensus: `estimates` and `next`.
+    pub estimates: bool,
+}
+
+/// Row filter for earnings. Giving neither flag of a pair keeps both: with
+/// neither `annual` nor `quarterly` every period is kept, with neither
+/// `reported` nor `estimates` both kinds are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EarningsFilter {
+    pub annual: bool,
+    pub quarterly: bool,
+    pub reported: bool,
+    pub estimates: bool,
+}
+
+impl EarningsFilter {
+    /// The filter from MCP and web names: `period` `annual` | `quarterly`,
+    /// `kind` `reported` | `estimates`; empty or `all` keeps both.
+    pub fn from_names(period: Option<&str>, kind: Option<&str>) -> Result<Self> {
+        let norm = |v: Option<&str>| v.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+        let mut f = EarningsFilter::default();
+        match norm(period).as_str() {
+            "" | "all" => {}
+            "annual" => f.annual = true,
+            "quarterly" => f.quarterly = true,
+            other => {
+                return Err(IdxError::Usage(format!(
+                    "invalid period {other:?}; use annual or quarterly (or leave it out for both)"
+                )))
+            }
+        }
+        match norm(kind).as_str() {
+            "" | "all" => {}
+            "reported" => f.reported = true,
+            "estimates" => f.estimates = true,
+            other => {
+                return Err(IdxError::Usage(format!(
+                    "invalid kind {other:?}; use reported or estimates (or leave it out for both)"
+                )))
+            }
+        }
+        Ok(f)
+    }
+
+    /// What the filter keeps, with each unset pair widened to both.
+    pub fn scope(&self) -> EarningsScope {
+        let periods = !self.annual && !self.quarterly;
+        let kinds = !self.reported && !self.estimates;
+        EarningsScope {
+            annual: self.annual || periods,
+            quarterly: self.quarterly || periods,
+            reported: self.reported || kinds,
+            estimates: self.estimates || kinds,
+        }
+    }
+
+    /// `true` when the filter keeps every row.
+    pub fn is_all(&self) -> bool {
+        let s = self.scope();
+        s.annual && s.quarterly && s.reported && s.estimates
+    }
+
+    /// Drops the rows the filter leaves out and records the scope; a no-op
+    /// (scope stays `null`) when it keeps everything. Dividend dates, name,
+    /// currency and source are always kept.
+    pub fn apply(&self, e: &mut Earnings) {
+        if self.is_all() {
+            return;
+        }
+        let s = self.scope();
+        if !(s.reported && s.quarterly) {
+            e.quarters.clear();
+            e.quarterly.clear();
+        }
+        if !(s.reported && s.annual) {
+            e.yearly.clear();
+        }
+        if s.estimates {
+            e.estimates.retain(|x| match x.period_type {
+                PeriodKind::Annual => s.annual,
+                PeriodKind::Quarterly => s.quarterly,
+            });
+        } else {
+            e.estimates.clear();
+        }
+        if !(s.estimates && s.quarterly) {
+            e.next = None;
+        }
+        e.scope = Some(s);
+    }
 }
 
 #[cfg(test)]
@@ -687,6 +835,140 @@ mod tests {
         f.sector = Some("Technology".into());
         f.industry = Some("Telecommunications Services".into());
         assert!(!f.is_financial_sector());
+    }
+
+    fn earnings() -> Earnings {
+        let est = |period: &str, period_type| EarningsEstimate {
+            period: period.into(),
+            period_type,
+            end_date: None,
+            eps_avg: Some(1.0),
+            eps_low: None,
+            eps_high: None,
+            eps_year_ago: None,
+            eps_growth_pct: None,
+            eps_analysts: None,
+            revenue_avg: None,
+            revenue_low: None,
+            revenue_high: None,
+            revenue_year_ago: None,
+            revenue_growth_pct: None,
+            revenue_analysts: None,
+        };
+        let re = |period: &str| RevenueEarnings {
+            period: period.into(),
+            revenue: Some(10.0),
+            earnings: Some(1.0),
+            profit_margin_pct: Some(10.0),
+        };
+        Earnings {
+            symbol: Symbol::parse("TLKM").unwrap(),
+            name: None,
+            currency: Some("IDR".into()),
+            estimates: vec![
+                est("0q", PeriodKind::Quarterly),
+                est("+1q", PeriodKind::Quarterly),
+                est("0y", PeriodKind::Annual),
+                est("+1y", PeriodKind::Annual),
+            ],
+            quarters: vec![EarningsQuarter {
+                period: "3Q2026".into(),
+                end_date: None,
+                reported_date: None,
+                eps_actual: Some(38.81),
+                eps_estimate: Some(58.24),
+                surprise_pct: Some(-33.36),
+            }],
+            yearly: vec![re("2024"), re("2025")],
+            quarterly: vec![re("2Q2026"), re("3Q2026")],
+            next: Some(NextEarnings::default()),
+            ex_dividend_date: NaiveDate::from_ymd_opt(2026, 6, 18),
+            dividend_date: None,
+            source: "t".into(),
+            scope: None,
+        }
+    }
+
+    fn periods(e: &Earnings) -> Vec<&str> {
+        e.estimates.iter().map(|x| x.period.as_str()).collect()
+    }
+
+    #[test]
+    fn earnings_filter_keeps_the_asked_rows() {
+        let f = |annual, quarterly, reported, estimates| EarningsFilter {
+            annual,
+            quarterly,
+            reported,
+            estimates,
+        };
+        // No flag, or both flags of each pair: nothing filtered, scope null.
+        for filter in [f(false, false, false, false), f(true, true, true, true)] {
+            let mut e = earnings();
+            filter.apply(&mut e);
+            assert_eq!(e, earnings());
+            assert!(filter.is_all());
+        }
+        // --annual: yearly rows and the yearly consensus; no quarters, no next.
+        let mut e = earnings();
+        f(true, false, false, false).apply(&mut e);
+        assert!(e.quarters.is_empty() && e.quarterly.is_empty());
+        assert_eq!(e.yearly.len(), 2);
+        assert_eq!(periods(&e), ["0y", "+1y"]);
+        assert_eq!(e.next, None);
+        assert_eq!(e.ex_dividend_date, NaiveDate::from_ymd_opt(2026, 6, 18));
+        assert_eq!(
+            e.scope,
+            Some(EarningsScope {
+                annual: true,
+                quarterly: false,
+                reported: true,
+                estimates: true
+            })
+        );
+        // --quarterly --estimates: the quarter consensus and the next date.
+        let mut e = earnings();
+        f(false, true, false, true).apply(&mut e);
+        assert!(e.quarters.is_empty() && e.quarterly.is_empty() && e.yearly.is_empty());
+        assert_eq!(periods(&e), ["0q", "+1q"]);
+        assert!(e.next.is_some());
+        // --reported: every reported row, no consensus.
+        let mut e = earnings();
+        f(false, false, true, false).apply(&mut e);
+        assert_eq!(
+            (e.quarters.len(), e.yearly.len(), e.quarterly.len()),
+            (1, 2, 2)
+        );
+        assert!(e.estimates.is_empty());
+        assert_eq!(e.next, None);
+        assert!(e.scope.is_some_and(|s| s.reported && !s.estimates));
+        // --quarterly --reported: reported quarters only.
+        let mut e = earnings();
+        f(false, true, true, false).apply(&mut e);
+        assert_eq!(
+            (e.quarters.len(), e.yearly.len(), e.quarterly.len()),
+            (1, 0, 2)
+        );
+        assert!(e.estimates.is_empty() && e.next.is_none());
+        // --annual --estimates
+        let mut e = earnings();
+        f(true, false, false, true).apply(&mut e);
+        assert!(e.quarters.is_empty() && e.yearly.is_empty() && e.quarterly.is_empty());
+        assert_eq!(periods(&e), ["0y", "+1y"]);
+        assert_eq!(e.next, None);
+    }
+
+    #[test]
+    fn earnings_filter_from_names() {
+        let f = EarningsFilter::from_names(Some("Annual"), Some(" estimates ")).unwrap();
+        assert!(f.annual && f.estimates && !f.quarterly && !f.reported);
+        assert!(EarningsFilter::from_names(None, Some("all"))
+            .unwrap()
+            .is_all());
+        assert!(EarningsFilter::from_names(Some(""), None).unwrap().is_all());
+        let e = EarningsFilter::from_names(Some("weekly"), None).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        let e = EarningsFilter::from_names(None, Some("forecast-ish")).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
     }
 
     #[test]

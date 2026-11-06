@@ -30,7 +30,8 @@ src/
   lib.rs             module map
   cli/               clap definitions + handlers (mod.rs builds Context; one file per group);
                      input.rs reads `-` symbol lists from stdin (text or idx's own JSON/JSONL)
-  providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source
+  providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source; history.rs
+                     routes candles by history_provider (auto | yahoo | stockbit) over the selected provider
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
     msn/             autosuggest lookup -> Quotes / Equities (public web key); insights.rs (api.msn.com
                      insights, peers via Quotes), screener.rs (whole-market return windows, one cached POST)

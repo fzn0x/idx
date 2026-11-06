@@ -308,10 +308,13 @@ async function lensReading(env, symbol, lens) {
   return envelope(`idx.${lens}.v1`, data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-export async function earnings(env, symbolRaw) {
+export async function earnings(env, symbolRaw, period = null, kind = null) {
   const symbol = parseSymbol(symbolRaw);
+  let filter;
+  try { filter = ex.earningsFilter(period, kind); } catch (e) { throw usage(e.message); }
   const r = await summary(env, symbol, y.EARNINGS_MODULES);
-  return envelope("idx.earnings.v1", y.parseEarnings(r.value, symbol), { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
+  const data = ex.filterEarnings(y.parseEarnings(r.value, symbol), filter);
+  return envelope("idx.earnings.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
 }
 
 export async function financials(env, symbolRaw, period = "annual") {
@@ -1225,7 +1228,7 @@ export async function route(env, url) {
     case "/history": return history(env, q.get("symbol"), q.get("period") || "1y", q.get("interval") || "1d", num(q.get("limit"), 0));
     case "/profile": return profile(env, q.get("symbol"));
     case "/fundamental": return fundamentals(env, q.get("symbol"), q.get("lens"));
-    case "/earnings": return earnings(env, q.get("symbol"));
+    case "/earnings": return earnings(env, q.get("symbol"), q.get("period"), q.get("kind"));
     case "/financials": return financials(env, q.get("symbol"), q.get("period") || "annual");
     case "/technical": return technical(env, q.get("symbol"), q.get("period") || "1y");
     case "/compare": return compare(env, q.get("symbols"));

@@ -17,8 +17,8 @@ const COMMANDS = [
   { name: "quote", usage: "quote <SYMBOLS>", help: "delayed quotes, e.g. quote BBCA,BBRI; one symbol adds a price chart (1D to 5Y)" },
   { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 5m 15m 30m 1h 1d 1wk 1mo" },
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
-  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm]", help: "income statement, balance sheet, cash flow" },
-  { name: "earnings", usage: "earnings <SYMBOL>", help: "quarterly EPS vs estimates, next date" },
+  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm] [--statement income,balance,cash]", help: "income statement, balance sheet, cash flow; --statement shows only those" },
+  { name: "earnings", usage: "earnings <SYMBOL> [--annual|--quarterly] [--reported|--estimates]", help: "quarterly EPS vs estimates, revenue and earnings, analyst consensus, next date; the flags keep only those rows (--history and --forecast work too)" },
   { name: "fundamental", usage: "fundamental <SYMBOL> [--lens growth|valuation|risk]", help: "ratios with a plain-language verdict; --lens gives one of the readings below instead" },
   { name: "growth", usage: "growth <SYMBOL>", help: "growth lens: latest quarter, forward EPS, fiscal-year revenue and net income, each rule with its points" },
   { name: "valuation", usage: "valuation <SYMBOL>", help: "valuation lens: P/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and analyst target, each scored" },
@@ -80,6 +80,13 @@ function kv(pairs) {
   return dl;
 }
 const pct = (v) => fmt.pctPlain(v);
+const ESTIMATE_NAMES = { "0q": "this quarter", "+1q": "next quarter", "0y": "this year", "+1y": "next year" };
+// "showing annual estimates" and the like (scope_label in src/output/table_reports.rs).
+function scopeLabel(s) {
+  const period = s.annual && !s.quarterly ? "annual " : s.quarterly && !s.annual ? "quarterly " : "";
+  const kind = s.reported && !s.estimates ? "reported figures" : s.estimates && !s.reported ? "estimates" : "rows";
+  return `showing ${period}${kind}`;
+}
 const x = (v) => (v == null ? NA : `${fmt.num(v, 2)}x`);
 
 const newsTable = (items) => wrapScroll(table([
@@ -222,7 +229,7 @@ const R = {
     const p = r.price, dd = p?.max_drawdown;
     return lensView(r, "risk", [
       ["Balance sheet", [["Negative equity", yesNo(r.negative_equity)], ["Debt / equity", x(r.debt_to_equity)], ["Current ratio", fmt.ratio(r.current_ratio)], ["Quick ratio", fmt.ratio(r.quick_ratio)], ["Financial company", yesNo(r.financial_company)], ["Net margin", pct(r.net_margin_pct)], ["EPS (ttm)", fmt.price(r.eps_ttm)]]],
-      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} – ${p.to}`], ["Daily returns", fmt.int(p.observations)], ["Zero returns", p.zero_returns == null ? null : `${fmt.int(p.zero_returns)} of ${fmt.int(p.observations)}`], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
+      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} to ${p.to}`], ["Daily returns", fmt.int(p.observations)], ["Zero returns", p.zero_returns == null ? null : `${fmt.int(p.zero_returns)} of ${fmt.int(p.observations)}`], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
       ["Volatility and falls", p ? [["Volatility", pct(p.volatility_pct)], ["IHSG volatility", pct(p.benchmark_volatility_pct)], ["Largest fall", dd ? pct(dd.pct) : "none"], ["Peak to trough", dd ? `${dd.peak_date} to ${dd.trough_date}` : null], ["IHSG largest fall", pct(p.benchmark_max_drawdown_pct)]] : []],
     ], "points add risk");
   },
@@ -245,14 +252,14 @@ const R = {
     frag.append(el("p", { class: "warn", text: "Rule-based read of daily candles, not investment advice." }));
     return frag;
   },
-  financials(f) {
+  financials(f, only = null) {
     const cols = [{ h: "", k: "label", l: true }, ...f.periods.map((p, i) => ({ h: f.period === "annual" ? `FY${p.end_date.slice(0, 4)}` : p.end_date, f: (r) => r.vals[i], cls: "num" }))];
     const lines = [
       ["Total revenue", "income", "total_revenue"], ["Gross profit", "income", "gross_profit"], ["Operating income", "income", "operating_income"], ["EBITDA", "income", "ebitda"],
       ["Net interest income", "income", "net_interest_income"], ["Pretax income", "income", "pretax_income"], ["Net income", "income", "net_income"], ["EPS (diluted)", "income", "eps_diluted", "price"],
       ["Total assets", "balance", "total_assets"], ["Total liabilities", "balance", "total_liabilities"], ["Shareholders' equity", "balance", "stockholders_equity"], ["Cash & equivalents", "balance", "cash_and_equivalents"], ["Total debt", "balance", "total_debt"],
       ["Operating cash flow", "cash_flow", "operating"], ["Capital expenditure", "cash_flow", "capital_expenditure"], ["Free cash flow", "cash_flow", "free_cash_flow"], ["Dividends paid", "cash_flow", "dividends_paid"],
-    ];
+    ].filter(([, s]) => !only || only.has(s));
     const rows = lines.map(([label, s, k, kind]) => ({ label, vals: f.periods.map((p) => (kind === "price" ? fmt.price(p[s][k]) : fmt.compact(p[s][k]))) })).filter((r) => r.vals.some((v) => v !== NA));
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", text: `${f.symbol} · ${f.period} statements · ${f.periods.length} periods · ${f.currency || ""} · T = trillion, B = billion` }));
@@ -261,10 +268,17 @@ const R = {
   },
   earnings(e) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}${e.scope ? ` · ${scopeLabel(e.scope)}` : ""}` }));
     if (e.quarters.length) frag.append(wrapScroll(table([{ h: "Quarter", k: "period", l: true, cls: "sym" }, { h: "Period end", f: (q) => fmt.date(q.end_date), l: true }, { h: "Reported", f: (q) => fmt.date(q.reported_date), l: true }, { h: "EPS actual", f: (q) => fmt.price(q.eps_actual) }, { h: "EPS est.", f: (q) => fmt.price(q.eps_estimate) }, { h: "Surprise", f: (q) => fmt.pct(q.surprise_pct), cls: (q) => `num ${signClass(q.surprise_pct)}` }], e.quarters)));
     const re = [...e.yearly, ...e.quarterly];
     if (re.length) frag.append(wrapScroll(table([{ h: "Period", k: "period", l: true, cls: "sym" }, { h: "Revenue", f: (r) => fmt.compact(r.revenue) }, { h: "Earnings", f: (r) => fmt.compact(r.earnings) }, { h: "Margin", f: (r) => pct(r.profit_margin_pct) }], re)));
+    const est = e.estimates || [];
+    if (est.length) frag.append(wrapScroll(table([
+      { h: "Consensus", f: (r) => `${ESTIMATE_NAMES[r.period] || r.period} (${r.period})`, l: true, cls: "sym" }, { h: "Period end", f: (r) => fmt.date(r.end_date), l: true },
+      { h: "EPS avg", f: (r) => fmt.price(r.eps_avg) }, { h: "EPS low", f: (r) => fmt.price(r.eps_low) }, { h: "EPS high", f: (r) => fmt.price(r.eps_high) }, { h: "Analysts", f: (r) => fmt.int(r.eps_analysts) },
+      { h: "EPS growth", f: (r) => fmt.pct(r.eps_growth_pct), cls: (r) => `num ${signClass(r.eps_growth_pct)}` }, { h: "Revenue avg", f: (r) => fmt.compact(r.revenue_avg) },
+      { h: "Revenue growth", f: (r) => fmt.pct(r.revenue_growth_pct), cls: (r) => `num ${signClass(r.revenue_growth_pct)}` },
+    ], est)));
     if (e.next) frag.append(el("p", { class: "prose", text: `Next earnings ${e.next.date || NA}${e.next.date_is_estimate ? " (estimated)" : ""} · EPS consensus ${fmt.price(e.next.eps_avg)} (${fmt.price(e.next.eps_low)} to ${fmt.price(e.next.eps_high)}, ${e.next.analysts ?? NA} analysts) · revenue consensus ${fmt.compact(e.next.revenue_avg)}` }));
     if (e.ex_dividend_date) frag.append(el("p", { class: "prose", text: `Ex-dividend ${e.ex_dividend_date} · payment ${e.dividend_date || NA}` }));
     return frag;
@@ -712,6 +726,20 @@ const R = {
 
 // ---- command execution -----------------------------------------------------
 
+// `--statement income,balance,cash` (aliases cashflow, cash-flow; all = every
+// statement) as the set of statement keys to show, or null for all of them.
+const STATEMENTS = { income: "income", balance: "balance", cash: "cash_flow", cashflow: "cash_flow", "cash-flow": "cash_flow" };
+function statements(v) {
+  if (v == null || v === true) return null;
+  const keys = new Set();
+  for (const name of String(v).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
+    if (name === "all") return null;
+    if (!STATEMENTS[name]) throw Object.assign(new Error(`invalid statement "${name}"; use income, balance, cash or all`), { code: "usage" });
+    keys.add(STATEMENTS[name]);
+  }
+  return keys.size ? keys : null;
+}
+
 function need(pos, n, usage) { if (pos.length < n) throw Object.assign(new Error(`usage: ${usage}`), { code: "usage" }); }
 
 async function run(line) {
@@ -740,8 +768,24 @@ async function run(line) {
     case "quote": need(pos, 1, cmd.usage); env = await api(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
     case "history": need(pos, 1, cmd.usage); env = await api(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
     case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
-    case "financials": need(pos, 1, cmd.usage); env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`); render = R.financials; break;
-    case "earnings": need(pos, 1, cmd.usage); env = await api(`earnings?symbol=${encodeURIComponent(sym())}`); render = R.earnings; break;
+    case "financials": {
+      need(pos, 1, cmd.usage);
+      const only = statements(opt.statement);
+      env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`);
+      render = (d) => R.financials(d, only);
+      break;
+    }
+    case "earnings": {
+      // Boolean flags: a word the flag parser took as a flag's value is the symbol.
+      for (const k of ["annual", "quarterly", "reported", "estimates", "history", "forecast"]) if (typeof opt[k] === "string") { pos.push(opt[k]); opt[k] = true; }
+      need(pos, 1, cmd.usage);
+      const reported = opt.reported || opt.history, estimates = opt.estimates || opt.forecast;
+      const period = opt.annual && !opt.quarterly ? "annual" : opt.quarterly && !opt.annual ? "quarterly" : null;
+      const kind = reported && !estimates ? "reported" : estimates && !reported ? "estimates" : null;
+      env = await api(`earnings?${qs({ symbol: sym(), period, kind })}`);
+      render = R.earnings;
+      break;
+    }
     case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: opt.lens })}`); render = opt.lens ? R[String(opt.lens).toLowerCase()] : R.fundamentals; break;
     case "growth": case "valuation": case "risk": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: name })}`); render = R[name]; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;

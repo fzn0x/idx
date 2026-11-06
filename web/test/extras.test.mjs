@@ -12,6 +12,34 @@ import * as y from "../src/yahoo.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
 
+test("earnings filter keeps the rows the Rust filter keeps", () => {
+  const e = y.parseEarnings(JSON.parse(fixture("yahoo/quote_summary_earnings_tlkm.json")).quoteSummary.result[0], "TLKM");
+  const periods = (x) => x.estimates.map((r) => r.period);
+  assert.equal(e.scope, null);
+  // Neither flag of a pair, or both: untouched, scope null.
+  assert.equal(ex.filterEarnings(e, ex.earningsFilter(null, null)), e);
+  assert.equal(ex.filterEarnings(e, ex.earningsFilter("all", "all")), e);
+  const a = ex.filterEarnings(e, ex.earningsFilter("annual", null));
+  assert.deepEqual(a.quarters, []);
+  assert.deepEqual(a.quarterly, []);
+  assert.equal(a.yearly.length, 4);
+  assert.deepEqual(periods(a), ["0y", "+1y"]);
+  assert.equal(a.next, null);
+  assert.deepEqual(a.scope, { annual: true, quarterly: false, reported: true, estimates: true });
+  assert.equal(a.ex_dividend_date, e.ex_dividend_date);
+  const qe = ex.filterEarnings(e, ex.earningsFilter("Quarterly", " estimates "));
+  assert.deepEqual(periods(qe), ["0q", "+1q"]);
+  assert.ok(qe.next);
+  assert.deepEqual(qe.yearly, []);
+  const r = ex.filterEarnings(e, ex.earningsFilter(null, "reported"));
+  assert.deepEqual(r.estimates, []);
+  assert.equal(r.next, null);
+  assert.equal(r.quarters.length, 4);
+  assert.equal(e.estimates.length, 4, "the input is not mutated");
+  assert.throws(() => ex.earningsFilter("weekly", null), /invalid period "weekly"/);
+  assert.throws(() => ex.earningsFilter(null, "forecasts"), /invalid kind "forecasts"/);
+});
+
 test("dividend events parse and enrich like the Rust side", () => {
   const h = y.parseEvents(JSON.parse(fixture("yahoo/chart_events_bbca_max.json")));
   assert.equal(h.symbol, "BBCA");
@@ -240,4 +268,11 @@ test("ownership ticker on the web carries accounts and the controller flag", asy
 
 test("sha256Hex matches a known digest", async () => {
   assert.equal(await sha256Hex("hello"), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+});
+
+test("the earnings endpoint rejects an unknown period or kind before fetching", async () => {
+  const { earnings } = await import("../src/api.js");
+  for (const [period, kind] of [["weekly", null], [null, "forecasts"]]) {
+    await assert.rejects(earnings({}, "TLKM", period, kind), (e) => e.code === "usage" && e.exit === 2 && e.status === 400);
+  }
 });

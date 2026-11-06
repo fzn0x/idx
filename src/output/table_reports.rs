@@ -6,9 +6,9 @@ use comfy_table::{Attribute, Cell, Color, Table};
 
 use crate::analysis::fundamental::summary_line;
 use crate::model::{
-    Brief, DividendHistory, Earnings, FinancialPeriod, Financials, Fundamentals, MarketOverview,
-    MarketRow, Performance, Profile, ReturnWindows, SignalLabel, StatementPeriod, Technical, Trend,
-    VerdictLabel,
+    Brief, DividendHistory, Earnings, EarningsEstimate, EarningsScope, FinancialPeriod, Financials,
+    Fundamentals, MarketOverview, MarketRow, Performance, Profile, ReturnWindows, SignalLabel,
+    StatementPeriod, Technical, Trend, VerdictLabel,
 };
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
@@ -589,14 +589,92 @@ pub fn financials(fin: &Financials, flags: &StatementFlags, color: bool) -> Stri
     out
 }
 
+/// `0q` -> "this quarter (0q)" and so on; other labels as the source wrote them.
+fn estimate_label(period: &str) -> String {
+    let name = match period {
+        "0q" => "this quarter",
+        "+1q" => "next quarter",
+        "0y" => "this year",
+        "+1y" => "next year",
+        other => return other.to_string(),
+    };
+    format!("{name} ({period})")
+}
+
+/// Analyst consensus per period: EPS average with its range and analyst
+/// count, growth on a year earlier, and the revenue consensus.
+fn estimates_table(rows: &[EarningsEstimate], color: bool) -> String {
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "Consensus",
+        "Period end",
+        "EPS avg",
+        "EPS range",
+        "Analysts",
+        "EPS growth",
+        "Revenue avg",
+        "Revenue growth",
+    ]));
+    for r in rows {
+        let range = match (r.eps_low, r.eps_high) {
+            (None, None) => f::DASH.to_string(),
+            (lo, hi) => format!("{} – {}", f::price(lo), f::price(hi)),
+        };
+        t.add_row(vec![
+            Cell::new(estimate_label(&r.period)).add_attribute(Attribute::Bold),
+            Cell::new(date_opt(r.end_date)),
+            right(f::price(r.eps_avg)),
+            right(range),
+            right(
+                r.eps_analysts
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| f::DASH.into()),
+            ),
+            signed(f::pct(r.eps_growth_pct), r.eps_growth_pct, color),
+            money(r.revenue_avg),
+            signed(f::pct(r.revenue_growth_pct), r.revenue_growth_pct, color),
+        ]);
+    }
+    let mut out = t.to_string();
+    out.push('\n');
+    out
+}
+
+/// "showing annual estimates" and the like, for a filtered earnings call.
+fn scope_label(s: &EarningsScope) -> String {
+    let period = match (s.annual, s.quarterly) {
+        (true, false) => "annual ",
+        (false, true) => "quarterly ",
+        _ => "",
+    };
+    let kind = match (s.reported, s.estimates) {
+        (true, false) => "reported figures",
+        (false, true) => "estimates",
+        _ => "rows",
+    };
+    format!("showing {period}{kind}")
+}
+
 pub fn earnings(e: &Earnings, color: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "{} · {} · EPS in {}\n",
+        "{} · {} · EPS in {}{}\n",
         e.symbol,
         e.name.clone().unwrap_or_else(|| f::DASH.into()),
-        e.currency.clone().unwrap_or_default()
+        e.currency.clone().unwrap_or_default(),
+        e.scope
+            .as_ref()
+            .map(|s| format!(" · {}", scope_label(s)))
+            .unwrap_or_default()
     ));
+    let nothing = e.quarters.is_empty()
+        && e.yearly.is_empty()
+        && e.quarterly.is_empty()
+        && e.estimates.is_empty()
+        && e.next.is_none();
+    if e.scope.is_some() && nothing {
+        out.push_str("The source has no rows of this kind for this ticker.\n");
+    }
     if !e.quarters.is_empty() {
         let mut t = base_table(color);
         t.set_header(header(&[
@@ -639,6 +717,9 @@ pub fn earnings(e: &Earnings, color: bool) -> String {
         }
         out.push_str(&t.to_string());
         out.push('\n');
+    }
+    if !e.estimates.is_empty() {
+        out.push_str(&estimates_table(&e.estimates, color));
     }
     if let Some(n) = &e.next {
         out.push_str(&format!(

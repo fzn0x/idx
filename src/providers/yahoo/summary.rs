@@ -9,8 +9,9 @@ use serde_json::Value;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    Analyst, Director, Dividend, Earnings, EarningsQuarter, Fundamentals, Growth, Health,
-    NextEarnings, PerShare, Profile, Profitability, RevenueEarnings, Symbol, Valuation,
+    Analyst, Director, Dividend, Earnings, EarningsEstimate, EarningsQuarter, Fundamentals, Growth,
+    Health, NextEarnings, PerShare, PeriodKind, Profile, Profitability, RevenueEarnings, Symbol,
+    Valuation,
 };
 
 use super::NAME;
@@ -204,25 +205,116 @@ fn period_label(v: &Value) -> String {
     }
 }
 
-/// Yahoo pads quarters it has not loaded yet with `earnings: 0`; a company
-/// with revenue and exactly zero earnings is a gap in the feed, not a result.
+/// An amount Yahoo may have padded: values it has not loaded come as
+/// `{"raw": 0, "fmt": null}`, while a reported figure carries its formatted
+/// form. A padded value is missing, not zero.
+fn amount(v: &Value, key: &str) -> Option<f64> {
+    let x = v.get(key)?;
+    let padded = x.get("fmt").is_some_and(Value::is_null)
+        && x.get("raw").and_then(Value::as_f64) == Some(0.0);
+    if padded {
+        None
+    } else {
+        raw(v, key)
+    }
+}
+
+/// Yahoo pads quarters it has not loaded yet with zeros (`{"raw": 0, "fmt":
+/// null}` for revenue or earnings); a company with revenue and exactly zero
+/// earnings is a gap in the feed, not a result. The margin is kept only when
+/// both figures are there.
 fn revenue_earnings(arr: Option<&Vec<Value>>) -> Vec<RevenueEarnings> {
     arr.map(|a| {
         a.iter()
             .map(|e| {
-                let revenue = raw(e, "revenue");
-                let earnings = raw(e, "earnings")
+                let revenue = amount(e, "revenue");
+                let earnings = amount(e, "earnings")
                     .filter(|x| !(*x == 0.0 && revenue.is_some_and(|r| r != 0.0)));
+                let profit_margin_pct = match (revenue, earnings) {
+                    (Some(r), Some(_)) if r != 0.0 => pct(e, "profitMargin"),
+                    _ => None,
+                };
                 RevenueEarnings {
                     period: period_label(e),
                     revenue,
-                    profit_margin_pct: pct(e, "profitMargin").filter(|_| earnings.is_some()),
                     earnings,
+                    profit_margin_pct,
                 }
             })
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// An analyst count. Unlike amounts, a count of zero is a value: Yahoo writes
+/// every zero as `{"raw": 0, "fmt": null}`, padded or not.
+fn count(v: &Value, key: &str) -> Option<u32> {
+    raw(v, key).map(|x| x.max(0.0) as u32)
+}
+
+/// `true` when a consensus row carries a figure. For a ticker no analyst
+/// covers Yahoo still sends the four trend rows, every amount empty or padded
+/// and every count zero; those rows say nothing and are left out.
+fn has_consensus(e: &EarningsEstimate) -> bool {
+    [
+        e.eps_avg,
+        e.eps_low,
+        e.eps_high,
+        e.eps_year_ago,
+        e.eps_growth_pct,
+        e.revenue_avg,
+        e.revenue_low,
+        e.revenue_high,
+        e.revenue_year_ago,
+        e.revenue_growth_pct,
+    ]
+    .iter()
+    .any(Option::is_some)
+        || e.eps_analysts.is_some_and(|n| n > 0)
+        || e.revenue_analysts.is_some_and(|n| n > 0)
+}
+
+/// The consensus rows of `earningsTrend.trend[]` for this and next quarter and
+/// fiscal year (`0q`, `+1q`, `0y`, `+1y`), in source order. Long-term growth
+/// rows (`+5y`, `-5y`), when present, are not period estimates and are left
+/// out, and so are rows with no figure at all ([`has_consensus`]).
+fn estimates(trend: &Value) -> Vec<EarningsEstimate> {
+    let Some(rows) = trend.get("trend").and_then(Value::as_array) else {
+        return vec![];
+    };
+    rows.iter()
+        .filter_map(|t| {
+            let period = t.get("period").and_then(Value::as_str)?;
+            let period_type = match period {
+                "0q" | "+1q" => PeriodKind::Quarterly,
+                "0y" | "+1y" => PeriodKind::Annual,
+                _ => return None,
+            };
+            let eps = module(t, "earningsEstimate");
+            let rev = module(t, "revenueEstimate");
+            Some(EarningsEstimate {
+                period: period.to_string(),
+                period_type,
+                end_date: t
+                    .get("endDate")
+                    .and_then(Value::as_str)
+                    .and_then(|d| NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d").ok()),
+                eps_avg: amount(eps, "avg"),
+                eps_low: amount(eps, "low"),
+                eps_high: amount(eps, "high"),
+                eps_year_ago: amount(eps, "yearAgoEps"),
+                eps_growth_pct: pct(eps, "growth").or_else(|| pct(t, "growth")),
+                eps_analysts: count(eps, "numberOfAnalysts"),
+                revenue_avg: amount(rev, "avg"),
+                revenue_low: amount(rev, "low"),
+                revenue_high: amount(rev, "high"),
+                revenue_year_ago: amount(rev, "yearAgoRevenue"),
+                revenue_growth_pct: pct(rev, "growth"),
+                revenue_analysts: count(rev, "numberOfAnalysts"),
+            })
+        })
+        .filter(has_consensus)
+        .collect()
 }
 
 pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
@@ -275,13 +367,13 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
                 .get("isEarningsDateEstimate")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            eps_avg: raw(cal_e, "earningsAverage"),
-            eps_low: raw(cal_e, "earningsLow"),
-            eps_high: raw(cal_e, "earningsHigh"),
+            eps_avg: amount(cal_e, "earningsAverage"),
+            eps_low: amount(cal_e, "earningsLow"),
+            eps_high: amount(cal_e, "earningsHigh"),
             eps_growth_pct: current_q.and_then(|t| pct(t, "growth")),
-            revenue_avg: raw(cal_e, "revenueAverage"),
-            revenue_low: raw(cal_e, "revenueLow"),
-            revenue_high: raw(cal_e, "revenueHigh"),
+            revenue_avg: amount(cal_e, "revenueAverage"),
+            revenue_low: amount(cal_e, "revenueLow"),
+            revenue_high: amount(cal_e, "revenueHigh"),
             analysts: current_q
                 .and_then(|t| raw(module(t, "earningsEstimate"), "numberOfAnalysts"))
                 .map(|x| x.max(0.0) as u32),
@@ -292,6 +384,7 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
         symbol: symbol.clone(),
         name: text(price, "longName").or_else(|| text(price, "shortName")),
         currency: text(e, "financialCurrency").or_else(|| text(price, "currency")),
+        estimates: estimates(trend),
         quarters,
         yearly: revenue_earnings(
             e.pointer("/financialsChart/yearly")
@@ -305,6 +398,7 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
         ex_dividend_date: date(cal, "exDividendDate"),
         dividend_date: date(cal, "dividendDate"),
         source: SOURCE.to_string(),
+        scope: None,
     })
 }
 
@@ -324,6 +418,10 @@ mod tests {
         include_str!("../../../tests/fixtures/yahoo/quote_summary_statements_bbca.json");
     const EARN_TLKM: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm.json");
+    const EARN_TLKM_20261106: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm_20261106.json");
+    const EARN_BEEF_20261106: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_beef_20261106.json");
     const NOT_FOUND: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_not_found.json");
 
@@ -485,6 +583,126 @@ mod tests {
         let e = parse_earnings(EARN_TLKM, &sym("TLKM")).unwrap();
         assert!(!e.quarters.is_empty());
         assert!(!e.yearly.is_empty());
+    }
+
+    #[test]
+    fn estimates_for_this_and_next_quarter_and_year() {
+        let e = parse_earnings(EARN_TLKM, &sym("TLKM")).unwrap();
+        let periods: Vec<&str> = e.estimates.iter().map(|x| x.period.as_str()).collect();
+        assert_eq!(periods, ["0q", "+1q", "0y", "+1y"]);
+        let q = &e.estimates[0];
+        assert_eq!(q.period_type, PeriodKind::Quarterly);
+        assert_eq!(q.end_date, NaiveDate::from_ymd_opt(2026, 9, 30));
+        assert_eq!(q.eps_avg, Some(58.23986));
+        assert_eq!(q.eps_low, Some(57.81064));
+        assert_eq!(q.eps_high, Some(58.68895));
+        assert_eq!(q.eps_year_ago, Some(48.54));
+        assert!((q.eps_growth_pct.unwrap() - 19.98).abs() < 1e-9);
+        assert_eq!(q.eps_analysts, Some(3));
+        assert_eq!(q.revenue_avg, Some(38_169_334_860_000.0));
+        assert_eq!(q.revenue_year_ago, Some(36_613_000_000_000.0));
+        assert!((q.revenue_growth_pct.unwrap() - 4.25).abs() < 1e-9);
+        assert_eq!(q.revenue_analysts, Some(3));
+        let next_q = &e.estimates[1];
+        assert_eq!(next_q.end_date, NaiveDate::from_ymd_opt(2026, 12, 31));
+        assert_eq!(next_q.eps_avg, Some(36.08966));
+        assert!((next_q.eps_growth_pct.unwrap() - 76.05).abs() < 1e-9);
+        assert_eq!(next_q.revenue_analysts, Some(1));
+        let y = &e.estimates[2];
+        assert_eq!(y.period_type, PeriodKind::Annual);
+        assert_eq!(y.eps_avg, Some(202.63542));
+        assert_eq!(y.eps_analysts, Some(19));
+        assert!((y.eps_growth_pct.unwrap() - 12.68).abs() < 1e-9);
+        assert_eq!(y.revenue_avg, Some(150_213_955_830_000.0));
+        assert_eq!(y.revenue_analysts, Some(22));
+        let next_y = &e.estimates[3];
+        assert_eq!(next_y.end_date, NaiveDate::from_ymd_opt(2027, 12, 31));
+        assert_eq!(next_y.eps_avg, Some(221.80434));
+        assert_eq!(next_y.eps_analysts, Some(20));
+        assert!((next_y.eps_growth_pct.unwrap() - 9.46).abs() < 1e-9);
+
+        // 2026-11-06: next quarter's revenue consensus is padded (no analysts).
+        let e = parse_earnings(EARN_TLKM_20261106, &sym("TLKM")).unwrap();
+        let q = &e.estimates[0];
+        assert_eq!(q.end_date, NaiveDate::from_ymd_opt(2026, 12, 31));
+        assert_eq!(q.eps_avg, Some(42.29838));
+        assert_eq!(q.eps_analysts, Some(1));
+        let next_q = &e.estimates[1];
+        assert_eq!(next_q.eps_avg, Some(47.35));
+        assert_eq!(next_q.revenue_avg, None);
+        assert_eq!(next_q.revenue_low, None);
+        assert_eq!(next_q.revenue_year_ago, None);
+        assert_eq!(next_q.revenue_growth_pct, None);
+        assert_eq!(next_q.revenue_analysts, Some(0));
+        // BBCA carries the same four rows.
+        let e = parse_earnings(EARN_BBCA, &sym("BBCA")).unwrap();
+        assert_eq!(e.estimates.len(), 4);
+        assert_eq!(e.estimates[3].eps_avg, Some(526.90076));
+    }
+
+    #[test]
+    fn uncovered_ticker_has_no_consensus_rows() {
+        // Recorded 2026-11-06: BEEF has no analyst coverage, yet Yahoo sends
+        // the four trend rows with empty EPS, padded revenue and zero counts.
+        let e = parse_earnings(EARN_BEEF_20261106, &sym("BEEF")).unwrap();
+        assert_eq!(e.estimates, vec![]);
+        assert!(e.quarters.is_empty() && e.yearly.is_empty() && e.quarterly.is_empty());
+        assert_eq!(e.name.as_deref(), Some("PT Estika Tata Tiara Tbk"));
+        let n = e.next.unwrap();
+        assert_eq!((n.eps_avg, n.revenue_avg, n.analysts), (None, None, None));
+        // A row with only its revenue analysts' count is kept: zero is padding,
+        // a positive count is coverage.
+        let row = |n: u32| {
+            serde_json::json!({"trend": [{"period": "0q", "earningsEstimate": {},
+                "revenueEstimate": {"avg": {"raw": 0, "fmt": null},
+                    "numberOfAnalysts": {"raw": n, "fmt": null}}}]})
+        };
+        assert!(estimates(&row(0)).is_empty());
+        assert_eq!(estimates(&row(2))[0].revenue_analysts, Some(2));
+    }
+
+    #[test]
+    fn padded_next_consensus_is_null() {
+        // calendarEvents follows the same padding rule as the trend rows.
+        let body = r#"{"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+            "earningsAverage":{"raw":12.5,"fmt":"12.50"},
+            "revenueAverage":{"raw":0,"fmt":null},"revenueLow":{"raw":0,"fmt":null}}}}],
+            "error":null}}"#;
+        let n = parse_earnings(body, &sym("TLKM")).unwrap().next.unwrap();
+        assert_eq!(n.eps_avg, Some(12.5));
+        assert_eq!((n.revenue_avg, n.revenue_low), (None, None));
+        // Reported next consensus is untouched.
+        let n = parse_earnings(EARN_TLKM, &sym("TLKM"))
+            .unwrap()
+            .next
+            .unwrap();
+        assert!(n.revenue_avg.is_some_and(|r| r > 0.0));
+    }
+
+    #[test]
+    fn padded_revenue_is_null_with_no_margin() {
+        // Recorded 2026-11-06: 1Q2026 revenue is {"raw":0,"fmt":null} while its
+        // earnings are reported; it used to print as 0 revenue at a 0.00% margin.
+        for body in [EARN_TLKM_20261106, EARN_TLKM] {
+            let e = parse_earnings(body, &sym("TLKM")).unwrap();
+            let q = e.quarterly.iter().find(|q| q.period == "1Q2026").unwrap();
+            assert_eq!(q.revenue, None);
+            assert_eq!(q.profit_margin_pct, None);
+            assert_eq!(q.earnings, Some(4_344_000_000_000.0));
+            let q = e.quarterly.iter().find(|q| q.period == "2Q2026").unwrap();
+            assert_eq!(q.revenue, Some(38_689_000_000_000.0));
+            assert!((q.profit_margin_pct.unwrap() - 17.503685).abs() < 1e-6);
+        }
+        let e = parse_earnings(EARN_TLKM_20261106, &sym("TLKM")).unwrap();
+        assert_eq!(e.quarterly.len(), 4);
+        assert_eq!(e.quarterly[3].period, "3Q2026");
+        assert!(e.quarterly[3].revenue.is_some());
+        // BBCA's padded 2Q2025 earnings stay null, its revenue stays.
+        let e = parse_earnings(EARN_BBCA, &sym("BBCA")).unwrap();
+        let q = e.quarterly.iter().find(|q| q.period == "2Q2025").unwrap();
+        assert_eq!(q.earnings, None);
+        assert_eq!(q.profit_margin_pct, None);
+        assert_eq!(q.revenue, Some(28_589_918_000_000.0));
     }
 
     #[test]

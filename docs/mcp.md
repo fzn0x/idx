@@ -275,6 +275,10 @@ filled-in version.
 All `IDX_*` environment variables and the config file apply to every client,
 so `--offline` behaviour, cache location, TTLs and provider choice can be set
 per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
+`-e IDX_HISTORY_PROVIDER=stockbit` takes candles (`idx_history`,
+`idx_technical`, `idx_returns`, `idx_brief`) from your Stockbit session while
+every other tool stays on the free providers; the envelope's `provider` names
+the source the candles came from.
 
 ## HTTP transport
 
@@ -307,7 +311,7 @@ local agents can share one process and one cache this way.
 | `idx_history` | `symbol`, `period?`, `interval?`, `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
 | `idx_profile` | `symbol` | `idx.profile.v1` |
 | `idx_financials` | `symbol`, `period?` (`annual` \| `quarterly` \| `ttm`) | `idx.financials.v1` |
-| `idx_earnings` | `symbol` | `idx.earnings.v1` |
+| `idx_earnings` | `symbol`, `period?` (`annual` \| `quarterly`), `kind?` (`reported` \| `estimates`) | `idx.earnings.v1` |
 | `idx_dividends` | `symbol` | `idx.dividends.v1`: payments, splits, yearly totals, TTM total/yield, streak |
 | `idx_returns` | `symbols`, `benchmark?` (`^JKSE` default, `none`) | `idx.returns.v1`: windows, CAGR, volatility, drawdowns, 52-week, excess over the benchmark |
 | `idx_fundamental` | `symbol`, `lens?` (`growth` \| `valuation` \| `risk`) | `idx.fundamentals.v1` (verdict included; when `financial_currency` differs from `currency`, P/B, P/S and the EV multiples mix USD and IDR and P/B is not scored); with `lens`, `idx.growth.v1`, `idx.valuation.v1` or `idx.risk.v1`: a focused reading with every rule and its points |

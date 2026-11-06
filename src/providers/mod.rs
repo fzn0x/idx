@@ -8,8 +8,9 @@
 //!
 //! Adding a provider: see `AGENTS.md`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -24,6 +25,7 @@ use crate::model::{
     Interval, MarketReturns, Period, Profile, Quote, StaleReason, StatementPeriod, Symbol,
 };
 
+pub mod history;
 pub mod idx;
 pub mod ipot;
 pub mod msn;
@@ -155,6 +157,8 @@ pub struct ProviderOptions {
     /// Stockbit session file and env-seed tokens. The path is empty only in
     /// tests that never select the Stockbit provider.
     pub stockbit: StockbitOptions,
+    /// Where candles come from (`history_provider`); see [`history`].
+    pub history: HistoryProviderKind,
 }
 
 /// Where the Stockbit session lives and what seeds it. The file is authoritative;
@@ -168,13 +172,35 @@ pub struct StockbitOptions {
 }
 
 impl StockbitOptions {
-    /// Builds the shared session store this process will read and refresh.
+    /// The session store this process reads and refreshes. There is one per
+    /// session file (and seed) per process: the provider, the history router
+    /// and the MCP Stockbit tools all get the same store, so its refresh lock
+    /// really serialises the rotating refresh token instead of two stores each
+    /// spending it. A store nobody holds any more is rebuilt on the next call.
     pub fn store(&self) -> Arc<stockbit::SessionStore> {
-        Arc::new(stockbit::SessionStore::new(
+        type Key = (PathBuf, Option<String>, Option<String>);
+        static STORES: OnceLock<Mutex<HashMap<Key, Weak<stockbit::SessionStore>>>> =
+            OnceLock::new();
+        let key = (
             self.session_path.clone(),
             self.access_seed.clone(),
             self.refresh_seed.clone(),
-        ))
+        );
+        let mut stores = STORES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(store) = stores.get(&key).and_then(Weak::upgrade) {
+            return store;
+        }
+        stores.retain(|_, w| w.strong_count() > 0);
+        let store = Arc::new(stockbit::SessionStore::new(
+            self.session_path.clone(),
+            self.access_seed.clone(),
+            self.refresh_seed.clone(),
+        ));
+        stores.insert(key, Arc::downgrade(&store));
+        store
     }
 }
 
@@ -285,6 +311,50 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+/// Where price history (candles) comes from, apart from `--provider`
+/// (`--history-provider`, `IDX_HISTORY_PROVIDER`, config `history_provider`).
+/// The routing itself lives in [`history`].
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryProviderKind {
+    /// Follow --provider: Yahoo, or under --provider stockbit Stockbit where its bars match the request and Yahoo otherwise or when Stockbit fails.
+    #[default]
+    Auto,
+    /// Yahoo Finance charts, whatever --provider says.
+    Yahoo,
+    /// Stockbit charts from your own session, whatever --provider says; no fallback.
+    Stockbit,
+}
+
+impl HistoryProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HistoryProviderKind::Auto => "auto",
+            HistoryProviderKind::Yahoo => "yahoo",
+            HistoryProviderKind::Stockbit => "stockbit",
+        }
+    }
+}
+
+impl std::str::FromStr for HistoryProviderKind {
+    type Err = IdxError;
+    fn from_str(s: &str) -> Result<Self> {
+        <HistoryProviderKind as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            IdxError::Config(format!(
+                "unknown history provider {s:?}; use auto, yahoo or stockbit"
+            ))
+        })
+    }
+}
+
+impl std::fmt::Display for HistoryProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Tries providers in order. Returns the first success. If every provider
 /// fails, surfaces a `NotFound` if any provider said so (the symbol is probably
 /// wrong), otherwise the first real error, otherwise `Unsupported`.
@@ -297,7 +367,7 @@ impl Chain {
         Chain { providers }
     }
 
-    fn pick(errors: Vec<IdxError>) -> IdxError {
+    pub(crate) fn pick(errors: Vec<IdxError>) -> IdxError {
         let mut errors = errors;
         if let Some(pos) = errors
             .iter()
@@ -449,18 +519,29 @@ impl Provider for Chain {
 /// Names of the providers `auto` tries, in order.
 pub const AUTO_ORDER: &[&str] = &[yahoo::NAME, msn::NAME];
 
-/// Builds the provider for `kind`.
+/// Builds the provider for `kind`, with candles routed by `opts.history`
+/// (see [`history::route`]; the default routing leaves it untouched).
 pub fn build(
     kind: ProviderKind,
     fetcher: Arc<Fetcher>,
     opts: ProviderOptions,
+) -> Result<Box<dyn Provider>> {
+    let selected = build_selected(kind, fetcher.clone(), &opts)?;
+    Ok(history::route(kind, selected, fetcher, &opts))
+}
+
+/// The provider `--provider` names, before any history routing.
+fn build_selected(
+    kind: ProviderKind,
+    fetcher: Arc<Fetcher>,
+    opts: &ProviderOptions,
 ) -> Result<Box<dyn Provider>> {
     match kind {
         ProviderKind::Yahoo => Ok(Box::new(yahoo::Yahoo::new(fetcher, opts.ttls))),
         ProviderKind::Msn => Ok(Box::new(msn::Msn::new(
             fetcher,
             opts.ttls,
-            opts.msn_api_key,
+            opts.msn_api_key.clone(),
         ))),
         // Stockbit stands alone: it needs a credential and is never folded into
         // the keyless `auto` chain.
@@ -471,7 +552,7 @@ pub fn build(
         ))),
         ProviderKind::Auto => Ok(Box::new(Chain::new(vec![
             Box::new(yahoo::Yahoo::new(fetcher.clone(), opts.ttls)),
-            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key)),
+            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key.clone())),
         ]))),
     }
 }
@@ -725,6 +806,34 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.exit_code(), 6);
         assert!(err.to_string().contains("institutional holders"), "{err}");
+    }
+
+    #[test]
+    fn one_session_store_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = StockbitOptions {
+            session_path: dir.path().join("stockbit-session.json"),
+            access_seed: None,
+            refresh_seed: None,
+        };
+        let a = opts.store();
+        let b = opts.clone().store();
+        assert!(Arc::ptr_eq(&a, &b), "same file, same store");
+        let other = StockbitOptions {
+            session_path: dir.path().join("other.json"),
+            ..opts.clone()
+        }
+        .store();
+        assert!(!Arc::ptr_eq(&a, &other));
+        // The registry holds no strong reference: a store nobody uses is freed
+        // and the next call builds a fresh one.
+        let weak = Arc::downgrade(&a);
+        drop((a, b));
+        assert!(weak.upgrade().is_none());
+        assert_eq!(
+            opts.store().path(),
+            dir.path().join("stockbit-session.json")
+        );
     }
 
     #[test]

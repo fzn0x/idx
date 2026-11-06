@@ -112,8 +112,8 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stocks quote <SYMBOLS>` | Delayed quote for one or many tickers (`BBCA,BBRI` or `BBCA BBRI`; `.JK` optional; `-` reads them from stdin; another Yahoo Finance market by its suffix, e.g. `D05.SI`) |
 | `stocks history <SYMBOL> [--period 1y] [--interval 1d] [--limit 30]` | OHLCV candles with a summary line. Periods `1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max`, intervals `5m 15m 30m 1h 1d 1wk 1mo` |
 | `stocks profile <SYMBOL>` | Sector, industry, description, size, headquarters, management |
-| `stocks financials <SYMBOL> [--period annual\|quarterly\|ttm] [--statement all\|income\|balance\|cash]` | Income statement, balance sheet, cash flow |
-| `stocks earnings <SYMBOL>` | Quarterly EPS vs estimates with surprise, yearly revenue/earnings, next earnings date and consensus |
+| `stocks financials <SYMBOL> [--period annual\|quarterly\|ttm] [--statement income,balance,cash]` | Income statement, balance sheet, cash flow; `--statement` (comma-separated or repeated, `all` by default) picks the tables shown |
+| `stocks earnings <SYMBOL> [--annual\|--quarterly] [--reported\|--estimates]` | Quarterly EPS vs estimates with surprise, yearly and quarterly revenue/earnings, analyst consensus for this and next quarter and fiscal year, next earnings date; the flags keep only those rows in every format (`--history`/`--forecast` are aliases) |
 | `stocks dividends <SYMBOL>` | Every cash dividend (ex-date, split-adjusted amount) and split; yearly totals, TTM total and yield, payout streak |
 | `stocks returns <SYMBOLS> [--benchmark ^JKSE]` | 1w/1m/3m/6m/YTD/1y/3y/5y returns, CAGR, volatility, max drawdown, best/worst day, 52-week position, and excess over IHSG |
 | `stocks brief <SYMBOL>` | One page: quote, verdict, signal, returns vs IHSG, dividends, top holders, headlines, with plain-language key points |
@@ -169,6 +169,7 @@ Global flags work anywhere on the line:
 | --- | --- | --- |
 | `-o, --output table\|json\|jsonl\|csv\|auto` | `IDX_OUTPUT` | Output format: tables for people, the JSON envelope for programs, one JSON record per line (`jsonl`), CSV rows of the payload's main list for spreadsheets; `auto` is a table on a terminal and the JSON envelope when piped (opt-in: the default stays `table`) |
 | `--provider auto\|yahoo\|msn\|stockbit` | `IDX_PROVIDER` | Data source (`auto` tries Yahoo, then MSN, and merges fundamentals; `stockbit` is opt-in realtime from your own session, see [docs/stockbit.md](docs/stockbit.md)) |
+| `--history-provider auto\|yahoo\|stockbit` | `IDX_HISTORY_PROVIDER` | Where candles come from; `auto` follows `--provider` (Yahoo for `msn`; under `stockbit`, Stockbit where its bars match the request and Yahoo otherwise or when Stockbit fails). See [docs/configuration.md](docs/configuration.md#history-provider) |
 | `--offline` | `IDX_OFFLINE=1` | Never touch the network |
 | `--no-cache` | `IDX_NO_CACHE=1` | Ignore cached responses |
 | `--timeout SECS` | `IDX_TIMEOUT_SECS` | Per-request timeout (default 15) |
@@ -308,7 +309,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 | MSN Money `Finance/Quotes`, `Finance/Equities` | quotes, profile, fundamentals, analyst targets, institutional and fund holders (`ownershipSummary`) | MSN's own public web key (shipped; override with `IDX_MSN_API_KEY`) | Tickers resolve to MSN ids through its autosuggest service, filtered to exchange `XIDX` |
 | MSN Money `pages/finance/insights` (api.msn.com) | stocks insights | same public web key | Rule-based statements, refreshed about once a day (cached for the fundamentals TTL, 6 h by default); peers resolve to tickers through `Finance/Quotes`. MSN's crowd sentiment is not used: it has no data for IDX tickers |
 | MSN Money `Finance/Screener` (POST, whole Indonesian market) | screen return windows (`ret1w`..`ret1y`) | same public web key | One request, ~887 stocks, cached 15 minutes; values as MSN reports them. MSN's own preset lists are not used (stale or empty for IDX) |
-| Stockbit `exodus.stockbit.com` (`--provider stockbit`, opt-in) | realtime quote, history, live order book + foreign flow | **your own Stockbit session**, captured by `idx stockbit login` and stored locally | The one source that needs a credential and the one not in the `auto` chain. Volume is realtime; the order book carries the full depth ladder. Foreign flow is left empty, with a warning, while Stockbit marks it as not current (seen during trading). See [docs/stockbit.md](docs/stockbit.md) |
+| Stockbit `exodus.stockbit.com` (`--provider stockbit`, opt-in) | realtime quote, history, live order book + foreign flow | **your own Stockbit session**, captured by `idx stockbit login` and stored locally | The one source that needs a credential and the one not in the `auto` chain. Volume is realtime; the order book carries the full depth ladder. Foreign flow is left empty, with a warning, while Stockbit marks it as not current (seen during trading). Candles alone with `--history-provider stockbit`. See [docs/stockbit.md](docs/stockbit.md) |
 
 Prices from the free sources are delayed as published; Stockbit is realtime for
 your own account. This tool is for research and tooling; it is not investment
