@@ -137,13 +137,14 @@ idx completions powershell | Out-String | Invoke-Expression
 | `market indices [CODE...] [--date D]` | Every IDX index (IHSG, LQ45, IDX30, sector and thematic) for one session: close, change, range, constituents, value, market cap |
 | `market calendar [--from D --to D \| --date D] [--symbol S] [--type T]` | The exchange calendar: dividend and rights dates (cum, ex, recording, payment), RUPS, public exposes, listings; bonds and buyback reports with `--type all`. Default: the next 14 days |
 | `market holidays [--year Y \| --all] [--upcoming]` | Trading holidays (Kalender Libur Bursa, bundled), the year's trading days, whether today is a trading day and the next one |
+| `market astro [--date D] [--days N] [--natal launch\|base\|none] [--backtest [--period P]]` | Traditional astrology for IHSG, computed offline: the Sun, Moon and planets (sign, degree, speed, retrograde) at 16:00 WIB, Moon phase, Mercury retrograde, Javanese weton, Chinese shio, phases, stations and ingresses ahead, aspects to IHSG's chart; `--backtest` tests them on IHSG's daily returns. See [Astrology](#astrology) |
 | `market members [--search S]` | Exchange members (broker codes) with names and licences |
 | `ownership changes --from D --to D [--symbol S] [--min-change PP] [--limit N --offset N]` | New holders, exits and position changes between two months, paged, with a summary (counts, foreign vs local net, by investor type, issuer flow, top moves) over every match |
 | `ownership foreign [SYMBOL] [--from D --to D]` | Disclosed foreign (KSEI `A`) vs local stake: one issuer month by month, or every issuer's change between two months |
 | `watch [add\|rm\|list\|clear\|returns]` | Plain-text watchlist next to the config; `idx watch` quotes it |
 | `ownership releases\|discover\|path` | Imported months, files published on idx.co.id, database path |
-| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 36 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
-| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `actions`, `foreign`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
+| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 37 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_astro`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
+| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `actions`, `foreign`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `astro`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
 | `config init\|set\|get\|path` | Config file management |
 | `cache stats\|clear\|path` | Response cache management |
 | `completions <shell>` | bash, zsh, fish, powershell, elvish |
@@ -220,7 +221,7 @@ substitutes the absolute path, and `--npx` swaps in
 `npx -y github:fzn0x/idx mcp`). Each entry's remote (HTTP) form and the
 config file locations are in [docs/mcp.md](docs/mcp.md).
 
-The server lists 36 tools with typed input schemas kept to the subset every
+The server lists 37 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
 and one-paragraph descriptions. `idx_brief` is the one-call starting point;
 each tool returns the same envelope as `-o json`, so an agent that learned the
@@ -260,11 +261,41 @@ idx bandar screen --preset quiet-accumulation  # buying while the price stalls
 idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the bandar's average
 ```
 
+## Astrology
+
+`idx market astro` is traditional astrology done carefully: the positions are
+astronomy, computed on this machine from JPL's Keplerian elements (Standish),
+Schlyter's Jupiter-Saturn terms and Meeus's lunar theory, and checked in the
+tests against JPL Horizons (Sun and Moon within 0.01°, planets within 0.04°,
+1800-2050) and the USNO moon phases (within 2 minutes). The Javanese weton
+(day, pasaran, neptu) and the Chinese shio (Imlek computed from new moons and
+solar terms, checked against the published dates 1924-2050) come with it, and
+IHSG's own chart is cast for noon WIB on its launch (1983-04-01) or base date
+(1982-08-10, value 100), dates from secondary sources (Antara, Bisnis.com,
+CEIC) not yet confirmed against an IDX publication.
+
+`--backtest` asks whether any of it shows up in the index: IHSG's daily
+returns grouped by lunar phase, Mercury retrograde or direct, pasaran and Sun
+sign, each group tested against all other days (Welch's t, Bonferroni over the
+27 groups). On every session from 1990-04-09 to 2026-11-04 (8,904 returns) no
+group passes Bonferroni; the nominal p < 0.05 groups (full moon -0.07 % a day,
+Capricorn +0.19 %, Pisces -0.10 %, Leo -0.09 %) are the lunar-effect and
+month-of-year patterns the finance literature already knows, since Sun signs
+follow the calendar. v1 prints no interpretations; it is not a forecast or
+investment advice.
+
+```sh
+idx market astro                          # today: planets, Moon, Mercury, weton, shio
+idx market astro --date 2026-12-24 --days 7
+idx market astro --backtest               # every session since 1990
+idx -o json market astro --backtest --period 10y | jq '.data.backtest.factors[0]'
+```
+
 ## Data sources
 
 | source | used for | auth | notes |
 | --- | --- | --- | --- |
-| Yahoo Finance `v8/finance/chart` | history, quote fallback | none | IDX tickers carry the `.JK` suffix |
+| Yahoo Finance `v8/finance/chart` | history, quote fallback | none | IDX tickers carry the `.JK` suffix. `range=max` comes back monthly, so `--period max` with daily or weekly bars asks for `period1=0&period2=9999999999` |
 | Yahoo Finance `v7/finance/quote` | quotes | anonymous cookie + crumb, cached 6 h | Falls back to the chart endpoint (fewer fields) if rejected |
 | Yahoo Finance `v10/finance/quoteSummary` | profile, fundamentals, earnings | same session | Statement modules are empty at the source, so they are not used |
 | Yahoo Finance `fundamentals-timeseries` | financials | none | Annual, quarterly and TTM statement items |
@@ -272,6 +303,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 | Indo Premier (IPOT) `module/saham/include/data-brokersummary.php` | broker summary | none | Top 10 buyers and sellers per range, ranked by lots; figures of a million and more are rounded to one decimal by the source (`rounded: true`). Its nginx answers spurious 404s in bursts, so a 404 is retried with backoff. Broker names come from IDX's member list, bundled as `data/brokers.csv`; `bandar` computes its readings from these summaries |
 | idx.co.id JSON endpoints behind its pages (`primary/TradingSummary/GetStockSummary`, `GetBrokerSummary`, `GetIndexSummary`, `ListedCompany/GetTradingInfoSS`, `Home/GetCalendar`, `StockData/GetSecuritiesStock`, `ExchangeMember/GetBrokerSearch`) | foreign flow, member activity, indices, the exchange calendar, listed stocks, members | none, but Cloudflare bot protection | Foreign trading is published in shares only; `foreign_net_value_at_close` (net shares × close) is a rupiah scale, not the traded value. Ordinary connections pass; data centres and CI runners are often refused, and the error says so. Closed sessions are cached for 30 days |
 | Indo Premier (IPOT) `module/saham/include/corporateaction.php` | corporate actions, RUPS, warrants and rights | none | Same module and spurious-404 retry as the broker summary; repeated rows are dropped |
+| computed on this machine: JPL Keplerian elements (Standish, Table 1; Pluto from JPL's archived table), Schlyter (Jupiter, Saturn), Meeus (Moon, nutation, aberration) | `market astro` | none | Checked against JPL Horizons and USNO recordings in `tests/fixtures/astro/`; the `--backtest` reads `^JKSE` daily history from Yahoo's chart endpoint |
 | idx.co.id trading-holiday calendar (published as an image per year) | trading holidays | none | Transcribed into `data/holidays.csv` (2026, 2027) and checked against IDX's monthly trading-day counts; `IDX_HOLIDAYS` overrides it |
 | Kontan RSS (`investasi`, `keuangan`, `industri`, `insight`) and CNBC Indonesia RSS (`market`, `research`, `news`) | news, sentiment | none | Bisnis.com refuses non-browser clients; listed as an opt-in source |
 | MSN Money `Finance/Quotes`, `Finance/Equities` | quotes, profile, fundamentals, analyst targets | MSN's own public web key (shipped; override with `IDX_MSN_API_KEY`) | Tickers resolve to MSN ids through its autosuggest service, filtered to exchange `XIDX` |
@@ -287,8 +319,8 @@ advice and not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.
 browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `returns BBCA BBRI`,
 `screen pe<10,div>5,mcap>5T --sort div`, `news ASII`, `ownership ticker BBCA`,
 `ownership foreign`, `bandar BBCA --daily`, `bandar screen --preset
-big-accumulation`, `bandar broker YP`, `actions BBCA`, `holidays --upcoming`,
-`list --search bank`, `members`, and `tools` (all 33 MCP tools as buttons). The idx.co.id
+big-accumulation`, `bandar broker YP`, `actions BBCA`, `holidays --upcoming`, `astro`,
+`list --search bank`, `members`, and `tools` (all 37 MCP tools as buttons). The idx.co.id
 commands (foreign flow, top brokers, the calendar, indices) are CLI and MCP
 only, because idx.co.id refuses requests from Cloudflare Workers. `quote` with one symbol also draws a price chart (1D, 5D,
 1M, 6M, YTD, 1Y, 5Y) with volume, the previous close and a crosshair readout.
