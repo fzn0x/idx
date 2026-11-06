@@ -116,10 +116,11 @@ tell a genuine "no match" from a capped fundamentals pass.
 Filters apply to the values as published. `price_to_book` comes from the quote
 and is negative for a company whose shareholders' equity is below zero, so
 `pb<1` matches those too; add `pb>0` (`pb>0,pb<1`) to keep only companies
-trading below a positive book value. For an issuer that reports in USD the
-quote's `price_to_book` divides the IDR price by a USD book value, so `pb`
-filters say little about those (see `financial_currency` under
-`idx.fundamentals.v1`).
+trading below a positive book value. A negative `debt_to_equity` means the
+same, so `de<0.5` matches it too; add `de>0`. For an issuer that reports in
+USD, `price_to_book` and `price_to_sales` divide the IDR price by USD figures,
+so `pb` and `ps` filters say little about those (see `financial_currency`
+under `idx.fundamentals.v1`).
 
 ## `idx.news.v1` (`stocks news`) and `idx.sentiment.v1` (`stocks sentiment`)
 
@@ -377,8 +378,9 @@ already percentages (`21.8` = 21.8 %). Ratios are plain multiples
   lists who contributed. Values are never averaged across sources.
 - Yahoo reports gross and EBITDA margins as `0` for banks; that is published
   as `null` because it means "not applicable", not 0 %.
-- MSN writes `-999.9999` for a ratio it cannot compute, notably debt/equity
-  when shareholders' equity is negative; that is published as `null`.
+- MSN writes `±999.9999` in a ratio field (forward P/E, PEG, P/B, P/S,
+  debt/equity) where it cannot compute one, notably debt/equity when
+  shareholders' equity is negative; that is published as `null`.
 - `currency` is the price's currency. `financial_currency` is the currency of
   the financial statements when the source names it (Yahoo
   `financialCurrency`; MSN does not, so it is `null` under `--provider msn`).
