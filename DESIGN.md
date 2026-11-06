@@ -184,7 +184,7 @@ A near-monochrome blue-black instrument palette in which colour appears only as 
 - **Late Amber** (amber): delayed or stale only. A stale age stamp, the stale status lamp, a stale result's meta, the terminal's clock once a request runs slow. 9.9:1 on the ground.
 
 ### Neutral
-- **Black Glass** (ground): the page, every panel, the gate, the status bar and the dialog. Taken from the mark's own tile.
+- **Black Glass** (ground): the page, every panel, the gate, the status bar and the dialog. The mark's candles are cut in the same ink.
 - **Hairline** (rule): the 1px splits between panels, rows, cells and bars.
 - **Ghost Dot** (ghost): unlit LED dots on the band and the stacked panel strips, volume bars in charts.
 - **Raised Row** (raise): the hover tone for table rows, rail entries and suggestions.
@@ -255,7 +255,7 @@ Flat. There are no shadows, no glows and no tonal elevation steps. Depth is expr
 
 Square everything: zero radius on panels, buttons, inputs, key caps, tabs, dialogs and lamps. Status lamps are 7px squares, the moved-row lamp a 5px square, breadth and tape are dots on a 4px grid, the busy runner a 3px dot strip. Outlines are 1px in the control edge; selected nav links and tabs carry a 2px lit bottom rule. Icons are thin stroked SVG (1.5 to 1.6px, mitre joins): the star and the arrow.
 
-The brand mark (a rounded tile with gradient candles) is a fixed identity asset and keeps its own shape; it is the one exemption from the square rule and is never imitated by interface elements.
+The brand mark is a fixed identity asset in Material 3 Expressive form: a nine-lobed cookie (`RoundedPolygon.star(9, 0.84)` rounded as far as its edges allow) in idx mint, holding three ink candles that rise left to right, each a body pill on a wick pill. It is the one exemption from the square rule, keeps its own shape and is never imitated by interface elements. The README lockup sets IHSG beside it in Google Sans Flex Rounded ExtraBold over a Medium tagline, outlined so no viewer depends on installed fonts.
 
 ## Components
 

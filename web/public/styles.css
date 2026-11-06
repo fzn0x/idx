@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: dark;
-  --ground: #0b0f14;   /* black glass, the mark's own tile */
+  --ground: #0b0f14;   /* black glass, the ink of the mark's candles */
   --rule: #1b242d;     /* the 1px splits between panels and rows */
   --ghost: #17202a;    /* unlit dots */
   --raise: #121a22;    /* a hovered row; rose stays AA on it (4.7:1) */
