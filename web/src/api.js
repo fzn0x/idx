@@ -202,6 +202,7 @@ export async function history(env, symbolRaw, period = "1y", interval = "1d", li
   if (r.value.notFound) throw notFound(`${symbol}: ${r.value.notFound}`);
   const data = { ...r.value };
   const warnings = r.warning ? [r.warning] : [];
+  if (data.interval !== interval) warnings.push(`Yahoo returned ${data.interval} bars for ${period}/${interval}; the candles are labelled ${data.interval}`);
   if (limit > 0 && data.candles.length > limit) {
     data.candles = data.candles.slice(-limit);
     warnings.push(`candles truncated to the last ${limit}; summary covers the full period`);

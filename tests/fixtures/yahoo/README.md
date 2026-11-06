@@ -11,6 +11,8 @@ crumb session (`providers/yahoo/session.rs`); `v8/finance/chart` and
 | chart_tlkm_1y_1wk.json | `v8/finance/chart/TLKM.JK?range=1y&interval=1wk` | includes `adjclose` |
 | chart_events_bbca_max.json | `v8/finance/chart/BBCA.JK?range=max&interval=1mo&events=div,splits` | `events.dividends` (47, keyed by unix ex-date, split-adjusted amounts) and `events.splits` (2:1 2008, 5:1 2021); recorded 2026-10-17 |
 | chart_bbri_5d_1h.json | `v8/finance/chart/BBRI.JK?range=5d&interval=1h` | intraday |
+| chart_jkse_range_max_1d.json | `v8/finance/chart/%5EJKSE?range=max&interval=1d` | the bug behind `--period max`: `dataGranularity` "1mo", 440 monthly rows from 1990-05 although 1d was asked for (recorded 2026-11-06 06:57 WIB) |
+| chart_jkse_period1_max_1d.json | `v8/finance/chart/%5EJKSE?period1=0&period2=9999999999&interval=1d` | what idx asks for now: 9,221 daily rows from 1990-04-06, 8,905 with prices (holidays and the unfinished last session are null); 1990-1995 rows are close-only (open = high = low = close, volume 0) (2026-11-06 06:57 WIB) |
 | chart_not_found.json | `v8/finance/chart/ZZZZ.JK` | HTTP 404 |
 | quote_v7_bbca_bbri_tlkm.json | `v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK` | full quote rows |
 | quote_v7_partial_bbca_zzzz.json | `v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK` | unknown symbol silently omitted |

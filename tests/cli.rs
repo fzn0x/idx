@@ -1142,3 +1142,34 @@ fn completions_generate() {
         .success()
         .stdout(predicate::str::contains("Register-ArgumentCompleter"));
 }
+
+#[test]
+fn max_daily_history_is_daily() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1d&includePrePost=false",
+        "yahoo/chart_jkse_period1_max_1d.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "json", "stocks", "history", "^JKSE", "--period", "max",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.history.v1");
+    assert_eq!(v["data"]["interval"], "1d");
+    assert_eq!(v["data"]["period"], "max");
+    let candles = v["data"]["candles"].as_array().unwrap();
+    assert_eq!(candles.len(), 8905);
+    assert!(candles[0]["time"]
+        .as_str()
+        .unwrap()
+        .starts_with("1990-04-06"));
+}

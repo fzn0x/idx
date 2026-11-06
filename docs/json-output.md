@@ -97,6 +97,11 @@ and average-volume fields to be `null`.
   only affects the table).
 - Bars with a missing open/high/low/close (holidays, or the current session
   before its first trade) are dropped.
+- `interval` is the bar size the source actually returned. Yahoo can answer
+  with coarser bars than asked; the payload then carries its real size and a
+  warning says so. `--period max` with `1d` or `1wk` asks Yahoo for the whole
+  history (`period1=0`), so it is daily or weekly (about 9,200 daily bars for
+  `^JKSE`, from 1990-04-06), not the monthly bars `range=max` returns.
 - `adj_close` is present when the source supplies split/dividend adjusted
   closes.
 - `summary` is `null` when there are no candles.
