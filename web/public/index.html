@@ -1,24 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>idx · IHSG / IDX stock market CLI, MCP server and web terminal</title>
-<meta name="description" content="Open-source CLI, MCP server and web terminal for the Indonesian stock market: IHSG quotes, fundamentals, technicals, KSEI ownership and news. No API keys.">
+<title>IHSG dan Harga Saham Hari Ini | idx oleh Midori Research</title>
+<meta name="description" content="IHSG, harga saham unggulan, saham naik dan turun, dan jadwal sesi bursa hari ini, dalam bahasa Indonesia. Gratis, tanpa akun, dari data publik.">
 <link rel="canonical" href="https://ihsg.midoriresearch.com/">
+<link rel="alternate" hreflang="id" href="https://ihsg.midoriresearch.com/">
+<link rel="alternate" hreflang="en" href="https://ihsg.midoriresearch.com/en/">
+<link rel="alternate" hreflang="x-default" href="https://ihsg.midoriresearch.com/">
 <meta name="robots" content="index,follow,max-image-preview:large">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#123a64" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#173d66" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="idx · Midori Research">
-<meta property="og:locale" content="en_US">
-<meta property="og:title" content="idx · Indonesian stock market CLI, MCP server and web terminal">
-<meta property="og:description" content="Quotes, fundamentals, technicals, the KSEI shareholder register and news for IDX tickers. One binary, three faces: table, JSON, MCP.">
+<meta property="og:site_name" content="idx oleh Midori Research">
+<meta property="og:locale" content="id_ID">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:title" content="IHSG dan harga saham Indonesia hari ini">
+<meta property="og:description" content="IHSG, saham unggulan, saham naik dan turun, dan sesi bursa, diperbarui setiap menit pada jam bursa. Gratis, tanpa akun, data tertunda dari sumber publik.">
 <meta property="og:url" content="https://ihsg.midoriresearch.com/">
 <meta property="og:image" content="https://ihsg.midoriresearch.com/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="idx: IDX stocks for people, scripts and AI agents. idx stocks quote BBCA prints a table, idx -o json a stable JSON envelope, idx mcp an MCP server.">
+<meta property="og:image:alt" content="idx oleh Midori Research: IHSG dan harga saham Indonesia hari ini, gratis dan tanpa akun.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/mark.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -31,8 +36,19 @@
       "@id": "https://ihsg.midoriresearch.com/#website",
       "url": "https://ihsg.midoriresearch.com/",
       "name": "idx",
-      "inLanguage": "en",
+      "alternateName": "idx oleh Midori Research",
+      "inLanguage": ["id", "en"],
       "publisher": { "@id": "https://midoriresearch.com/#org" }
+    },
+    {
+      "@type": "WebPage",
+      "@id": "https://ihsg.midoriresearch.com/#page",
+      "url": "https://ihsg.midoriresearch.com/",
+      "name": "IHSG dan Harga Saham Hari Ini | idx oleh Midori Research",
+      "description": "IHSG, harga saham unggulan, saham naik dan turun, dan jadwal sesi bursa hari ini, dalam bahasa Indonesia. Gratis, tanpa akun, dari data publik.",
+      "inLanguage": "id",
+      "isPartOf": { "@id": "https://ihsg.midoriresearch.com/#website" },
+      "about": { "@id": "https://ihsg.midoriresearch.com/#app" }
     },
     {
       "@type": "Organization",
@@ -46,7 +62,7 @@
       "@id": "https://ihsg.midoriresearch.com/#app",
       "name": "idx",
       "alternateName": "ihsg-cli",
-      "description": "Open-source CLI, MCP server and web terminal for Indonesian stock market (IDX / IHSG) analysis: quotes, history, fundamentals, technicals, the KSEI register of holders above 1 % and news, from free public sources.",
+      "description": "Alat sumber terbuka untuk pasar saham Indonesia (IHSG, BEI): CLI, server MCP dan terminal web untuk harga, riwayat, fundamental, teknikal, pemegang saham di atas 1 % dari KSEI dan berita, dari sumber publik gratis.",
       "url": "https://ihsg.midoriresearch.com/",
       "image": "https://ihsg.midoriresearch.com/og.png",
       "applicationCategory": "FinanceApplication",
@@ -54,7 +70,7 @@
       "downloadUrl": "https://github.com/fzn0x/idx/releases",
       "license": "https://opensource.org/licenses/MIT",
       "isAccessibleForFree": true,
-      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "IDR" },
       "publisher": { "@id": "https://midoriresearch.com/#org" },
       "sameAs": ["https://github.com/fzn0x/idx"]
     }
@@ -63,127 +79,146 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:ROND,wght@100,700..900&family=Martian+Mono:wdth,wght@75..100,300..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&family=Libre+Franklin:wght@800&display=swap">
 <link rel="stylesheet" href="/styles.css">
 <script type="module" src="/landing.js"></script>
 </head>
-<body class="monitor-page">
-<a class="skip" href="#papan">Skip to the board</a>
-<header class="topbar">
-  <a class="brand" href="/" aria-label="idx home"><img src="/mark.svg" alt="" width="22" height="22"><span>idx</span></a>
-  <nav class="nav" aria-label="Site">
-    <a href="/" aria-current="page">Monitor</a>
-    <a href="/terminal">Terminal</a>
-    <a href="/docs/">Docs</a>
-  </nav>
-  <a class="star" id="star" href="https://github.com/fzn0x/idx" aria-label="Star fzn0x/idx on GitHub"><span class="star-l"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6L9.7 6.25 14.66 6.44 10.76 9.5 12.11 14.26 8 11.5 3.89 14.26 5.24 9.5 1.34 6.44 6.3 6.25Z"/></svg><span class="star-w">Star</span></span><span class="star-n" id="star-n" hidden></span></a>
+<body class="home">
+<a class="skip" href="#utama">Langsung ke data pasar</a>
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="idx, beranda"><img src="/mark.svg" alt="" width="36" height="36"><span class="brand-name"><b>idx</b><small>oleh Midori Research</small></span></a>
+    <nav class="nav" aria-label="Situs">
+      <a href="/" aria-current="page">Pasar</a>
+      <a href="/terminal">Terminal</a>
+      <a href="/docs/" hreflang="en">Panduan</a>
+    </nav>
+    <div class="mast-end">
+      <p class="lang" role="group" aria-label="Bahasa"><span aria-current="true">ID</span><a href="/en/" hreflang="en" lang="en" aria-label="English">EN</a></p>
+      <a class="star" id="star" href="https://github.com/fzn0x/idx" aria-label="Beri bintang fzn0x/idx di GitHub"><span class="star-l"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6L9.7 6.25 14.66 6.44 10.76 9.5 12.11 14.26 8 11.5 3.89 14.26 5.24 9.5 1.34 6.44 6.3 6.25Z"/></svg><span class="star-w">Star</span></span><span class="star-n" id="star-n" hidden></span></a>
+    </div>
+  </div>
 </header>
 
-<form class="gate" id="gate" role="search" autocomplete="off">
-  <label class="gate-l" for="cmd">Perintah</label>
-  <div class="gate-field">
-    <input id="cmd" name="cmd" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="gate-list" aria-describedby="gate-help" placeholder="Command or ticker: quote BBCA" data-short-placeholder="Ticker or command" spellcheck="false" autocapitalize="off" autocorrect="off">
-    <ul class="gate-list" id="gate-list" role="listbox" aria-label="Suggestions" hidden></ul>
-  </div>
-  <button class="gate-go" type="submit">Run</button>
-  <span class="gate-key" aria-hidden="true"><kbd>/</kbd> to type</span>
-  <p class="sr-only" id="gate-help">Runs in the web terminal. Up and down move through suggestions, Tab completes, Escape clears.</p>
-  <p class="sr-only" id="gate-status" role="status"></p>
-  <noscript><p class="gate-noscript">The command line needs JavaScript. The CLI does not: <code>curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh</code></p></noscript>
-</form>
-
-<section class="band" id="band" aria-labelledby="band-h">
-  <h2 class="sr-only" id="band-h">IHSG and the trading session</h2>
-  <div class="cell ix">
-    <p class="lbl">IHSG <span>Composite · ^JKSE</span></p>
-    <p class="ix-row"><span class="led ix-px" id="ix-px">n/a</span><span class="led ix-chg" id="ix-chg"></span></p>
-    <p class="sub" id="ix-asof">Loading the minute board</p>
-  </div>
-  <div class="cell clk">
-    <p class="lbl">WIB <span>Jakarta, UTC+7</span></p>
-    <p class="led clk-t" id="clock" aria-hidden="true">--:--:--</p>
-    <p class="sub" id="clock-d">Western Indonesia Time</p>
-  </div>
-  <div class="cell ses">
-    <p class="lbl">Session <span>regular market</span></p>
-    <p class="ses-name" id="ses-name">IDX hours</p>
-    <p class="led ses-t" id="ses-t" aria-hidden="true"></p>
-    <p class="sub" id="ses-next">Mon to Fri, 08:45 to 16:15 WIB</p>
-  </div>
-  <div class="cell brd">
-    <p class="lbl">Breadth <span id="brd-q"></span></p>
-    <div class="brd-bar" id="brd-bar" aria-hidden="true"><i class="a"></i><i class="d"></i><i class="u"></i></div>
-    <p class="brd-l"><span class="up">Adv<b id="adv">n/a</b></span><span class="dn">Dec<b id="dec">n/a</b></span><span>Unch<b id="unch">n/a</b></span></p>
-  </div>
-  <div class="cell tape-cell">
-    <p class="lbl">Tape</p>
-    <p class="tape-k" id="tape-start">IHSG minute closes</p>
-    <div class="tape-plot" id="tape"></div>
-    <p class="tape-k" id="tape-last"></p>
-  </div>
-</section>
-
-<main id="main">
-<div class="monitor">
-  <section class="panel board" id="papan" aria-labelledby="board-h" tabindex="-1">
-    <header class="ph"><span class="no">01</span><h2 id="board-h">Papan Harga</h2><p class="sub">Heavyweights by market cap · IDR · delayed as published</p><p class="age">Age <b data-age>n/a</b></p></header>
-    <div class="tbl-wrap">
-      <table class="tbl board-t" id="board" aria-label="Live board: heavyweights by market cap">
-        <thead><tr><th class="rk" scope="col">#</th><th class="l" scope="col">Symbol</th><th class="l name" scope="col">Name</th><th scope="col">Last</th><th scope="col">Chg</th><th scope="col">Chg %</th><th class="vol" scope="col">Volume</th><th class="val" scope="col">Value</th><th scope="col">Mkt cap</th></tr></thead>
-        <tbody id="board-rows">
-          <tr><td class="l muted" colspan="9">Loading the minute board. Without JavaScript the CLI prints it: idx market overview</td></tr>
-        </tbody>
-      </table>
+<main id="utama" tabindex="-1">
+<div class="wrap">
+  <div class="pagehead">
+    <div>
+      <h1>Pasar Saham Indonesia</h1>
+      <p class="dateline" id="dateline">Waktu Jakarta (WIB)</p>
     </div>
-    <p class="mline" id="board-m"><span class="sr-only">Source: Yahoo Finance through the idx minute snapshot.</span><span aria-hidden="true">IDX.MARKET.V1&lt;&lt;YAHOO&lt;&lt;MINUTE&lt;SNAPSHOT</span></p>
-  </section>
+    <p class="state" id="state" data-open="false">Memuat jadwal bursa</p>
+  </div>
 
-  <div class="side">
-    <section class="panel movers" id="teraktif" aria-labelledby="movers-h" tabindex="-1">
-      <header class="ph"><span class="no">02</span><h2 id="movers-h">Saham Teraktif</h2><p class="sub">Above 1 T market cap</p><p class="age">Age <b data-age>n/a</b></p></header>
-      <div class="tabs-row">
-        <div class="tabs" role="tablist" aria-label="Movers">
-          <button type="button" role="tab" id="tab-g" aria-selected="true" aria-controls="mv-g">Gainers</button>
-          <button type="button" role="tab" id="tab-l" aria-selected="false" aria-controls="mv-l" tabindex="-1">Losers</button>
-          <button type="button" role="tab" id="tab-v" aria-selected="false" aria-controls="mv-v" tabindex="-1">Most traded</button>
-        </div>
-        <a class="movers-more" href="/terminal?cmd=market" title="All ten gainers, losers and most traded in the terminal">All ten</a>
+  <form class="search" id="gate" role="search" autocomplete="off">
+    <label class="search-l" for="cmd">Cari saham</label>
+    <div class="search-row">
+      <div class="search-field">
+        <input id="cmd" name="cmd" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="gate-list" aria-describedby="gate-help" placeholder="Kode atau nama perusahaan, misalnya BBCA atau Bank Central Asia" data-short-placeholder="Kode atau nama, misal BBCA" spellcheck="false" autocapitalize="characters" autocorrect="off">
+        <ul class="gate-list" id="gate-list" role="listbox" aria-label="Saran" hidden></ul>
       </div>
-      <div role="tabpanel" id="mv-g" aria-labelledby="tab-g" tabindex="0"><p class="pbody muted">Loading the movers.</p></div>
-      <div role="tabpanel" id="mv-l" aria-labelledby="tab-l" tabindex="0" hidden></div>
-      <div role="tabpanel" id="mv-v" aria-labelledby="tab-v" tabindex="0" hidden></div>
-      <p class="mline" id="movers-m"><span class="sr-only">Same snapshot as the board; only stocks above 1 T market cap that traded.</span><span aria-hidden="true">IDX.MARKET.V1&lt;&lt;LIQUID&lt;MCAP&lt;1T</span></p>
+      <button type="submit">Cari</button>
+    </div>
+    <p class="search-help" id="gate-help">Ketik kode empat huruf atau sebagian nama perusahaan. Hasilnya terbuka di terminal: harga, grafik dan ringkasan.<span class="kbd-hint"> Tekan <kbd>/</kbd> untuk langsung mengetik.</span></p>
+    <p class="sr-only" id="gate-status" role="status"></p>
+    <noscript><p class="gate-noscript">Pencarian membutuhkan JavaScript. Data yang sama tersedia lewat CLI: <code>idx market overview</code></p></noscript>
+  </form>
+
+  <section class="module" id="ihsg" aria-labelledby="ihsg-h" tabindex="-1">
+    <h2 class="sr-only" id="ihsg-h">IHSG dan sesi perdagangan hari ini</h2>
+    <div class="lead">
+      <div class="lead-fig">
+        <div class="ix-top">
+          <p class="ix-l">IHSG <small>Indeks Harga Saham Gabungan</small></p>
+          <p class="ix-px" id="ix-px">t/a</p>
+          <p class="ix-chg" id="ix-chg" hidden></p>
+          <p class="ix-asof" id="ix-asof">Memuat data menit terakhir</p>
+        </div>
+        <div class="breadth">
+          <p class="lbl">Saham naik dan turun</p>
+          <div class="brd-bar" id="brd-bar" aria-hidden="true"><i class="a"></i><i class="d"></i><i class="u"></i></div>
+          <p class="brd-l"><span class="up"><span class="tri" aria-hidden="true">&#9650;</span> Naik <b id="adv">t/a</b></span><span class="dn"><span class="tri" aria-hidden="true">&#9660;</span> Turun <b id="dec">t/a</b></span><span><span class="tri" aria-hidden="true">&#9670;</span> Tetap <b id="unch">t/a</b></span></p>
+          <p class="brd-q" id="brd-q"></p>
+        </div>
+        <div class="session">
+          <p class="lbl">Sesi perdagangan</p>
+          <p class="now" id="ses-now">t/a</p>
+          <p class="next" id="ses-next">Senin sampai Jumat, 08.45 sampai 16.15 WIB</p>
+          <p class="wall">Sekarang <b id="clock">--.--</b> WIB</p>
+        </div>
+      </div>
+      <div class="lead-chart">
+        <p class="lbl">IHSG per menit <span id="tape-range"></span></p>
+        <div class="ihsg-plot" id="tape"><p class="empty">Memuat grafik</p></div>
+      </div>
+    </div>
+  </section>
+  <p class="fresh"><span class="live" id="st-state" data-state="idle">Menghubungkan</span><span id="st-age"></span><span>Data tertunda dari Yahoo Finance, diperbarui setiap menit pada jam bursa.</span><button id="pause" type="button" aria-pressed="false" data-resume="Lanjutkan pembaruan">Jeda pembaruan</button></p>
+
+  <div class="cols">
+    <section class="module board" id="unggulan" aria-labelledby="board-h" tabindex="-1">
+      <header class="sec-h"><h2 id="board-h">Saham Unggulan</h2><p class="sub">16 saham terbesar menurut kapitalisasi pasar, dalam rupiah</p><p class="age">Diperbarui <b data-age>t/a</b></p></header>
+      <div class="tbl-wrap">
+        <table class="tbl board-t" id="board" aria-label="Saham unggulan menurut kapitalisasi pasar">
+          <thead><tr><th class="l" scope="col">Saham</th><th scope="col">Harga</th><th scope="col">Perubahan</th><th scope="col" class="chgv">Persen</th><th class="vol" scope="col">Volume</th><th class="val" scope="col">Nilai</th><th scope="col">Kap. pasar</th></tr></thead>
+          <tbody id="board-rows">
+            <tr><td class="l muted" colspan="7">Memuat papan harga. Tanpa JavaScript, CLI mencetaknya: idx market overview</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mod-foot" id="board-m">Sumber: Yahoo Finance lewat snapshot menit idx. Pilih kode saham untuk melihat harga dan grafiknya.</p>
     </section>
 
-    <section class="panel ket" id="keterangan" aria-labelledby="ket-h" tabindex="-1">
-      <header class="ph"><span class="no">03</span><h2 id="ket-h">Keterangan</h2><p class="sub">What idx is</p><p class="age">Static</p></header>
+    <section class="module movers" id="teraktif" aria-labelledby="movers-h" tabindex="-1">
+      <header class="sec-h"><h2 id="movers-h">Pergerakan Saham</h2><p class="sub">Saham dengan kapitalisasi di atas 1 triliun rupiah</p></header>
+      <div class="tabs" role="tablist" aria-label="Pergerakan Saham">
+        <button type="button" role="tab" id="tab-g" aria-selected="true" aria-controls="mv-g">Naik</button>
+        <button type="button" role="tab" id="tab-l" aria-selected="false" aria-controls="mv-l" tabindex="-1">Turun</button>
+        <button type="button" role="tab" id="tab-v" aria-selected="false" aria-controls="mv-v" tabindex="-1">Teramai</button>
+      </div>
+      <div role="tabpanel" id="mv-g" aria-labelledby="tab-g" tabindex="0"><p class="pbody muted">Memuat saham paling aktif.</p></div>
+      <div role="tabpanel" id="mv-l" aria-labelledby="tab-l" tabindex="0" hidden></div>
+      <div role="tabpanel" id="mv-v" aria-labelledby="tab-v" tabindex="0" hidden></div>
+      <p class="mod-foot" id="movers-m"><a href="/terminal?cmd=market">Lihat sepuluh teratas di terminal</a></p>
+    </section>
+  </div>
+
+  <section class="module about" id="tentang" aria-labelledby="about-h" tabindex="-1">
+    <div>
+      <header class="sec-h"><h2 id="about-h">Tentang idx</h2></header>
       <div class="pbody">
-        <div class="ket-lines">
-          <p><b>One binary for IDX data:</b> quotes, holders, news.</p>
-          <p><b>One answer, three faces:</b> a table, <code>-o json</code>, <code>idx mcp</code>.</p>
-          <p><b>Free, no keys.</b> Nothing is estimated.</p>
+        <div class="lines">
+          <p><b>Data pasar saham Indonesia, gratis.</b> IHSG, harga saham, pemegang saham di atas 1 % dan berita, dari sumber publik. Tanpa akun dan tanpa biaya.</p>
+          <p><b>Apa adanya.</b> Setiap angka menyebut sumber dan waktunya. Bila sumber tidak memberi nilai, idx menulis t/a, tidak menebak.</p>
+          <p><b>Satu alat, tiga cara.</b> Dibaca di halaman ini dan di terminal, diketik di komputer lewat CLI, atau dipakai agen AI lewat MCP.</p>
         </div>
+        <div class="actions">
+          <a class="btn" href="/terminal">Buka terminal<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h13M11 5l5 5-5 5"/></svg></a>
+          <a class="btn ghost" href="/docs/" hreflang="en">Panduan (bahasa Inggris)</a>
+        </div>
+      </div>
+    </div>
+    <div>
+      <header class="sec-h"><h2 id="install-h">Pasang di komputer</h2></header>
+      <div class="pbody">
+        <p class="prose">Untuk pengembang dan pengguna terminal: pasang CLI di Linux atau macOS, atau daftarkan server MCP di Claude Code.</p>
         <div class="cmdline">
-          <p class="lbl">Install · Linux, macOS <span id="copy-install"></span></p>
+          <p class="lbl">Pasang · Linux, macOS <span id="copy-install"></span></p>
           <pre id="install-line">curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh</pre>
         </div>
         <div class="cmdline">
-          <p class="lbl">Agents · Claude Code <span id="copy-mcp"></span></p>
+          <p class="lbl">Agen AI · Claude Code <span id="copy-mcp"></span></p>
           <pre id="mcp-line">claude mcp add idx -- idx mcp</pre>
         </div>
-        <a class="go" href="/terminal">Open the terminal<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg></a>
       </div>
-      <p class="mline"><span class="sr-only">MIT licence, no API keys, source at github.com/fzn0x/idx.</span><span aria-hidden="true">IDX&lt;&lt;MIT&lt;&lt;NO&lt;API&lt;KEYS&lt;&lt;GITHUB.COM/FZN0X/IDX</span></p>
-    </section>
-  </div>
-</div>
+    </div>
+  </section>
 
-<div class="stack">
-  <section class="panel" id="ikhtisar" aria-labelledby="ikh-h" tabindex="-1">
-    <header class="ph"><span class="no">04</span><h2 id="ikh-h">Ikhtisar</h2><p class="sub">The same answer in three forms · real output</p><p class="age">Run <b>16 Oct 2026</b></p></header>
+  <section class="module dev" id="contoh" aria-labelledby="ikh-h" tabindex="-1">
+    <header class="sec-h"><h2 id="ikh-h">Contoh Keluaran</h2><p class="sub">Jawaban yang sama dalam tiga bentuk, dari keluaran asli</p><p class="age">Dijalankan <b>16 Okt 2026</b></p></header>
     <div class="three">
       <div class="face">
-        <h3 class="stmt-title">For people<small>idx stocks quote BBCA,BBRI,TLKM</small></h3>
+        <h3 class="stmt-title">Untuk manusia<small>idx stocks quote BBCA,BBRI,TLKM</small></h3>
 <pre>Symbol  Price   Chg    Chg %    P/E    Div %
 BBCA    5,175   -900   -14.81%  10.96  6.27%
 BBRI    2,640   -460   -14.84%   6.49  13.48%
@@ -191,7 +226,7 @@ TLKM    1,900   -330   -14.80%  10.98  10.01%
 Last trade 2026-10-16 16:14 WIB · market closed</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For scripts<small>idx -o json stocks fundamental BBCA | jq .data.verdict</small></h3>
+        <h3 class="stmt-title">Untuk skrip<small>idx -o json stocks fundamental BBCA | jq .data.verdict</small></h3>
 <pre>{
   "label": "undervalued",
   "score": 5,
@@ -206,139 +241,111 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For agents<small>idx mcp · 47 tools · stdio or HTTP</small></h3>
-        <table class="tbl tbl-mcp" aria-label="MCP tools">
+        <h3 class="stmt-title">Untuk agen AI<small>idx mcp · 47 alat · stdio atau HTTP</small></h3>
+        <table class="tbl tbl-mcp" aria-label="Alat MCP">
           <tbody>
-            <tr><td>idx_brief</td><td>one call, every section</td></tr>
-            <tr><td>idx_market</td><td>IHSG, breadth, movers</td></tr>
-            <tr><td>idx_quote · idx_history · idx_intraday</td><td>quotes, OHLCV candles, the session by the minute</td></tr>
-            <tr><td>idx_fundamental · idx_technical</td><td>verdict, lenses, signal</td></tr>
-            <tr><td>idx_returns · idx_dividends</td><td>vs IHSG, TTM yield</td></tr>
-            <tr><td>idx_screen · idx_news · idx_sentiment</td><td>filter, headlines, lexicon</td></tr>
-            <tr><td>idx_insights</td><td>MSN's rated statements</td></tr>
-            <tr><td>idx_broker</td><td>who bought and sold</td></tr>
-            <tr><td>idx_bandar · idx_bandar_screen · idx_bandar_broker</td><td>bandarmology, screener, one broker</td></tr>
-            <tr><td>idx_foreign · idx_market_foreign</td><td>foreign buying and selling</td></tr>
-            <tr><td>idx_market_brokers · idx_indices</td><td>top brokers, every index</td></tr>
-            <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividends, rights, RUPS, holidays</td></tr>
-            <tr><td>idx_instruments · idx_members</td><td>listed stocks, broker codes</td></tr>
-            <tr><td>idx_astro</td><td>sky, weton, shio, backtest</td></tr>
-            <tr><td>idx_ownership_*</td><td>holders, search, rankings, networks, changes, foreign flow, composition, snapshot sync, institutions</td></tr>
-            <tr><td>idx_orderbook · idx_stockbit_*</td><td>Stockbit, your login (opt-in): book, corporate actions, holder movements</td></tr>
+            <tr><td>idx_brief</td><td>satu panggilan, semua bagian</td></tr>
+            <tr><td>idx_market</td><td>IHSG, naik dan turun, saham bergerak</td></tr>
+            <tr><td>idx_quote · idx_history · idx_intraday</td><td>harga, data OHLCV, sesi per menit</td></tr>
+            <tr><td>idx_fundamental · idx_technical</td><td>penilaian, lensa, sinyal</td></tr>
+            <tr><td>idx_returns · idx_dividends</td><td>dibanding IHSG, imbal hasil 12 bulan</td></tr>
+            <tr><td>idx_screen · idx_news · idx_sentiment</td><td>penyaring, judul berita, kamus sentimen</td></tr>
+            <tr><td>idx_insights</td><td>pernyataan berperingkat dari MSN</td></tr>
+            <tr><td>idx_broker</td><td>siapa membeli dan menjual</td></tr>
+            <tr><td>idx_bandar · idx_bandar_screen · idx_bandar_broker</td><td>bandarmologi, penyaring, satu broker</td></tr>
+            <tr><td>idx_foreign · idx_market_foreign</td><td>beli dan jual asing</td></tr>
+            <tr><td>idx_market_brokers · idx_indices</td><td>broker teratas, semua indeks</td></tr>
+            <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividen, rights, RUPS, hari libur</td></tr>
+            <tr><td>idx_instruments · idx_members</td><td>saham tercatat, kode broker</td></tr>
+            <tr><td>idx_astro</td><td>langit, weton, shio, uji balik</td></tr>
+            <tr><td>idx_ownership_*</td><td>pemegang, pencarian, peringkat, jaringan, perubahan, aliran asing, komposisi, sinkron snapshot, institusi</td></tr>
+            <tr><td>idx_orderbook · idx_stockbit_*</td><td>Stockbit, akun Anda (opsional): antrean harga, aksi korporasi, transaksi pemegang</td></tr>
           </tbody>
         </table>
-        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 47 tools with their CLI and web commands</a></p>
+        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> mencetak cara mendaftar untuk Claude Code, Codex, Muse Code, Cursor dan dua puluh agen lain; <code>idx mcp --http</code> melayani produk yang hanya menerima URL seperti ChatGPT. <a href="#cmd-h">Semua 47 alat dengan perintah CLI dan web-nya</a></p>
       </div>
     </div>
-    <p class="mline"><span class="sr-only">One envelope behind the table, the JSON and the MCP tool.</span><span aria-hidden="true">TABLE&lt;&lt;JSON&lt;&lt;MCP&lt;&lt;ONE&lt;ENVELOPE&lt;&lt;2026-10-16</span></p>
   </section>
 
-  <section class="panel" id="catatan" aria-labelledby="notes-h" tabindex="-1">
-    <header class="ph"><span class="no">05</span><h2 id="notes-h">Catatan</h2><p class="sub">Notes to the statements · what this tool does and does not do</p><p class="age">Static</p></header>
+  <section class="module dev" id="catatan" aria-labelledby="notes-h" tabindex="-1">
+    <header class="sec-h"><h2 id="notes-h">Catatan</h2><p class="sub">Apa yang dilakukan dan tidak dilakukan alat ini</p></header>
     <div class="notes">
-      <p><b>Scope.</b> <code>stocks quote · history · profile · financials · earnings · dividends · returns · fundamental · technical · brief · compare · screen · news · sentiment</code>, <code>market overview</code>, <code>broker</code>, <code>bandar detect · screen</code>, <code>ownership import · ticker · entity · changes · foreign</code> and <code>watch</code>, plus <code>mcp</code>, <code>schema</code>, <code>config</code>, <code>cache</code>. Output as a table, <code>-o json</code>, <code>-o jsonl</code> or <code>-o csv</code>. Every command works on IDX tickers such as <code>BBCA</code>; <code>^JKSE</code> is IHSG.</p>
-      <p><b>Sources.</b> Yahoo Finance for prices, history, profiles, ratios, earnings and statements; MSN Money for a second opinion on ratios and analyst targets, and for the institutions and funds holding a stock (CLI and MCP); IDX's monthly KSEI file for holders above 1 %; KSEI's monthly composition archive from ksei.co.id for local and foreign holders by investor type (CLI and MCP); the exchange's own idx.co.id summaries for foreign flow, member activity, indices and the corporate-action calendar (CLI and MCP: the exchange refuses requests from data centres, this page's host included); Indo Premier for broker summaries, foreign flow per stock in rupiah and corporate actions; Kontan and CNBC Indonesia feeds for news; and, opt-in, Stockbit for realtime quotes, history, a live order book, corporate actions and insider and major-holder movements carrying your own Stockbit session (CLI and MCP only, via <code>idx stockbit login</code>). Every response names its <code>provider</code>, <code>fetched_at</code>, and whether it came from cache.</p>
-      <p><b>Provenance over polish.</b> When two sources disagree they are never averaged: the first answers, the second fills blanks, and <code>sources</code> lists who contributed. Yahoo publishes gross margin as 0 for banks; idx publishes <code>null</code>, because it means not applicable.</p>
-      <p><b>Ownership.</b> Since March 2026 KSEI compiles, and IDX publishes monthly, every holder above 1 % of a listed company. The CLI imports the XLSX (or the earlier PDF) into local SQLite with normalised entity names, so <em>who holds more than 1 % of BBCA</em> and <em>what did this fund change last month</em> are one command each. idx.co.id sits behind Cloudflare; the import explains the manual path when a download is refused.</p>
-      <p><b>Heuristics are labelled.</b> The fundamentals verdict, the technical signal and the news sentiment are rule scores. Every rule that fired is listed in plain language, and none of them is advice.</p>
-      <p><b>Offline and free.</b> Responses are cached with per-endpoint lifetimes; <code>--offline</code> serves the cache when the network is gone. No accounts, no keys, no paywall. MIT licence; self-hosting this page is one <code>wrangler deploy</code>.</p>
+      <p><b>Cakupan.</b> <code>stocks quote · history · profile · financials · earnings · dividends · returns · fundamental · technical · brief · compare · screen · news · sentiment</code>, <code>market overview</code>, <code>broker</code>, <code>bandar detect · screen</code>, <code>ownership import · ticker · entity · changes · foreign</code> dan <code>watch</code>, ditambah <code>mcp</code>, <code>schema</code>, <code>config</code>, <code>cache</code>. Keluaran berupa tabel, <code>-o json</code>, <code>-o jsonl</code> atau <code>-o csv</code>. Setiap perintah bekerja untuk kode saham seperti <code>BBCA</code>; <code>^JKSE</code> adalah IHSG.</p>
+      <p><b>Sumber.</b> Yahoo Finance untuk harga, riwayat, profil, rasio, laba dan laporan keuangan; MSN Money untuk pendapat kedua atas rasio dan target analis, serta institusi dan reksa dana pemegang saham (CLI dan MCP); berkas bulanan KSEI yang diterbitkan IDX untuk pemegang di atas 1 %; arsip komposisi bulanan KSEI dari ksei.co.id untuk pemegang lokal dan asing menurut jenis investor (CLI dan MCP); ringkasan idx.co.id untuk aliran asing, aktivitas anggota bursa, indeks dan kalender aksi korporasi (CLI dan MCP: bursa menolak permintaan dari pusat data, termasuk server halaman ini); Indo Premier untuk ringkasan broker, aliran asing per saham dalam rupiah dan aksi korporasi; umpan Kontan dan CNBC Indonesia untuk berita; dan, bila Anda aktifkan, Stockbit untuk harga waktu nyata, riwayat, antrean beli dan jual, aksi korporasi serta transaksi orang dalam dan pemegang besar dengan sesi Stockbit Anda sendiri (hanya CLI dan MCP, lewat <code>idx stockbit login</code>). Setiap jawaban menyebut <code>provider</code>, <code>fetched_at</code>, dan apakah berasal dari cache.</p>
+      <p><b>Asal data lebih penting dari tampilan.</b> Bila dua sumber berbeda, angkanya tidak pernah dirata-rata: sumber pertama menjawab, sumber kedua mengisi yang kosong, dan <code>sources</code> mencatat siapa yang berkontribusi. Yahoo menerbitkan margin kotor bank sebagai 0; idx menerbitkan <code>null</code>, karena artinya tidak berlaku.</p>
+      <p><b>Kepemilikan.</b> Sejak Maret 2026 KSEI menyusun, dan IDX menerbitkan setiap bulan, semua pemegang di atas 1 % saham perusahaan tercatat. CLI mengimpor berkas XLSX (atau PDF sebelumnya) ke SQLite lokal dengan nama entitas yang diseragamkan, sehingga <em>siapa yang memegang lebih dari 1 % BBCA</em> dan <em>apa yang diubah reksa dana ini bulan lalu</em> masing-masing cukup satu perintah. idx.co.id berada di balik Cloudflare; perintah impor menjelaskan cara manual bila unduhan ditolak.</p>
+      <p><b>Heuristik diberi label.</b> Penilaian fundamental, sinyal teknikal dan sentimen berita adalah skor berdasarkan aturan. Setiap aturan yang berlaku dicantumkan dalam bahasa sederhana, dan tidak satu pun merupakan saran investasi.</p>
+      <p><b>Bisa tanpa internet, dan gratis.</b> Jawaban disimpan di cache dengan masa berlaku per sumber; <code>--offline</code> memakai cache saat jaringan putus. Tanpa akun, tanpa kunci API, tanpa biaya. Lisensi MIT; menjalankan halaman ini sendiri cukup dengan satu <code>wrangler deploy</code>.</p>
     </div>
-    <p class="mline"><span class="sr-only">Six notes: scope, sources, provenance, ownership, heuristics, offline use.</span><span aria-hidden="true">CATATAN&lt;&lt;SCOPE&lt;&lt;SOURCES&lt;&lt;PROVENANCE&lt;&lt;OWNERSHIP&lt;&lt;HEURISTICS&lt;&lt;OFFLINE</span></p>
   </section>
 
-  <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 47 MCP tools, the CLI command behind each, and 35 that run in the web terminal</p><p class="age">Static</p></header>
+  <section class="module dev" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
+    <header class="sec-h"><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">47 alat MCP, perintah CLI di baliknya, dan 35 yang berjalan di terminal web</p></header>
     <div class="tbl-wrap">
-      <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
-        <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
+      <table class="tbl tbl-tools" aria-label="Alat MCP, perintah CLI dan perintah terminal web">
+        <thead><tr><th class="l">Alat MCP</th><th class="l">CLI</th><th class="l">Terminal web</th><th class="l">Kegunaan</th></tr></thead>
         <tbody>
-            <tr><td>idx_brief</td><td><code>idx stocks brief BBCA</code></td><td><a href="/terminal?cmd=brief%20BBCA">brief BBCA</a></td><td class="muted">one page: quote, verdict, signal, returns, dividends, holders, headlines</td></tr>
-            <tr><td>idx_market</td><td><code>idx market overview</code></td><td><a href="/terminal?cmd=market">market</a></td><td class="muted">IHSG, breadth, gainers, losers, most traded</td></tr>
-            <tr><td>idx_quote</td><td><code>idx stocks quote BBCA,BBRI</code></td><td><a href="/terminal?cmd=quote%20BBCA">quote BBCA</a></td><td class="muted">delayed quotes; one symbol adds a price chart</td></tr>
-            <tr><td>idx_history</td><td><code>idx stocks history BBCA --period 3mo</code></td><td><a href="/terminal?cmd=history%20BBCA%203mo">history BBCA 3mo</a></td><td class="muted">OHLCV candles</td></tr>
-            <tr><td>idx_intraday</td><td><code>idx stocks intraday BBCA</code></td><td><a href="/terminal?cmd=intraday%20BBCA">intraday BBCA</a></td><td class="muted">the latest session by the minute: OHLCV bars, VWAP, change vs the previous close</td></tr>
-            <tr><td>idx_profile</td><td><code>idx stocks profile TLKM</code></td><td><a href="/terminal?cmd=profile%20TLKM">profile TLKM</a></td><td class="muted">sector, industry, description, management</td></tr>
-            <tr><td>idx_financials</td><td><code>idx stocks financials ASII</code></td><td><a href="/terminal?cmd=financials%20ASII">financials ASII</a></td><td class="muted">income statement, balance sheet, cash flow</td></tr>
-            <tr><td>idx_earnings</td><td><code>idx stocks earnings TLKM</code></td><td><a href="/terminal?cmd=earnings%20TLKM">earnings TLKM</a></td><td class="muted">EPS vs estimates, next earnings date</td></tr>
-            <tr><td>idx_dividends</td><td><code>idx stocks dividends TLKM</code></td><td><a href="/terminal?cmd=dividends%20TLKM">dividends TLKM</a></td><td class="muted">payments, yearly totals, TTM yield, streak</td></tr>
-            <tr><td>idx_returns</td><td><code>idx stocks returns BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=returns%20BBCA%20BBRI%20BMRI">returns BBCA BBRI BMRI</a></td><td class="muted">1w..5y returns, CAGR, drawdown, excess over IHSG</td></tr>
-            <tr><td>idx_fundamental</td><td><code>idx stocks fundamental BBCA</code></td><td><a href="/terminal?cmd=fundamental%20BBCA">fundamental BBCA</a></td><td class="muted">ratios with a plain-language verdict; lens growth, valuation or risk for a focused reading</td></tr>
-            <tr><td>idx_technical</td><td><code>idx stocks technical BBRI</code></td><td><a href="/terminal?cmd=technical%20BBRI">technical BBRI</a></td><td class="muted">RSI, MACD, averages, levels, signal</td></tr>
-            <tr><td>idx_compare</td><td><code>idx stocks compare BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=compare%20BBCA%20BBRI%20BMRI">compare BBCA BBRI BMRI</a></td><td class="muted">side-by-side fundamentals</td></tr>
-            <tr><td>idx_screen</td><td><code>idx stocks screen -f 'pe&lt;10,div&gt;5,mcap&gt;5T'</code></td><td><a href="/terminal?cmd=screen%20pe%3C10%2Cdiv%3E5%2Cmcap%3E5T%20--sort%20div">screen pe&lt;10,div&gt;5,mcap&gt;5T --sort div</a></td><td class="muted">screener over ~950 tickers</td></tr>
-            <tr><td>idx_news</td><td><code>idx stocks news TLKM</code></td><td><a href="/terminal?cmd=news%20TLKM">news TLKM</a></td><td class="muted">Kontan and CNBC Indonesia headlines</td></tr>
-            <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">lexicon sentiment over the headlines</td></tr>
-            <tr><td>idx_insights</td><td><code>idx stocks insights BBCA</code></td><td><a href="/terminal?cmd=insights%20BBCA">insights BBCA</a></td><td class="muted">MSN Money's rated statements vs peers and industry</td></tr>
-            <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividends, splits, bonus, rights, RUPS, warrants</td></tr>
-            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><a href="/terminal?cmd=foreign%20BBCA">foreign BBCA</a></td><td class="muted">foreign buying and selling per session (the web reads IPOT, in rupiah)</td></tr>
-            <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">listed stocks (the web lists codes and names)</td></tr>
-            <tr><td>idx_market_foreign</td><td><code>idx market foreign</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">top foreign net buying and selling</td></tr>
-            <tr><td>idx_market_brokers</td><td><code>idx market brokers</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">exchange members ranked by the day's value</td></tr>
-            <tr><td>idx_indices</td><td><code>idx market indices</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">every IDX index for one session</td></tr>
-            <tr><td>idx_calendar</td><td><code>idx market calendar</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">dividend and rights dates, RUPS, public exposes</td></tr>
-            <tr><td>idx_holidays</td><td><code>idx market holidays --upcoming</code></td><td><a href="/terminal?cmd=holidays%20--upcoming">holidays --upcoming</a></td><td class="muted">trading holidays and the next trading day</td></tr>
-            <tr><td>idx_members</td><td><code>idx market members</code></td><td><a href="/terminal?cmd=members">members</a></td><td class="muted">exchange members: broker codes and names</td></tr>
-            <tr><td>idx_astro</td><td><code>idx market astro</code></td><td><a href="/terminal?cmd=astro">astro</a></td><td class="muted">planets, Moon phase, Mercury retrograde, weton and shio for IHSG, with a returns backtest</td></tr>
-            <tr><td>idx_broker</td><td><code>idx broker BBCA</code></td><td><a href="/terminal?cmd=broker%20BBCA">broker BBCA</a></td><td class="muted">top 10 buyers and sellers of a stock</td></tr>
-            <tr><td>idx_bandar</td><td><code>idx bandar detect BBCA --daily</code></td><td><a href="/terminal?cmd=bandar%20BBCA%20--daily">bandar BBCA --daily</a></td><td class="muted">bandarmology: accumulation or distribution</td></tr>
-            <tr><td>idx_bandar_screen</td><td><code>idx bandar screen --preset big-accumulation</code></td><td><a href="/terminal?cmd=bandar%20screen%20--preset%20big-accumulation">bandar screen --preset big-accumulation</a></td><td class="muted">the most traded stocks the top brokers accumulate</td></tr>
-            <tr><td>idx_bandar_broker</td><td><code>idx bandar broker YP</code></td><td><a href="/terminal?cmd=bandar%20broker%20YP">bandar broker YP</a></td><td class="muted">where one broker is a top buyer or seller</td></tr>
-            <tr><td>idx_ownership_ticker</td><td><code>idx ownership ticker BBCA</code></td><td><a href="/terminal?cmd=ownership%20ticker%20BBCA">ownership ticker BBCA</a></td><td class="muted">holders above 1 %</td></tr>
-            <tr><td>idx_ownership_entity</td><td><code>idx ownership entity &quot;Dwimuria Investama&quot;</code></td><td><a href="/terminal?cmd=ownership%20entity%20%22Dwimuria%20Investama%22">ownership entity &quot;Dwimuria Investama&quot;</a></td><td class="muted">every position of a holder</td></tr>
-            <tr><td>idx_ownership_changes</td><td><code>idx ownership changes --from 2026-08-31 --to 2026-09-30</code></td><td><a href="/terminal?cmd=ownership%20changes%202026-08-31%202026-09-30">ownership changes 2026-08-31 2026-09-30</a></td><td class="muted">monthly changes with a summary</td></tr>
-            <tr><td>idx_ownership_foreign</td><td><code>idx ownership foreign</code></td><td><a href="/terminal?cmd=ownership%20foreign">ownership foreign</a></td><td class="muted">disclosed foreign vs local stakes</td></tr>
-            <tr><td>idx_ownership_releases</td><td><code>idx ownership releases</code></td><td><a href="/terminal?cmd=ownership%20releases">ownership releases</a></td><td class="muted">imported monthly registers</td></tr>
-            <tr><td>idx_ownership_search</td><td><code>idx ownership search salim</code></td><td><a href="/terminal?cmd=ownership%20search%20salim">ownership search salim</a></td><td class="muted">find a holder by name: key, spellings, issuers held</td></tr>
-            <tr><td>idx_ownership_rankings</td><td><code>idx ownership cross-holders</code></td><td><a href="/terminal?cmd=ownership%20cross-holders">ownership cross-holders</a></td><td class="muted">holders in the most issuers, or issuers by concentration (HHI)</td></tr>
-            <tr><td>idx_ownership_graph</td><td><code>idx ownership graph BBCA</code></td><td><a href="/terminal?cmd=ownership%20graph%20BBCA">ownership graph BBCA</a></td><td class="muted">network of holders and issuers around a ticker or holder</td></tr>
-            <tr><td>idx_ownership_composition</td><td><code>idx ownership composition BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">local vs foreign shares by investor type (KSEI monthly archive)</td></tr>
-            <tr><td>idx_ownership_snapshot</td><td><code>idx ownership sync</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">install or check the prebuilt ownership database (action sync or status)</td></tr>
-            <tr><td>idx_ownership_institutions</td><td><code>idx ownership institutions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">institutions and funds holding it: buying, selling, new, exited (MSN)</td></tr>
-            <tr><td>idx_orderbook</td><td><code>idx stockbit orderbook BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">realtime order book: full depth ladder and foreign flow (your Stockbit session)</td></tr>
-            <tr><td>idx_stockbit_status</td><td><code>idx stockbit status</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">is a Stockbit session stored, and when its tokens expire</td></tr>
-            <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in a browser or through a local page, once</td></tr>
-            <tr><td>idx_stockbit_actions</td><td><code>idx stockbit actions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">a stock's corporate actions since listing, or the market's calendar, by kind (your Stockbit session)</td></tr>
-            <tr><td>idx_stockbit_movements</td><td><code>idx stockbit movements BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">insider and 5 % holder movements: who bought or sold, how many shares, at what price (your Stockbit session)</td></tr>
+          <tr><td>idx_brief</td><td><code>idx stocks brief BBCA</code></td><td><a href="/terminal?cmd=brief%20BBCA">brief BBCA</a></td><td class="muted">satu halaman: harga, penilaian, sinyal, imbal hasil, dividen, pemegang saham, berita</td></tr>
+          <tr><td>idx_market</td><td><code>idx market overview</code></td><td><a href="/terminal?cmd=market">market</a></td><td class="muted">IHSG, jumlah saham naik dan turun, saham naik, turun dan teramai</td></tr>
+          <tr><td>idx_quote</td><td><code>idx stocks quote BBCA,BBRI</code></td><td><a href="/terminal?cmd=quote%20BBCA">quote BBCA</a></td><td class="muted">harga tertunda; satu kode menambahkan grafik harga</td></tr>
+          <tr><td>idx_history</td><td><code>idx stocks history BBCA --period 3mo</code></td><td><a href="/terminal?cmd=history%20BBCA%203mo">history BBCA 3mo</a></td><td class="muted">data harga harian: buka, tertinggi, terendah, tutup, volume</td></tr>
+          <tr><td>idx_intraday</td><td><code>idx stocks intraday BBCA</code></td><td><a href="/terminal?cmd=intraday%20BBCA">intraday BBCA</a></td><td class="muted">sesi terakhir per menit: harga, VWAP, perubahan dari penutupan sebelumnya</td></tr>
+          <tr><td>idx_profile</td><td><code>idx stocks profile TLKM</code></td><td><a href="/terminal?cmd=profile%20TLKM">profile TLKM</a></td><td class="muted">sektor, industri, deskripsi, manajemen</td></tr>
+          <tr><td>idx_financials</td><td><code>idx stocks financials ASII</code></td><td><a href="/terminal?cmd=financials%20ASII">financials ASII</a></td><td class="muted">laba rugi, neraca, arus kas</td></tr>
+          <tr><td>idx_earnings</td><td><code>idx stocks earnings TLKM</code></td><td><a href="/terminal?cmd=earnings%20TLKM">earnings TLKM</a></td><td class="muted">laba per saham dibanding perkiraan, tanggal laporan berikutnya</td></tr>
+          <tr><td>idx_dividends</td><td><code>idx stocks dividends TLKM</code></td><td><a href="/terminal?cmd=dividends%20TLKM">dividends TLKM</a></td><td class="muted">pembayaran, total per tahun, imbal hasil 12 bulan, tahun berturut-turut</td></tr>
+          <tr><td>idx_returns</td><td><code>idx stocks returns BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=returns%20BBCA%20BBRI%20BMRI">returns BBCA BBRI BMRI</a></td><td class="muted">imbal hasil 1 minggu sampai 5 tahun, CAGR, penurunan terdalam, selisih dengan IHSG</td></tr>
+          <tr><td>idx_fundamental</td><td><code>idx stocks fundamental BBCA</code></td><td><a href="/terminal?cmd=fundamental%20BBCA">fundamental BBCA</a></td><td class="muted">rasio dengan penilaian dalam bahasa sederhana; lensa pertumbuhan, valuasi atau risiko</td></tr>
+          <tr><td>idx_technical</td><td><code>idx stocks technical BBRI</code></td><td><a href="/terminal?cmd=technical%20BBRI">technical BBRI</a></td><td class="muted">RSI, MACD, rata-rata bergerak, level harga, sinyal</td></tr>
+          <tr><td>idx_compare</td><td><code>idx stocks compare BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=compare%20BBCA%20BBRI%20BMRI">compare BBCA BBRI BMRI</a></td><td class="muted">fundamental beberapa saham berdampingan</td></tr>
+          <tr><td>idx_screen</td><td><code>idx stocks screen -f 'pe&lt;10,div&gt;5,mcap&gt;5T'</code></td><td><a href="/terminal?cmd=screen%20pe%3C10%2Cdiv%3E5%2Cmcap%3E5T%20--sort%20div">screen pe&lt;10,div&gt;5,mcap&gt;5T --sort div</a></td><td class="muted">penyaring atas sekitar 950 saham</td></tr>
+          <tr><td>idx_news</td><td><code>idx stocks news TLKM</code></td><td><a href="/terminal?cmd=news%20TLKM">news TLKM</a></td><td class="muted">judul berita Kontan dan CNBC Indonesia</td></tr>
+          <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">sentimen judul berita menurut kamus kata</td></tr>
+          <tr><td>idx_insights</td><td><code>idx stocks insights BBCA</code></td><td><a href="/terminal?cmd=insights%20BBCA">insights BBCA</a></td><td class="muted">pernyataan berperingkat dari MSN Money dibanding pesaing dan industri</td></tr>
+          <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividen, pemecahan saham, saham bonus, rights, RUPS, waran</td></tr>
+          <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><a href="/terminal?cmd=foreign%20BBCA">foreign BBCA</a></td><td class="muted">beli dan jual investor asing per sesi (versi web membaca IPOT, dalam rupiah)</td></tr>
+          <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">saham tercatat (versi web menampilkan kode dan nama)</td></tr>
+          <tr><td>idx_market_foreign</td><td><code>idx market foreign</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">beli dan jual bersih asing terbesar</td></tr>
+          <tr><td>idx_market_brokers</td><td><code>idx market brokers</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">anggota bursa menurut nilai transaksi hari itu</td></tr>
+          <tr><td>idx_indices</td><td><code>idx market indices</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">semua indeks bursa untuk satu sesi</td></tr>
+          <tr><td>idx_calendar</td><td><code>idx market calendar</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">tanggal dividen dan rights, RUPS, paparan publik</td></tr>
+          <tr><td>idx_holidays</td><td><code>idx market holidays --upcoming</code></td><td><a href="/terminal?cmd=holidays%20--upcoming">holidays --upcoming</a></td><td class="muted">hari libur bursa dan hari perdagangan berikutnya</td></tr>
+          <tr><td>idx_members</td><td><code>idx market members</code></td><td><a href="/terminal?cmd=members">members</a></td><td class="muted">anggota bursa: kode dan nama broker</td></tr>
+          <tr><td>idx_astro</td><td><code>idx market astro</code></td><td><a href="/terminal?cmd=astro">astro</a></td><td class="muted">planet, fase Bulan, Merkurius retrograde, weton dan shio untuk IHSG, dengan uji balik imbal hasil</td></tr>
+          <tr><td>idx_broker</td><td><code>idx broker BBCA</code></td><td><a href="/terminal?cmd=broker%20BBCA">broker BBCA</a></td><td class="muted">10 pembeli dan penjual teratas suatu saham</td></tr>
+          <tr><td>idx_bandar</td><td><code>idx bandar detect BBCA --daily</code></td><td><a href="/terminal?cmd=bandar%20BBCA%20--daily">bandar BBCA --daily</a></td><td class="muted">bandarmologi: akumulasi atau distribusi</td></tr>
+          <tr><td>idx_bandar_screen</td><td><code>idx bandar screen --preset big-accumulation</code></td><td><a href="/terminal?cmd=bandar%20screen%20--preset%20big-accumulation">bandar screen --preset big-accumulation</a></td><td class="muted">saham teramai yang diakumulasi broker teratas</td></tr>
+          <tr><td>idx_bandar_broker</td><td><code>idx bandar broker YP</code></td><td><a href="/terminal?cmd=bandar%20broker%20YP">bandar broker YP</a></td><td class="muted">saham tempat satu broker menjadi pembeli atau penjual teratas</td></tr>
+          <tr><td>idx_ownership_ticker</td><td><code>idx ownership ticker BBCA</code></td><td><a href="/terminal?cmd=ownership%20ticker%20BBCA">ownership ticker BBCA</a></td><td class="muted">pemegang saham di atas 1 %</td></tr>
+          <tr><td>idx_ownership_entity</td><td><code>idx ownership entity &quot;Dwimuria Investama&quot;</code></td><td><a href="/terminal?cmd=ownership%20entity%20%22Dwimuria%20Investama%22">ownership entity &quot;Dwimuria Investama&quot;</a></td><td class="muted">semua posisi satu pemegang saham</td></tr>
+          <tr><td>idx_ownership_changes</td><td><code>idx ownership changes --from 2026-08-31 --to 2026-09-30</code></td><td><a href="/terminal?cmd=ownership%20changes%202026-08-31%202026-09-30">ownership changes 2026-08-31 2026-09-30</a></td><td class="muted">perubahan bulanan dengan ringkasan</td></tr>
+          <tr><td>idx_ownership_foreign</td><td><code>idx ownership foreign</code></td><td><a href="/terminal?cmd=ownership%20foreign">ownership foreign</a></td><td class="muted">kepemilikan asing dibanding lokal yang diungkapkan</td></tr>
+          <tr><td>idx_ownership_releases</td><td><code>idx ownership releases</code></td><td><a href="/terminal?cmd=ownership%20releases">ownership releases</a></td><td class="muted">daftar bulanan yang sudah diimpor</td></tr>
+          <tr><td>idx_ownership_search</td><td><code>idx ownership search salim</code></td><td><a href="/terminal?cmd=ownership%20search%20salim">ownership search salim</a></td><td class="muted">cari pemegang saham menurut nama: kunci, ejaan, emiten yang dipegang</td></tr>
+          <tr><td>idx_ownership_rankings</td><td><code>idx ownership cross-holders</code></td><td><a href="/terminal?cmd=ownership%20cross-holders">ownership cross-holders</a></td><td class="muted">pemegang di emiten terbanyak, atau emiten menurut konsentrasi (HHI)</td></tr>
+          <tr><td>idx_ownership_graph</td><td><code>idx ownership graph BBCA</code></td><td><a href="/terminal?cmd=ownership%20graph%20BBCA">ownership graph BBCA</a></td><td class="muted">jaringan pemegang saham dan emiten di sekitar satu kode atau pemegang</td></tr>
+          <tr><td>idx_ownership_composition</td><td><code>idx ownership composition BBCA</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">saham lokal dan asing menurut jenis investor (arsip bulanan KSEI)</td></tr>
+          <tr><td>idx_ownership_snapshot</td><td><code>idx ownership sync</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">pasang atau periksa basis data kepemilikan siap pakai (aksi sync atau status)</td></tr>
+          <tr><td>idx_ownership_institutions</td><td><code>idx ownership institutions BBCA</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">institusi dan reksa dana pemegangnya: membeli, menjual, baru, keluar (MSN)</td></tr>
+          <tr><td>idx_orderbook</td><td><code>idx stockbit orderbook BBCA</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">antrean beli dan jual waktu nyata dan aliran asing (sesi Stockbit Anda)</td></tr>
+          <tr><td>idx_stockbit_status</td><td><code>idx stockbit status</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">apakah sesi Stockbit tersimpan, dan kapan tokennya berakhir</td></tr>
+          <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">masuk ke Stockbit sekali, lewat peramban atau halaman lokal</td></tr>
+          <tr><td>idx_stockbit_actions</td><td><code>idx stockbit actions BBCA</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">aksi korporasi suatu saham sejak tercatat, atau kalender pasar, menurut jenis (sesi Stockbit Anda)</td></tr>
+          <tr><td>idx_stockbit_movements</td><td><code>idx stockbit movements BBCA</code></td><td><span class="muted">hanya CLI dan MCP</span></td><td class="muted">transaksi orang dalam dan pemegang 5 %: siapa membeli atau menjual, berapa lembar, di harga berapa (sesi Stockbit Anda)</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="tools-foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 5 Stockbit tools (live order book, corporate actions and calendar, holder movements, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
-    <p class="mline" id="tools-m"><span class="sr-only">The MCP tools, the CLI command behind each and the web terminal command.</span><span aria-hidden="true">IDX&lt;MCP&lt;&lt;TOOLS&lt;&lt;CLI&lt;&lt;WEB</span></p>
+    <p class="tools-foot"><span>4 alat idx.co.id (aliran asing seluruh pasar, broker teratas, indeks, kalender bursa), alat komposisi KSEI dan snapshot kepemilikan, pemegang institusi MSN dan 5 alat Stockbit (antrean harga, aksi korporasi dan kalender, transaksi pemegang, masuk, status sesi) hanya berjalan di CLI dan server MCP: idx.co.id menolak permintaan dari server situs ini, arsip komposisi dan snapshot ada di basis data lokal CLI, MSN belum diperiksa dari server ini, dan Stockbit memakai sesi akun Anda sendiri.</span> <a href="/terminal?cmd=tools">Semua alat di terminal</a></p>
   </section>
 </div>
-
-<footer class="sign">
-  <div>
-    <p class="place">Jakarta, <span id="today">2026</span>. <b>Midori Research</b> · MIT licence · <a href="mailto:desk@midoriresearch.com">desk@midoriresearch.com</a></p>
-    <p class="links"><a href="https://github.com/fzn0x/idx">Source on GitHub</a> <a href="/terminal">Web terminal</a> <a href="/docs/">Docs</a> <a href="/docs/json-output">JSON contract</a> <a href="/docs/mcp#tools">MCP tools</a> <a href="/docs/ownership">Ownership data</a> <a href="/llms.txt">llms.txt</a> <a href="https://github.com/fzn0x/idx/blob/main/CHANGELOG.md">Changelog</a></p>
-  </div>
-  <p class="disc">Prices are delayed as published by their sources; idx is research tooling, not investment advice, and is not affiliated with IDX, KSEI, Yahoo or Microsoft.</p>
-</footer>
 </main>
 
-<div class="statusbar" id="statusbar">
-  <span class="st-state" id="st-state" data-state="idle">Connecting</span>
-  <span class="st-age" id="st-age"></span>
-  <span class="st-src">Yahoo Finance via idx · prices delayed as published</span>
-  <span class="st-right">
-    <button class="st-btn" id="pause" type="button" aria-pressed="false">Pause</button>
-    <button class="st-btn" id="keys-open" type="button">Keys</button>
-    <span class="st-keys"><kbd>/</kbd> command <kbd>1</kbd><span class="to">-</span><kbd>6</kbd> panels <kbd>?</kbd> keys</span>
-  </span>
-</div>
-
-<dialog class="keys" id="keys" aria-labelledby="keys-h">
-  <header class="ph"><h2 id="keys-h">Keys</h2><p class="sub">Every control also works with the mouse</p><button class="copy x" type="button" id="keys-close">Close</button></header>
-  <table>
-    <tr><th scope="row"><kbd>/</kbd></th><td>Focus the command line</td></tr>
-    <tr><th scope="row"><kbd>Up</kbd> <kbd>Down</kbd></th><td>Move through suggestions, or recall earlier commands</td></tr>
-    <tr><th scope="row"><kbd>Tab</kbd></th><td>Complete the highlighted suggestion</td></tr>
-    <tr><th scope="row"><kbd>Enter</kbd></th><td>Run it in the web terminal; a bare ticker runs quote</td></tr>
-    <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the suggestions, then clear the line</td></tr>
-    <tr><th scope="row"><kbd>1</kbd> to <kbd>6</kbd></th><td>Jump to a panel; Back returns to the last one</td></tr>
-    <tr><th scope="row"><kbd>P</kbd></th><td>Pause or resume the live board and the clock</td></tr>
-    <tr><th scope="row"><kbd>?</kbd></th><td>Show these keys</td></tr>
-  </table>
-</dialog>
+<footer class="sign">
+  <div class="wrap">
+    <p class="place">Jakarta, <span id="today">2026</span>. Midori Research · Lisensi MIT · <a href="mailto:desk@midoriresearch.com">desk@midoriresearch.com</a></p>
+    <p class="links"><a href="https://github.com/fzn0x/idx">Kode sumber di GitHub</a> <a href="/terminal">Terminal web</a> <a href="/docs/" hreflang="en">Panduan</a> <a href="/docs/json-output" hreflang="en">Kontrak JSON</a> <a href="/docs/mcp#tools" hreflang="en">Alat MCP</a> <a href="/docs/ownership" hreflang="en">Data kepemilikan</a> <a href="/llms.txt">llms.txt</a> <a href="https://github.com/fzn0x/idx/blob/main/CHANGELOG.md">Catatan rilis</a></p>
+    <p class="disc">Harga tertunda sebagaimana diterbitkan sumbernya; idx adalah alat riset, bukan saran investasi, dan tidak berafiliasi dengan PT Bursa Efek Indonesia, KSEI, Yahoo atau Microsoft.</p>
+  </div>
+</footer>
 </body>
 </html>

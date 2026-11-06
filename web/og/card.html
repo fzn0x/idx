@@ -1,68 +1,70 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
 <meta charset="utf-8">
 <title>idx social card</title>
 <!-- Source of public/og.png (1200x630). Not served; render with scripts/og.mjs.
-     The station board of the site: black glass ground, 2px rules, an LED
-     band set in Doto, everything else in Martian Mono, mint as the one lit
-     circuit. Web fonts, so the render does not depend on installed fonts. -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:ROND,wght@100,700..900&family=Martian+Mono:wdth,wght@75..100,300..700&display=block">
+     Halaman Bursa, light: the newsprint ground, the navy masthead with the
+     mark, the headline in Libre Franklin 800 and everything else in Atkinson
+     Hyperlegible Next, three plain lines on a white sheet, and the address over
+     a 4px ink rule, as the site's footer signs off. No figures: the card never
+     prints an IHSG value or a price. Web fonts, so the render does not depend
+     on installed fonts. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&family=Libre+Franklin:wght@800&display=block">
 <style>
   :root {
-    --ground: #0b0f14; --rule: #1b242d; --ghost: #17202a; --dim: #8b98a5; --lit: #e6edf3; --mint: #4ade80;
+    --paper: #f3f4f1; --sheet: #ffffff; --rule: #cfd4cd; --ink: #15191e; --ink-2: #454e58;
+    --navy: #123a64; --on-navy: #ffffff; --on-navy-2: #c9d6e6;
+    --text: "Atkinson Hyperlegible Next", sans-serif; --head: "Libre Franklin", sans-serif;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { width: 1200px; height: 630px; overflow: hidden; }
   body {
     display: flex; flex-direction: column;
-    background: var(--ground); color: var(--lit);
-    font-family: "Martian Mono", monospace; font-variant-numeric: tabular-nums;
+    background: var(--paper); color: var(--ink);
+    font-family: var(--text); font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
   }
-  .bar { flex: none; height: 84px; display: flex; align-items: center; gap: 18px; padding: 0 52px; border-bottom: 2px solid var(--rule); }
-  .bar img { width: 44px; height: 44px; display: block; }
-  .bar .word { font-size: 38px; font-weight: 700; letter-spacing: -0.03em; }
-  .bar .what { margin-left: 10px; font-size: 19px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); font-stretch: 87.5%; }
-  .bar .url { margin-left: auto; font-size: 20px; color: var(--dim); font-stretch: 87.5%; }
 
-  .band {
-    flex: none; padding: 34px 52px 32px; border-bottom: 2px solid var(--rule);
-    background-image: radial-gradient(circle at 3px 3px, var(--ghost) 2px, transparent 2.5px); background-size: 6px 6px;
+  .mast { flex: none; height: 108px; display: flex; align-items: center; gap: 20px; padding: 0 64px; background: var(--navy); color: var(--on-navy); }
+  .mast img { display: block; width: 64px; height: 64px; }
+  .mast .name { display: grid; line-height: 1.05; }
+  .mast b { font-family: var(--head); font-size: 46px; font-weight: 800; letter-spacing: -0.02em; }
+  .mast small { margin-top: 3px; font-size: 21px; font-weight: 700; color: var(--on-navy-2); }
+
+  .lead { flex: none; padding: 44px 64px 0; }
+  h1 { font-family: var(--head); font-size: 84px; font-weight: 800; line-height: 1.02; letter-spacing: -0.02em; text-wrap: balance; }
+  .en { margin-top: 16px; font-size: 32px; color: var(--ink-2); }
+
+  .lines {
+    flex: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 34px 64px 0; background: var(--sheet); border: 2px solid var(--rule); border-radius: 4px;
   }
-  .band .led { font-family: Doto, monospace; font-weight: 800; font-size: 124px; line-height: 0.9; letter-spacing: 0.02em; }
-  .band .sub { margin-top: 18px; font-size: 30px; font-stretch: 87.5%; }
-
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 23px 0 22px; border-bottom: 2px solid var(--rule); font-size: 25px; white-space: nowrap; }
-  td.no { width: 1%; padding-left: 52px; padding-right: 22px; color: var(--dim); font-size: 21px; font-weight: 600; }
-  td.who { width: 230px; font-size: 21px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-stretch: 87.5%; }
-  td.what { padding-right: 52px; text-align: right; color: var(--dim); font-stretch: 87.5%; }
-
-  .status {
-    margin-top: auto; flex: none; height: 58px; display: flex; align-items: center; gap: 22px; padding: 0 52px;
-    border-top: 2px solid var(--rule); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); font-stretch: 87.5%;
+  .lines p { display: flex; gap: 16px; align-items: flex-start; padding: 20px 24px 22px; font-size: 24px; line-height: 1.3; color: var(--ink-2); }
+  .lines p + p { border-left: 2px solid var(--rule); }
+  .lines p b { color: var(--ink); }
+  .lines p::before {
+    content: attr(data-n); flex: none; width: 36px; height: 36px; margin-top: -2px; display: grid; place-items: center;
+    border-radius: 50%; background: var(--navy); color: var(--on-navy); font-size: 20px; font-weight: 800;
   }
-  .status .lamp { display: inline-flex; align-items: center; gap: 12px; color: var(--lit); font-weight: 700; }
-  .status .lamp::before { content: ""; width: 13px; height: 13px; background: var(--mint); }
+
+  .sign { margin: auto 64px 0; padding: 16px 0 28px; border-top: 4px solid var(--ink); font-size: 30px; font-weight: 800; letter-spacing: -0.005em; }
 </style>
 </head>
 <body>
-  <header class="bar">
+  <header class="mast">
     <img src="../public/mark.svg" alt="">
-    <span class="word">idx</span>
-    <span class="what">Indonesian stock market · IDX / IHSG</span>
-    <span class="url">ihsg.midoriresearch.com</span>
+    <span class="name"><b>idx</b><small>oleh Midori Research</small></span>
   </header>
-  <section class="band">
-    <p class="led">IDX STOCKS</p>
-    <p class="sub">for people, scripts and AI agents</p>
+  <section class="lead">
+    <h1>IHSG dan harga saham hari ini</h1>
+    <p class="en" lang="en">IHSG and Indonesian stock prices today</p>
   </section>
-  <table>
-    <tr><td class="no">01</td><td class="who">For people</td><td>idx stocks quote BBCA</td><td class="what">tables</td></tr>
-    <tr><td class="no">02</td><td class="who">For scripts</td><td>idx -o json stocks quote BBCA</td><td class="what">JSON envelope</td></tr>
-    <tr><td class="no">03</td><td class="who">For agents</td><td>idx mcp</td><td class="what">MCP server</td></tr>
-  </table>
-  <footer class="status"><span class="lamp">Live</span><span>minute board · free public data · no API keys · MIT</span></footer>
+  <div class="lines">
+    <p data-n="1"><span><b>Gratis</b>, tanpa akun, data publik tertunda</span></p>
+    <p data-n="2"><span><b>Bahasa Indonesia</b> dan bahasa Inggris</span></p>
+    <p data-n="3"><span><b>CLI dan MCP</b> untuk pengembang</span></p>
+  </div>
+  <footer class="sign">ihsg.midoriresearch.com</footer>
 </body>
 </html>

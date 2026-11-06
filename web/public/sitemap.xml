@@ -1,7 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://ihsg.midoriresearch.com/</loc></url>
-  <url><loc>https://ihsg.midoriresearch.com/terminal</loc></url>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://ihsg.midoriresearch.com/</loc>
+    <xhtml:link rel="alternate" hreflang="id" href="https://ihsg.midoriresearch.com/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ihsg.midoriresearch.com/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ihsg.midoriresearch.com/"/>
+  </url>
+  <url>
+    <loc>https://ihsg.midoriresearch.com/en/</loc>
+    <xhtml:link rel="alternate" hreflang="id" href="https://ihsg.midoriresearch.com/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ihsg.midoriresearch.com/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ihsg.midoriresearch.com/"/>
+  </url>
+  <url>
+    <loc>https://ihsg.midoriresearch.com/terminal</loc>
+    <xhtml:link rel="alternate" hreflang="id" href="https://ihsg.midoriresearch.com/terminal"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ihsg.midoriresearch.com/en/terminal"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ihsg.midoriresearch.com/terminal"/>
+  </url>
+  <url>
+    <loc>https://ihsg.midoriresearch.com/en/terminal</loc>
+    <xhtml:link rel="alternate" hreflang="id" href="https://ihsg.midoriresearch.com/terminal"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ihsg.midoriresearch.com/en/terminal"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ihsg.midoriresearch.com/terminal"/>
+  </url>
   <url><loc>https://ihsg.midoriresearch.com/docs/</loc></url>
   <url><loc>https://ihsg.midoriresearch.com/docs/agent-guide</loc></url>
   <url><loc>https://ihsg.midoriresearch.com/docs/mcp</loc></url>

@@ -4,6 +4,11 @@
 // completes; Enter runs; Esc closes the list, then clears the line, then
 // leaves it. The page decides what running a line means (onRun).
 import { el } from "/app.js";
+import { t } from "/i18n.js";
+
+/** The words beside each suggestion, in the page's language. */
+const KIND = { command: t("perintah", "command"), ticker: t("saham", "ticker"), history: t("riwayat", "history"), example: t("contoh", "example") };
+const AGAIN = t("jalankan lagi", "run again");
 
 const TICKERISH = /^[a-z]{1,4}$/i;
 
@@ -21,11 +26,11 @@ export function suggestions(line, { commands = [], tickers = [], history = [], e
   const ticker = (s, value, match) => push({ kind: "ticker", label: s.symbol, detail: s.name || "", value, run: true, match });
 
   if (!raw) {
-    for (const h of history.slice(0, 5)) push({ kind: "history", label: h, detail: "run again", value: h, run: true, match: 0 });
+    for (const h of history.slice(0, 5)) push({ kind: "history", label: h, detail: AGAIN, value: h, run: true, match: 0 });
     for (const e of examples) push({ kind: "example", label: e, detail: "", value: e, run: true, match: 0 });
     return out;
   }
-  for (const h of history) if (h.toLowerCase().startsWith(lower) && h.toLowerCase() !== lower) push({ kind: "history", label: h, detail: "run again", value: h, run: true, match: raw.length });
+  for (const h of history) if (h.toLowerCase().startsWith(lower) && h.toLowerCase() !== lower) push({ kind: "history", label: h, detail: AGAIN, value: h, run: true, match: raw.length });
 
   const toks = raw.split(/\s+/);
   const trailing = /\s$/.test(raw);
@@ -70,7 +75,7 @@ export function mountGate({ form, input, list, status, suggest, onRun, history =
       const key = el("span", { class: "key" });
       if (s.match > 0) key.append(el("mark", { text: s.label.slice(0, s.match) }), s.label.slice(s.match));
       else key.textContent = s.label;
-      const li = el("li", { role: "option", id: optId(i), "aria-selected": String(i === active) }, [el("span", { class: "kind", text: s.kind }), key, el("span", { class: "what", text: s.detail })]);
+      const li = el("li", { role: "option", id: optId(i), "aria-selected": String(i === active) }, [el("span", { class: "kind", text: KIND[s.kind] || s.kind }), key, el("span", { class: "what", text: s.detail })]);
       li.addEventListener("mousedown", (ev) => ev.preventDefault());
       li.addEventListener("click", () => accept(s, s.run));
       return li;
@@ -87,7 +92,7 @@ export function mountGate({ form, input, list, status, suggest, onRun, history =
     items = next;
     active = -1;
     paint();
-    if (status) status.textContent = items.length ? `${items.length} suggestion${items.length === 1 ? "" : "s"}; up and down to choose` : "";
+    if (status) status.textContent = items.length ? t(`${items.length} saran; panah atas dan bawah untuk memilih`, `${items.length} suggestion${items.length === 1 ? "" : "s"}; up and down to choose`) : "";
   }
   const close = () => { if (items.length || !list.hidden) show([]); };
   const refresh = () => show(suggest(input.value));

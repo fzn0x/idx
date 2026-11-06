@@ -1,5 +1,8 @@
 // Shared browser helpers: API access, number formatting, small renderers.
-// Plain ES module, no build step. Served with script-src 'self'.
+// Plain ES module, no build step. Served with script-src 'self'. Numbers follow
+// the page's language (i18n.js): 5.050,43 on the Indonesian pages, 5,050.43 on
+// the English ones; the machine formats (fmt.wib, fmt.time, fmt.date) do not.
+import { LOCALE, ID, TIME_SEP, MONTHS_SHORT, t } from "./i18n.js";
 
 export const API = "/api";
 // The API gives up on a slow source well before this; past it the terminal
@@ -27,23 +30,45 @@ export async function api(path) {
 }
 
 /** What a table or a line shows where the source has no value (the JSON says null). */
-export const NA = "n/a";
-const nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
-const nf2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const NA = ID ? "t/a" : "n/a";
+const nf0 = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Compact units: T, B, M, K in English; triliun (T), miliar (M), juta (jt), ribu (rb) in Indonesian. */
+const UNITS = ID ? [[1e12, " T"], [1e9, " M"], [1e6, " jt"], [1e3, " rb"]] : [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+const p2 = (n) => String(n).padStart(2, "0");
 
 export const fmt = {
   price(v) { if (v == null) return NA; return Number.isInteger(v) || Math.abs(v - Math.round(v)) < 1e-9 ? nf0.format(v) : nf2.format(v); },
   int(v) { return v == null ? NA : nf0.format(v); },
-  num(v, d = 2) { return v == null ? NA : new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }).format(v); },
+  num(v, d = 2) { return v == null ? NA : new Intl.NumberFormat(LOCALE, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v); },
   ratio(v) { return v == null ? NA : nf2.format(v); },
   pct(v) { if (v == null) return NA; const s = nf2.format(v); return v > 0 ? `+${s}%` : `${s}%`; },
   pctPlain(v) { return v == null ? NA : `${nf2.format(v)}%`; },
   change(v) { if (v == null) return NA; const s = fmt.price(Math.abs(v)); return v > 0 ? `+${s}` : v < 0 ? `-${s}` : s; },
   compact(v) {
     if (v == null) return NA;
-    const a = Math.abs(v);
-    const [n, s] = a >= 1e12 ? [v / 1e12, "T"] : a >= 1e9 ? [v / 1e9, "B"] : a >= 1e6 ? [v / 1e6, "M"] : a >= 1e3 ? [v / 1e3, "K"] : [v, ""];
-    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: Math.abs(n) >= 100 ? 1 : 2 }).format(n)}${s}`;
+    const unit = UNITS.find(([u]) => Math.abs(v) >= u);
+    const [n, s] = unit ? [v / unit[0], unit[1]] : [v, ""];
+    return `${new Intl.NumberFormat(LOCALE, { maximumFractionDigits: Math.abs(n) >= 100 ? 1 : 2 }).format(n)}${s}`;
+  },
+  /** The direction mark the printed market page uses beside a change: up, down or level. */
+  arrow(v) { return v == null ? "" : v > 0 ? "▲" : v < 0 ? "▼" : "◆"; },
+  /** A readable WIB moment for people: "6 Nov 2026 16.14 WIB" (Indonesian) or "6 Nov 2026, 16:14 WIB". */
+  when(t0) {
+    const ms = t0 instanceof Date ? t0.getTime() : Date.parse(t0);
+    if (!Number.isFinite(ms)) return NA;
+    const d = new Date(ms + 7 * 3600e3);
+    const date = `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+    const time = `${p2(d.getUTCHours())}${TIME_SEP}${p2(d.getUTCMinutes())} WIB`;
+    return ID ? `${date} ${time}` : `${date}, ${time}`;
+  },
+  /** Elapsed seconds in words: "42 detik", "12 menit", "3 jam 5 menit" (or the English). */
+  ago(secs) {
+    if (secs == null || !Number.isFinite(secs)) return NA;
+    const s = Math.max(0, Math.floor(secs)), m = Math.floor(s / 60), h = Math.floor(m / 60);
+    if (s < 60) return t(`${s} detik`, `${s} s`);
+    if (h < 1) return t(`${m} menit`, `${m} min`);
+    return t(`${h} jam ${m % 60} menit`, `${h} h ${m % 60} min`);
   },
   wib(iso) { if (!iso) return NA; const m = String(iso).match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} WIB` : iso; },
   time(iso) { if (!iso) return NA; const m = String(iso).match(/T(\d{2}):(\d{2})/); return m ? `${m[1]}:${m[2]} WIB` : iso; },
@@ -63,7 +88,7 @@ export const signClass = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 
 /** An IDX ticker as a link that runs `quote` in the web terminal. */
 export const TICKER = /^[A-Z]{4}$/;
-export const quoteHref = (symbol) => `/terminal?cmd=${encodeURIComponent(`quote ${symbol}`)}`;
+export const quoteHref = (symbol) => `${ID ? "" : "/en"}/terminal?cmd=${encodeURIComponent(`quote ${symbol}`)}`;
 
 /** Builds a table. cols: [{h, k|f, cls, l}] ; rows: objects. Ticker cells in a `sym` column link to their quote. */
 export function table(cols, rows, opts = {}) {
@@ -104,7 +129,7 @@ export function wrapScroll(node) {
   d.className = "tbl-wrap";
   d.appendChild(node);
   const frag = document.createDocumentFragment();
-  const cue = el("p", { class: "scroll-cue", text: "scroll for more columns" });
+  const cue = el("p", { class: "scroll-cue", text: t("geser untuk kolom lainnya", "scroll for more columns") });
   frag.append(d, cue);
   scrollCue(d, cue);
   return frag;
@@ -192,8 +217,9 @@ export function sparkline(points, { height = 36, cls = "tape", pitch = 4, label 
 const motionOk = () => !matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
- * The board's flip: a changed cell shows one frame of inverted dots, then
- * its new value. No tween; under reduced motion the value just changes.
+ * Fresh ink: a figure that changed in a refresh is marked like a line drawn
+ * over with a highlighter, which fades back to the paper over about two
+ * seconds. Under reduced motion the value just changes.
  */
 export function flip(node) {
   if (!node || !motionOk()) return;
@@ -222,11 +248,11 @@ export function machineLine(node, fields, sentence) {
   node.replaceChildren(el("span", { class: "sr-only", text: sentence }), el("span", { "aria-hidden": "true", text: mrz }));
 }
 
-export function copyButton(text, label = "Copy") {
+export function copyButton(text, label = t("Salin", "Copy")) {
   const b = el("button", { class: "copy", type: "button", text: label, "aria-label": `${label}: ${text}` });
   b.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => (b.textContent = label), 1400); }
-    catch { b.textContent = "Select and copy"; }
+    try { await navigator.clipboard.writeText(text); b.textContent = t("Tersalin", "Copied"); setTimeout(() => (b.textContent = label), 1400); }
+    catch { b.textContent = t("Pilih lalu salin", "Select and copy"); }
   });
   return b;
 }

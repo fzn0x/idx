@@ -105,7 +105,7 @@ test("rendered pages carry no Markdown leftovers, balanced tags and well-formed 
 test("every internal link resolves to a page, a file or an anchor that exists", () => {
   const ids = new Map(PAGES.map((p) => [htmlPath(p.slug), new Set([...html(p.slug).matchAll(/ id="([^"]+)"/g)].map((m) => m[1]))]));
   const pub = join(ROOT, "web", "public");
-  const routes = new Set(["/", "/terminal"]);
+  const routes = new Set(["/", "/terminal", "/en/", "/en/terminal"]);
   const exists = (path) => routes.has(path) || ids.has(path) || files.has(path.slice(1)) || existsSync(join(pub, path.slice(1)));
   for (const p of PAGES) {
     for (const [, raw] of html(p.slug).matchAll(/<(?:a|link)\b[^>]*\bhref="([^"]+)"/g)) {

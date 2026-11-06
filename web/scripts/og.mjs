@@ -16,7 +16,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const web = join(dirname(fileURLToPath(import.meta.url)), "..");
 const JOBS = [
-  { src: "card.html", out: "og.png", width: 1200, height: 630, fonts: ["800 124px Doto", '400 25px "Martian Mono"', '700 21px "Martian Mono"'] },
+  {
+    src: "card.html", out: "og.png", width: 1200, height: 630,
+    fonts: ['800 84px "Libre Franklin"', '400 32px "Atkinson Hyperlegible Next"', '700 24px "Atkinson Hyperlegible Next"', '800 30px "Atkinson Hyperlegible Next"'],
+  },
   { src: "icon.html", out: "apple-touch-icon.png", width: 180, height: 180, fonts: [] },
 ];
 
