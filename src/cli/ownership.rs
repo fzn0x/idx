@@ -28,7 +28,7 @@ pub enum OwnershipCmd {
 
     /// Holders above 1 % of one ticker.
     #[command(
-        after_help = "Examples:\n  idx ownership ticker BBCA\n  idx ownership ticker BBRI --as-of 2026-07-31"
+        after_help = "Examples:\n  idx ownership ticker BBCA\n  idx ownership ticker BBRI --as-of 2026-07-31\n  idx -o json ownership ticker KREN      # accounts, controller_or_affiliate per holder\n\nKSEI lists a holder once per SID and once per scrip account without one; those lines are\nsummed into one row (Accts column, `accounts` in JSON). From the 30 Oct 2026 register a\nControl column shows CONTROLLER / AFFILIATE OF THE CONTROLLER as the issuer reported it to IDX\nfor the previous month. Rows dated other than the release are kept but not listed."
     )]
     Ticker {
         #[arg(value_name = "SYMBOL")]
@@ -51,7 +51,7 @@ pub enum OwnershipCmd {
 
     /// Month-over-month changes: new holders, exits and position changes, with a summary.
     #[command(
-        after_help = "Examples:\n  idx ownership changes --from 2026-07-31 --to 2026-08-31\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --symbol BBCA\n  idx ownership changes --from 2026-02-27 --to 2026-08-31 --min-change 1 --limit 100\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --limit 100 --offset 100   # page 2\n\nThe summary (counts, net percentage points by foreign/local and investor type, issuer flow,\nlargest rises and falls) always covers every match; --limit/--offset page the rows."
+        after_help = "Examples:\n  idx ownership changes --from 2026-07-31 --to 2026-08-31\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --symbol BBCA\n  idx ownership changes --from 2026-02-27 --to 2026-08-31 --min-change 1 --limit 100\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --limit 100 --offset 100   # page 2\n\nThe summary (counts, net percentage points by foreign/local and investor type, issuer flow,\nlargest rises and falls) always covers every match; --limit/--offset page the rows.\n\nA holder's register lines (one per account, e.g. scrip and scripless) are summed before\ncomparing; `accounts_from`/`accounts_to` show how many. With the same shares on both sides, a\nmove within the rounding of summed lines (0.005 pp per line) is not a change."
     )]
     Changes {
         #[arg(long, value_name = "YYYY-MM-DD")]
@@ -91,6 +91,9 @@ pub enum OwnershipCmd {
     },
 
     /// Imported releases in the local database.
+    #[command(
+        after_help = "Examples:\n  idx ownership releases\n  idx -o json ownership releases\n\n`rows` counts register lines, `positions` the holders per ticker after summing each holder's\naccounts, `other_date_rows` the lines dated other than the release (kept, left out of its\nholdings), `controller_column` whether the file has CONTROLLER_OR_AFFILIATE. Releases imported\nby idx 0.8.1 or older show no positions and are named in a warning until\n`idx ownership import --all --force` re-imports them."
+    )]
     Releases,
 
     /// List the monthly files currently published on idx.co.id (needs network).

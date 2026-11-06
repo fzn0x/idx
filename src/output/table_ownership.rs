@@ -7,7 +7,7 @@ use comfy_table::{Attribute, Cell, Color};
 
 use crate::model::{
     ChangeKind, ChangesReport, DiscoveredFile, EntityReport, ForeignFlowReport, ForeignReport,
-    HoldersReport, ImportReport, Release,
+    HoldersReport, Holding, ImportReport, Release,
 };
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
@@ -24,6 +24,30 @@ fn shares(v: i64) -> String {
     f::num(v as f64, 0)
 }
 
+/// CONTROLLER_OR_AFFILIATE in a narrow column; blank when not flagged.
+fn control(v: &Option<String>) -> String {
+    match v.as_deref() {
+        Some("CONTROLLER") => "controller".into(),
+        Some("AFFILIATE OF THE CONTROLLER") => "affiliate".into(),
+        Some(other) => f::clip(&other.to_lowercase(), 12),
+        None => String::new(),
+    }
+}
+
+/// Register lines summed into a position (blank for releases imported by an
+/// old idx, which never show the column).
+fn accounts(v: Option<u32>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_default()
+}
+
+fn several_accounts(list: &[Holding]) -> bool {
+    list.iter().any(|h| h.accounts.unwrap_or(1) > 1)
+}
+
+const ACCTS_NOTE: &str = "Accts: register lines summed (KSEI lists a holder once per SID and once per scrip account without one).\n";
+const CONTROL_NOTE: &str =
+    "Control: CONTROLLER_OR_AFFILIATE as the issuer reported it to IDX for the previous month.\n";
+
 pub fn holders(r: &HoldersReport, color: bool) -> String {
     let mut out = format!(
         "{} · {} · holders above 1% as of {} · {} listed = {}\n",
@@ -33,20 +57,42 @@ pub fn holders(r: &HoldersReport, color: bool) -> String {
         r.holders.len(),
         pct(r.listed_pct)
     );
+    let show_accts = several_accounts(&r.holders);
+    let show_control = r.controller_reported;
+    let mut cols = vec!["#", "Holder", "Type", "L/A"];
+    if show_control {
+        cols.push("Control");
+    }
+    if show_accts {
+        cols.push("Accts");
+    }
+    cols.extend(["Shares", "%"]);
     let mut t = base_table(color);
-    t.set_header(header(&["#", "Holder", "Type", "L/A", "Shares", "%"]));
+    t.set_header(header(&cols));
     for (i, h) in r.holders.iter().enumerate() {
-        t.add_row(vec![
+        let mut row = vec![
             right((i + 1).to_string()),
             Cell::new(f::clip(&h.holder, 48)).add_attribute(Attribute::Bold),
             Cell::new(f::clip(&f::text(&h.investor_type), 22)),
             Cell::new(f::text(&h.local_foreign)),
-            right(shares(h.shares_total)),
-            right(pct(h.pct)),
-        ]);
+        ];
+        if show_control {
+            row.push(Cell::new(control(&h.controller_or_affiliate)));
+        }
+        if show_accts {
+            row.push(right(accounts(h.accounts)));
+        }
+        row.extend([right(shares(h.shares_total)), right(pct(h.pct))]);
+        t.add_row(row);
     }
     out.push_str(&t.to_string());
     out.push_str("\nSource: KSEI via IDX monthly register, imported locally. Holders below 1% are not published.\n");
+    if show_accts {
+        out.push_str(ACCTS_NOTE);
+    }
+    if show_control {
+        out.push_str(CONTROL_NOTE);
+    }
     out
 }
 
@@ -147,27 +193,44 @@ pub fn entity(r: &EntityReport, color: bool) -> String {
     for e in &r.entities {
         out.push_str(&format!("  {e}\n"));
     }
+    let show_accts = several_accounts(&r.holdings);
+    let show_control = r.controller_reported;
+    let mut cols = vec!["Symbol", "Issuer", "Holder (as printed)", "Type"];
+    if show_control {
+        cols.push("Control");
+    }
+    if show_accts {
+        cols.push("Accts");
+    }
+    cols.extend(["Shares", "%"]);
     let mut t = base_table(color);
-    t.set_header(header(&[
-        "Symbol",
-        "Issuer",
-        "Holder (as printed)",
-        "Type",
-        "Shares",
-        "%",
-    ]));
+    t.set_header(header(&cols));
     for h in &r.holdings {
-        t.add_row(vec![
+        let mut row = vec![
             Cell::new(&h.symbol).add_attribute(Attribute::Bold),
             Cell::new(f::clip(&f::text(&h.issuer_name), 30)),
             Cell::new(f::clip(&h.holder_raw, 40)),
             Cell::new(f::clip(&f::text(&h.investor_type), 18)),
-            right(shares(h.shares_total)),
-            right(pct(h.pct)),
-        ]);
+        ];
+        if show_control {
+            row.push(Cell::new(control(&h.controller_or_affiliate)));
+        }
+        if show_accts {
+            row.push(right(accounts(h.accounts)));
+        }
+        row.extend([right(shares(h.shares_total)), right(pct(h.pct))]);
+        t.add_row(row);
     }
     out.push_str(&t.to_string());
     out.push('\n');
+    if show_accts {
+        out.push_str(
+            "Accts: register lines summed; the name as printed is the largest line's spelling.\n",
+        );
+    }
+    if show_control {
+        out.push_str(CONTROL_NOTE);
+    }
     out
 }
 
@@ -234,23 +297,28 @@ pub fn changes(r: &ChangesReport, color: bool) -> String {
             r.total_matches, last
         ));
     }
+    let show_control = r
+        .changes
+        .iter()
+        .any(|c| c.controller_or_affiliate.is_some());
+    let mut cols = vec!["Symbol", "Holder", "Type", "L/A"];
+    if show_control {
+        cols.push("Control");
+    }
+    cols.extend(["Kind", "% from", "% to", "Δ pp", "Δ shares"]);
     let mut t = base_table(color);
-    t.set_header(header(&[
-        "Symbol",
-        "Holder",
-        "Type",
-        "L/A",
-        "Kind",
-        "% from",
-        "% to",
-        "Δ pp",
-        "Δ shares",
-    ]));
+    t.set_header(header(&cols));
     for c in &r.changes {
-        let kind = Cell::new(match c.kind {
+        let word = match c.kind {
             ChangeKind::Changed => "changed",
             ChangeKind::New => "new",
             ChangeKind::Exited => "exited",
+        };
+        // Holders on several register lines say so: "changed (1→2 accts)".
+        let kind = Cell::new(match (c.accounts_from, c.accounts_to) {
+            (Some(a), Some(b)) if a != b => format!("{word} ({a}→{b} accts)"),
+            (Some(n), _) | (_, Some(n)) if n > 1 => format!("{word} ({n} accts)"),
+            _ => word.to_string(),
         });
         let kind = if color {
             match c.kind {
@@ -261,11 +329,16 @@ pub fn changes(r: &ChangesReport, color: bool) -> String {
         } else {
             kind
         };
-        t.add_row(vec![
+        let mut row = vec![
             Cell::new(&c.symbol).add_attribute(Attribute::Bold),
             Cell::new(f::clip(&c.holder, 40)),
             Cell::new(f::clip(&f::text(&c.investor_type), 12)),
             Cell::new(f::text(&c.local_foreign)),
+        ];
+        if show_control {
+            row.push(Cell::new(control(&c.controller_or_affiliate)));
+        }
+        row.extend([
             kind,
             right(pct_opt(c.pct_from)),
             right(pct_opt(c.pct_to)),
@@ -276,41 +349,104 @@ pub fn changes(r: &ChangesReport, color: bool) -> String {
                 color,
             ),
         ]);
+        t.add_row(row);
     }
     out.push_str(&t.to_string());
     out.push('\n');
+    if show_control {
+        out.push_str(CONTROL_NOTE);
+    }
     out
 }
 
 pub fn releases(list: &[Release], db: &Path, color: bool) -> String {
+    let count = |v: Option<u64>| {
+        v.map(|n| f::num(n as f64, 0))
+            .unwrap_or_else(|| f::DASH.into())
+    };
+    let show_other = list.iter().any(|r| r.other_date_rows.unwrap_or(0) > 0);
+    let legacy = list.iter().any(|r| r.positions.is_none());
+    let mut cols = vec!["As of", "Format", "Rows", "Positions"];
+    if show_other {
+        cols.push("Other dates");
+    }
+    cols.extend(["Issuers", "Holders", "Imported", "Source"]);
     let mut t = base_table(color);
-    t.set_header(header(&[
-        "As of", "Format", "Rows", "Issuers", "Holders", "Imported", "Source",
-    ]));
+    t.set_header(header(&cols));
     for r in list {
-        t.add_row(vec![
+        let mut row = vec![
             Cell::new(r.as_of.to_string()).add_attribute(Attribute::Bold),
             Cell::new(&r.format),
             right(f::num(r.rows as f64, 0)),
+            right(count(r.positions)),
+        ];
+        if show_other {
+            row.push(right(count(r.other_date_rows)));
+        }
+        row.extend([
             right(f::num(r.issuers as f64, 0)),
             right(f::num(r.entities as f64, 0)),
             Cell::new(r.imported_at.get(..10).unwrap_or(&r.imported_at)),
             Cell::new(f::clip(&r.source, 48)),
         ]);
+        t.add_row(row);
     }
-    format!("{}\nDatabase: {}\n", t, db.display())
+    let mut out = format!("{t}\n");
+    out.push_str("Rows: register lines. Positions: holders per ticker after summing each holder's accounts.\n");
+    if show_other {
+        out.push_str(
+            "Other dates: lines dated other than the release, kept but left out of its holdings.\n",
+        );
+    }
+    if legacy {
+        out.push_str(&format!(
+            "Positions {}: imported by idx 0.8.1 or older, which kept one account per holder; run `idx ownership import --all --force`.\n",
+            f::DASH
+        ));
+    }
+    out.push_str(&format!("Database: {}\n", db.display()));
+    out
 }
 
 pub fn imports(list: &[ImportReport]) -> String {
     let mut out = String::new();
     for r in list {
+        let rel = &r.release;
+        let other = rel.other_date_rows.unwrap_or(0);
+        let positions = match rel.positions {
+            Some(p) => {
+                let summed = rel.rows.saturating_sub(other).saturating_sub(p);
+                format!(
+                    " → {} positions{}",
+                    f::num(p as f64, 0),
+                    if summed > 0 {
+                        format!(
+                            " ({summed} extra account line{} summed)",
+                            if summed == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
+            }
+            None => String::new(),
+        };
         out.push_str(&format!(
-            "Imported {} ({}): {} rows, {} issuers, {} holders{} → {}\n",
-            r.release.as_of,
-            r.release.format,
-            f::num(r.release.rows as f64, 0),
-            r.release.issuers,
-            r.release.entities,
+            "Imported {} ({}): {} rows{}{}, {} issuers, {} holders{} → {}\n",
+            rel.as_of,
+            rel.format,
+            f::num(rel.rows as f64, 0),
+            positions,
+            if other > 0 {
+                format!(
+                    ", {other} row{} dated otherwise left out",
+                    if other == 1 { "" } else { "s" }
+                )
+            } else {
+                String::new()
+            },
+            rel.issuers,
+            f::num(rel.entities as f64, 0),
             if r.replaced {
                 " (replaced earlier import)"
             } else {
