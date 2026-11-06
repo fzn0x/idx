@@ -688,6 +688,30 @@ pub struct BandarScreenArgs {
 pub struct StockbitConfig {
     pub options: StockbitOptions,
     pub ttls: Ttls,
+    /// The process's session store for `options`, taken once and shared by
+    /// every clone (the server of each MCP HTTP session), so its pacer and
+    /// the refresh token it saw refused last as long as the server, not one
+    /// tool call. Filled by [`StockbitConfig::resolved`].
+    store: Option<Arc<SessionStore>>,
+}
+
+impl StockbitConfig {
+    pub fn new(options: StockbitOptions, ttls: Ttls) -> Self {
+        StockbitConfig {
+            options,
+            ttls,
+            store: None,
+        }
+        .resolved()
+    }
+
+    /// The same config holding the process's store for its options.
+    pub fn resolved(mut self) -> Self {
+        if self.store.is_none() {
+            self.store = Some(self.options.store());
+        }
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -745,7 +769,7 @@ impl IdxServer {
             provider,
             fetcher,
             ownership_db,
-            stockbit,
+            stockbit: stockbit.resolved(),
             tool_router: Self::tool_router(),
         }
     }
@@ -754,8 +778,13 @@ impl IdxServer {
         OwnershipDb::open(&self.ownership_db)
     }
 
+    /// The store [`IdxServer::new`] took once: every tool call paces and
+    /// refreshes on it.
     fn stockbit_store(&self) -> Arc<SessionStore> {
-        self.stockbit.options.store()
+        match &self.stockbit.store {
+            Some(s) => s.clone(),
+            None => self.stockbit.options.store(),
+        }
     }
 
     fn stockbit_provider(&self) -> Stockbit {
@@ -2392,6 +2421,58 @@ mod tests {
             dir.join("ownership.sqlite"),
             StockbitConfig::default(),
         )
+    }
+
+    /// The Stockbit session store lives as long as the server: its pacer and
+    /// the refresh token it saw refused carry from one tool call to the next,
+    /// and every clone (one per MCP HTTP session) shares it.
+    #[test]
+    fn the_stockbit_store_lives_as_long_as_the_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Offline,
+        ));
+        let cfg = StockbitConfig {
+            options: StockbitOptions {
+                session_path: dir.path().join("stockbit-session.json"),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher.clone(),
+            dir.path().join("ownership.sqlite"),
+            cfg.clone(),
+        );
+        let first = s.stockbit_store();
+        let held = Arc::downgrade(&first);
+        drop(first);
+        let second = s.stockbit_store();
+        let first = held.upgrade().expect("the server still holds the store");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&s.clone().stockbit_store(), &second));
+        drop((first, second));
+        drop(s);
+        // Servers built from one config (one per HTTP session) share it too.
+        let cfg = cfg.resolved();
+        let a = IdxServer::new(
+            Arc::new(Fake),
+            fetcher.clone(),
+            dir.path().join("ownership.sqlite"),
+            cfg.clone(),
+        );
+        let held = Arc::downgrade(&a.stockbit_store());
+        drop(a);
+        let b = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            cfg,
+        );
+        assert!(Arc::ptr_eq(&held.upgrade().unwrap(), &b.stockbit_store()));
     }
 
     fn text(r: &CallToolResult) -> String {

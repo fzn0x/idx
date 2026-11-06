@@ -317,7 +317,8 @@ let one own the refresh and feed the other its current token.
 Inside idx, refreshes are serialised so that one session does have one
 refresher: a process keeps one session store per session file (the CLI
 handler, the `--provider stockbit` provider, every MCP tool call and every
-MCP HTTP session share it), and a refresh also takes a lock file beside the
+MCP HTTP session share it; an MCP server takes it once when it starts and
+holds it until it stops), and a refresh also takes a lock file beside the
 session (`stockbit-session.lock`) so a CLI command and a running MCP server do
 not refresh at the same moment. Inside both locks the file is read again: a
 pair another holder just stored is used, not refreshed a second time. A lock

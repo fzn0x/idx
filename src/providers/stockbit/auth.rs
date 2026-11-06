@@ -303,12 +303,6 @@ impl SessionStore {
         &self.pacer
     }
 
-    /// `true` when this store was built from the same env seeds.
-    pub fn seeded_with(&self, access: Option<&str>, refresh: Option<&str>) -> bool {
-        self.seed.access == access.map(normalize_token).unwrap_or_default()
-            && self.seed.refresh == refresh.map(normalize_token).unwrap_or_default()
-    }
-
     /// The session file's raw bytes, `None` when there is none. For putting a
     /// previous session back after Stockbit refuses a new one.
     pub fn read_raw(&self) -> Option<Vec<u8>> {
