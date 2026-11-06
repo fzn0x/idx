@@ -1,6 +1,6 @@
 //! JSON contract of the ownership analytics over the local KSEI register:
-//! holder search, holders across issuers, ownership concentration and the
-//! holder-issuer network.
+//! holder search, holders across issuers, ownership concentration, the
+//! holder-issuer network and the spelling rules (entity resolution).
 //!
 //! Every figure is computed from the positions of one monthly release (a
 //! holder's register lines in one issuer summed), on idx's 0-100 percent
@@ -269,4 +269,121 @@ pub struct GraphReport {
     pub holders: Vec<GraphHolder>,
     /// Every holding between two nodes of the walk, by hops, symbol, percent.
     pub links: Vec<GraphLink>,
+}
+
+// ---- entity resolution --------------------------------------------------------
+
+/// One issuer in one release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IssuerMonth {
+    pub as_of: NaiveDate,
+    pub symbol: String,
+}
+
+/// Why two holders may be one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateReason {
+    /// The same share count left one name and appeared under the other in
+    /// the same issuer between consecutive releases.
+    Renamed,
+    /// The same words once legal forms and titles are dropped, in any order.
+    SimilarName,
+}
+
+/// One side of a resolution candidate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CandidateHolder {
+    pub entity_key: String,
+    pub holder: String,
+    /// Issuers held above 1 % in the newest release.
+    pub issuers: usize,
+    pub last_seen: NaiveDate,
+}
+
+/// Identical share counts moving from one name to the other.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RenameEvidence {
+    /// Release where `merge` held the shares.
+    pub from: NaiveDate,
+    /// Next release, where `keep` holds the same shares.
+    pub to: NaiveDate,
+    pub symbols: Vec<String>,
+}
+
+/// Two holders that may be one, with the evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ResolveCandidate {
+    /// The suggested survivor (the newer name, or the larger holder).
+    pub keep: CandidateHolder,
+    pub merge: CandidateHolder,
+    pub reasons: Vec<CandidateReason>,
+    pub renamed: Vec<RenameEvidence>,
+    /// Issuers where both are listed in one release: often two different
+    /// holders, sometimes one holder's two accounts.
+    pub listed_together: Vec<IssuerMonth>,
+}
+
+/// `ownership resolve candidates`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ResolveCandidates {
+    /// Newest release.
+    pub as_of: NaiveDate,
+    /// Pairs of consecutive releases compared for `renamed` evidence.
+    pub releases_compared: usize,
+    pub total_matches: usize,
+    pub candidates: Vec<ResolveCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionKind {
+    /// Every spelling of one holder joins another.
+    Merge,
+    /// One spelling joins another holder.
+    Map,
+}
+
+/// A stored rule: applied to every imported release and every later import.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Resolution {
+    /// Rule number for `resolve undo`; `null` on a dry run.
+    pub id: Option<i64>,
+    pub kind: ResolutionKind,
+    /// Merge: the holder key folded away. Map: the spelling exactly as printed.
+    pub subject: String,
+    /// Holder the subject belongs to now.
+    pub holder: String,
+    pub entity_key: String,
+    /// Issuers where both held a position when the rule was made (`--fold`).
+    pub combined: Vec<IssuerMonth>,
+    /// UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionAction {
+    Merge,
+    Map,
+    Undo,
+}
+
+/// What `resolve merge|map|undo` changed (or would change, on a dry run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ResolutionReport {
+    pub action: ResolutionAction,
+    /// `true` when nothing was written.
+    pub dry_run: bool,
+    pub resolution: Resolution,
+    /// Spellings re-pointed.
+    pub spellings_moved: usize,
+    /// Register lines re-pointed (0 for releases imported by idx 0.8.1 or older).
+    pub lines_moved: usize,
+    /// Positions that changed holder.
+    pub positions_moved: usize,
+    /// Issuer-months where two positions became one (or were split again by `undo`).
+    pub positions_combined: usize,
+    /// Releases rebuilt or changed, oldest first.
+    pub releases: Vec<NaiveDate>,
 }

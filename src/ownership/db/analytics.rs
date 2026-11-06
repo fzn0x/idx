@@ -1,5 +1,5 @@
 //! Read queries behind `ownership search | cross-holders | concentration |
-//! graph`: load the positions of a release (one row
+//! graph | resolve candidates`: load the positions of a release (one row
 //! per holder and issuer, accounts summed), then rank them with the pure
 //! functions in `ownership::analytics`.
 
@@ -10,7 +10,8 @@ use chrono::NaiveDate;
 use super::{db_err, parse_date, OwnershipDb};
 use crate::error::{IdxError, Result};
 use crate::model::{
-    ConcentrationReport, ConcentrationSort, CrossHoldersReport, GraphReport, SearchReport, Symbol,
+    ConcentrationReport, ConcentrationSort, CrossHoldersReport, GraphReport, ResolveCandidates,
+    SearchReport, Symbol,
 };
 use crate::ownership::analytics::{self, CrossFilter, Known, Root, Stake};
 use crate::ownership::normalize;
@@ -68,8 +69,8 @@ impl OwnershipDb {
         Ok(out)
     }
 
-    /// Holders with at least one position in any release, with their
-    /// spellings and last release.
+    /// Holders with at least one position in any release (so a holder
+    /// emptied by a merge is gone), with their spellings and last release.
     fn known_holders(&self) -> Result<Vec<Known>> {
         let spellings = self.spellings()?;
         let mut st = self
@@ -341,12 +342,46 @@ impl OwnershipDb {
         }
         Ok(Root::Holder(first.entity_key.clone()))
     }
+
+    /// Positions of every release, oldest first.
+    pub(crate) fn all_stakes(&self) -> Result<Vec<(NaiveDate, Vec<Stake>)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT id, as_of FROM releases ORDER BY as_of")
+            .map_err(db_err)?;
+        let ids = st
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        ids.into_iter()
+            .map(|(id, d)| Ok((parse_date(&d), self.stakes(id)?)))
+            .collect()
+    }
+
+    /// `ownership resolve candidates`: holders that may be one, with the
+    /// evidence, over every imported release.
+    pub fn resolve_candidates(&self, limit: Option<usize>) -> Result<ResolveCandidates> {
+        let (_, newest) = self.release_for(None)?;
+        let releases = self.all_stakes()?;
+        let mut candidates = analytics::candidates(&releases);
+        let total = candidates.len();
+        if let Some(n) = limit {
+            candidates.truncate(n);
+        }
+        Ok(ResolveCandidates {
+            as_of: newest,
+            releases_compared: releases.len().saturating_sub(1),
+            total_matches: total,
+            candidates,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{HolderOrigin, SearchMatchKind};
+    use crate::model::{CandidateReason, HolderOrigin, SearchMatchKind};
     use crate::ownership::ingest::parse_xlsx;
 
     const AUG: &[u8] =
@@ -389,6 +424,7 @@ mod tests {
                 .unwrap_err(),
         );
         none(db.graph("BBCA", false, 2, 0.0, 100, None).unwrap_err());
+        none(db.resolve_candidates(None).unwrap_err());
         // A query that could never match is a usage error first.
         assert_eq!(db.search("x", None, None).unwrap_err().exit_code(), 2);
     }
@@ -729,5 +765,38 @@ mod tests {
                 "{depth} {min} {max}"
             );
         }
+    }
+
+    #[test]
+    fn candidates_on_the_excerpts() {
+        let db = excerpts();
+        let r = db.resolve_candidates(None).unwrap();
+        assert_eq!((r.releases_compared, r.total_matches), (1, 8));
+        let pairs: Vec<(&str, &str)> = r
+            .candidates
+            .iter()
+            .map(|c| (c.keep.entity_key.as_str(), c.merge.entity_key.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("DRS SURONO SUBEKTI", "SURONO SUBEKTI"),
+                ("T PERMADI RACHMAT", "IR T PERMADI RACHMAT"),
+                ("UOB KAY HIAN PRIVATE LIMITED", "UOB KAY HIAN PTE LTD"),
+                ("LONG CAI", "CAI LONG"),
+                ("TRIPLE BERKAH BERSAMA", "TRIPLE BERSAMA BERKAH"),
+                ("KALON MIDCO HOLDINGS CO LTD", "MANDOM CORPORATION"),
+                (
+                    "AHMAD BIN ABDULLAH HUSSAIN HARHARAH",
+                    "HUSSAIN BIN AHMAD ABDULLAH HARHARAH"
+                ),
+                ("WALDEN GLOBAL SERVICES", "WALDEN GLOBAL SERVICES PTE LTD"),
+            ]
+        );
+        assert_eq!(r.candidates[0].renamed[0].symbols, ["ADES", "CASS", "OBAT"]);
+        assert_eq!(r.candidates[5].reasons, [CandidateReason::Renamed]);
+        assert_eq!(r.candidates[7].reasons, [CandidateReason::SimilarName]);
+        assert_eq!(r.candidates[7].listed_together.len(), 2);
+        assert_eq!(db.resolve_candidates(Some(2)).unwrap().candidates.len(), 2);
     }
 }

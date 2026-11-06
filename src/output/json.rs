@@ -13,7 +13,10 @@ use crate::model::{
     Release, ScreenReport, SentimentReport, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
-use crate::model::{ConcentrationReport, CrossHoldersReport, GraphReport, SearchReport};
+use crate::model::{
+    ConcentrationReport, CrossHoldersReport, GraphReport, Resolution, ResolutionReport,
+    ResolveCandidates, SearchReport,
+};
 use crate::providers::Sourced;
 
 /// Stable wrapper. `schema` names the payload shape and is versioned
@@ -92,6 +95,9 @@ pub const SCHEMA_OWNERSHIP_SEARCH: &str = "idx.ownership.search.v1";
 pub const SCHEMA_OWNERSHIP_CROSS_HOLDERS: &str = "idx.ownership.cross-holders.v1";
 pub const SCHEMA_OWNERSHIP_CONCENTRATION: &str = "idx.ownership.concentration.v1";
 pub const SCHEMA_OWNERSHIP_GRAPH: &str = "idx.ownership.graph.v1";
+pub const SCHEMA_OWNERSHIP_RESOLVE_CANDIDATES: &str = "idx.ownership.resolve-candidates.v1";
+pub const SCHEMA_OWNERSHIP_RESOLUTION: &str = "idx.ownership.resolution.v1";
+pub const SCHEMA_OWNERSHIP_RESOLUTIONS: &str = "idx.ownership.resolutions.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
@@ -135,6 +141,9 @@ pub type OwnershipSearchEnvelope = Envelope<SearchReport>;
 pub type OwnershipCrossHoldersEnvelope = Envelope<CrossHoldersReport>;
 pub type OwnershipConcentrationEnvelope = Envelope<ConcentrationReport>;
 pub type OwnershipGraphEnvelope = Envelope<GraphReport>;
+pub type OwnershipResolveCandidatesEnvelope = Envelope<ResolveCandidates>;
+pub type OwnershipResolutionEnvelope = Envelope<Vec<ResolutionReport>>;
+pub type OwnershipResolutionsEnvelope = Envelope<Vec<Resolution>>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -213,6 +222,9 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-cross-holders",
         "ownership-concentration",
         "ownership-graph",
+        "ownership-resolve-candidates",
+        "ownership-resolution",
+        "ownership-resolutions",
         "error",
         "quote",
         "candle",
@@ -263,6 +275,11 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-cross-holders" => schemars::schema_for!(OwnershipCrossHoldersEnvelope),
         "ownership-concentration" => schemars::schema_for!(OwnershipConcentrationEnvelope),
         "ownership-graph" => schemars::schema_for!(OwnershipGraphEnvelope),
+        "ownership-resolve-candidates" => {
+            schemars::schema_for!(OwnershipResolveCandidatesEnvelope)
+        }
+        "ownership-resolution" => schemars::schema_for!(OwnershipResolutionEnvelope),
+        "ownership-resolutions" => schemars::schema_for!(OwnershipResolutionsEnvelope),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),

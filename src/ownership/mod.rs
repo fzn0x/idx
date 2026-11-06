@@ -12,7 +12,8 @@
 //! idx, rows dated otherwise) in `warnings`.
 //!
 //! `analytics` ranks a release's positions (search, cross-holders,
-//! concentration, the network graph).
+//! concentration, the network graph, spelling candidates); the `resolve_*`
+//! wrappers write the user's spelling rules (`ownership resolve`).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,7 +25,7 @@ use crate::error::{IdxError, Result};
 use crate::model::{
     ChangesReport, ConcentrationReport, ConcentrationSort, CrossHoldersReport, DiscoveredFile,
     EntityReport, ForeignFlowReport, ForeignReport, GraphReport, HoldersReport, ImportReport,
-    Release, SearchReport, Symbol,
+    Release, Resolution, ResolutionReport, ResolveCandidates, SearchReport, Symbol,
 };
 use crate::providers::Sourced;
 
@@ -208,6 +209,62 @@ pub fn graph(
     let (r, w) = db.graph(root, force_holder, depth, min_pct, max_nodes, as_of)?;
     let date = r.as_of;
     with_notes(db, r, &[date], w)
+}
+
+/// `ownership resolve candidates`.
+pub fn resolve_candidates(
+    db: &OwnershipDb,
+    limit: Option<usize>,
+) -> Result<Sourced<ResolveCandidates>> {
+    let r = db.resolve_candidates(limit)?;
+    let dates: Vec<NaiveDate> = db.releases()?.iter().map(|r| r.as_of).collect();
+    sourced(db, r, &dates)
+}
+
+/// `ownership resolve merge`.
+pub fn resolve_merge(
+    db: &mut OwnershipDb,
+    keep: &str,
+    merge: &[String],
+    fold: bool,
+    dry_run: bool,
+) -> Result<Sourced<Vec<ResolutionReport>>> {
+    let (r, w) = db.resolve_merge(keep, merge, fold, dry_run)?;
+    let mut s = Sourced::fresh(r, PROVIDER);
+    s.warnings = w;
+    Ok(s)
+}
+
+/// `ownership resolve map`.
+pub fn resolve_map(
+    db: &mut OwnershipDb,
+    spelling: &str,
+    holder: &str,
+    new: bool,
+    fold: bool,
+    dry_run: bool,
+) -> Result<Sourced<Vec<ResolutionReport>>> {
+    let (r, w) = db.resolve_map(spelling, holder, new, fold, dry_run)?;
+    let mut s = Sourced::fresh(vec![r], PROVIDER);
+    s.warnings = w;
+    Ok(s)
+}
+
+/// `ownership resolve undo`.
+pub fn resolve_undo(
+    db: &mut OwnershipDb,
+    id: i64,
+    dry_run: bool,
+) -> Result<Sourced<Vec<ResolutionReport>>> {
+    let (r, w) = db.resolve_undo(id, dry_run)?;
+    let mut s = Sourced::fresh(vec![r], PROVIDER);
+    s.warnings = w;
+    Ok(s)
+}
+
+/// `ownership resolve list`.
+pub fn resolutions(db: &OwnershipDb) -> Result<Sourced<Vec<Resolution>>> {
+    Ok(Sourced::fresh(db.resolutions()?, PROVIDER))
 }
 
 pub fn import_file(db: &mut OwnershipDb, path: &Path) -> Result<(ImportReport, Vec<String>)> {

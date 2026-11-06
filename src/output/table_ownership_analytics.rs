@@ -1,12 +1,14 @@
-//! Tables for `idx ownership search | cross-holders | concentration | graph`.
+//! Tables for `idx ownership search | cross-holders | concentration | graph
+//! | resolve`.
 
 use std::collections::HashMap;
 
 use comfy_table::{Attribute, Cell};
 
 use crate::model::{
-    ConcentrationReport, ConcentrationSort, CrossHoldersReport, GraphReport, HolderOrigin,
-    SearchMatch, SearchMatchKind, SearchReport,
+    CandidateReason, ConcentrationReport, ConcentrationSort, CrossHoldersReport, GraphReport,
+    HolderOrigin, Resolution, ResolutionAction, ResolutionKind, ResolutionReport,
+    ResolveCandidates, SearchMatch, SearchMatchKind, SearchReport,
 };
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right};
@@ -294,5 +296,187 @@ pub fn graph(r: &GraphReport, color: bool) -> String {
             label
         }
     ));
+    out
+}
+
+pub fn resolve_candidates(r: &ResolveCandidates, color: bool) -> String {
+    let mut out = format!(
+        "Holders that may be one · {}{} · {} compared, newest {}\n",
+        plural(r.total_matches, "pair", "pairs"),
+        showing(r.candidates.len(), r.total_matches),
+        plural(r.releases_compared, "pair of months", "pairs of months"),
+        r.as_of
+    );
+    if r.candidates.is_empty() {
+        out.push_str("No candidates.\n");
+        return out;
+    }
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "#",
+        "Keep",
+        "Merge",
+        "Evidence",
+        "Listed together",
+    ]));
+    for (i, c) in r.candidates.iter().enumerate() {
+        let mut evidence: Vec<String> = c
+            .renamed
+            .iter()
+            .map(|e| {
+                format!(
+                    "renamed in {} {}→{} ({})",
+                    plural(e.symbols.len(), "issuer", "issuers"),
+                    e.from,
+                    e.to,
+                    e.symbols.join(", ")
+                )
+            })
+            .collect();
+        if c.reasons.contains(&CandidateReason::SimilarName) {
+            evidence.push("similar name".into());
+        }
+        let together = c
+            .listed_together
+            .iter()
+            .map(|m| format!("{} {}", m.symbol, m.as_of))
+            .collect::<Vec<_>>()
+            .join(", ");
+        t.add_row(vec![
+            right((i + 1).to_string()),
+            Cell::new(format!(
+                "{} ({})",
+                f::clip(&c.keep.holder, 36),
+                c.keep.issuers
+            ))
+            .add_attribute(Attribute::Bold),
+            Cell::new(format!(
+                "{} ({}, last {})",
+                f::clip(&c.merge.holder, 36),
+                c.merge.issuers,
+                c.merge.last_seen
+            )),
+            Cell::new(evidence.join(" · ")),
+            Cell::new(if together.is_empty() {
+                String::new()
+            } else {
+                f::clip(&together, 40)
+            }),
+        ]);
+    }
+    out.push_str(&t.to_string());
+    let first = &r.candidates[0];
+    out.push_str(&format!(
+        "\n(n): issuers held above 1% in the newest release. To merge the first pair:\n  idx ownership resolve merge \"{}\" \"{}\" --dry-run\n",
+        first.keep.entity_key, first.merge.entity_key
+    ));
+    out.push_str("These are suggestions: an identical share count can also be a real block sale (MANDOM CORPORATION\n");
+    out.push_str("to KALON MIDCO HOLDINGS CO LTD), and holders listed together are often different people.\n");
+    out
+}
+
+fn kind_name(k: ResolutionKind) -> &'static str {
+    match k {
+        ResolutionKind::Merge => "merge",
+        ResolutionKind::Map => "map",
+    }
+}
+
+fn combined_text(r: &Resolution) -> String {
+    r.combined
+        .iter()
+        .map(|m| format!("{} {}", m.symbol, m.as_of))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Results of `resolve merge | map | undo`: one sentence per rule.
+pub fn resolution_reports(list: &[ResolutionReport]) -> String {
+    let mut out = String::new();
+    for r in list {
+        let rule = &r.resolution;
+        let id = rule.id.map(|i| format!(" (#{i})")).unwrap_or_default();
+        let what = match (r.action, rule.kind) {
+            (ResolutionAction::Merge, _) => format!("{} into {}{id}", rule.subject, rule.holder),
+            (ResolutionAction::Map, _) => {
+                format!("spelling \"{}\" to {}{id}", rule.subject, rule.holder)
+            }
+            (ResolutionAction::Undo, ResolutionKind::Merge) => {
+                format!("merge{id} of {} into {}", rule.subject, rule.holder)
+            }
+            (ResolutionAction::Undo, ResolutionKind::Map) => {
+                format!("map{id} of \"{}\" to {}", rule.subject, rule.holder)
+            }
+        };
+        let verb = match (r.action, r.dry_run) {
+            (ResolutionAction::Undo, true) => "Would undo",
+            (ResolutionAction::Undo, false) => "Undid",
+            (ResolutionAction::Merge, true) => "Would merge",
+            (ResolutionAction::Merge, false) => "Merged",
+            (ResolutionAction::Map, true) => "Would map",
+            (ResolutionAction::Map, false) => "Mapped",
+        };
+        let months = if r.releases.is_empty() {
+            "no imported release".to_string()
+        } else {
+            r.releases
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!(
+            "{verb} {what}: {}, {}, {} in {months}{}{}\n",
+            plural(r.spellings_moved, "spelling", "spellings"),
+            plural(r.lines_moved, "register line", "register lines"),
+            plural(r.positions_moved, "position", "positions"),
+            if r.positions_combined > 0 {
+                format!(
+                    " ({} {})",
+                    plural(r.positions_combined, "issuer-month", "issuer-months"),
+                    if r.action == ResolutionAction::Undo {
+                        "split again"
+                    } else {
+                        "combined"
+                    }
+                )
+            } else {
+                String::new()
+            },
+            if r.dry_run {
+                " (dry run, nothing written)"
+            } else {
+                ""
+            }
+        ));
+    }
+    out
+}
+
+/// `resolve list`.
+pub fn resolutions(list: &[Resolution], color: bool) -> String {
+    if list.is_empty() {
+        return "No resolution rules yet. Suggestions: idx ownership resolve candidates\n".into();
+    }
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "#", "Kind", "Subject", "Holder", "Created", "Combined",
+    ]));
+    for r in list {
+        t.add_row(vec![
+            right(r.id.map(|i| format!("#{i}")).unwrap_or_default()),
+            Cell::new(kind_name(r.kind)),
+            Cell::new(f::clip(&r.subject, 40)).add_attribute(Attribute::Bold),
+            Cell::new(f::clip(&r.holder, 40)),
+            Cell::new(&r.created_at),
+            Cell::new(f::clip(&combined_text(r), 40)),
+        ]);
+    }
+    let mut out = format!(
+        "{} in this database, applied to every imported release and every later import\n",
+        plural(list.len(), "resolution rule", "resolution rules")
+    );
+    out.push_str(&t.to_string());
+    out.push_str("\nUndo one with: idx ownership resolve undo <#>\n");
     out
 }

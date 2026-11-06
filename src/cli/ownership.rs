@@ -17,7 +17,7 @@ use crate::ownership::{self, OwnershipDb};
 use crate::providers::Sourced;
 
 use super::ownership_analytics::{
-    self as analytics, ConcentrationArgs, CrossHoldersArgs, GraphArgs, SearchArgs,
+    self as analytics, ConcentrationArgs, CrossHoldersArgs, GraphArgs, ResolveCmd, SearchArgs,
 };
 use super::{emit, Context};
 
@@ -79,6 +79,13 @@ pub enum OwnershipCmd {
         after_help = "Examples:\n  idx ownership graph BBCA                       # holders of BBCA and their other holdings\n  idx ownership graph \"Anthoni Salim\" --depth 3\n  idx ownership graph AADI --min-pct 5           # major stakes only\n  idx ownership graph BBRI --dot | dot -Tsvg -o bbri.svg\n\nROOT is a ticker, or a holder's name or key (--holder forces a name). One hop links a holder to an\nissuer it owns more than 1 % of; the walk follows the strongest links first and stops at --depth\nhops or --max-nodes nodes. Node ids are ticker:<SYMBOL> and holder:<entity_key>."
     )]
     Graph(GraphArgs),
+
+    /// Suggest, merge and split holder spellings (writes the local database).
+    #[command(
+        subcommand,
+        after_help = "Examples:\n  idx ownership resolve candidates\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\" --dry-run\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\"\n  idx ownership resolve map \"IR. T. PERMADI RACHMAT\" \"T PERMADI RACHMAT\"\n  idx ownership resolve list\n  idx ownership resolve undo 1\n\nKSEI sometimes prints one holder differently from month to month (DRS SURONO SUBEKTI, SURONO\nSUBEKTI), which shows up in `changes` as an exit plus a new holder. A merge moves every month\nalready imported and every later import; `undo` reverts it. Holders are named by key or display\nname (see `idx ownership search`). If both are listed in the same issuer in one month (often two\ndifferent people, sometimes one holder's two accounts) the merge stops unless you pass --fold.\nThe rules live in the ownership database; the web terminal and the mirror keep the automatic\ngrouping."
+    )]
+    Resolve(ResolveCmd),
 
     /// Month-over-month changes: new holders, exits and position changes, with a summary.
     #[command(
@@ -189,6 +196,7 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         OwnershipCmd::CrossHolders(a) => analytics::cross_holders(ctx, a).await,
         OwnershipCmd::Concentration(a) => analytics::concentration(ctx, a).await,
         OwnershipCmd::Graph(a) => analytics::graph(ctx, a).await,
+        OwnershipCmd::Resolve(cmd) => analytics::resolve(ctx, cmd).await,
         OwnershipCmd::Changes {
             from,
             to,

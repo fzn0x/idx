@@ -1,6 +1,7 @@
 //! Pure analytics over the positions of a release (no SQLite): holder
 //! search, holders across issuers, ownership concentration (HHI), the
-//! holder-issuer walk and its Graphviz form.
+//! holder-issuer walk and its Graphviz form, and the evidence behind
+//! spelling candidates for `ownership resolve`.
 //!
 //! `db::analytics` loads the positions and calls these. The web terminal
 //! has a JavaScript port (`web/src/ownership.js`) tested on the same
@@ -12,8 +13,9 @@ use chrono::NaiveDate;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    Concentration, ConcentrationSort, CrossHolder, CrossPosition, GraphHolder, GraphIssuer,
-    GraphLink, GraphReport, HolderOrigin, SearchMatch, SearchMatchKind,
+    CandidateHolder, CandidateReason, Concentration, ConcentrationSort, CrossHolder, CrossPosition,
+    GraphHolder, GraphIssuer, GraphLink, GraphReport, HolderOrigin, IssuerMonth, RenameEvidence,
+    ResolveCandidate, SearchMatch, SearchMatchKind,
 };
 
 use super::normalize;
@@ -558,6 +560,241 @@ pub fn to_dot(r: &GraphReport) -> String {
     out
 }
 
+// ---- spelling candidates ------------------------------------------------------
+
+/// Legal forms and titles left out of [`name_signature`].
+const NAME_NOISE: &[&str] = &[
+    "PT",
+    "TBK",
+    "PERSERO",
+    "PERSEROAN",
+    "PERUSAHAAN",
+    "LTD",
+    "LIMITED",
+    "PTE",
+    "PRIVATE",
+    "PLC",
+    "INC",
+    "CORP",
+    "CORPORATION",
+    "CO",
+    "COMPANY",
+    "THE",
+    "AND",
+    "LLC",
+    "LP",
+    "SA",
+    "AG",
+    "NV",
+    "BV",
+    "BHD",
+    "SDN",
+    "DRS",
+    "DR",
+    "IR",
+    "H",
+    "HJ",
+    "PROF",
+    "SH",
+    "SE",
+    "MM",
+    "MBA",
+    "ST",
+];
+
+/// The words of a holder key without legal forms and titles, sorted, so
+/// `DRS SURONO SUBEKTI` and `SURONO SUBEKTI`, or `CAI LONG` and `LONG CAI`,
+/// share one signature. `None` below two words: single names (WILLIAM) are
+/// too common to suggest anything.
+pub fn name_signature(entity_key: &str) -> Option<String> {
+    let mut words: Vec<&str> = entity_key
+        .split_whitespace()
+        .filter(|w| !NAME_NOISE.contains(w))
+        .collect();
+    if words.len() < 2 {
+        return None;
+    }
+    words.sort_unstable();
+    Some(words.join(" "))
+}
+
+#[derive(Default)]
+struct PairEvidence {
+    /// (from, to) -> symbols, with the key on the `to` side.
+    renamed: BTreeMap<(NaiveDate, NaiveDate), (BTreeSet<String>, String)>,
+    similar: bool,
+}
+
+/// Pairs of holders that may be one, from the positions of every release
+/// (oldest first): `renamed` when identical share counts (> 0) leave one
+/// name and reach the other in the same issuer between consecutive
+/// releases, `similar_name` when [`name_signature`] matches, and the issuers
+/// where both are listed together. `keep` is the name of the newest rename,
+/// else the holder with more issuers in the newest release, then the later
+/// `last_seen`, then the smaller key. Sorted by renamed issuers, similar
+/// names first, the keeper's issuers, then the keys.
+pub fn candidates(releases: &[(NaiveDate, Vec<Stake>)]) -> Vec<ResolveCandidate> {
+    let newest = releases.last().map(|r| r.0);
+    // key -> (display name, last seen, issuers in the newest release)
+    let mut info: BTreeMap<&str, (String, NaiveDate, BTreeSet<&str>)> = BTreeMap::new();
+    for (date, stakes) in releases {
+        for s in stakes {
+            let e = info
+                .entry(s.entity_key.as_str())
+                .or_insert_with(|| (s.holder.clone(), *date, BTreeSet::new()));
+            if *date >= e.1 {
+                e.1 = *date;
+                e.0 = s.holder.clone();
+            }
+            if Some(*date) == newest {
+                e.2.insert(s.symbol.as_str());
+            }
+        }
+    }
+    let pair_of = |a: &str, b: &str| -> (String, String) {
+        if a < b {
+            (a.to_string(), b.to_string())
+        } else {
+            (b.to_string(), a.to_string())
+        }
+    };
+    let mut pairs: BTreeMap<(String, String), PairEvidence> = BTreeMap::new();
+
+    for w in releases.windows(2) {
+        let (d0, before) = (&w[0].0, &w[0].1);
+        let (d1, after) = (&w[1].0, &w[1].1);
+        let index = |list: &'_ [Stake]| -> BTreeMap<String, BTreeMap<String, i64>> {
+            let mut m: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+            for s in list {
+                m.entry(s.symbol.clone())
+                    .or_default()
+                    .insert(s.entity_key.clone(), s.shares_total);
+            }
+            m
+        };
+        let a = index(before);
+        let b = index(after);
+        for (symbol, was) in &a {
+            let Some(now) = b.get(symbol) else { continue };
+            for (gone, shares) in was {
+                if *shares <= 0 || now.contains_key(gone) {
+                    continue;
+                }
+                for (came, s2) in now {
+                    if s2 != shares || was.contains_key(came) {
+                        continue;
+                    }
+                    let e = pairs.entry(pair_of(gone, came)).or_default();
+                    let slot = e
+                        .renamed
+                        .entry((*d0, *d1))
+                        .or_insert_with(|| (BTreeSet::new(), came.clone()));
+                    slot.0.insert(symbol.clone());
+                    slot.1 = came.clone();
+                }
+            }
+        }
+    }
+
+    let mut by_signature: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for key in info.keys() {
+        if let Some(sig) = name_signature(key) {
+            by_signature.entry(sig).or_default().push(key);
+        }
+    }
+    for keys in by_signature.values() {
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                pairs.entry(pair_of(a, b)).or_default().similar = true;
+            }
+        }
+    }
+
+    // (date, symbol) -> keys listed there, for listed_together.
+    let mut listed: HashMap<&str, BTreeSet<(NaiveDate, &str)>> = HashMap::new();
+    for (date, stakes) in releases {
+        for s in stakes {
+            listed
+                .entry(s.entity_key.as_str())
+                .or_default()
+                .insert((*date, s.symbol.as_str()));
+        }
+    }
+
+    let holder = |key: &str| -> CandidateHolder {
+        let (name, last, issuers) = info
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| (key.to_string(), NaiveDate::default(), BTreeSet::new()));
+        CandidateHolder {
+            entity_key: key.to_string(),
+            holder: name,
+            issuers: issuers.len(),
+            last_seen: last,
+        }
+    };
+    let mut out: Vec<(usize, ResolveCandidate)> = pairs
+        .into_iter()
+        .map(|((a, b), e)| {
+            let (ha, hb) = (holder(&a), holder(&b));
+            let keep_a = match e.renamed.iter().next_back() {
+                Some((_, (_, to))) => *to == a,
+                None => {
+                    (ha.issuers, ha.last_seen, std::cmp::Reverse(&ha.entity_key))
+                        >= (hb.issuers, hb.last_seen, std::cmp::Reverse(&hb.entity_key))
+                }
+            };
+            let (keep, merge) = if keep_a { (ha, hb) } else { (hb, ha) };
+            let mut reasons = Vec::new();
+            if !e.renamed.is_empty() {
+                reasons.push(CandidateReason::Renamed);
+            }
+            if e.similar {
+                reasons.push(CandidateReason::SimilarName);
+            }
+            let renamed: Vec<RenameEvidence> = e
+                .renamed
+                .iter()
+                .map(|((from, to), (symbols, _))| RenameEvidence {
+                    from: *from,
+                    to: *to,
+                    symbols: symbols.iter().cloned().collect(),
+                })
+                .collect();
+            let renamed_symbols = renamed.iter().map(|r| r.symbols.len()).sum();
+            let empty = BTreeSet::new();
+            let la = listed.get(a.as_str()).unwrap_or(&empty);
+            let lb = listed.get(b.as_str()).unwrap_or(&empty);
+            let listed_together = la
+                .intersection(lb)
+                .map(|(d, s)| IssuerMonth {
+                    as_of: *d,
+                    symbol: s.to_string(),
+                })
+                .collect();
+            (
+                renamed_symbols,
+                ResolveCandidate {
+                    keep,
+                    merge,
+                    reasons,
+                    renamed,
+                    listed_together,
+                },
+            )
+        })
+        .collect();
+    out.sort_by(|(ra, a), (rb, b)| {
+        let sim = |c: &ResolveCandidate| !c.reasons.contains(&CandidateReason::SimilarName);
+        rb.cmp(ra)
+            .then(sim(a).cmp(&sim(b)))
+            .then(b.keep.issuers.cmp(&a.keep.issuers))
+            .then(a.keep.entity_key.cmp(&b.keep.entity_key))
+            .then(a.merge.entity_key.cmp(&b.merge.entity_key))
+    });
+    out.into_iter().map(|(_, c)| c).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,5 +1148,91 @@ mod tests {
             normalize::entity_key("IR. T. PERMADI RACHMAT"),
             "IR T PERMADI RACHMAT"
         );
+    }
+
+    #[test]
+    fn signatures_drop_forms_and_titles() {
+        assert_eq!(
+            name_signature("DRS SURONO SUBEKTI"),
+            name_signature("SURONO SUBEKTI")
+        );
+        assert_eq!(name_signature("CAI LONG"), name_signature("LONG CAI"));
+        assert_eq!(
+            name_signature("UOB KAY HIAN PTE LTD"),
+            name_signature("UOB KAY HIAN PRIVATE LIMITED")
+        );
+        assert_eq!(name_signature("WILLIAM"), None);
+        assert_eq!(name_signature("DR WILLIAM"), None, "one word left");
+        assert_eq!(name_signature("MANDOM CORPORATION"), None);
+    }
+
+    #[test]
+    fn candidates_from_renames_and_names() {
+        let aug = date(2026, 8, 31);
+        let sep = date(2026, 9, 30);
+        let mut a1 = stake("ADES", "SURONO SUBEKTI", 1.04);
+        a1.shares_total = 6_000_000;
+        let mut a2 = stake("ADES", "DRS SURONO SUBEKTI", 1.04);
+        a2.shares_total = 6_000_000;
+        let mut t1 = stake("TCID", "MANDOM CORPORATION", 66.48);
+        t1.shares_total = 100;
+        let mut t2 = stake("TCID", "KALON MIDCO HOLDINGS CO LTD", 66.48);
+        t2.shares_total = 100;
+        let mut z1 = stake("ZERO", "ZERO ONE", 1.0);
+        z1.shares_total = 0;
+        let mut z2 = stake("ZERO", "ZERO TWO", 1.0);
+        z2.shares_total = 0;
+        let releases = vec![
+            (
+                aug,
+                vec![
+                    a1,
+                    t1,
+                    z1,
+                    stake("WGSH", "WALDEN GLOBAL SERVICES", 33.14),
+                    stake("WGSH", "WALDEN GLOBAL SERVICES PTE LTD", 1.86),
+                ],
+            ),
+            (
+                sep,
+                vec![
+                    a2,
+                    t2,
+                    z2,
+                    stake("WGSH", "WALDEN GLOBAL SERVICES", 33.14),
+                    stake("WGSH", "WALDEN GLOBAL SERVICES PTE LTD", 1.86),
+                ],
+            ),
+        ];
+        let c = candidates(&releases);
+        let pairs: Vec<(&str, &str)> = c
+            .iter()
+            .map(|x| (x.keep.entity_key.as_str(), x.merge.entity_key.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("DRS SURONO SUBEKTI", "SURONO SUBEKTI"),
+                ("KALON MIDCO HOLDINGS CO LTD", "MANDOM CORPORATION"),
+                ("WALDEN GLOBAL SERVICES", "WALDEN GLOBAL SERVICES PTE LTD"),
+            ],
+            "zero shares are no evidence"
+        );
+        assert_eq!(
+            c[0].reasons,
+            [CandidateReason::Renamed, CandidateReason::SimilarName]
+        );
+        assert_eq!(c[0].renamed[0].symbols, ["ADES"]);
+        assert_eq!((c[0].renamed[0].from, c[0].renamed[0].to), (aug, sep));
+        assert_eq!(c[0].keep.issuers, 1);
+        assert_eq!(c[0].merge.last_seen, aug);
+        assert_eq!(c[1].reasons, [CandidateReason::Renamed]);
+        assert_eq!(c[2].reasons, [CandidateReason::SimilarName]);
+        assert_eq!(c[2].listed_together.len(), 2);
+        assert!(c[0].listed_together.is_empty());
+        // One release: names only.
+        let one = candidates(&releases[1..]);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].keep.entity_key, "WALDEN GLOBAL SERVICES");
     }
 }

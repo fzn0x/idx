@@ -58,8 +58,10 @@ pub use ownership::{
     IssuerFlow, IssuerForeign, Release, TypeFlow,
 };
 pub use ownership_analytics::{
-    Concentration, ConcentrationReport, ConcentrationSort, CrossHolder, CrossHoldersReport,
-    CrossPosition, GraphHolder, GraphIssuer, GraphLink, GraphReport, HolderOrigin, SearchMatch,
+    CandidateHolder, CandidateReason, Concentration, ConcentrationReport, ConcentrationSort,
+    CrossHolder, CrossHoldersReport, CrossPosition, GraphHolder, GraphIssuer, GraphLink,
+    GraphReport, HolderOrigin, IssuerMonth, RenameEvidence, Resolution, ResolutionAction,
+    ResolutionKind, ResolutionReport, ResolveCandidate, ResolveCandidates, SearchMatch,
     SearchMatchKind, SearchReport,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};

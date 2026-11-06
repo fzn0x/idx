@@ -1415,6 +1415,136 @@ fn ownership_analytics_work_offline() {
 }
 
 #[test]
+fn ownership_resolve_merges_and_undoes_offline() {
+    let sb = sandbox();
+    let db = analytics_db(&sb);
+    let own = || {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+    let changes = || {
+        let out = own()
+            .args([
+                "ownership",
+                "changes",
+                "--from",
+                "2026-08-31",
+                "--to",
+                "2026-09-30",
+                "--limit",
+                "0",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    own()
+        .args(["ownership", "resolve", "candidates"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SURONO SUBEKTI"))
+        .stdout(predicate::str::contains("8 pairs"))
+        .stdout(predicate::str::contains("suggestions"));
+    // The reference CLI's name for it still works.
+    own()
+        .args(["-o", "json", "ownership", "resolve", "unresolved"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.resolve-candidates.v1\"",
+        ));
+    assert!(changes().contains("SURONO"));
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "merge",
+            "DRS SURONO SUBEKTI",
+            "SURONO SUBEKTI",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would merge SURONO SUBEKTI"))
+        .stdout(predicate::str::contains("dry run"));
+    assert!(changes().contains("SURONO"), "a dry run writes nothing");
+    own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "resolve",
+            "merge",
+            "DRS SURONO SUBEKTI",
+            "SURONO SUBEKTI",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.resolution.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"lines_moved\": 3"));
+    assert!(!changes().contains("SURONO"));
+    own()
+        .args(["ownership", "resolve", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#1"))
+        .stdout(predicate::str::contains("merge"));
+    own()
+        .args(["ownership", "resolve", "undo", "#1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Undid merge (#1)"));
+    assert!(changes().contains("SURONO"));
+    own()
+        .args(["ownership", "resolve", "undo", "1"])
+        .assert()
+        .code(4);
+
+    // Listed together in WGSH: refused without --fold.
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "merge",
+            "WALDEN GLOBAL SERVICES",
+            "WALDEN GLOBAL SERVICES PTE LTD",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--fold"));
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "map",
+            "IR. T. PERMADI RACHMAT",
+            "T PERMADI RACHMAT",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Mapped spelling"));
+    assert!(!changes().contains("PERMADI"));
+    own()
+        .args(["-o", "json", "ownership", "resolve", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"kind\": \"map\""))
+        .stdout(predicate::str::contains("\"id\": 2"));
+    for name in [
+        "ownership-resolve-candidates",
+        "ownership-resolution",
+        "ownership-resolutions",
+    ] {
+        own().args(["schema", name]).assert().success();
+    }
+}
+
+#[test]
 fn mcp_setup_prints_recipes_offline() {
     let sb = sandbox();
     idx(&sb.cache, &sb.config)

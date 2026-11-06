@@ -123,7 +123,7 @@ pub enum Command {
     #[command(subcommand)]
     Stocks(stocks::StocksCmd),
 
-    /// KSEI shareholder register (holders above 1 %): import monthly files; holders, entities, search, cross-holders, concentration, network graph, changes.
+    /// KSEI shareholder register (holders above 1 %): import monthly files; holders, entities, search, cross-holders, concentration, network graph, changes; resolve spellings.
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 
