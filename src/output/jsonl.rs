@@ -214,7 +214,9 @@ mod tests {
     #[test]
     fn the_docs_table_lists_every_row_rule() {
         let doc = include_str!("../../docs/json-output.md");
-        let start = doc.find("| schema | one line per |").expect("the JSONL table");
+        let start = doc
+            .find("| schema | one line per |")
+            .expect("the JSONL table");
         let table: Vec<&str> = doc[start..]
             .lines()
             .take_while(|l| l.starts_with('|'))
