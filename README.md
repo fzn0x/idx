@@ -80,19 +80,20 @@ The package is called **`ihsg-cli`**; the command it installs is **`idx`**
 
 ```sh
 cargo install --locked ihsg-cli           # crates.io, builds from source (Rust 1.89+)
-npm install -g github:fzn0x/idx           # npm, straight from this repository
-npx github:fzn0x/idx stocks quote BBCA    # npm, no install
+npm install -g ihsg-cli                   # npm
+npx ihsg-cli stocks quote BBCA            # npm, no install
 curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh   # Linux, macOS
 nix profile install github:fzn0x/idx      # Nix (Linux; Apple silicon macOS untested), with shell completions
 nix run github:fzn0x/idx -- stocks quote BBCA   # Nix, no install
 ```
 
-npm installs a small launcher from this repository; the first `idx` command
-downloads the prebuilt binary for your platform from the matching GitHub
-release and checks it against the release's `SHA256SUMS` (so does
-`install.sh`). The binary is stored next to the launcher, or in a per-user
-cache when the global npm folder is not writable. On npm 12, which only
-installs from git when allowed, add `--allow-git=all` to the command.
+npm installs a small launcher; the first `idx` command downloads the
+prebuilt binary for your platform from the matching GitHub release and checks
+it against the release's `SHA256SUMS` (so does `install.sh`). The binary is
+stored next to the launcher, or in a per-user cache when the global npm
+folder is not writable. `npm install -g github:fzn0x/idx` installs the same
+launcher from this repository's `main`; npm 12 only installs from git with
+`--allow-git=all`.
 
 Windows without npm: download `idx-<version>-x86_64-pc-windows-msvc.zip` from
 the [releases page](https://github.com/fzn0x/idx/releases). Static Linux
