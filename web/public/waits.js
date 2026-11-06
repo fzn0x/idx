@@ -21,6 +21,7 @@ export const WAITS = {
   sentiment: { on: "the Kontan and CNBC Indonesia feeds", slow: FEEDS_SLOW },
   brief: { on: "quote, fundamentals, history, dividends, holders and news in parallel", slow: `${FEEDS_SLOW}; the rest of the brief still prints` },
   broker: { on: "IPOT broker summaries", slow: IPOT_SLOW },
+  foreign: { on: "IPOT broker summaries, two per session", slow: IPOT_SLOW },
   bandar: { on: "IPOT broker summaries, one per session", slow: IPOT_SLOW },
   "bandar screen": { on: "the nightly bandar scan" },
   "bandar broker": { on: "the nightly bandar scan" },

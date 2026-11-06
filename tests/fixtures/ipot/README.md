@@ -41,3 +41,17 @@ is the all-board foreign net on every page.
 | brokersummary_bbca_20261016_foreign_regular.html | BBCA 10-16, `fd=F&board=RG` | by 2026-10-18 | from 0xrsydn/idx-cli (MIT, added there 2026-10-18), `ipot_brokersummary_bbca_20261016_foreign_regular.html`, byte-identical: `T. Val` 1.6 T, `F. NVal` still the all-board -2.3 T |
 | brokersummary_bbca_20261105_foreign.html | BBCA 11-05, `fd=F` | 2026-11-06 06:49 | `T. Val` 605.4 B, `F. NVal` 303.9 B: foreign investors sold 301.5 B |
 | brokersummary_bbca_20261105_domestic.html | BBCA 11-05, `fd=D` | 2026-11-06 06:51 | `T. Val` 242.8 B: with the foreign 605.4 B, the 848.3 B traded |
+
+Foreign flow (`stocks foreign --source ipot`): each session's `fd=all` and
+`fd=F` pages. During a session the source publishes today's totals so far but
+no broker lists, an empty foreign page and `F. NVal` 0; ranges are right then
+(the doubled net appears between the close and the next open).
+
+| file | request | recorded | notes |
+| --- | --- | --- | --- |
+| brokersummary_bbca_20261012_foreign.html .. brokersummary_bbca_20261015_foreign.html | BBCA, `fd=F`, one session each | by 2026-10-18 | from 0xrsydn/idx-cli (MIT, added there 2026-10-18), `ipot_brokersummary_bbca_2026101X_foreign_all.html`, byte-identical; with the 10-16 page, buying 4,364.7 B, net -1,823.1 B over the week |
+| brokersummary_bbca_20261102.html, brokersummary_bbca_20261103.html | BBCA, one session each | 2026-11-06 06:51 | `T. Val` 1.2 T and 1.5 T |
+| brokersummary_bbca_20261102_foreign.html .. brokersummary_bbca_20261104_foreign.html | BBCA, `fd=F`, one session each | 2026-11-06 06:49 to 06:51 | foreign buying 792.1 B, 961.5 B, 955.7 B |
+| brokersummary_truk_20261105.html, brokersummary_truk_20261105_foreign.html | TRUK 11-05, `fd=all` and `fd=F` | 2026-11-06 07:02 | the stock traded 21.6 M and no foreigner did: the foreign page is the empty template |
+| brokersummary_bbca_20261106_insession.html, brokersummary_bbca_20261106_insession_foreign.html | BBCA 11-06, `fd=all` and `fd=F` | 2026-11-06 09:15 | during the session: `T. Val` 89.5 B so far, no broker lists, `F. NVal` 0, the foreign page empty |
+| brokersummary_bbca_20261102_20261106_insession.html, brokersummary_bbca_20261102_20261105_insession.html | BBCA, 11-02 to 11-06 and 11-02 to 11-05 | 2026-11-06 09:15 | during the session both read 292.2 B: no session counted twice (11-02..11-05 read 595.4 B before the open) |

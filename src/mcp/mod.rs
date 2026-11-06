@@ -24,7 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    BandarPeriod, BrokerBoard, BrokerInvestor, ForeignSource, Interval, Period, StatementPeriod,
+    Symbol,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -34,8 +35,8 @@ use crate::output::json::{
     SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
 };
 use crate::output::json::{
-    SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
-    SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
+    SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_INDICES,
+    SCHEMA_INSTRUMENTS, SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
 };
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
@@ -244,9 +245,18 @@ pub struct IndicesArgs {
 pub struct ForeignArgs {
     /// One IDX ticker, e.g. "BBCA".
     pub symbol: String,
-    /// Latest sessions to return, 1-250 (default 20).
+    /// Latest sessions to return (default 20; source idx at most 250, ipot at most 60). Not with from/to.
     #[serde(default)]
     pub days: Option<u32>,
+    /// First session of a date range, YYYY-MM-DD.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Last session of the range, YYYY-MM-DD. Default: today; not in the future.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// "idx" (default): idx.co.id, shares on the regular board, returns idx.foreign.v1. "ipot": Indo Premier, rupiah across all boards, returns idx.foreign.value.v1.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -796,7 +806,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_foreign",
-        description = "Foreign investors' buying and selling of one IDX stock over its latest sessions (default 20, at most 250) from idx.co.id's daily stock summary, oldest first: close, change, volume, value, foreign buy and sell (shares), net shares and net shares times the close (a rupiah scale, not the traded value; IDX publishes foreign trading in shares only). Totals give the sums, how many sessions were net buying or net selling and the current streak (+3 = three net-buy sessions in a row). Returns the idx.foreign.v1 envelope."
+        description = "Foreign investors' buying and selling of one IDX stock over its latest sessions (default 20, at most 250) or a from/to date range, oldest first. Default source idx: idx.co.id's daily stock summary with close, change, volume, value, foreign buy and sell (shares), net shares and net shares times the close (a rupiah scale, not the traded value; IDX publishes foreign trading in shares only); returns the idx.foreign.v1 envelope. With source=ipot the flow comes from Indo Premier's broker summary instead: foreign buy, sell and net value in rupiah across all boards, the value traded, average price and foreign investors' share of the trading, two requests per session (cached), at most 60 sessions, figures of a million and more rounded by the source (rounded=true); returns the idx.foreign.value.v1 envelope, and works where idx.co.id refuses the connection. Totals give the sums, how many sessions were net buying or net selling and the current streak (+3 = three net-buy sessions in a row)."
     )]
     async fn foreign(
         &self,
@@ -805,12 +815,26 @@ impl IdxServer {
         finish(
             async {
                 let symbol = Symbol::parse(&a.symbol)?;
+                let source = parse_opt(&a.source, ForeignSource::Idx)?;
                 let list = universe::load(None).unwrap_or_default();
-                let days = a.days.unwrap_or(service::FOREIGN_DEFAULT_DAYS as u32) as usize;
-                ok(
-                    SCHEMA_FOREIGN,
-                    service::foreign_flow(&self.fetcher, &list, &symbol, days).await?,
-                )
+                let today = service::today_wib();
+                let range = service::ForeignRange::from_args(
+                    a.days.map(|d| d as usize),
+                    parse_date(&a.from)?,
+                    parse_date(&a.to)?,
+                    today,
+                )?;
+                match source {
+                    ForeignSource::Idx => ok(
+                        SCHEMA_FOREIGN,
+                        service::foreign_flow(&self.fetcher, &list, &symbol, range, today).await?,
+                    ),
+                    ForeignSource::Ipot => ok(
+                        SCHEMA_FOREIGN_VALUE,
+                        service::foreign_flow_ipot(&self.fetcher, &list, &symbol, range, today)
+                            .await?,
+                    ),
+                }
             }
             .await,
         )

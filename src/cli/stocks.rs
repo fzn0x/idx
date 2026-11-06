@@ -5,12 +5,12 @@ use clap::Subcommand;
 use crate::analysis::screen::{parse_filters, Key};
 use crate::error::IdxError;
 use crate::error::Result;
-use crate::model::{Interval, Period, StatementPeriod, Symbol};
+use crate::model::{ForeignSource, Interval, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
-    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSTRUMENTS,
-    SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
-    SCHEMA_TECHNICAL,
+    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY,
+    SCHEMA_INSTRUMENTS, SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN,
+    SCHEMA_SENTIMENT, SCHEMA_TECHNICAL,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
@@ -235,16 +235,25 @@ pub enum StocksCmd {
         since: Option<chrono::NaiveDate>,
     },
 
-    /// Foreign buying and selling per session (idx.co.id), with totals and the net-buy/net-sell streak.
+    /// Foreign buying and selling per session, with totals and the net-buy/net-sell streak: idx.co.id (shares) or IPOT (rupiah).
     #[command(
-        after_help = "Examples:\n  idx stocks foreign BBCA\n  idx stocks foreign BBRI --days 60\n  idx -o json stocks foreign TLKM | jq '.data.totals'\n\nFrom idx.co.id's daily stock summary. IDX publishes foreign trading in shares only; the\nnet × close column multiplies the net shares by the close for a rupiah scale, which is not\nthe value foreigners traded at. For the whole market on one day see `idx market foreign`."
+        after_help = "Examples:\n  idx stocks foreign BBCA\n  idx stocks foreign BBRI --days 60\n  idx stocks foreign BBCA --from 2026-10-01 --to 2026-10-31\n  idx stocks foreign TLKM --source ipot\n  idx stocks foreign BBCA --source ipot --from 2026-10-12 --to 2026-10-16\n  idx -o json stocks foreign TLKM --source ipot | jq '.data.totals'\n\n--source idx (default): idx.co.id's daily stock summary. Foreign buy and sell in shares on the\nregular board, as IDX publishes them; the net × close column multiplies the net shares by the\nclose for a rupiah scale, which is not the value foreigners traded at. Up to 250 sessions in\none request. Cloudflare often refuses data centres and VPNs.\n--source ipot: Indo Premier's broker summary. Foreign buy, sell and net in rupiah across all\nboards (negotiated trades included) and foreign investors' share of the trading; two requests\nper session (cached), at most 60 sessions; schema idx.foreign.value.v1. The source rounds\nfigures of a million and more to one decimal.\nFor the whole market on one day see `idx market foreign`."
     )]
     Foreign {
         /// IDX ticker, e.g. BBCA.
         symbol: String,
-        /// Latest sessions to show (1-250).
-        #[arg(long, short = 'n', default_value_t = service::FOREIGN_DEFAULT_DAYS)]
-        days: usize,
+        /// Latest sessions to show (default 20; idx 1-250, ipot 1-60). Not with --from/--to.
+        #[arg(long, short = 'n', conflicts_with_all = ["from", "to"])]
+        days: Option<usize>,
+        /// First session of a range, YYYY-MM-DD (WIB).
+        #[arg(long, value_name = "DATE")]
+        from: Option<chrono::NaiveDate>,
+        /// Last session of the range, YYYY-MM-DD. Default: today.
+        #[arg(long, value_name = "DATE", requires = "from")]
+        to: Option<chrono::NaiveDate>,
+        /// Where the figures come from: idx (shares, regular board) or ipot (rupiah, all boards).
+        #[arg(long, value_enum, default_value_t = ForeignSource::Idx)]
+        source: ForeignSource,
     },
 
     /// Side-by-side fundamentals for two or more tickers.
@@ -284,13 +293,33 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
         StocksCmd::Fundamental { symbol } => fundamental(ctx, &symbol).await,
         StocksCmd::Technical { symbol, period } => technical(ctx, &symbol, period).await,
         StocksCmd::Compare { symbols } => compare(ctx, &symbols).await,
-        StocksCmd::Foreign { symbol, days } => {
+        StocksCmd::Foreign {
+            symbol,
+            days,
+            from,
+            to,
+            source,
+        } => {
             let sym = Symbol::parse(&symbol)?;
             let list = universe::load(None).unwrap_or_default();
-            let result = service::foreign_flow(&ctx.fetcher, &list, &sym, days).await?;
-            emit(ctx, SCHEMA_FOREIGN, result, |d| {
-                tx::foreign_flow(d, ctx.color)
-            })
+            let today = service::today_wib();
+            let range = service::ForeignRange::from_args(days, from, to, today)?;
+            match source {
+                ForeignSource::Idx => {
+                    let result =
+                        service::foreign_flow(&ctx.fetcher, &list, &sym, range, today).await?;
+                    emit(ctx, SCHEMA_FOREIGN, result, |d| {
+                        tx::foreign_flow(d, ctx.color)
+                    })
+                }
+                ForeignSource::Ipot => {
+                    let result =
+                        service::foreign_flow_ipot(&ctx.fetcher, &list, &sym, range, today).await?;
+                    emit(ctx, SCHEMA_FOREIGN_VALUE, result, |d| {
+                        tx::foreign_value_flow(d, ctx.color)
+                    })
+                }
+            }
         }
         StocksCmd::Actions { symbol, since } => {
             let sym = Symbol::parse(&symbol)?;

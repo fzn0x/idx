@@ -262,7 +262,33 @@ sessions in a row, -2 = two net-sell sessions, 0 when the latest was flat).
 IDX publishes foreign trading in shares only; `foreign_net_value_at_close` is
 net shares × close, a rupiah scale for comparing stocks, not the value
 foreigners traded at. `volume` and `value` exclude non-regular (negotiated)
-trades, as the source reports them.
+trades, as the source reports them. `--days N` (MCP `days`) gives the latest
+N sessions; `--from D [--to D]` (MCP `from`, `to`) the sessions of a range
+among the latest 250. `--source ipot` (MCP `source: "ipot"`) answers with
+`idx.foreign.value.v1` instead.
+
+## `idx.foreign.value.v1` (`stocks foreign --source ipot`)
+
+An object, from Indo Premier's broker summary (`idx schema foreign-value`):
+`symbol`, `name`, `from` and `to` (first and last session shown), `days[]`
+oldest first, one per session the stock traded: `date`, `value` (traded by
+all investors on all boards, IDR), `lots`, `average_price`,
+`foreign_buy_value` (as published), `foreign_sell_value`
+(`foreign_buy_value - foreign_net_value`, computed by idx),
+`foreign_net_value` (as published) and `foreign_share_pct` (`(buy + sell) /
+(2 × value) × 100`, computed by idx); `totals` (`sessions`, `value`,
+`foreign_buy_value`, `foreign_sell_value`, `foreign_net_value`,
+`foreign_share_pct` over all the sessions, `net_buy_sessions`,
+`net_sell_sessions`, `streak` as in `idx.foreign.v1`) and `rounded`. Every
+figure is in rupiah across all boards, negotiated trades included, so it is
+not comparable field by field with `idx.foreign.v1`'s regular-board shares;
+the two share no field names. Each session costs two single-session requests
+(all investors and foreign investors; a range's own foreign net is not used,
+see `idx.broker.v1`), cached, at most 60 sessions. A day without trades is
+skipped; a traded day on which no foreigner traded has zeros. The source
+publishes a session after the close: while today trades it is left out with
+a warning. It rounds figures of a million and more to one decimal (`1.2 T`
+is ±4 %), and `foreign_sell_value` carries the error of both its terms.
 
 ## `idx.market.foreign.v1` (`market foreign`)
 

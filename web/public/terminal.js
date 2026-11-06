@@ -27,6 +27,7 @@ const COMMANDS = [
   { name: "brief", usage: "brief <SYMBOL>", help: "one page: quote, verdict, signal, returns, dividends, holders, headlines" },
   { name: "sentiment", usage: "sentiment <SYMBOL>", help: "lexicon sentiment over matching headlines" },
   { name: "broker", usage: "broker <SYMBOLS> [--date D | --from D --to D] [--investor foreign|domestic] [--board regular|cash|negotiated]", help: "which brokers bought and sold it: top 10 per side ranked by lots (IPOT), latest session by default" },
+  { name: "foreign", usage: "foreign <SYMBOL> [--days N | --from D --to D]", help: "foreign buying and selling per session in rupiah across all boards (IPOT): value, foreign share, totals and the net-buy/net-sell streak; 10 sessions by default, at most 20" },
   { name: "bandar", usage: "bandar <SYMBOLS> [--period 1d|1w|1m|3m] [--top 1|3|5|10] [--daily] [--date D | --from D --to D] | bandar screen [--preset P] [--filter F] [--period P] [--sort KEY] [--limit N] | bandar broker <CODE> [--period P] [--limit N]", help: "bandarmology: are the top brokers accumulating or distributing? screen presets: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: where one broker (YP, CC, ...) is a top-10 buyer or seller of the session's 100 most traded stocks" },
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
   { name: "market", usage: "market", help: "IHSG, breadth, gainers, losers, most traded" },
@@ -385,6 +386,26 @@ const R = {
     frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}${list.some((s) => s.board !== "all") ? " The source's foreign net covers every board, so a board filter leaves it out." : ""}` }));
     return frag;
   },
+  foreignFlow(fl) {
+    const frag = document.createDocumentFragment();
+    const signed = (v) => (v > 0 ? `+${fmt.compact(v)}` : fmt.compact(v));
+    const share = (v) => (v == null ? null : `${fmt.num(v, 1)}%`);
+    const t = fl.totals;
+    frag.append(el("p", { class: "prose", html: `<b>${fl.symbol}</b>${fl.name ? ` · ${fl.name}` : ""} · foreign flow (IPOT, all boards) · ${fl.from} to ${fl.to} · ${t.sessions} sessions` }));
+    frag.append(wrapScroll(table([
+      { h: "Date", k: "date", l: true },
+      { h: "Value", f: (d) => fmt.compact(d.value) },
+      { h: "Avg", f: (d) => fmt.price(d.average_price) },
+      { h: "Foreign buy", f: (d) => fmt.compact(d.foreign_buy_value) },
+      { h: "Foreign sell", f: (d) => fmt.compact(d.foreign_sell_value) },
+      { h: "Foreign net", f: (d) => signed(d.foreign_net_value), cls: (d) => `num ${signClass(d.foreign_net_value)}` },
+      { h: "Foreign %", f: (d) => share(d.foreign_share_pct) },
+    ], [...fl.days].reverse())));
+    const streak = t.streak === 0 ? "flat last session" : t.streak > 0 ? `${t.streak} net-buy session(s) in a row` : `${-t.streak} net-sell session(s) in a row`;
+    frag.append(el("p", { class: "prose", html: `Total · value ${fmt.compact(t.value)} · foreign buy ${fmt.compact(t.foreign_buy_value)} · sell ${fmt.compact(t.foreign_sell_value)} · net <span class="${signClass(t.foreign_net_value)}">${signed(t.foreign_net_value)}</span> · foreign share ${share(t.foreign_share_pct) ?? fmt.pctPlain(null)} · ${t.net_buy_sessions} net-buy / ${t.net_sell_sessions} net-sell sessions · ${streak}` }));
+    frag.append(el("p", { class: "warn", text: `Rupiah across all boards (negotiated trades included) from IPOT's broker summary, two requests per session; foreign % is foreign buying plus selling over twice the value traded.${fl.rounded ? " The source rounds figures of a million and more to one decimal." : ""} The CLI also reads idx.co.id's share counts (--source idx).` }));
+    return frag;
+  },
   actions(c) {
     const frag = document.createDocumentFragment();
     const KIND = { cash_dividend: "cash dividend", stock_dividend: "stock dividend", stock_split: "stock split", reverse_split: "reverse split", bonus: "bonus shares", rights_issue: "rights issue", warrant: "warrant", other: "other" };
@@ -568,6 +589,7 @@ async function run(line) {
     case "brief": need(pos, 1, cmd.usage); env = await api(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
     case "sentiment": need(pos, 1, cmd.usage); env = await api(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
     case "broker": need(pos, 1, cmd.usage); env = await api(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
+    case "foreign": need(pos, 1, cmd.usage); env = await api(`foreign?${qs({ symbol: sym(), days: opt.days, from: opt.from, to: opt.to })}`); render = R.foreignFlow; break;
     case "bandar": {
       if ((pos[0] || "").toLowerCase() === "screen") {
         env = await api(`bandar/screen?${qs({ preset: opt.preset, filter: opt.filter, period: opt.period, top: opt.top, sort: opt.sort, asc: opt.asc ? "1" : opt.desc ? "0" : null, limit: opt.limit })}`);

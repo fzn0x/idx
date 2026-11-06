@@ -12,7 +12,7 @@ use crate::model::{
     InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
     Release, ScreenReport, SentimentReport, Technical, Watchlist,
 };
-use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
+use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign};
 use crate::providers::Sourced;
 
 /// Stable wrapper. `schema` names the payload shape and is versioned
@@ -72,6 +72,7 @@ pub const SCHEMA_INDICES: &str = "idx.indices.v1";
 pub const SCHEMA_CALENDAR: &str = "idx.calendar.v1";
 pub const SCHEMA_ACTIONS: &str = "idx.actions.v1";
 pub const SCHEMA_FOREIGN: &str = "idx.foreign.v1";
+pub const SCHEMA_FOREIGN_VALUE: &str = "idx.foreign.value.v1";
 pub const SCHEMA_MARKET_FOREIGN: &str = "idx.market.foreign.v1";
 pub const SCHEMA_MARKET_BROKERS: &str = "idx.market.brokers.v1";
 pub const SCHEMA_TECHNICAL: &str = "idx.technical.v1";
@@ -111,6 +112,7 @@ pub type IndicesEnvelope = Envelope<IndexBoard>;
 pub type CalendarEnvelope = Envelope<Calendar>;
 pub type ActionsEnvelope = Envelope<CorporateActions>;
 pub type ForeignEnvelope = Envelope<ForeignFlow>;
+pub type ForeignValueEnvelope = Envelope<ForeignValueFlow>;
 pub type MarketForeignEnvelope = Envelope<MarketForeign>;
 pub type MarketBrokersEnvelope = Envelope<BrokerRanking>;
 pub type TechnicalEnvelope = Envelope<Technical>;
@@ -185,6 +187,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "calendar",
         "actions",
         "foreign",
+        "foreign-value",
         "market-foreign",
         "market-brokers",
         "technical",
@@ -231,6 +234,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "calendar" => schemars::schema_for!(CalendarEnvelope),
         "actions" => schemars::schema_for!(ActionsEnvelope),
         "foreign" => schemars::schema_for!(ForeignEnvelope),
+        "foreign-value" => schemars::schema_for!(ForeignValueEnvelope),
         "market-foreign" => schemars::schema_for!(MarketForeignEnvelope),
         "market-brokers" => schemars::schema_for!(MarketBrokersEnvelope),
         "technical" => schemars::schema_for!(TechnicalEnvelope),

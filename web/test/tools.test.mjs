@@ -28,7 +28,7 @@ test("the tool list matches docs/mcp.md", () => {
 });
 
 test("only the idx.co.id and Stockbit tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_foreign", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_stockbit_login", "idx_stockbit_status"]);
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_stockbit_login", "idx_stockbit_status"]);
   const terminal = read("web", "public", "terminal.js");
   const names = new Set([...terminal.matchAll(/\{ name: "([a-z]+)", usage:/g)].map((m) => m[1]));
   for (const t of TOOLS.filter((x) => x.web)) assert.ok(names.has(t.web.split(" ")[0]), `${t.tool}: ${t.web}`);

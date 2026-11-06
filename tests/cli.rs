@@ -671,6 +671,120 @@ fn broker_one_investor_side_carries_its_buying_and_selling() {
 }
 
 #[test]
+fn stocks_foreign_from_ipot_in_rupiah() {
+    let sb = sandbox();
+    for day in ["12", "13", "14", "15", "16"] {
+        for (fd, suffix) in [("all", ""), ("F", "_foreign")] {
+            seed(
+                &sb.cache,
+                &format!("https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=10/{day}/2026&end=10/{day}/2026&fd={fd}&board=all"),
+                &format!("ipot/brokersummary_bbca_202610{day}{suffix}.html"),
+            );
+        }
+    }
+    let week = [
+        "--source",
+        "ipot",
+        "--from",
+        "2026-10-12",
+        "--to",
+        "2026-10-16",
+    ];
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "foreign", "BBCA"])
+        .args(week)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.foreign.value.v1");
+    assert_eq!(v["provider"], "ipot");
+    let data = &v["data"];
+    assert_eq!(data["days"].as_array().unwrap().len(), 5);
+    assert_eq!(data["rounded"], true);
+    assert_eq!(data["totals"]["foreign_buy_value"], 4.3647e12);
+    assert_eq!(data["totals"]["foreign_sell_value"], 6.1878e12);
+    assert_eq!(data["totals"]["foreign_net_value"], -1.8231e12);
+    assert_eq!(data["totals"]["streak"], -1);
+    assert_eq!(data["days"][4]["foreign_sell_value"], 4.0e12);
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "foreign", "BBCA"])
+        .args(week)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "foreign flow (IPOT, all boards) · 2026-10-12 to 2026-10-16 · 5 sessions",
+        ))
+        .stdout(predicate::str::contains("foreign share 53.1%"))
+        .stdout(predicate::str::contains("1 net-sell session(s) in a row"));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "foreign", "BBCA"])
+        .args(week)
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        csv.starts_with("date,value,lots,average_price,foreign_buy_value"),
+        "{csv}"
+    );
+
+    for args in [
+        vec![
+            "stocks",
+            "foreign",
+            "BBCA",
+            "--days",
+            "3",
+            "--from",
+            "2026-10-12",
+        ],
+        vec!["stocks", "foreign", "BBCA", "--to", "2026-10-16"],
+        vec![
+            "stocks",
+            "foreign",
+            "BBCA",
+            "--from",
+            "2026-01-01",
+            "--to",
+            "2099-01-01",
+        ],
+        vec![
+            "stocks",
+            "foreign",
+            "BBCA",
+            "--from",
+            "2026-10-16",
+            "--to",
+            "2026-10-12",
+        ],
+        vec![
+            "stocks", "foreign", "BBCA", "--source", "ipot", "--days", "61",
+        ],
+        vec!["stocks", "foreign", "BBCA", "--source", "rti"],
+        vec!["stocks", "foreign", "^JKSE", "--source", "ipot"],
+    ] {
+        idx(&sb.cache, &sb.config).args(&args).assert().code(2);
+    }
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "foreign-value"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(schema.contains("foreign_buy_value") && schema.contains("foreign_share_pct"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "foreign", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--source ipot"));
+}
+
+#[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();
     seed(

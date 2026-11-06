@@ -1,0 +1,181 @@
+<div id="modContentBrokerSum"></div>
+
+<!--DATA BROKER SUMMARY-->
+<div class="pa5">
+	<div class="row mincol-3">
+		<div class="col col-xs-5 col-sm-3">
+			<input class="form-control input-xs text-center" id="startDateBrokerSummary" name="startDate" placeholder="DD Month YYYY" value="11/05/2026" type="text">
+		</div>
+		<div class="col col-xs-5 col-sm-3">
+			<input class="form-control input-xs text-center" id="endDateBrokerSummary" name="endDate" placeholder="DD Month YYYY" value="11/05/2026" type="text">
+		</div>
+		<div class="mt15 visible-xs">&nbsp;</div>
+		<div class="col col-xs-5 col-sm-3">
+			<select class="form-control input-xs" id="FDBrokerSummary">
+				<option value="all">All</option>
+				<option value="F" >Foreign</option>
+				<option value="D" >Domestic</option>
+			</select>
+		</div>
+		<div class="col col-xs-5 col-sm-2">
+			<select class="form-control input-xs" id="boardBrokerSummary">
+				<option value="all">All Trade</option>
+				<option value="RG" >Regular</option>
+				<option value="TN" >Tunai</option>
+				<option value="NG" >Nego</option>
+			</select>
+		</div>
+		<div class="col col-xs-2 col-sm-1">
+			<button type="button" class="btn btn-default btn-block btn-xs-input" onClick="quickinfo_brokersummary($('#stockPageCode').val()!==undefined?$('#stockPageCode').val():$('#stockInfoCode').val(),$('#startDateBrokerSummary').val(),$('#endDateBrokerSummary').val(),$('#FDBrokerSummary').val(),$('#boardBrokerSummary').val());">GO</button>
+		</div>
+	</div>	
+</div>
+
+
+<div class="table-responsive">
+	<table width="100%" border="0" cellspacing="0" cellpadding="0" class="table table-summary table-hover noborder nm">
+		<thead>
+			<tr>
+				<th align="center">Buyer</th>
+				<th align="right">B.Lot</th>
+				<th align="right">B.Val</th>
+				<th align="right">B.Avg</th>
+				<th align="center">#</th>
+				<th align="center">Seller</th>
+				<th align="right">S.Lot</th>
+				<th align="right">S.Val</th>
+				<th align="right">S.Avg</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td align="center"><span class="text-local">LG</span></td>
+				<td align="right"><span class="text-up">20 </span></td>
+				<td align="right"><span class="text-up">12.1 M</span></td>
+				<td align="right"><span class="text-up">6,025 </span></td>
+				<td align="center">1</td>
+				<td align="center"><span class="text-local">XL</span></td>
+				<td align="right"><span class="text-down">36 </span></td>
+				<td align="right"><span class="text-down">21.6 M</span></td>
+				<td align="right"><span class="text-down">6,003 </span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-local">XL</span></td>
+				<td align="right"><span class="text-up">16 </span></td>
+				<td align="right"><span class="text-up">9.6 M</span></td>
+				<td align="right"><span class="text-up">5,977 </span></td>
+				<td align="center">2</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">3</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">4</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">5</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">6</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">7</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">8</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">9</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+			<tr>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="right"><span class="text-up"></span></td>
+				<td align="center">10</td>
+				<td align="center"><span class="text-"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+				<td align="right"><span class="text-down"></span></td>
+			</tr>		
+		</tbody>
+		<tfoot>
+			<tr class="bdr-t">
+				<th colspan="9" align="center">
+					<div class="text-center pt20 valign-middle" style="height:50px;">
+						<span class="fsize12 ml5 mr5">T. Val : 21.6 M</span>
+						<span class="fsize12 ml5 mr5">F. NVal : 0 </span>
+						<span class="fsize12 ml5 mr5">T.Lot : 36 </span>
+						<span class="fsize12 ml5 mr5">Avg : 6,003 </span>					
+					</div>
+	
+				</th>
+			</tr>
+		</tfoot>
+	</table>	
+</div>	
+
+<!-- =======================
+======SCRIPT MODULE=========
+============================-->
+<script src="../../../../module/saham/include/js/data-brokersummary.js"></script>

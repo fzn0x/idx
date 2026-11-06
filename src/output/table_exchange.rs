@@ -8,7 +8,7 @@ use comfy_table::{Attribute, Cell};
 use crate::model::{ActionKind, CorporateActions};
 use crate::model::{BrokerRanking, BrokerSort};
 use crate::model::{Calendar, CalendarCategory, Holidays, IndexBoard, InstrumentList, MemberList};
-use crate::model::{ForeignFlow, ForeignRow, ForeignSort, MarketForeign};
+use crate::model::{ForeignFlow, ForeignRow, ForeignSort, ForeignValueFlow, MarketForeign};
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
 
@@ -99,11 +99,7 @@ pub fn foreign_flow(fl: &ForeignFlow, color: bool) -> String {
     out.push_str(&t.to_string());
     out.push('\n');
     let tt = &fl.totals;
-    let streak = match tt.streak {
-        0 => "flat last session".to_string(),
-        s if s > 0 => format!("{s} net-buy session(s) in a row"),
-        s => format!("{} net-sell session(s) in a row", -s),
-    };
+    let streak = streak_words(tt.streak);
     out.push_str(&format!(
         "Total · foreign buy {} · sell {} · net {} shares (≈ {} at close) · {} net-buy / {} net-sell sessions · {streak}\n",
         f::compact(Some(tt.foreign_buy)),
@@ -114,6 +110,86 @@ pub fn foreign_flow(fl: &ForeignFlow, color: bool) -> String {
         tt.net_sell_sessions,
     ));
     out.push_str("Foreign figures are shares as IDX publishes them; net × close gives a rupiah scale, not the traded value.\n");
+    out
+}
+
+fn streak_words(streak: i32) -> String {
+    match streak {
+        0 => "flat last session".to_string(),
+        s if s > 0 => format!("{s} net-buy session(s) in a row"),
+        s => format!("{} net-sell session(s) in a row", -s),
+    }
+}
+
+fn signed_compact(v: Option<f64>) -> String {
+    match v {
+        Some(x) if x > 0.0 => format!("+{}", f::compact(Some(x))),
+        other => f::compact(other),
+    }
+}
+
+fn pct1(v: Option<f64>) -> String {
+    v.map(|p| format!("{}%", f::num(p, 1)))
+        .unwrap_or_else(|| f::DASH.to_string())
+}
+
+/// One stock's foreign flow in rupiah from IPOT, newest session first.
+pub fn foreign_value_flow(fl: &ForeignValueFlow, color: bool) -> String {
+    let mut out = format!(
+        "{}{} · foreign flow (IPOT, all boards) · {} to {} · {} sessions\n",
+        fl.symbol,
+        fl.name
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default(),
+        fl.from,
+        fl.to,
+        fl.totals.sessions
+    );
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "Date",
+        "Value",
+        "Avg",
+        "Foreign buy",
+        "Foreign sell",
+        "Foreign net",
+        "Foreign %",
+    ]));
+    for d in fl.days.iter().rev() {
+        t.add_row(vec![
+            Cell::new(d.date.to_string()),
+            right(f::compact(d.value)),
+            right(f::price(d.average_price)),
+            right(f::compact(d.foreign_buy_value)),
+            right(f::compact(d.foreign_sell_value)),
+            signed(
+                signed_compact(d.foreign_net_value),
+                d.foreign_net_value,
+                color,
+            ),
+            right(pct1(d.foreign_share_pct)),
+        ]);
+    }
+    out.push_str(&t.to_string());
+    out.push('\n');
+    let tt = &fl.totals;
+    out.push_str(&format!(
+        "Total · value {} · foreign buy {} · sell {} · net {} · foreign share {} · {} net-buy / {} net-sell sessions · {}\n",
+        f::compact(Some(tt.value)),
+        f::compact(Some(tt.foreign_buy_value)),
+        f::compact(Some(tt.foreign_sell_value)),
+        signed_compact(Some(tt.foreign_net_value)),
+        pct1(tt.foreign_share_pct),
+        tt.net_buy_sessions,
+        tt.net_sell_sessions,
+        streak_words(tt.streak),
+    ));
+    out.push_str("Rupiah across all boards (negotiated trades included) from IPOT's broker summary; foreign % is foreign buying plus selling over twice the value traded.");
+    if fl.rounded {
+        out.push_str(" The source rounds figures of a million and more to one decimal.");
+    }
+    out.push_str(" For shares on the regular board as IDX publishes them, use --source idx.\n");
     out
 }
 

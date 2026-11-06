@@ -22,7 +22,7 @@ export const TOOLS = [
   { tool: "idx_news", cli: "idx stocks news TLKM", web: "news TLKM", what: "Kontan and CNBC Indonesia headlines" },
   { tool: "idx_sentiment", cli: "idx stocks sentiment BBRI", web: "sentiment BBRI", what: "lexicon sentiment over the headlines" },
   { tool: "idx_corporate_actions", cli: "idx stocks actions BBCA", web: "actions BBCA", what: "dividends, splits, bonus, rights, RUPS, warrants" },
-  { tool: "idx_foreign", cli: "idx stocks foreign BBCA", web: null, what: "foreign buying and selling per session" },
+  { tool: "idx_foreign", cli: "idx stocks foreign BBCA", web: "foreign BBCA", what: "foreign buying and selling per session (the web reads IPOT, in rupiah)" },
   { tool: "idx_instruments", cli: "idx stocks list --search bank", web: "list --search bank", what: "listed stocks (the web lists codes and names)" },
   { tool: "idx_market_foreign", cli: "idx market foreign", web: null, what: "top foreign net buying and selling" },
   { tool: "idx_market_brokers", cli: "idx market brokers", web: null, what: "exchange members ranked by the day's value" },

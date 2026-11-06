@@ -39,7 +39,8 @@ pub use calendar::{Calendar, CalendarCategory, CalendarEvent, Holiday, Holidays}
 pub use dividends::{DividendEvent, DividendHistory, DividendYear, SplitEvent};
 pub use flow::{
     BrokerActivity, BrokerDayRow, BrokerRanking, BrokerSort, BrokerStockRow, ForeignDay,
-    ForeignFlow, ForeignRow, ForeignSort, ForeignTotals, MarketForeign,
+    ForeignFlow, ForeignRow, ForeignSort, ForeignSource, ForeignTotals, ForeignValueDay,
+    ForeignValueFlow, ForeignValueTotals, MarketForeign,
 };
 pub use fundamentals::{
     Analyst, BalanceSheet, CashFlow, Director, Dividend, Earnings, EarningsQuarter,

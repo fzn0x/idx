@@ -137,7 +137,7 @@
     <h2 id="notes-h" class="strip"><span class="cond">Catatan</span><small>Notes to the statements · what this tool does and does not do</small></h2>
     <div class="notes">
       <p><b>Scope.</b> <code>stocks quote · history · profile · financials · earnings · dividends · returns · fundamental · technical · brief · compare · screen · news · sentiment</code>, <code>market overview</code>, <code>broker</code>, <code>bandar detect · screen</code>, <code>ownership import · ticker · entity · changes · foreign</code> and <code>watch</code>, plus <code>mcp</code>, <code>schema</code>, <code>config</code>, <code>cache</code>. Output as a table, <code>-o json</code> or <code>-o csv</code>. Every command works on IDX tickers such as <code>BBCA</code>; <code>^JKSE</code> is IHSG.</p>
-      <p><b>Sources.</b> Yahoo Finance for prices, history, profiles, ratios, earnings and statements; MSN Money for a second opinion on ratios and analyst targets; IDX's monthly KSEI file for holders above 1 %; the exchange's own idx.co.id summaries for foreign flow, member activity, indices and the corporate-action calendar (CLI and MCP: the exchange refuses requests from data centres, this page's host included); Indo Premier for broker summaries and corporate actions; Kontan and CNBC Indonesia feeds for news; and, opt-in, Stockbit for realtime quotes, history and a live order book carrying your own Stockbit session (CLI and MCP only, via <code>idx stockbit login</code>). Every response names its <code>provider</code>, <code>fetched_at</code>, and whether it came from cache.</p>
+      <p><b>Sources.</b> Yahoo Finance for prices, history, profiles, ratios, earnings and statements; MSN Money for a second opinion on ratios and analyst targets; IDX's monthly KSEI file for holders above 1 %; the exchange's own idx.co.id summaries for foreign flow, member activity, indices and the corporate-action calendar (CLI and MCP: the exchange refuses requests from data centres, this page's host included); Indo Premier for broker summaries, foreign flow per stock in rupiah and corporate actions; Kontan and CNBC Indonesia feeds for news; and, opt-in, Stockbit for realtime quotes, history and a live order book carrying your own Stockbit session (CLI and MCP only, via <code>idx stockbit login</code>). Every response names its <code>provider</code>, <code>fetched_at</code>, and whether it came from cache.</p>
       <p><b>Provenance over polish.</b> When two sources disagree they are never averaged: the first answers, the second fills blanks, and <code>sources</code> lists who contributed. Yahoo publishes gross margin as 0 for banks; idx publishes <code>null</code>, because it means not applicable.</p>
       <p><b>Ownership.</b> Since March 2026 KSEI compiles, and IDX publishes monthly, every holder above 1 % of a listed company. The CLI imports the XLSX (or the earlier PDF) into local SQLite with normalised entity names, so <em>who holds more than 1 % of BBCA</em> and <em>what did this fund change last month</em> are one command each. idx.co.id sits behind Cloudflare; the import explains the manual path when a download is refused.</p>
       <p><b>Heuristics are labelled.</b> The fundamentals verdict, the technical signal and the news sentiment are rule scores. Every rule that fired is listed in plain language, and none of them is advice.</p>
@@ -197,7 +197,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="section" aria-labelledby="cmd-h">
-    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 36 MCP tools, the CLI command behind each, and 28 that run in the web terminal</small></h2>
+    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 36 MCP tools, the CLI command behind each, and 29 that run in the web terminal</small></h2>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -218,7 +218,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_news</td><td><code>idx stocks news TLKM</code></td><td><a href="/terminal?cmd=news%20TLKM">news TLKM</a></td><td class="muted">Kontan and CNBC Indonesia headlines</td></tr>
             <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">lexicon sentiment over the headlines</td></tr>
             <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividends, splits, bonus, rights, RUPS, warrants</td></tr>
-            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">foreign buying and selling per session</td></tr>
+            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><a href="/terminal?cmd=foreign%20BBCA">foreign BBCA</a></td><td class="muted">foreign buying and selling per session (the web reads IPOT, in rupiah)</td></tr>
             <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">listed stocks (the web lists codes and names)</td></tr>
             <tr><td>idx_market_foreign</td><td><code>idx market foreign</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">top foreign net buying and selling</td></tr>
             <tr><td>idx_market_brokers</td><td><code>idx market brokers</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">exchange members ranked by the day's value</td></tr>
@@ -241,7 +241,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
         </tbody>
       </table>
     </div>
-    <p class="foot"><span>The 5 idx.co.id tools (foreign flow, top brokers, indices, the exchange calendar) and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal →</a></p>
+    <p class="foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar) and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal →</a></p>
   </section>
 
   <footer class="sign">

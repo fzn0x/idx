@@ -22,6 +22,11 @@
 //!   are plain sums and a single session is always right.
 //!   [`broker_summary_range`] rebuilds such a net from single sessions.
 //!
+//! - With `fd=F` or `fd=D` the footer's `T. Val`, `T.Lot` and `Avg` are that
+//!   side's buying; `F. NVal` is the same on every page and ignores `board`
+//!   (see `parse::Parsed::into_summary`). [`foreign_day`] reads a session's
+//!   foreign buying and selling from the `fd=all` and `fd=F` pages.
+//!
 //! Broker names come from the bundled IDX member list (`crate::brokers`),
 //! filled in by `service::broker`.
 //!
@@ -38,7 +43,7 @@ use chrono::NaiveDate;
 use crate::error::{IdxError, Result};
 use crate::holidays;
 use crate::http::{Fetched, Fetcher};
-use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, Symbol};
+use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, ForeignValueDay, Symbol};
 
 use super::Sourced;
 
@@ -242,6 +247,95 @@ async fn rebuild_net(
         }
         end = rest_end;
     }
+}
+
+/// What [`foreign_day`] found for one date.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForeignSession {
+    /// The stock did not trade that day.
+    NoTrades,
+    /// Today: the stock trades, but the source publishes the session only
+    /// after the close. During the session the all-investor page carries the
+    /// totals so far without broker lists, the foreign page is the empty
+    /// template and `F. NVal` reads 0 (seen 2026-11-06 09:15 WIB), which is
+    /// not known to be zero.
+    Pending,
+    /// `rounded`: the source abbreviated a figure.
+    Traded { day: ForeignValueDay, rounded: bool },
+}
+
+/// One session's foreign trading from two summaries of `date`, both single
+/// sessions (always right, unlike a range's foreign net):
+/// - all investors: the value traded, lots and average price, and whether
+///   the stock traded at all;
+/// - foreign investors: their buying is that page's `T. Val` and `F. NVal`
+///   the foreign net, so their selling is buying minus net. A foreign page
+///   without trades on a past traded day means no foreigner traded: zeros.
+///   Today it means the figures are not published yet.
+///
+/// Both pages share their cache with `idx broker --date` and `bandar --daily`.
+pub async fn foreign_day(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    date: NaiveDate,
+    today: NaiveDate,
+) -> Result<Sourced<ForeignSession>> {
+    let all = broker_summary(
+        fetcher,
+        symbol,
+        date,
+        date,
+        BrokerInvestor::All,
+        BrokerBoard::All,
+        today,
+    )
+    .await?;
+    if all.data.is_empty() {
+        // While a session trades, its page has the totals so far but no
+        // broker lists and no foreign breakdown (seen 2026-11-06 09:15 WIB).
+        let trading = date >= today && all.data.total_value.is_some_and(|v| v > 0.0);
+        return Ok(all.map(|_| {
+            if trading {
+                ForeignSession::Pending
+            } else {
+                ForeignSession::NoTrades
+            }
+        }));
+    }
+    let foreign = broker_summary(
+        fetcher,
+        symbol,
+        date,
+        date,
+        BrokerInvestor::Foreign,
+        BrokerBoard::All,
+        today,
+    )
+    .await?;
+    let (a, f) = (&all.data, &foreign.data);
+    if date >= today && f.is_empty() {
+        let mut s = all.map(|_| ForeignSession::Pending);
+        s.absorb(&foreign);
+        return Ok(s);
+    }
+    let share = match (f.buy_value, f.sell_value, a.total_value) {
+        (Some(b), Some(s), Some(v)) if v > 0.0 => Some((b + s) / (2.0 * v) * 100.0),
+        _ => None,
+    };
+    let day = ForeignValueDay {
+        date,
+        value: a.total_value,
+        lots: a.total_lots,
+        average_price: a.average_price,
+        foreign_buy_value: f.buy_value,
+        foreign_sell_value: f.sell_value,
+        foreign_net_value: f.foreign_net_value,
+        foreign_share_pct: share,
+    };
+    let rounded = a.rounded || f.rounded;
+    let mut s = all.map(|_| ForeignSession::Traded { day, rounded });
+    s.absorb(&foreign);
+    Ok(s)
 }
 
 /// One HTML fragment, retrying the spurious 404 stretches; any other
@@ -599,46 +693,67 @@ mod tests {
 
     #[tokio::test]
     async fn the_walk_skips_a_session_without_trades_and_a_failed_rebuild_is_a_warning() {
-        let empty =
-            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html");
-        // Friday 11-06 before the open: its page is empty, so the last two
-        // sessions with trades are 11-05 and 11-04.
-        let (f, be, _d) = fetcher(
-            pages(&[
-                (
-                    "11/02/2026",
-                    "11/05/2026",
-                    "brokersummary_bbca_20261102_20261105.html",
-                ),
-                (
-                    "11/02/2026",
-                    "11/03/2026",
-                    "brokersummary_bbca_20261102_20261103.html",
-                ),
-                (
-                    "11/04/2026",
-                    "11/04/2026",
-                    "brokersummary_bbca_20261104.html",
-                ),
-                (
-                    "11/05/2026",
-                    "11/05/2026",
-                    "brokersummary_bbca_20261105.html",
-                ),
-            ])
-            .route("code=BBCA&start=11/06/2026&end=11/06/2026&", 200, empty)
-            // The range page stands in for 11/02..11/06: same totals, net doubled.
-            .route(
-                "code=BBCA&start=11/02/2026&end=11/06/2026&",
-                200,
-                include_str!(
-                    "../../../tests/fixtures/ipot/brokersummary_bbca_20261102_20261105.html"
-                ),
+        // Friday 11-06 at 09:15 WIB: today's page has the totals so far but
+        // no broker lists (and a foreign net of 0), so the last two sessions
+        // with trades are 11-05 and 11-04. During the session the range page
+        // is right (292.2 B); the rebuild agrees at the source's precision.
+        let (f, be, _d) = fetcher(pages(&[
+            (
+                "11/02/2026",
+                "11/06/2026",
+                "brokersummary_bbca_20261102_20261106_insession.html",
             ),
-        );
+            (
+                "11/02/2026",
+                "11/03/2026",
+                "brokersummary_bbca_20261102_20261103.html",
+            ),
+            (
+                "11/04/2026",
+                "11/04/2026",
+                "brokersummary_bbca_20261104.html",
+            ),
+            (
+                "11/05/2026",
+                "11/05/2026",
+                "brokersummary_bbca_20261105.html",
+            ),
+            (
+                "11/06/2026",
+                "11/06/2026",
+                "brokersummary_bbca_20261106_insession.html",
+            ),
+        ]));
         let s = range(&f, d(2026, 11, 2), d(2026, 11, 6), d(2026, 11, 6)).await;
         assert_eq!(s.data.foreign_net_value, Some(292_300_000_000.0));
+        assert_eq!(s.data.total_value, Some(5_100_000_000_000.0));
         assert_eq!(be.call_count(), 5, "range, 11-06, 11-05, 11-04, the rest");
+
+        // The 11-02..11-05 page read during the session is right too.
+        let (f, _be, _d) = fetcher(pages(&[
+            (
+                "11/02/2026",
+                "11/05/2026",
+                "brokersummary_bbca_20261102_20261105_insession.html",
+            ),
+            (
+                "11/02/2026",
+                "11/03/2026",
+                "brokersummary_bbca_20261102_20261103.html",
+            ),
+            (
+                "11/04/2026",
+                "11/04/2026",
+                "brokersummary_bbca_20261104.html",
+            ),
+            (
+                "11/05/2026",
+                "11/05/2026",
+                "brokersummary_bbca_20261105.html",
+            ),
+        ]));
+        let s = range(&f, d(2026, 11, 2), d(2026, 11, 5), d(2026, 11, 6)).await;
+        assert_eq!(s.data.foreign_net_value, Some(292_300_000_000.0));
 
         // A session that cannot be read: no net, said so; the rest stands.
         let (f, _be, _d) = fetcher(pages(&[
@@ -698,6 +813,160 @@ mod tests {
         assert!(!range_net_suspect(&monday, from, to, d(2026, 11, 9)));
         // One session is always right.
         assert!(!range_net_suspect(&friday, to, to, d(2026, 11, 6)));
+    }
+
+    fn fixture(file: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/ipot")
+                .join(file),
+        )
+        .unwrap()
+    }
+
+    /// The all-investor and foreign pages of one session.
+    fn session(
+        be: FixtureBackend,
+        code: &str,
+        mdy: &str,
+        all: &str,
+        foreign: &str,
+    ) -> FixtureBackend {
+        be.route(
+            &format!("code={code}&start={mdy}&end={mdy}&fd=all&"),
+            200,
+            &fixture(all),
+        )
+        .route(
+            &format!("code={code}&start={mdy}&end={mdy}&fd=F&"),
+            200,
+            &fixture(foreign),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_session_of_foreign_flow_from_two_pages() {
+        let be = session(
+            FixtureBackend::new(),
+            "BBCA",
+            "10/16/2026",
+            "brokersummary_bbca_20261016.html",
+            "brokersummary_bbca_20261016_foreign.html",
+        );
+        let be = session(
+            be,
+            "BBCA",
+            "11/05/2026",
+            "brokersummary_bbca_20261105.html",
+            "brokersummary_bbca_20261105_foreign.html",
+        );
+        let be = session(
+            be,
+            "TRUK",
+            "11/05/2026",
+            "brokersummary_truk_20261105.html",
+            "brokersummary_truk_20261105_foreign.html",
+        )
+        .route(
+            "code=BBCA&start=10/17/2026&end=10/17/2026&fd=all&",
+            200,
+            &fixture("brokersummary_bbca_20261017_no_trades.html"),
+        );
+        let be = session(
+            be,
+            "BBCA",
+            "11/06/2026",
+            "brokersummary_bbca_20261106_insession.html",
+            "brokersummary_bbca_20261106_insession_foreign.html",
+        );
+        let (f, be, _d) = fetcher(be);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        let day = |s: Sourced<ForeignSession>| match s.data {
+            ForeignSession::Traded { day, rounded } => (day, rounded),
+            other => panic!("a traded session, not {other:?}"),
+        };
+
+        let (d16, rounded) = day(foreign_day(&f, &bbca, d(2026, 10, 16), d(2026, 10, 17))
+            .await
+            .unwrap());
+        assert!(rounded);
+        assert_eq!(d16.date, d(2026, 10, 16));
+        assert_eq!(d16.value, Some(6_600_000_000_000.0));
+        assert_eq!(d16.lots, Some(12_600_000.0));
+        assert_eq!(d16.average_price, Some(5_228.0));
+        assert_eq!(d16.foreign_buy_value, Some(1_700_000_000_000.0));
+        assert_eq!(d16.foreign_sell_value, Some(4_000_000_000_000.0));
+        assert_eq!(d16.foreign_net_value, Some(-2_300_000_000_000.0));
+        let share = d16.foreign_share_pct.unwrap();
+        assert!((share - 5.7 / 13.2 * 100.0).abs() < 1e-9, "{share}");
+        assert_eq!(be.call_count(), 2);
+        // The same pages serve `idx broker --date`.
+        broker_summary(
+            &f,
+            &bbca,
+            d(2026, 10, 16),
+            d(2026, 10, 16),
+            BrokerInvestor::All,
+            BrokerBoard::All,
+            d(2026, 10, 17),
+        )
+        .await
+        .unwrap();
+        assert_eq!(be.call_count(), 2);
+
+        // 11-05: 605.4 B bought, 303.9 B net, so 301.5 B sold, of 848.3 B.
+        let (d5, _) = day(foreign_day(&f, &bbca, d(2026, 11, 5), d(2026, 11, 6))
+            .await
+            .unwrap());
+        assert_eq!(d5.foreign_sell_value, Some(301_500_000_000.0));
+        let share = d5.foreign_share_pct.unwrap();
+        assert!((share - 906.9 / 1_696.6 * 100.0).abs() < 1e-9, "{share}");
+
+        // TRUK traded 21.6 M on 11-05 and no foreigner did: zeros, not missing.
+        let truk = Symbol::parse("TRUK").unwrap();
+        let (t, _) = day(foreign_day(&f, &truk, d(2026, 11, 5), d(2026, 11, 6))
+            .await
+            .unwrap());
+        assert_eq!(t.value, Some(21_600_000.0));
+        assert_eq!(
+            (
+                t.foreign_buy_value,
+                t.foreign_sell_value,
+                t.foreign_net_value
+            ),
+            (Some(0.0), Some(0.0), Some(0.0))
+        );
+        assert_eq!(t.foreign_share_pct, Some(0.0));
+
+        // No trades that day: no session, and no foreign page asked for.
+        let before = be.call_count();
+        let none = foreign_day(&f, &bbca, d(2026, 10, 17), d(2026, 10, 17))
+            .await
+            .unwrap();
+        assert_eq!(none.data, ForeignSession::NoTrades);
+        assert_eq!(be.call_count(), before + 1);
+
+        // 11-06 at 09:15 WIB: 89.5 B traded so far, no broker lists yet.
+        let before = be.call_count();
+        let today = foreign_day(&f, &bbca, d(2026, 11, 6), d(2026, 11, 6))
+            .await
+            .unwrap();
+        assert_eq!(today.data, ForeignSession::Pending);
+        assert_eq!(be.call_count(), before + 1, "no foreign page asked for");
+        // Its foreign page is the empty template as well.
+        let foreign = broker_summary(
+            &f,
+            &bbca,
+            d(2026, 11, 6),
+            d(2026, 11, 6),
+            BrokerInvestor::Foreign,
+            BrokerBoard::All,
+            d(2026, 11, 6),
+        )
+        .await
+        .unwrap();
+        assert!(foreign.data.is_empty());
+        assert_eq!(foreign.data.buy_value, Some(0.0));
     }
 
     const ACTIONS_MEGA: &str =

@@ -91,6 +91,45 @@ export function totals(p, investor = "all", board = "all") {
   };
 }
 
+// ---- per-session foreign flow (idx.foreign.value.v1) ---------------------
+
+/**
+ * One session from its all-investor and foreign pages, like
+ * ipot::foreign_day: { session: "none" } when the stock did not trade,
+ * "pending" for today while the source has not published the session (no
+ * broker lists, an empty foreign page), else "traded" with the day and
+ * whether a figure was rounded. `foreign` is only read for a traded day.
+ */
+export function foreignDay(date, all, foreign, today) {
+  if (!traded(all)) return { session: date >= today && all.total_value > 0 ? "pending" : "none" };
+  if (date >= today && !traded(foreign)) return { session: "pending" };
+  const f = totals(foreign, "foreign"), value = all.total_value;
+  const share = f.buy_value != null && f.sell_value != null && value > 0 ? ((f.buy_value + f.sell_value) / (2 * value)) * 100 : null;
+  return {
+    session: "traded", rounded: all.rounded || foreign.rounded,
+    day: {
+      date, value, lots: all.total_lots, average_price: all.average_price,
+      foreign_buy_value: f.buy_value, foreign_sell_value: f.sell_value, foreign_net_value: f.foreign_net_value, foreign_share_pct: share,
+    },
+  };
+}
+
+/** Sums over the sessions (oldest first), the foreign share and the streak, like service::foreign_value_totals. */
+export function foreignTotals(days) {
+  const sum = (k) => days.reduce((t, d) => t + (d[k] ?? 0), 0);
+  const sign = (d) => (d.foreign_net_value > 0 ? 1 : d.foreign_net_value < 0 ? -1 : 0);
+  let sides = 0, value = 0;
+  for (const d of days) if (d.foreign_buy_value != null && d.foreign_sell_value != null && d.value != null) { sides += d.foreign_buy_value + d.foreign_sell_value; value += d.value; }
+  const last = days.length ? sign(days[days.length - 1]) : 0;
+  let streak = 0;
+  if (last) for (let i = days.length - 1; i >= 0 && sign(days[i]) === last; i--) streak += last;
+  return {
+    sessions: days.length, value: sum("value"), foreign_buy_value: sum("foreign_buy_value"), foreign_sell_value: sum("foreign_sell_value"),
+    foreign_net_value: sum("foreign_net_value"), foreign_share_pct: value > 0 ? (sides / (2 * value)) * 100 : null,
+    net_buy_sessions: days.filter((d) => sign(d) > 0).length, net_sell_sessions: days.filter((d) => sign(d) < 0).length, streak,
+  };
+}
+
 // ---- range foreign net -------------------------------------------------
 
 const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);

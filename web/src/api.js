@@ -548,6 +548,87 @@ export async function broker(env, symbolsRaw, dateRaw, fromRaw, toRaw, investor 
   return envelope("idx.broker.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
+// ---- foreign flow (IPOT) -----------------------------------------------
+
+/** Sessions /api/foreign reads by default and at most: two subrequests each (the CLI takes 60). */
+const FOREIGN_WEB_DEFAULT = 10;
+const FOREIGN_WEB_MAX = 20;
+/** Minutes after midnight WIB when today's session is over (post-trading ends 16:15). */
+const SESSION_DONE_MIN = 16 * 60 + 15;
+
+const tradingDaysBetween = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) if (hol.isTradingDay(d)) out.push(d); return out; };
+const latestTradingDays = (today, n) => { const out = []; for (let d = today; out.length < n; d = addDays(d, -1)) if (hol.isTradingDay(d)) out.unshift(d); return out; };
+
+/**
+ * /api/foreign: `idx stocks foreign --source ipot` (idx.foreign.value.v1).
+ * Foreign buying, selling and net in rupiah across all boards, from each
+ * session's all-investor and foreign pages (shared with /api/broker in D1).
+ * idx.co.id refuses this host, so the CLI's default source is not offered.
+ */
+export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourceRaw) {
+  const symbol = parseSymbol(symbolRaw);
+  if (symbol.startsWith("^")) throw usage(`${symbol} is an index; foreign flow is per stock`);
+  const source = String(sourceRaw ?? "").trim().toLowerCase() || "ipot";
+  if (source === "idx") throw usage("idx.co.id refuses requests from this site's host; the web terminal reads IPOT (source=ipot), in rupiah across all boards; the CLI and MCP read idx.co.id too");
+  if (source !== "ipot") throw usage(`invalid source "${sourceRaw}"; the web terminal reads ipot`);
+  let from = isoDate(fromRaw, "from"), to = isoDate(toRaw, "to");
+  const hasDays = daysRaw != null && daysRaw !== "";
+  if (hasDays && (from || to)) throw usage("give either the latest days or a from/to range, not both");
+  if (to && !from) throw usage("to needs from, the first session of the range");
+  const today = wibToday();
+  let candidates, n = null;
+  if (from) {
+    to ||= today;
+    if (from > to) throw usage(`the range starts (${from}) after it ends (${to})`);
+    if (to > today) throw usage(`${to} is in the future (today is ${today} in WIB)`);
+    candidates = tradingDaysBetween(from, to);
+    if (candidates.length > FOREIGN_WEB_MAX) throw usage(`the web terminal reads at most ${FOREIGN_WEB_MAX} sessions (two requests each); ${from} to ${to} has ${candidates.length}; the CLI takes 60`);
+  } else {
+    n = num(daysRaw, FOREIGN_WEB_DEFAULT);
+    if (!Number.isInteger(n) || n < 1 || n > FOREIGN_WEB_MAX) throw usage(`days must be between 1 and ${FOREIGN_WEB_MAX} on the web (two requests per session); the CLI takes 60`);
+    // One more when today trades: its session is published after the close.
+    candidates = latestTradingDays(today, hol.isTradingDay(today) ? n + 1 : n);
+  }
+  const readDay = async (d) => {
+    const all = await ipotPage(env, symbol, d, d, "all", "all", today);
+    const traded = all.value.buyers.length || all.value.sellers.length;
+    return { d, all, foreign: traded ? await ipotPage(env, symbol, d, d, "foreign", "all", today) : null };
+  };
+  const days = [], warnings = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), rounded = false, firstErr = null, read = 0;
+  for (let i = 0; i < candidates.length; i += 3) {
+    const got = await Promise.allSettled(candidates.slice(i, i + 3).map(readDay));
+    for (const [k, r] of got.entries()) {
+      const d = candidates[i + k];
+      if (r.status === "rejected") {
+        if (r.reason?.code === "not_found") throw r.reason;
+        warnings.push(`${symbol}: the session of ${d} failed: ${r.reason?.message ?? r.reason}`);
+        firstErr ||= r.reason;
+        continue;
+      }
+      read++;
+      for (const page of [r.value.all, r.value.foreign].filter(Boolean)) {
+        cachedAll &&= page.cached; stale ||= page.stale; fetched = Math.min(fetched, page.fetched_at);
+        if (page.warning && !warnings.includes(page.warning)) warnings.push(page.warning);
+      }
+      const s = ipot.foreignDay(d, r.value.all.value, r.value.foreign?.value ?? null, today);
+      if (s.session === "traded") { days.push(s.day); rounded ||= s.rounded; }
+      else if (s.session === "pending") warnings.push(`${symbol}: today's session (${d}) is left out: the source publishes the foreign figures after the close`);
+    }
+  }
+  if (!days.length) {
+    if (!read && firstErr) throw firstErr;
+    throw notFound(`no sessions with trades for ${symbol} from ${candidates[0]} to ${candidates[candidates.length - 1]}`);
+  }
+  const list = n ? days.slice(-n) : days;
+  if (n && list.length < n) warnings.push(`${symbol} traded on ${list.length} of the ${candidates.length} latest trading days the web reads`);
+  const last = list[list.length - 1].date;
+  const w = new Date(Date.now() + 7 * 3600e3);
+  if (last === today && w.getUTCHours() * 60 + w.getUTCMinutes() < SESSION_DONE_MIN) warnings.push(`${symbol}: today's session (${today}) is still trading; its figures will change`);
+  const data = { symbol, name: NAME_BY_SYMBOL.get(symbol) || null, from: list[0].date, to: last, days: list, totals: ipot.foreignTotals(list), rounded };
+  return envelope("idx.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
+}
+
 // ---- corporate actions and holidays ------------------------------------
 
 /** Days `actions` reaches back without `since`, like the CLI. */
@@ -977,6 +1058,7 @@ export async function route(env, url) {
     case "/ownership/foreign": return ownershipForeign(env, q.get("symbol"), q.get("from"), q.get("to"), num(q.get("limit"), 25));
     case "/sentiment": return sentiment(env, q.get("symbol"));
     case "/broker": return broker(env, q.get("symbols") || q.get("symbol"), q.get("date"), q.get("from"), q.get("to"), q.get("investor") || "all", q.get("board") || "all");
+    case "/foreign": return foreignFlow(env, q.get("symbol"), q.get("days"), q.get("from"), q.get("to"), q.get("source"));
     case "/bandar": return bandar(env, q.get("symbols") || q.get("symbol"), q.get("period"), q.get("date"), q.get("from"), q.get("to"), q.get("top"), q.get("investor") || "all", q.get("board") || "all", q.get("daily"));
     case "/bandar/screen": return bandarScreen(env, q.get("preset"), q.get("filter"), q.get("period"), q.get("top"), q.get("sort"), q.get("asc"), q.get("limit"));
     case "/bandar/status": return envelope("idx.bandar.scan.v1", await scanStatus(env), { provider: ipot.NAME, cached: true });
