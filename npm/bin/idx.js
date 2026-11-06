@@ -17,9 +17,13 @@ async function main() {
     try {
       bin = await binary.download((line) => console.error(line));
     } catch (e) {
-      console.error(`idx: binary missing and download failed: ${e.message}`);
-      console.error(`idx: install it manually: curl -fsSL https://raw.githubusercontent.com/${binary.REPO}/main/install.sh | sh`);
-      return 1;
+      // A concurrent first run may have installed it in the meantime.
+      bin = binary.installed();
+      if (!bin) {
+        console.error(`idx: binary missing and download failed: ${e.message}`);
+        console.error(`idx: install it manually: curl -fsSL https://raw.githubusercontent.com/${binary.REPO}/main/install.sh | sh`);
+        return 1;
+      }
     }
   }
   const r = spawnSync(bin, process.argv.slice(2), { stdio: "inherit" });

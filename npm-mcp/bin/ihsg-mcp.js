@@ -30,9 +30,13 @@ async function main() {
     try {
       bin = await binary.download((line) => console.error(line));
     } catch (e) {
-      console.error(`ihsg-mcp: the idx binary is missing and the download failed: ${e.message}`);
-      console.error(`ihsg-mcp: install idx another way (https://github.com/${binary.REPO}#install) and register \`idx mcp\` instead`);
-      process.exit(1);
+      // A concurrent first start may have installed it in the meantime.
+      bin = binary.installed();
+      if (!bin) {
+        console.error(`ihsg-mcp: the idx binary is missing and the download failed: ${e.message}`);
+        console.error(`ihsg-mcp: install idx another way (https://github.com/${binary.REPO}#install) and register \`idx mcp\` instead`);
+        process.exit(1);
+      }
     }
   }
   const child = spawn(bin, mcpArgs(process.argv), { stdio: "inherit" });

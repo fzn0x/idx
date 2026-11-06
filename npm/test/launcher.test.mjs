@@ -3,9 +3,9 @@
 // downloader, and the MCP launcher must keep stdout for the protocol.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,9 @@ import { createRequire } from "node:module";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
 const pkg = (dir) => JSON.parse(read(dir, "package.json"));
-const { mcpArgs } = createRequire(import.meta.url)(join(root, "npm-mcp", "bin", "ihsg-mcp.js"));
+const require = createRequire(import.meta.url);
+const { mcpArgs } = require(join(root, "npm-mcp", "bin", "ihsg-mcp.js"));
+const binary = require(join(root, "npm", "lib", "binary.js"));
 
 test("ihsg-mcp ships ihsg-cli's downloader unchanged, at the same version", () => {
   assert.equal(
@@ -110,6 +112,79 @@ test("a supervisor's SIGTERM reaches the server, and the server's signal ends th
   const r = spawnSync(process.execPath, [stage("npm-mcp", "ihsg-mcp.js")], { env, encoding: "utf8" });
   assert.equal(r.signal, "SIGTERM");
   assert.equal(r.stdout, "");
+});
+
+test("a first run that loses the install race keeps the binary already in place", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ihsg-npm-"));
+  const dest = join(dir, binary.EXE);
+  const tmp = `${dest}.1.tmp`;
+
+  // Windows refuses to rename over a running exe (EPERM); the winner's copy stays.
+  t.mock.method(fs, "renameSync", () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  });
+  writeFileSync(dest, "winner");
+  writeFileSync(tmp, "loser");
+  binary.place(tmp, dest);
+  assert.equal(readFileSync(dest, "utf8"), "winner");
+  assert.equal(existsSync(tmp), false, "the loser's temp file is removed");
+
+  // Nothing in place: the refusal is a real failure.
+  fs.rmSync(dest);
+  writeFileSync(tmp, "loser");
+  assert.throws(() => binary.place(tmp, dest), /EPERM/);
+  t.mock.restoreAll();
+
+  // The plain case: the rename installs the binary.
+  binary.place(tmp, dest);
+  assert.equal(readFileSync(dest, "utf8"), "loser");
+  assert.deepEqual(readdirSync(dir), [binary.EXE]);
+});
+
+test("on Windows the refusal is real: a running idx.exe is never replaced", { skip: process.platform !== "win32" && "Windows file locking" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ihsg-npm-"));
+  const dest = join(dir, "idx.exe");
+  cpSync(process.env.ComSpec, dest); // a small exe that waits on stdin
+  const running = spawn(dest, [], { stdio: ["pipe", "ignore", "ignore"] });
+  await once(running, "spawn");
+  try {
+    const tmp = `${dest}.1.tmp`;
+    writeFileSync(tmp, "loser");
+    assert.throws(() => fs.renameSync(tmp, dest), { code: "EPERM" });
+    binary.place(tmp, dest);
+    assert.deepEqual(readdirSync(dir), ["idx.exe"]);
+  } finally {
+    running.kill();
+    await once(running, "exit");
+  }
+});
+
+test("the Windows unzip works when %TEMP% holds a quote", { skip: process.platform !== "win32" && "PowerShell Expand-Archive" }, () => {
+  // A zip laid out like a release asset: <name>/idx.exe.
+  const name = "idx-0.0.0-x86_64-pc-windows-msvc";
+  const src = mkdtempSync(join(tmpdir(), "ihsg-npm-"));
+  mkdirSync(join(src, name));
+  writeFileSync(join(src, name, "idx.exe"), "stand-in");
+  const zip = join(src, "asset.zip");
+  execFileSync("powershell", ["-NoProfile", "-Command", "Compress-Archive -Path $env:SRC -DestinationPath $env:ZIP"], {
+    env: { ...process.env, SRC: join(src, name), ZIP: zip },
+  });
+
+  const quoted = join(src, "O'Brien $x `y");
+  mkdirSync(quoted);
+  const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP };
+  process.env.TEMP = process.env.TMP = quoted;
+  try {
+    const out = join(src, "idx.exe.tmp");
+    binary.unzipExe(readFileSync(zip), name, out);
+    assert.equal(readFileSync(out, "utf8"), "stand-in");
+    assert.deepEqual(readdirSync(quoted), [], "the work folder is removed");
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 });
 
 test("a failed first-run download says why on stderr and leaves stdout empty", () => {

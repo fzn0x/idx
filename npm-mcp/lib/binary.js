@@ -151,25 +151,67 @@ async function download(log = () => {}) {
 
   const dest = path.join(writableDir(), EXE);
   const tmp = `${dest}.${process.pid}.tmp`;
-  if (ext === "tar.gz") {
-    fs.writeFileSync(tmp, untar(zlib.gunzipSync(archive), EXE), { mode: 0o755 });
-  } else {
-    // Windows: hand the zip to PowerShell rather than shipping a zip parser.
-    const zipPath = path.join(os.tmpdir(), asset);
-    const outDir = path.join(os.tmpdir(), `${name}-${process.pid}`);
-    fs.writeFileSync(zipPath, archive);
-    execFileSync("powershell", [
-      "-NoProfile",
-      "-Command",
-      `Expand-Archive -Force -LiteralPath '${zipPath}' -DestinationPath '${outDir}'`,
-    ]);
-    fs.copyFileSync(path.join(outDir, name, EXE), tmp);
-    fs.rmSync(outDir, { recursive: true, force: true });
-    fs.rmSync(zipPath, { force: true });
+  try {
+    if (ext === "tar.gz") {
+      fs.writeFileSync(tmp, untar(zlib.gunzipSync(archive), EXE), { mode: 0o755 });
+    } else {
+      unzipExe(archive, name, tmp);
+    }
+    place(tmp, dest);
+  } finally {
+    rmQuiet(tmp);
   }
-  fs.renameSync(tmp, dest); // atomic: a concurrent first run never sees a half-written file
   log(`idx: installed ${dest} (sha256 verified)`);
   return dest;
+}
+
+// Best-effort cleanup: Windows refuses to delete a file another process still
+// holds, and a leftover must not fail the install.
+function rmQuiet(p) {
+  try {
+    fs.rmSync(p, { recursive: true, force: true });
+  } catch {
+    // left behind
+  }
+}
+
+/**
+ * Windows: writes the release zip's idx.exe to `out`, handing the zip to
+ * PowerShell rather than shipping a zip parser. Each run unpacks in its own
+ * fresh temp folder, so concurrent first runs share no file, and the paths
+ * reach PowerShell through the environment instead of the command text, so a
+ * quote in %TEMP% (C:\Users\O'Brien\...) cannot break the command.
+ */
+function unzipExe(archive, name, out) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  try {
+    const zip = path.join(work, `${name}.zip`); // Expand-Archive wants .zip
+    const dir = path.join(work, "out");
+    fs.writeFileSync(zip, archive);
+    execFileSync(
+      "powershell",
+      ["-NoProfile", "-Command", "Expand-Archive -Force -LiteralPath $env:IHSG_NPM_ZIP -DestinationPath $env:IHSG_NPM_OUT"],
+      { env: { ...process.env, IHSG_NPM_ZIP: zip, IHSG_NPM_OUT: dir } },
+    );
+    fs.copyFileSync(path.join(dir, name, EXE), out);
+  } finally {
+    rmQuiet(work);
+  }
+}
+
+/**
+ * Moves the verified binary from `tmp` to `dest`. The rename is atomic, so a
+ * concurrent first run never sees a half-written file. Windows refuses it
+ * (EPERM) when a concurrent first run has already put `dest` in place and
+ * started it; that run verified the same release, so its binary stays.
+ */
+function place(tmp, dest) {
+  try {
+    fs.renameSync(tmp, dest);
+  } catch (e) {
+    if (!fs.existsSync(dest)) throw e;
+    rmQuiet(tmp);
+  }
 }
 
 /** Installed path, downloading first when needed. */
@@ -177,4 +219,4 @@ async function ensure(log) {
   return installed() || download(log);
 }
 
-module.exports = { installed, download, ensure, target, REPO, VERSION, BIN_DIR, EXE, DIRS };
+module.exports = { installed, download, ensure, target, place, unzipExe, REPO, VERSION, BIN_DIR, EXE, DIRS };
