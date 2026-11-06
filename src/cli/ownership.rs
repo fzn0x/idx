@@ -122,7 +122,8 @@ pub enum OwnershipCmd {
     /// Maintainer tool: write the snapshot of the local database (scripts/ownership_mirror.py publishes it).
     #[command(
         hide = true,
-        after_help = "Examples:\n  IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite idx ownership build-snapshot --out build/snap --sources build/ownership/out/index.json\n\nWrites ownership-v{V}-{newest}-{sha12}.sqlite.gz and snapshot-v{V}.json into --out and prints the\nmanifest. --sources (the mirror's index.json) records each release's idx.co.id URL; every\nimported_at becomes --generated-at (default: now). The database itself is not changed."
+        after_help = "Examples:\n  IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite idx ownership build-snapshot --out build/snap --sources build/ownership/out/index.json\n\nWrites ownership-v{V}-{newest}-{sha12}.sqlite.gz and snapshot-v{V}.json into --out and prints the\nmanifest. --sources (the mirror's index.json) records each release's idx.co.id URL; every\nimported_at becomes --generated-at (default: now). The database itself is not changed: one of another
+schema version is refused, not migrated."
     )]
     BuildSnapshot {
         /// Directory for the two files.

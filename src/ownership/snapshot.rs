@@ -1322,52 +1322,73 @@ pub async fn status(
 /// `snapshot-v{V}.json`) and returns its manifest. `sources` (the mirror's
 /// `index.json`) replaces each release's source path with its idx.co.id URL
 /// when the file's SHA-256 matches; every `imported_at` becomes
-/// `generated_at`. The database itself is not changed.
+/// `generated_at`. The database itself is not changed: one of another
+/// schema version is refused, never migrated.
 pub fn build(
     db_path: &Path,
     out: &Path,
     sources: Option<&MirrorIndex>,
     generated_at: DateTime<Utc>,
 ) -> Result<SnapshotManifest> {
-    if !db_path.exists() {
+    let local = inspect(db_path)?;
+    if !local.exists {
         return Err(IdxError::Usage(format!(
             "no ownership database at {}; import the monthly files first",
             db_path.display()
         )));
     }
-    {
-        let db = OwnershipDb::open(db_path)?;
-        let releases = db.releases()?;
-        if releases.is_empty() {
-            return Err(IdxError::Usage(format!(
-                "the ownership database {} has no releases; import the monthly files first",
-                db_path.display()
-            )));
-        }
-        let legacy: Vec<NaiveDate> = releases
-            .iter()
-            .filter(|r| r.positions.is_none())
-            .map(|r| r.as_of)
-            .collect();
-        if !legacy.is_empty() {
-            return Err(IdxError::Usage(format!(
-                "releases {} were imported by idx 0.8.1 or older (no register lines); re-import them with `idx ownership import --all --force` first",
-                join_dates(&legacy)
-            )));
-        }
+    if let Some(v) = local.user_version.filter(|v| *v != SCHEMA_VERSION) {
+        return Err(IdxError::Usage(format!(
+            "the ownership database {} has schema version {v} and this idx builds version {SCHEMA_VERSION}; build from a database this idx imported into (build-snapshot never migrates the file it reads)",
+            db_path.display()
+        )));
+    }
+    if local.months.is_empty() {
+        return Err(IdxError::Usage(format!(
+            "the ownership database {} has no releases; import the monthly files first",
+            db_path.display()
+        )));
+    }
+    let err = db_err(db_path);
+    // Read-write without CREATE and query-only, as in `inspect`.
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(&err)?;
+    conn.execute_batch("PRAGMA query_only = ON;")
+        .map_err(&err)?;
+    conn.busy_timeout(Duration::from_secs(10)).map_err(&err)?;
+    let legacy: Vec<NaiveDate> = {
+        let mut st = conn
+            .prepare("SELECT as_of FROM releases WHERE positions IS NULL ORDER BY as_of")
+            .map_err(&err)?;
+        let rows = st
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(&err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(&err)?;
+        rows.iter()
+            .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+            .collect()
+    };
+    if !legacy.is_empty() {
+        return Err(IdxError::Usage(format!(
+            "releases {} were imported by idx 0.8.1 or older (no register lines); re-import them with `idx ownership import --all --force` first",
+            join_dates(&legacy)
+        )));
     }
     std::fs::create_dir_all(out)?;
     let generated_at = generated_at.trunc_subsecs(0);
     let stamp = generated_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let tmp = TempFile(unique_tmp(out, "build"));
     let _ = std::fs::remove_file(&tmp.0);
-    let err = db_err(db_path);
-    {
-        let conn = Connection::open(db_path).map_err(&err)?;
-        conn.busy_timeout(Duration::from_secs(10)).map_err(&err)?;
-        conn.execute("VACUUM INTO ?1", [tmp.0.to_string_lossy()])
-            .map_err(&err)?;
-    }
+    // VACUUM INTO only reads this database (query_only refuses it anyway).
+    conn.execute_batch("PRAGMA query_only = OFF;")
+        .map_err(&err)?;
+    conn.execute("VACUUM INTO ?1", [tmp.0.to_string_lossy()])
+        .map_err(&err)?;
+    drop(conn);
     let terr = db_err(&tmp.0);
     let (tables, releases, content) = {
         let conn = Connection::open(&tmp.0).map_err(&terr)?;
@@ -2207,5 +2228,25 @@ mod tests {
             assert_eq!(e.exit_code(), 3, "{name}: {e}");
             std::fs::remove_file(&copy).unwrap();
         }
+    }
+
+    #[test]
+    fn build_never_migrates_the_database_it_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.sqlite");
+        Connection::open(&old)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE releases (id INTEGER PRIMARY KEY, as_of TEXT NOT NULL, sha256 TEXT NOT NULL);
+                 INSERT INTO releases (as_of, sha256) VALUES ('2026-07-31', 'ab');",
+            )
+            .unwrap();
+        let before = std::fs::read(&old).unwrap();
+        let out = dir.path().join("out");
+        let e = build(&old, &out, None, t0()).unwrap_err();
+        assert_eq!(e.exit_code(), 2, "{e}");
+        assert!(e.to_string().contains("schema version 0"), "{e}");
+        assert_eq!(std::fs::read(&old).unwrap(), before, "the file changed");
+        assert!(!out.exists());
     }
 }

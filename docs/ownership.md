@@ -253,9 +253,10 @@ IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite \
 ```
 
 `build-snapshot` is hidden from `--help`. It never changes the database it
-reads; `--sources` records each month's idx.co.id URL from the mirror's
-`index.json` (when the file's SHA-256 matches) and `--generated-at` sets the
-build time (default now), which also replaces every `imported_at`.
+reads: one of another schema version is refused, not migrated. `--sources`
+records each month's idx.co.id URL from the mirror's `index.json` (when the
+file's SHA-256 matches) and `--generated-at` sets the build time (default
+now), which also replaces every `imported_at`.
 
 ## Database
 
