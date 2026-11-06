@@ -10,8 +10,10 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
-`ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
-`candle`.
+`ownership-import`, `ownership-discover`, `ownership-search`,
+`ownership-cross-holders`, `ownership-concentration`, `ownership-graph`,
+`ownership-resolve-candidates`, `ownership-resolution`,
+`ownership-resolutions`, `watchlist`, `error`, `quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -339,6 +341,41 @@ rows keep `rows` (register lines) and add `positions`, `other_date_rows` and
 Notes about the months read (imported by an old idx, rows dated otherwise)
 come in the envelope's `warnings`. The versions stay `v1`: every change is an
 added field, and the values now match the documented "one entity's position".
+
+The analytics read the same positions of one release (`as_of`; percentages on
+the 0-100 scale, rounded to 4 decimals at the end):
+
+- `search` (`idx.ownership.search.v1`): `query`, `as_of`, `total_matches`,
+  `matches[]` with `entity_key` (pass it to `entity --exact` or `graph`),
+  `holder`, `matched` (`exact`, `spelling`, `prefix`, `contains`, `words`),
+  `spellings[]` (every spelling recorded, any month), `issuers` and
+  `total_pct` in `as_of` (0 when absent that month), `investor_type`,
+  `local_foreign` (largest position; `null` when absent) and `last_seen`.
+- `cross-holders` (`idx.ownership.cross-holders.v1`): the filters applied
+  (`min_issuers`, `investor_type`, `origin`), `total_matches` and `holders[]`
+  with `issuers`, `total_pct` (a breadth measure, not a share of anything),
+  `max_pct` and `positions[]` (`symbol`, `issuer_name`, `shares_total`, `pct`).
+- `concentration` (`idx.ownership.concentration.v1`): `sort` (`hhi`, `top1`,
+  `top3`), `ascending`, `total_matches`, `controller_reported` and `rows[]`
+  with `holders_listed`, `top_holder`, `top1_pct`, `top3_pct`, `listed_pct`,
+  `undisclosed_pct`, `hhi` (sum of the listed holders' squared stakes,
+  0-10,000) and `controller_pct` (`null` when the release has no controller
+  column).
+- `graph` (`idx.ownership.graph.v1`): `root` (`ticker:<SYMBOL>` or
+  `holder:<entity_key>`), `depth`, `min_pct`, `max_nodes`, `truncated`,
+  `issuers[]` and `holders[]` with their `hops`, then `links[]` (`from`, `to`,
+  `holder`, `symbol`, `shares_total`, `pct`, `hops`). `links` comes last, so
+  `-o csv` prints the links.
+- `resolve candidates` (`idx.ownership.resolve-candidates.v1`): `keep` and
+  `merge` (`entity_key`, `holder`, `issuers`, `last_seen`), `reasons`
+  (`renamed`, `similar_name`), `renamed[]` (`from`, `to`, `symbols`) and
+  `listed_together[]` (`as_of`, `symbol`).
+- `resolve merge|map|undo` (`idx.ownership.resolution.v1`): a list of
+  `action`, `dry_run`, `resolution` (`id`, `kind`, `subject`, `holder`,
+  `entity_key`, `combined[]`, `created_at`), `spellings_moved`,
+  `lines_moved`, `positions_moved`, `positions_combined` and `releases[]`.
+  `resolve list` (`idx.ownership.resolutions.v1`) lists the stored
+  `resolution` objects.
 
 ## `idx.watchlist.v1` (`watch add|rm|list|clear`)
 

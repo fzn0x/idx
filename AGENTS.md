@@ -58,8 +58,10 @@ src/
   ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
                      mirror fallback), ingest.rs (XLSX/PDF, text numbers, controller column), normalize.rs
                      (entity keys), db.rs (SQLite schema with `PRAGMA user_version` migrations, register lines
-                     and summed positions, queries); mod.rs query wrappers shared by cli/, mcp/ and the brief.
-                     Imported once, queried locally.
+                     and summed positions, queries; db/analytics.rs the analytics queries, db/resolve.rs the
+                     `resolutions` rules and the import's entity resolver), analytics.rs (pure: search,
+                     cross-holders, HHI concentration, graph walk and DOT, spelling candidates); mod.rs query
+                     wrappers shared by cli/, mcp/ and the brief. Imported once, queried locally.
   mcp/               rmcp server; one #[tool] per command, same JSON envelope as -o json;
                      schema.rs rewrites input schemas into the subset every harness accepts;
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
@@ -82,7 +84,8 @@ scripts/smoke.sh     hits live providers; run manually, never in CI's test job
 docs/                json-output.md, configuration.md, mcp.md, ownership.md
 web/                 Cloudflare Worker for ihsg.midoriresearch.com: landing page, browser terminal, D1 board;
                      src/analysis.js, src/extras.js and src/bandar.js are JS ports of src/analysis/* tested on
-                     the same fixtures; src/bandar-scan.js is the nightly scan behind the web bandar screen
+                     the same fixtures, src/ownership.js of src/ownership/analytics.rs; src/bandar-scan.js is
+                     the nightly scan behind the web bandar screen
 npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies the release
                      (postinstall when allowed, otherwise on first run)
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
@@ -92,7 +95,8 @@ scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: 
 CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, returns,
 fundamental, technical, brief, compare, screen, news, sentiment, actions, foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
-`ownership` (import, ticker, entity, changes, foreign, releases, discover, path),
+`ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
+releases, discover, path),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in
 realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 
