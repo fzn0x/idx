@@ -96,7 +96,12 @@ pub fn parse_listing(html: &str) -> Vec<DiscoveredFile> {
             continue;
         }
         let url = unescape_js(&html[start + 1..from + 12]);
-        if !url.contains("://") || out.iter().any(|f| f.as_of == as_of) {
+        // Web URLs only: the page is a remote input and must not point the
+        // download at a local file (`file://` is for URLs the user types).
+        let scheme = url.get(..8).unwrap_or_default().to_ascii_lowercase();
+        if !(scheme == "https://" || scheme.starts_with("http://"))
+            || out.iter().any(|f| f.as_of == as_of)
+        {
             continue;
         }
         let title =
@@ -407,6 +412,22 @@ mod tests {
         assert_eq!(only[0].title, "Kepemilikan Efek 30 Oktober 2026");
         assert!(parse_listing("<html>nothing</html>").is_empty());
         assert!(parse_listing("BalanceposEfek2026.zip \"BalanceposEfek99999999.zip").is_empty());
+        // The page never chooses a local path or another scheme.
+        for href in [
+            "file:///tmp/BalanceposEfek20261030.zip",
+            "FILE://C:/Users/x/BalanceposEfek20261030.zip",
+            "ftp://www.ksei.co.id/BalanceposEfek20261030.zip",
+            "/storage/Download/BalanceposEfek20261030.zip",
+        ] {
+            assert!(
+                parse_listing(&format!("<a href=\"{href}\">")).is_empty(),
+                "{href}"
+            );
+        }
+        let plain = parse_listing(
+            "<a href=\"http://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip\">",
+        );
+        assert_eq!(plain.len(), 1);
     }
 
     #[tokio::test]

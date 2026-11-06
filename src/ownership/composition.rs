@@ -1269,15 +1269,40 @@ mod tests {
         assert_eq!(be.call_count(), 0);
     }
 
+    /// Answers one request on 127.0.0.1 with `body`, standing in for
+    /// ksei.co.id's file host without leaving the machine. Returns the
+    /// archive's URL.
+    fn serve_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/storage/Download/BalanceposEfek20261030.zip",
+            listener.local_addr().unwrap()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/zip\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(body);
+        });
+        (url, handle)
+    }
+
     #[tokio::test]
     async fn the_first_call_imports_the_newest_listed_month() {
         let dir = tempfile::tempdir().unwrap();
-        let zip_path = dir.path().join("BalanceposEfek20261030.zip");
-        std::fs::write(&zip_path, OCT_ZIP).unwrap();
-        let url = format!(
-            "file://{}",
-            zip_path.display().to_string().replace('\\', "/")
-        );
+        let (url, server) = serve_once(OCT_ZIP);
         let page = format!(
             "<p class=\"data-item-title\">Kepemilikan Efek 30 Oktober 2026</p> <a href=\"{url}\">Unduh</a> last_page:1"
         );
@@ -1299,6 +1324,7 @@ mod tests {
         );
         assert_eq!(s.data.scripless_pct, Some(42.5501));
         assert_eq!(s.data.source, url);
+        server.join().unwrap();
         // Later calls read the database; November's archive cannot exist yet.
         let s = report(&mut db, &fetcher, "TLKM", None, t, d(2026, 11, 6))
             .await
