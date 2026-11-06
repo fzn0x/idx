@@ -102,6 +102,9 @@ and average-volume fields to be `null`.
   warning says so. `--period max` with `1d` or `1wk` asks Yahoo for the whole
   history (`period1=0`), so it is daily or weekly (about 9,200 daily bars for
   `^JKSE`, from 1990-04-06), not the monthly bars `range=max` returns.
+  The web terminal caches a history in one D1 row (2 MB): one that would not
+  fit (all daily bars of an index older than IHSG) keeps its most recent
+  candles, `summary` still covers them all, and a warning says so.
 - `adj_close` is present when the source supplies split/dividend adjusted
   closes.
 - `summary` is `null` when there are no candles.

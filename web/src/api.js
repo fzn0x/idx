@@ -190,20 +190,41 @@ export async function quote(env, symbolsRaw) {
 const PERIODS = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","ytd","max"];
 const INTERVALS = ["5m","15m","30m","1h","1d","1wk","1mo"];
 
+/** A D1 row holds at most 2,000,000 bytes; the margin covers the key, the other columns and a non-ASCII name. */
+const CACHE_ROW_BUDGET = 1_900_000;
+/** More than any candle's JSON takes (91 bytes of keys and time, six numbers), so shorter histories skip the measuring. */
+const CANDLE_BYTES_MAX = 256;
+
+/** Keeps the most recent candles of a parsed history that fit one D1 cache row (all daily bars of an old
+ * index since 1970 do not); its summary still covers every candle Yahoo returned. */
+export function fitCacheRow(h, budget = CACHE_ROW_BUDGET) {
+  if (h.candles.length * CANDLE_BYTES_MAX < budget) return h;
+  let size = JSON.stringify(h).length, keep = h.candles.length, out = h;
+  while (size > budget && keep > 0) {
+    keep = Math.floor((keep * budget * 0.98) / size);
+    out = { ...h, candles: h.candles.slice(-keep) };
+    size = JSON.stringify(out).length;
+  }
+  return out;
+}
+
 export async function history(env, symbolRaw, period = "1y", interval = "1d", limit = 0) {
   const symbol = parseSymbol(symbolRaw);
   if (!PERIODS.includes(period)) throw usage(`invalid period "${period}"; use ${PERIODS.join(",")}`);
   if (!INTERVALS.includes(interval)) throw usage(`invalid interval "${interval}"; use ${INTERVALS.join(",")}`);
   const intraday = ["5m","15m","30m","1h"].includes(interval);
-  const r = await cached(env, `history:${symbol}:${period}:${interval}`, intraday ? 120 : 3600, async () => {
+  // Keyed on the request, so a row written for an older URL (0.8.1 asked range=max and got monthly bars
+  // labelled 1d) is never served, not even as a stale copy.
+  const r = await cached(env, `history:${y.chartUrl(symbol, period, interval)}`, intraday ? 120 : 3600, async () => {
     const res = await y.fetchChart(symbol, period, interval);
     if (res.notFound) return { notFound: res.message };
-    return y.parseChart(res.body, period, interval);
+    return fitCacheRow(y.parseChart(res.body, period, interval));
   });
   if (r.value.notFound) throw notFound(`${symbol}: ${r.value.notFound}`);
   const data = { ...r.value };
   const warnings = r.warning ? [r.warning] : [];
   if (data.interval !== interval) warnings.push(`Yahoo returned ${data.interval} bars for ${period}/${interval}; the candles are labelled ${data.interval}`);
+  if (data.summary && data.summary.candles > data.candles.length) warnings.push(`the web terminal keeps the last ${data.candles.length} of ${data.summary.candles} candles (one cache row); summary covers all of them; the CLI returns every candle`);
   if (limit > 0 && data.candles.length > limit) {
     data.candles = data.candles.slice(-limit);
     warnings.push(`candles truncated to the last ${limit}; summary covers the full period`);
