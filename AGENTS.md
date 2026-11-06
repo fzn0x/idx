@@ -43,7 +43,8 @@ src/
                      the rotating-token session store (file 0600 + env seed, POST /login/refresh), login.rs
                      captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL),
-                     sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),
+                     sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility, beta
+                     against a benchmark on shared dates), lens.rs (growth, valuation and risk lenses),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,
                      phase, screen filters and presets); no network
   universe.rs        bundled data/universe.csv (IDX issuers) + ownership-db issuers; IDX_UNIVERSE override
@@ -54,7 +55,9 @@ src/
   service.rs         provider call + analysis, shared by cli/ and mcp/ (fundamentals, technical, compare,
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
                      bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
-                     members, indices, calendar, corporate actions, foreign flow, market brokers
+                     members, indices, calendar, corporate actions, foreign flow, market brokers;
+                     service/lenses.rs: growth, valuation and risk lenses (fundamentals, statements,
+                     a year of candles for the stock and IHSG)
   ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
                      mirror fallback), ingest.rs (XLSX/PDF), normalize.rs (entity keys), db.rs (SQLite schema
                      + queries). Imported once, queried locally.
@@ -63,7 +66,7 @@ src/
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
                      per-agent registration recipes behind `idx mcp setup` (keep docs/mcp.md in step)
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
-                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs)
+                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, lenses.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
                      format.rs (numbers); cli/mod.rs emit() picks the format for every handler
   http/              Fetcher: cache in front of a Backend (reqwest live / FixtureBackend tests)
@@ -88,7 +91,8 @@ scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: 
 ```
 
 CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, returns,
-fundamental, technical, brief, compare, screen, news, sentiment, actions, foreign, list),
+fundamental, growth, valuation, risk, technical, brief, compare, screen, news, sentiment, actions,
+foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
 `ownership` (import, ticker, entity, changes, foreign, releases, discover, path),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in

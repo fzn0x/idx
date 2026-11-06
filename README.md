@@ -116,6 +116,9 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stocks returns <SYMBOLS> [--benchmark ^JKSE]` | 1w/1m/3m/6m/YTD/1y/3y/5y returns, CAGR, volatility, max drawdown, best/worst day, 52-week position, and excess over IHSG |
 | `stocks brief <SYMBOL>` | One page: quote, verdict, signal, returns vs IHSG, dividends, top holders, headlines, with plain-language key points |
 | `stocks fundamental <SYMBOL>` | P/E, P/B, PEG, EV/EBITDA, ROE, ROA, margins, leverage, growth, dividend, analyst targets, plus a plain-language verdict that lists every rule it applied (negative equity counts against a company; multiples that mix USD statements with an IDR price are marked and not scored) |
+| `stocks growth <SYMBOL>` | Growth lens: latest-quarter revenue and earnings growth, forward EPS against trailing, and revenue and net income across the annual statements (CAGR, how often revenue grew, a turn from profit to loss); every rule with its points, every skipped rule with the reason |
+| `stocks valuation <SYMBOL>` | Valuation lens: P/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and the analyst target (3 or more analysts), each scored; multiples that mix USD statements with an IDR price are shown, not scored |
+| `stocks risk <SYMBOL>` | Risk lens: negative equity, debt/equity, current ratio, losses, and beta, volatility and largest fall against IHSG over a year of daily closes (computed by idx, not the source's beta). `stocks fundamental <SYMBOL> --lens growth\|valuation\|risk` gives the same three readings |
 | `stocks technical <SYMBOL> [--period 1y]` | RSI, MACD, SMA/EMA 20/50/200, Bollinger, ATR, volume, support/resistance, trend, buy/sell/neutral signal with reasons |
 | `stocks compare <SYMBOLS>` | Side-by-side fundamentals for two or more tickers |
 | `stocks screen -f "pe<15,roe>15,sector=financial"` | Screener over ~950 IDX tickers: one batch quote for valuation/size/dividend keys, per-company fundamentals for the rest (capped, largest first) |
@@ -143,7 +146,7 @@ idx completions powershell | Out-String | Invoke-Expression
 | `watch [add\|rm\|list\|clear\|returns]` | Plain-text watchlist next to the config; `idx watch` quotes it |
 | `ownership releases\|discover\|path` | Imported months, files published on idx.co.id, database path |
 | `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 36 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
-| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `actions`, `foreign`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
+| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `actions`, `foreign`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
 | `config init\|set\|get\|path` | Config file management |
 | `cache stats\|clear\|path` | Response cache management |
 | `completions <shell>` | bash, zsh, fish, powershell, elvish |
@@ -223,6 +226,8 @@ config file locations are in [docs/mcp.md](docs/mcp.md).
 The server lists 36 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
 and one-paragraph descriptions. `idx_brief` is the one-call starting point;
+`idx_fundamental` takes an optional `lens` (`growth`, `valuation` or `risk`)
+for the focused readings of `stocks growth|valuation|risk`;
 each tool returns the same envelope as `-o json`, so an agent that learned the
 CLI already knows the tools. Failures come back as tool errors carrying
 `{error: {code, message}, exit_code}`.
@@ -288,7 +293,7 @@ browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `returns BBCA BBRI`,
 `screen pe<10,div>5,mcap>5T --sort div`, `news ASII`, `ownership ticker BBCA`,
 `ownership foreign`, `bandar BBCA --daily`, `bandar screen --preset
 big-accumulation`, `bandar broker YP`, `actions BBCA`, `holidays --upcoming`,
-`list --search bank`, `members`, and `tools` (all 33 MCP tools as buttons). The idx.co.id
+`list --search bank`, `members`, `risk TLKM` (also `growth` and `valuation`), and `tools` (all 36 MCP tools as buttons). The idx.co.id
 commands (foreign flow, top brokers, the calendar, indices) are CLI and MCP
 only, because idx.co.id refuses requests from Cloudflare Workers. `quote` with one symbol also draws a price chart (1D, 5D,
 1M, 6M, YTD, 1Y, 5Y) with volume, the previous close and a crosshair readout.

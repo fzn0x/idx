@@ -69,6 +69,19 @@ grep -q 'is rich (over 4)' "$TMP/fu.json" && fail "ITMG P/B scored across curren
 grep -q '999\.9999' "$TMP/fn.json" && fail "MSN placeholder leaked into GIAA" || pass "GIAA has no MSN placeholder"
 grep -q 'conservative balance sheet' "$TMP/fn.json" && fail "GIAA negative equity read as conservative" || pass "GIAA not conservative"
 
+echo "lenses"
+"$IDX" stocks risk TLKM >"$TMP/lr.txt" || fail "risk table"
+expect "$TMP/lr.txt" "PRICE VS ^JKSE" "risk table compares with IHSG"
+"$IDX" -o json stocks risk TLKM >"$TMP/lr.json" || fail "risk json"
+expect "$TMP/lr.json" '"schema": "idx.risk.v1"' "risk json schema"
+expect "$TMP/lr.json" '"rule": "beta"' "risk has a beta against IHSG"
+"$IDX" -o json stocks valuation ITMG >"$TMP/lv.json" || fail "valuation json"
+expect "$TMP/lv.json" 'not scored: statements in USD, price in IDR' "ITMG USD multiples not scored"
+"$IDX" -o json stocks growth BBCA >"$TMP/lg.json" || fail "growth json"
+expect "$TMP/lg.json" '"rule": "revenue_cagr"' "growth reads the fiscal years"
+"$IDX" -o json stocks fundamental GIAA --lens risk >"$TMP/ln.json" || fail "risk lens (negative equity)"
+expect "$TMP/ln.json" '"rule": "negative_equity"' "GIAA negative equity adds risk"
+
 "$IDX" -o json stocks profile BBCA >"$TMP/pr.json" || fail "profile json"
 expect "$TMP/pr.json" '"sector": "Financial Services"' "profile sector"
 

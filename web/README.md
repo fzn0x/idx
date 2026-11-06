@@ -31,9 +31,11 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   1D, a crosshair readout (pointer, touch or arrow keys). Its layout
   functions are tested in `test/chart.test.mjs` on the recorded Yahoo charts.
 - `src/yahoo.js` the Yahoo endpoints and parsers; `src/analysis.js` ports of
-  the Rust indicators, verdict, screener DSL and sentiment lexicon;
-  `src/extras.js` ports of returns, dividends, news ordering and the
-  ownership changes summary.
+  the Rust indicators, verdict, growth/valuation/risk lenses, screener DSL and
+  sentiment lexicon; `src/extras.js` ports of returns (with beta against a
+  benchmark), dividends, news ordering and the ownership changes summary.
+  `/api/fundamental?lens=growth|valuation|risk` returns a lens, as MCP
+  `idx_fundamental` does with `lens`.
 - Endpoints under `/api`: `market`, `quote`, `history`, `profile`,
   `fundamental`, `earnings`, `financials`, `dividends`, `returns`, `technical`,
   `brief`, `compare`, `screen`, `news`, `sentiment`, `broker`, `bandar`,
@@ -41,7 +43,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `instruments`, `members`, `ownership/ticker`,
   `ownership/entity`, `ownership/changes`, `ownership/foreign`,
   `ownership/releases`, `universe`.
-- `public/tools.js` the 33 MCP tools with their CLI and web commands: the
+- `public/tools.js` the 36 MCP tools with their CLI and web commands: the
   terminal's `tools` command and help buttons and the landing page's Daftar
   Perintah table use it; `test/tools.test.mjs` checks it against docs/mcp.md.
   `bandar/broker` reads the nightly scan; `instruments` and `members` serve the

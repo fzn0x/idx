@@ -6,8 +6,9 @@ JSON too. Nothing else is ever written to stdout in JSON mode, so
 `idx -o json ... | jq` is safe.
 
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
-`profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`,
-`returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
+`profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`,
+`financials`, `earnings`, `dividends`, `returns`, `market`, `brief`,
+`technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
 `ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
@@ -390,6 +391,9 @@ already percentages (`21.8` = 21.8 %). Ratios are plain multiples
   as reported, never converted; the verdict does not score P/B then, and the
   tables mark those multiples with `*`. P/E, EPS and the dividend yield are
   consistent.
+- `beta` is the source's own figure. Yahoo's does not track IHSG for IDX
+  shares (BBCA 0.066 on 2026-11-06, against 0.95 from a year of daily closes
+  against `^JKSE`); `stocks risk` computes beta against IHSG itself.
 - `verdict.label` is `undervalued` | `fair` | `overvalued` |
   `insufficient_data` (fewer than three rule inputs). Every rule that fired is
   in `reasons`. It is a heuristic, not advice.
@@ -400,6 +404,118 @@ already percentages (`21.8` = 21.8 %). Ratios are plain multiples
   `inputs_available`. An ROE above 15 % next to a net loss (negative net
   margin or EPS) is not rewarded either. A P/B that mixes currencies is
   neither scored nor counted.
+
+## Lenses: `idx.growth.v1`, `idx.valuation.v1`, `idx.risk.v1` (`stocks growth|valuation|risk`)
+
+Three focused readings next to the blended verdict, also returned by
+`stocks fundamental SYMBOL --lens growth|valuation|risk` and by MCP
+`idx_fundamental` with `lens`. Each `data` carries the inputs it read (the
+source's values as reported, `null` when absent), the figures idx computed
+from them, a `reading` and `sources`:
+
+```json
+"reading": {
+  "label": "moderate", "score": 2, "inputs_available": 6,
+  "rules": [
+    { "rule": "liquidity", "points": 1, "reason": "current ratio 0.79 is under 1" },
+    { "rule": "volatility", "points": 1, "reason": "volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)" }
+  ],
+  "notes": ["leverage and liquidity: not scored for a financial company"]
+}
+```
+
+- `rules[]` lists every rule that ran, with its `points` (0 still ran and
+  counts) and a `reason` carrying the figure and the threshold; `score` is
+  their sum and `inputs_available` their number. `notes[]` names every rule
+  that could not run and why (not reported, a financial company, statements
+  in another currency, negative equity, fewer than 3 analysts, fewer than
+  three fiscal years, benchmark unavailable). Fewer than three rules give
+  `insufficient_data`.
+- Rule ids are stable; the thresholds are heuristics, not advice. The
+  valuation lens can disagree with the verdict of `stocks fundamental`,
+  which also weighs quality and growth.
+- A lens that needs several inputs fetches them concurrently. A missing one
+  is named in `warnings` and the reading runs with fewer rules; the call
+  fails only when the essential inputs all fail (growth: fundamentals and
+  statements; risk: fundamentals and the stock's candles), with `not_found`
+  when any side says the ticker is unknown.
+
+### `idx.valuation.v1`: points favour cheapness
+
+`symbol`, `name`, `currency`, `financial_currency`, `financial_company`,
+`negative_equity`, `price`, `pe_trailing`, `pe_forward`, `peg`,
+`price_to_book`, `price_to_sales`, `ev_to_ebitda`, `ev_to_revenue` (shown,
+not scored), `dividend_yield_pct`, `payout_ratio_pct`, `target_mean`,
+`analysts`, `target_upside_pct` (computed: target over price, minus one),
+`reading`, `sources`. Label: `cheap` (score 3 or more), `expensive` (-3 or
+less), `fair`, `insufficient_data`.
+
+| rule | points |
+| --- | --- |
+| `pe_trailing` | under 10: +2; 10 to 15: +1; 15 to 25: 0; over 25: -1; over 35: -2; not positive: 0 |
+| `pe_forward` | only without a trailing P/E, above 0: under 10: +1; over 25: -1; else 0 |
+| `peg` | above 0: under 1: +1; over 2: -1; else 0 |
+| `price_to_book` | under 1: +1; over 4: -1; else 0. Not scored with negative equity or mixed currencies |
+| `price_to_sales` | under 1: +1; over 5: -1; else 0. Not for a financial company or mixed currencies |
+| `ev_to_ebitda` | above 0: under 6: +1; over 15: -1; else 0. Not for a financial company or mixed currencies |
+| `dividend_yield` | 4 % or more: +1, but 0 when the payout exceeds 100 %; under 4 %: 0 |
+| `analyst_target` | 3 or more analysts: upside over +20 %: +1; under -10 %: -1; else 0 |
+
+### `idx.growth.v1`: points favour growth
+
+`symbol`, `name`, `statements_currency`, `most_recent_quarter`,
+`revenue_growth_pct` and `earnings_growth_pct` (latest quarter against the
+same quarter a year earlier, as reported), `revenue_cagr_5y_pct` and
+`eps_growth_3y_pct` (MSN's, when it contributed), `eps_ttm`, `eps_forward`,
+`eps_forward_growth_pct` (computed, both EPS above zero), `annual[]` (one per
+fiscal year, oldest first: `end_date`, `revenue`, `net_income`,
+`revenue_change_pct`, `net_income_change_pct`, the changes computed against
+the year before), `revenue_cagr_pct` and `net_income_cagr_pct` (computed from
+the oldest to the newest fiscal year with a value, at least three such years,
+both ends above zero), `reading`, `sources`. Label: `growing` (score 2 or
+more), `shrinking` (-2 or less), `mixed` (points both ways), `stable`,
+`insufficient_data`.
+
+| rule | points |
+| --- | --- |
+| `revenue_growth`, `earnings_growth` | latest quarter over +10 %: +1; below 0 %: -1; else 0 (a figure beyond ±100 % is marked "from a small or negative base") |
+| `eps_forward_growth` | forward EPS against trailing over +10 %: +1; below -10 %: -1; else 0 |
+| `revenue_cagr` | over +10 %: +1; below 0 %: -1; else 0. From three or more fiscal years, else MSN's 5-year figure |
+| `revenue_consistency` | revenue grew every year: +1; in fewer than half the years: -1; else 0 (three or more fiscal years) |
+| `net_income_cagr` | over +10 %: +1; below 0 %: -1; else 0. A profit turning into a loss: -1; a loss turning into a profit: +1. Else MSN's 3-year EPS figure |
+
+### `idx.risk.v1`: points add risk
+
+`symbol`, `name`, `currency`, `financial_company`, `negative_equity`,
+`debt_to_equity`, `current_ratio`, `quick_ratio`, `net_margin_pct`, `eps_ttm`,
+`price` (`null` without daily candles for the stock), `reading`, `sources`.
+`price` is computed by idx from a year of daily closes on the dates the stock
+and IHSG both traded (Yahoo's `^JKSE` bar often lags the shares by a session):
+`benchmark` (`^JKSE`), `from`, `to`, `observations` (matched daily returns),
+`beta` and `correlation` (from simple daily returns, 3 dp, `null` under 120
+observations), `volatility_pct` and `benchmark_volatility_pct` (annualised
+standard deviation of daily log returns), `max_drawdown` (`pct`,
+`peak_date`, `trough_date`, `recovered`; `null` when the price never fell) and
+`benchmark_max_drawdown_pct`. Without IHSG the price rules become notes and
+`price` carries the stock's own volatility and drawdown over its own dates.
+Label: `high` (score 3 or more), `low` (-2 or less), `moderate`,
+`insufficient_data`.
+
+| rule | points |
+| --- | --- |
+| `negative_equity` | +2 (any sector); the leverage rule is then skipped |
+| `leverage` | debt/equity over 2x: +1; under 0.5x: -1; else 0. Not for a financial company |
+| `liquidity` | current ratio under 1: +1; 1.5 or more: -1; else 0. Not for a financial company |
+| `losses` | negative net margin or EPS over the trailing twelve months: +1; else 0 |
+| `beta` | against IHSG, 120 or more sessions: over 1.3: +1; under 0.7: -1; else 0 |
+| `volatility` | the stock's over IHSG's: over 1.5x: +1; under 0.8x: -1; else 0 |
+| `drawdown` | the stock's largest fall minus IHSG's: 15 points or more deeper: +1; 15 points or more shallower: -1; else 0 |
+
+Price risk is relative to IHSG so that a market-wide fall (IHSG fell 46 %
+peak to trough in the year to 2026-11-04) does not make every stock look
+risky. Thin trading biases a daily beta toward 0; `observations` and
+`correlation` show how much it rests on.
+
 
 ## `idx.compare.v1` (`stocks compare`)
 
