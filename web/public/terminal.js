@@ -1161,8 +1161,10 @@ function pick(c) {
 }
 // The rail is narrow: each command gets a label of a few words here; help prints the full text.
 const RAIL = {
-  quote: "quotes and chart", history: "OHLCV candles", profile: "company profile", financials: "statements",
-  earnings: "EPS vs estimates", fundamental: "ratios, verdict", technical: "indicators, signal", compare: "side by side",
+  quote: "quotes and chart", history: "OHLCV candles", intraday: "minute bars", profile: "company profile", financials: "statements",
+  earnings: "EPS vs estimates", fundamental: "ratios, verdict", growth: "growth lens", valuation: "valuation lens",
+  risk: "risk vs IHSG", technical: "indicators, signal", compare: "side by side", insights: "MSN insights",
+  foreign: "foreign flow", astro: "IHSG astrology",
   screen: "filter the market", news: "headlines", dividends: "payments, yield", returns: "returns vs IHSG",
   brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", bandar: "bandarmology",
   actions: "corporate actions", market: "IHSG and movers", holidays: "trading holidays", list: "listed stocks",
