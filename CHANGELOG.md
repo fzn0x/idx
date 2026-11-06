@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.8.2] - 2026-11-06
+## [0.8.2] - 2026-11-07
 
 ### Fixed
 
@@ -20,6 +20,9 @@ All notable changes to this project are documented here. The format follows
   migration `0004_ownership_accounts.sql` (#77).
 - Stockbit order book: foreign buy/sell/net are left empty, with a warning,
   while Stockbit marks them as not current (`has_foreign_bs`) (#67).
+- Tables print Yahoo's market state in words (`open`, `pre-market`,
+  `after hours`, `closed`) instead of codes such as `POSTPOST`; JSON keeps
+  the code (#89).
 
 ### Added
 
@@ -67,8 +70,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- Site redesign ("Papan Stasiun"): a live market monitor home page, the
-  terminal in the same shell, and a GitHub star button (#68).
+- Site redesign ("Halaman Bursa"): a bilingual market page, Bahasa
+  Indonesia at `/` and English at `/en/`, with a stock search on the home
+  page, the terminal at `/terminal`, plain page titles, search metadata
+  (canonical and hreflang links, structured data, a sitemap) and a GitHub
+  star button; the theme follows the device (#68, #89).
+- A new idx mark and README logo in Material 3 Expressive style, with the
+  wordmark IDX (#88, #89).
 - The MCP server lists 47 tools, 36 in 0.8.1 (#84, #83, #82, #69, #76, #75,
   #85, #80).
 - Minimum Rust version 1.89 (#66).
