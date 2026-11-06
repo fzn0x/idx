@@ -48,6 +48,7 @@ Examples:
   idx stocks actions BBCA                  # dividends, splits, rights, RUPS
   idx market foreign                       # top foreign net buying and selling
   idx market calendar --type dividend      # cum, ex and payment dates ahead
+  idx market astro --backtest              # lunar phase, Mercury, weton vs IHSG returns
   idx ownership import --latest            # KSEI >1% holders into local SQLite
   idx ownership ticker BBCA                # who holds more than 1%
   idx mcp                                  # MCP server over stdio for agents
@@ -126,7 +127,7 @@ pub enum Command {
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 
-    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members.
+    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members, astro.
     #[command(subcommand)]
     Market(market::MarketCmd),
 
@@ -179,7 +180,7 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
+        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | astro | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
         name: Option<String>,
     },
 

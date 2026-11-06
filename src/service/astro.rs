@@ -1,0 +1,122 @@
+//! `market astro`: the sky for a date (computed here, no network) and, when
+//! asked, the backtest over IHSG's daily history from the provider. Shared by
+//! the CLI and the MCP server like the rest of `service`.
+
+use chrono::NaiveDate;
+
+use crate::astro;
+use crate::error::Result;
+use crate::model::{Astro, AstroPeriod, Interval, NatalChoice, Symbol};
+use crate::providers::{Provider, Sourced};
+
+/// Provider name for data computed on this machine.
+pub const COMPUTED: &str = "computed";
+/// Default number of days of upcoming events.
+pub const ASTRO_DEFAULT_DAYS: u32 = 30;
+
+#[derive(Debug, Clone)]
+pub struct AstroQuery {
+    pub date: NaiveDate,
+    pub days: u32,
+    pub natal: NatalChoice,
+    /// Look-back of the returns backtest; `None` skips it (and the network).
+    pub backtest: Option<AstroPeriod>,
+}
+
+/// The sky, weton, shio and natal transits for `q.date`; with a backtest
+/// period, also IHSG's daily returns by factor. Without the backtest the
+/// envelope's provider is `computed`; with it, the history's provenance.
+pub async fn astro(p: &dyn Provider, q: &AstroQuery) -> Result<Sourced<Astro>> {
+    let (mut sky, warnings) = astro::sky(q.date, q.days, q.natal)?;
+    let mut s = match q.backtest {
+        None => Sourced::fresh(sky, COMPUTED),
+        Some(period) => {
+            let symbol = Symbol::parse("^JKSE")?;
+            let mut history = p
+                .history(&symbol, period.history_period(), Interval::Day1)
+                .await?;
+            if let Some(day) =
+                crate::analysis::astro::drop_unfinished(&mut history.data, chrono::Utc::now())
+            {
+                history.warnings.push(format!(
+                    "the backtest leaves out {day}, a session that has not closed yet"
+                ));
+            }
+            sky.backtest = Some(crate::analysis::astro::backtest(&history.data, period)?);
+            history.map(|_| sky)
+        }
+    };
+    s.warnings.extend(warnings);
+    Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::IdxError;
+    use crate::model::{History, Period, Quote};
+    use async_trait::async_trait;
+
+    struct Recorded;
+
+    #[async_trait]
+    impl Provider for Recorded {
+        fn name(&self) -> &'static str {
+            "yahoo"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            unreachable!("astro asks for history only")
+        }
+        async fn history(&self, s: &Symbol, p: Period, i: Interval) -> Result<Sourced<History>> {
+            assert_eq!((s.as_str(), p, i), ("^JKSE", Period::Y2, Interval::Day1));
+            let body = include_str!("../../tests/fixtures/yahoo/chart_jkse_2y_1d.json");
+            let mut out =
+                Sourced::fresh(crate::providers::yahoo::parse_chart(body, p, i)?, "yahoo");
+            out.cached = true;
+            Ok(out)
+        }
+    }
+
+    struct Offline;
+
+    #[async_trait]
+    impl Provider for Offline {
+        fn name(&self) -> &'static str {
+            "offline"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            unreachable!("astro asks for history only")
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            Err(IdxError::OfflineMiss("nothing cached".into()))
+        }
+    }
+
+    fn q(backtest: Option<AstroPeriod>) -> AstroQuery {
+        AstroQuery {
+            date: "2026-11-06".parse().unwrap(),
+            days: 7,
+            natal: NatalChoice::Launch,
+            backtest,
+        }
+    }
+
+    #[tokio::test]
+    async fn sky_alone_is_computed_and_never_calls_the_provider() {
+        let s = astro(&Offline, &q(None)).await.unwrap();
+        assert_eq!((s.provider, s.cached), (COMPUTED, false));
+        assert!(s.data.backtest.is_none());
+        assert_eq!(s.data.bodies.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn backtest_carries_the_history_provenance() {
+        let s = astro(&Recorded, &q(Some(AstroPeriod::Y2))).await.unwrap();
+        assert_eq!((s.provider, s.cached), ("yahoo", true));
+        assert_eq!(s.data.backtest.as_ref().unwrap().returns, 473);
+        let e = astro(&Offline, &q(Some(AstroPeriod::Y2)))
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 5);
+    }
+}

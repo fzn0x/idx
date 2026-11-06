@@ -26,7 +26,9 @@ use crate::providers::news as newsfeed;
 use crate::providers::{Provider, Sourced};
 use crate::universe::Issuer;
 
+mod astro;
 mod exchange;
+pub use astro::*;
 pub use exchange::*;
 
 /// Ratios plus the rule-based verdict.

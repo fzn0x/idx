@@ -1173,3 +1173,156 @@ fn max_daily_history_is_daily() {
         .unwrap()
         .starts_with("1990-04-06"));
 }
+
+#[test]
+fn market_astro_is_computed_offline() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["market", "astro", "--date", "2026-11-06"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "IHSG astro · Jumat Pahing 2026-11-06",
+        ))
+        .stdout(predicate::str::contains("waning crescent"))
+        .stdout(predicate::str::contains("Mercury: retrograde since"))
+        .stdout(predicate::str::contains("not a forecast"));
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "market", "astro", "--date", "2026-11-06"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.astro.v1");
+    assert_eq!(v["provider"], "computed");
+    assert_eq!(v["cached"], false);
+    assert_eq!(v["data"]["at"], "2026-11-06T16:00:00+07:00");
+    assert_eq!(v["data"]["bodies"].as_array().unwrap().len(), 10);
+    assert_eq!(v["data"]["bodies"][0]["body"], "sun");
+    assert_eq!(v["data"]["bodies"][0]["sign"], "scorpio");
+    assert_eq!(v["data"]["moon"]["phase"], "waning_crescent");
+    assert_eq!(v["data"]["weton"]["neptu"], 15);
+    assert_eq!(v["data"]["shio"]["animal"], "horse");
+    assert_eq!(v["data"]["natal"]["chart"], "launch");
+    assert_eq!(v["data"]["natal"]["date"], "1983-04-01");
+    assert!(v["data"]["backtest"].is_null());
+    assert!(v["data"]["disclaimer"]
+        .as_str()
+        .unwrap()
+        .contains("not a forecast"));
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "market", "astro", "--date", "2026-11-06"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        csv.starts_with("body,longitude,sign,degree,speed,retrograde\n"),
+        "{csv}"
+    );
+    assert_eq!(csv.lines().count(), 11);
+
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "json",
+            "market",
+            "astro",
+            "--date",
+            "2026-11-06",
+            "--natal",
+            "base",
+            "--days",
+            "7",
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["natal"]["chart"], "base");
+    assert_eq!(v["data"]["natal"]["date"], "1982-08-10");
+    assert_eq!(v["data"]["upcoming"]["to"], "2026-11-13T00:00:00+07:00");
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "market", "astro", "--natal", "none"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["data"]["natal"].is_null());
+
+    for args in [
+        vec!["market", "astro", "--period", "2y"],
+        vec!["market", "astro", "--date", "1700-01-01"],
+        vec!["market", "astro", "--date", "2051-01-01"],
+        vec!["market", "astro", "--days", "0"],
+        vec!["market", "astro", "--natal", "birth"],
+        vec!["market", "astro", "--backtest", "--period", "6mo"],
+    ] {
+        idx(&sb.cache, &sb.config).args(&args).assert().code(2);
+    }
+    // The backtest needs ^JKSE history; with nothing cached offline it is exit 5.
+    idx(&sb.cache, &sb.config)
+        .args(["market", "astro", "--backtest"])
+        .assert()
+        .code(5);
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "astro"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("$schema"))
+        .stdout(predicate::str::contains("bonferroni_alpha"));
+}
+
+#[test]
+fn market_astro_backtest_reads_the_jkse_history() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=2y&interval=1d&includePrePost=false",
+        "yahoo/chart_jkse_2y_1d.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "json",
+            "market",
+            "astro",
+            "--date",
+            "2026-11-06",
+            "--backtest",
+            "--period",
+            "2y",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["provider"], "yahoo");
+    assert_eq!(v["cached"], true);
+    let b = &v["data"]["backtest"];
+    assert_eq!(b["symbol"], "^JKSE");
+    assert_eq!(b["period"], "2y");
+    assert_eq!(b["returns"], 473);
+    assert_eq!(b["tests"], 27);
+    assert_eq!(b["significant"], 0);
+    assert_eq!(b["factors"].as_array().unwrap().len(), 4);
+    idx(&sb.cache, &sb.config)
+        .args([
+            "market",
+            "astro",
+            "--date",
+            "2026-11-06",
+            "--backtest",
+            "--period",
+            "2y",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Backtest · ^JKSE daily close-to-close returns · 2024-11-06 to 2026-11-04 · 473 sessions",
+        ))
+        .stdout(predicate::str::contains("Bonferroni needs p < 0.001852 at 5%: none pass."));
+}

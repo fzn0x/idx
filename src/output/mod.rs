@@ -15,6 +15,7 @@ pub mod csv;
 pub mod format;
 pub mod json;
 pub mod table;
+pub mod table_astro;
 pub mod table_bandar;
 pub mod table_broker;
 pub mod table_exchange;

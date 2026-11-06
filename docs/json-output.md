@@ -285,6 +285,87 @@ minus holidays in `year`), `today`, `today_is_trading_day`,
 `next_trading_day` and `holidays[]` (`date`, `weekday`, `name`, `name_en`).
 Bundled; `provider` is `bundled`.
 
+## `idx.astro.v1` (`market astro`)
+
+```json
+{
+  "date": "2026-11-06",
+  "at": "2026-11-06T16:00:00+07:00",
+  "bodies": [
+    { "body": "sun", "longitude": 223.96, "sign": "scorpio", "degree": 13.96, "speed": 1.003, "retrograde": false },
+    { "body": "mercury", "longitude": 219.92, "sign": "scorpio", "degree": 9.92, "speed": -1.22, "retrograde": true }
+  ],
+  "moon": { "phase": "waning_crescent", "elongation": 325.98, "illumination": 0.087, "age_days": 26.7,
+            "previous_new_moon": "2026-10-10T22:50:00+07:00", "next_new_moon": "2026-11-09T14:02:00+07:00",
+            "next_full_moon": "2026-11-24T21:54:00+07:00" },
+  "mercury": { "retrograde": true, "retrograde_since": "2026-10-24T14:17:00+07:00",
+               "retrograde_until": "2026-11-13T22:56:00+07:00",
+               "next_retrograde": { "from": "2027-02-10T00:33:00+07:00", "until": "2027-03-03T19:41:00+07:00" } },
+  "weton": { "day": "Jumat", "day_en": "Friday", "pasaran": "Pahing", "neptu_day": 6, "neptu_pasaran": 9, "neptu": 15 },
+  "shio": { "animal": "horse", "animal_id": "Kuda", "element": "fire", "year_start": "2026-02-17" },
+  "upcoming": { "from": "2026-11-06T00:00:00+07:00", "to": "2026-12-06T00:00:00+07:00",
+                "events": [ { "at": "2026-11-09T14:02:00+07:00", "kind": "new_moon", "body": "moon", "sign": "scorpio" } ] },
+  "natal": { "chart": "launch", "date": "1983-04-01", "at": "1983-04-01T12:00:00+07:00", "bodies": [ ... ],
+             "transits": [ { "transit": "saturn", "aspect": "trine", "natal": "uranus", "orb": 0.03, "applying": false } ] },
+  "backtest": null,
+  "method": "Apparent geocentric positions in the tropical zodiac ...",
+  "disclaimer": "Traditional astrology, not a forecast or investment advice: ..."
+}
+```
+
+- Computed on the machine (no network) for 16:00 WIB on `date`, the IDX
+  close; `provider` is `computed` and `cached` is `false`. With `--backtest`
+  the envelope carries the `^JKSE` history's provenance instead (`provider`
+  `yahoo`, `cached`, `stale`, `fetched_at`, warnings).
+- `bodies` lists the Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn,
+  Uranus, Neptune and Pluto in that order: apparent geocentric ecliptic
+  longitude of date (tropical zodiac) to 2 decimals, the `sign` and `degree`
+  of that rounded longitude, `speed` in degrees per day (3 decimals, negative
+  while retrograde) and `retrograde` (always `false` for the Sun and Moon).
+  It is the only top-level list, so `-o csv market astro` prints it.
+- `moon.phase` is one of eight 45° sectors of the Moon-Sun elongation
+  centred on the exact phases (`new_moon`, `waxing_crescent`,
+  `first_quarter`, `waxing_gibbous`, `full_moon`, `waning_gibbous`,
+  `last_quarter`, `waning_crescent`), so `full_moon` spans about 3.7 days;
+  the exact instants are in `upcoming.events`. `illumination` is the lit
+  fraction 0-1 (3 decimals), `age_days` the days since the previous new moon.
+- `mercury`: `retrograde_since` and `retrograde_until` are the stations
+  around the current retrograde (`null` when direct); `next_retrograde` the
+  next period starting after `at`.
+- `weton`: the civil date's day and pasaran (Legi, Pahing, Pon, Wage,
+  Kliwon) with their neptu. Javanese days start at sunset; idx uses the
+  civil date.
+- `shio`: the Chinese year holding the date (`year_start` is its Imlek, a
+  China Standard Time date); `null` before Imlek 1924 and after 2050.
+- `upcoming.events` (`kind`: `new_moon`, `first_quarter`, `full_moon`,
+  `last_quarter`, `station_retrograde`, `station_direct`, `ingress`) from
+  00:00 WIB on `date` for `--days` days (1-366; the web terminal takes up to
+  90), oldest first, rounded to the minute. `sign` is the sign the body is
+  in, or the one it enters. The Moon's own sign changes are not listed.
+- `natal` (`null` with `--natal none`): IHSG's chart at 12:00 WIB on
+  `1983-04-01` (`launch`, the default) or `1982-08-10` (`base`), dates from
+  secondary sources. `bodies` adds `approximate` (`true` for the Moon only:
+  the time of day is unknown). `transits` lists the aspects
+  (`conjunction`, `sextile`, `square`, `trine`, `opposition`) of the Sun and
+  Mercury to Pluto at `at` to the natal Sun and Mercury to Pluto within 2°,
+  closest first; `applying` means the orb shrinks over the next day.
+- `backtest` (`null` unless asked): `symbol` (`^JKSE`), `period` (`1y`,
+  `2y`, `5y`, `10y`, `max`; the web terminal stops at `10y`), `from` and
+  `to` (session dates of the first and last return), `returns`, `mean_pct`,
+  `median_pct` (4 decimals), `win_rate_pct` (2 decimals), `tests`, `alpha`
+  (0.05), `bonferroni_alpha` (`alpha / tests`, 6 decimals), `significant`
+  (groups below it), `factors[]` and `method`. Each factor (`moon_phase`,
+  `mercury`, `pasaran`, `sun_sign`) lists its `groups[]`: `group`, `n`,
+  `mean_pct`, `median_pct`, `stdev_pct` (4 decimals; `null` when `n` is 0,
+  `stdev_pct` when `n` < 2), `win_rate_pct`, `t_stat` (Welch's t against all
+  other sessions, 3 decimals) and `p_value` (two-sided, 6 decimals), `null`
+  with fewer than two sessions on either side, and `significant`. Returns
+  are close to close, one close per WIB date; a session still trading
+  (before 17:00 WIB) is left out with a warning. A history coarser than
+  daily is a provider error; fewer than 31 closes is `not_found`.
+- `method` and `disclaimer` are fixed text. There is no interpretive text
+  in v1; meanings, if added, will be a new optional field.
+
 ## `idx.instruments.v1` (`stocks list`) and `idx.members.v1` (`market members`)
 
 `idx.instruments.v1`: `total`, `board` and `search` (filters or `null`) and
