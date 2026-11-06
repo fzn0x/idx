@@ -454,7 +454,8 @@ holder's own) and `signal` (`new` | `buyer` | `seller` | `exited` |
 `unchanged`, computed by idx; `null` when `shares` or `shares_change` is
 missing). Funds overlap their managers: never add the two lists. A stock MSN
 lists no holders for has empty `holders` and a warning. `-o csv` prints one
-row per holder. See [ownership.md](ownership.md#institutional-and-fund-holders-msn).
+row per holder; with no holders it prints the holder header alone, so files
+for several symbols share one layout. See [ownership.md](ownership.md#institutional-and-fund-holders-msn).
 
 ## Errors
 

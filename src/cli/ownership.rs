@@ -7,17 +7,17 @@ use chrono::NaiveDate;
 use clap::{Args, Subcommand};
 
 use crate::error::{IdxError, Result};
-use crate::model::Symbol;
+use crate::model::{HolderKind, InstitutionalHolder, Symbol};
 use crate::output::json::{
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_DISCOVER, SCHEMA_OWNERSHIP_ENTITY,
     SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS,
     SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_INSTITUTIONS, SCHEMA_OWNERSHIP_RELEASES,
 };
-use crate::output::{self, table_institutions, table_ownership as tbl};
+use crate::output::{self, table_institutions, table_ownership as tbl, OutputFormat};
 use crate::ownership::{self, OwnershipDb};
 use crate::providers::Sourced;
 
-use super::{emit, Context};
+use super::{emit, notices, Context};
 
 pub const LOCAL: &str = "local-db";
 
@@ -104,7 +104,8 @@ From MSN Money's ownership data (its vendor's fund and institution filings), not
 register: up to 15 institutions and 20 funds, each as of its own report date, with the change
 since that holder's previous report. The signal is computed by idx: new (position opened),
 buyer, seller, exited (sold out), unchanged. Funds are part of their managers' institutional
-positions, so never add the two lists. Needs no import; MSN's response is cached for 6 hours.")]
+positions, so never add the two lists. Needs no import; MSN's response is cached for 6 hours.
+With no holders, -o csv prints the holder header alone.")]
     Institutions {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
@@ -146,6 +147,31 @@ fn open(ctx: &Context) -> Result<OwnershipDb> {
 
 fn local<T>(data: T) -> Sourced<T> {
     Sourced::fresh(data, LOCAL)
+}
+
+/// `-o csv` of `ownership institutions` for a stock without holders: the
+/// holder header alone, so files for several symbols share one layout (the
+/// generic CSV rule would print the report itself as one summary row). The
+/// columns come from a blank holder, so they follow the struct.
+fn holders_csv_header() -> Result<String> {
+    let blank = InstitutionalHolder {
+        kind: HolderKind::Institution,
+        rank: 1,
+        name: String::new(),
+        shares: None,
+        shares_change: None,
+        pct_outstanding: None,
+        pct_outstanding_change: None,
+        pct_portfolio: None,
+        report_date: None,
+        signal: None,
+    };
+    let csv = output::csv::render(&serde_json::to_value([blank])?);
+    Ok(csv
+        .lines()
+        .next()
+        .map(|h| format!("{h}\n"))
+        .unwrap_or_default())
 }
 
 pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
@@ -220,6 +246,10 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         OwnershipCmd::Institutions { symbol } => {
             let sym = Symbol::parse(&symbol)?;
             let report = ctx.provider.institutions(&sym).await?;
+            if ctx.settings.output == OutputFormat::Csv && report.data.holders.is_empty() {
+                notices(ctx, &report);
+                return output::print_stdout(&holders_csv_header()?);
+            }
             emit(ctx, SCHEMA_OWNERSHIP_INSTITUTIONS, report, |r| {
                 table_institutions::institutions(r, ctx.color)
             })

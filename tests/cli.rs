@@ -958,6 +958,17 @@ fn ownership_institutions_reads_msn_offline() {
         v["warnings"][0],
         "MSN lists no institutional or fund holders for ATAP"
     );
+    // CSV keeps the holder layout: the same header as JTPE, no rows.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "ownership", "institutions", "ATAP"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        format!("{}\n", csv.lines().next().unwrap())
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("warning: MSN lists no institutional"));
 
     // Nothing cached: offline miss. A provider without the data: exit 6.
     idx(&sb.cache, &sb.config)
