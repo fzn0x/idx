@@ -434,9 +434,11 @@ Realtime via the Stockbit provider (your own session; see
 `name`, `last`, `change`, `change_pct`, `previous_close`, `open`, `day_high`,
 `day_low`, `volume` (shares), `value` (IDR), `bids[]` and `asks[]` (each a
 level `{price, shares, orders}`, best price first), and the session foreign
-flow `foreign_buy`, `foreign_sell`, `foreign_net` (IDR). Sizes are shares (one
-IDX lot is 100 shares). A level the book does not show, or a field the source
-omits, is absent/`null`.
+flow `foreign_buy`, `foreign_sell`, `foreign_net` (IDR). Stockbit flags these
+three with `has_foreign_bs`; while it is not `true` (seen during trading, when
+the fields still hold the previous session's figures) they are `null` and
+`warnings` says why. Sizes are shares (one IDX lot is 100 shares). A level the
+book does not show, or a field the source omits, is absent/`null`.
 
 ## Errors
 
