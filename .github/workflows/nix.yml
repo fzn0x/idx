@@ -2,8 +2,10 @@ name: nix
 
 # The flake (flake.nix): package, apps, dev shell and checks (fmt, clippy,
 # tests, the declared MSRV, a packaged-binary smoke). Runs on main and on pull
-# requests that touch what the flake builds from; ci.yml stays the fast gate
-# for everything else.
+# requests that touch what the flake builds from (its `src` fileset plus the
+# flake and toolchain files), so a test that needs the network, an embedded
+# file outside the fileset or syntax newer than the MSRV fails before merge;
+# ci.yml stays the fast gate for everything else.
 on:
   push:
     branches: [main]
@@ -15,6 +17,9 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - rustfmt.toml
+      - src/**
+      - data/**
+      - tests/**
       - .github/workflows/nix.yml
   workflow_dispatch:
 
