@@ -6,7 +6,7 @@ JSON too. Nothing else is ever written to stdout in JSON mode, so
 `idx -o json ... | jq` is safe.
 
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
-`profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`,
+`intraday`, `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
@@ -161,12 +161,15 @@ shows its last session, with a warning naming the date.
   bars give 5,089.98 against IDX's 5,088.5.
 - Indices carry no volume on Yahoo, so their `vwap` is `null` and
   `bars_volume` is 0.
-- Warnings: no quote (and why), the five-day retry after the open, no bars
-  (the stock did not trade, or the source has none outside trading hours), and
-  bars and quote from different dates.
-- Yahoo's multi-day windows end with a row stamped at the last trade time
-  (e.g. 16:14:43); it is a snapshot, not a bar, and is left out (intraday bars
-  start on the minute), in `idx.history.v1` too.
+- Warnings: no quote (and why), the five-day retry when the 1-day window is
+  empty (for some minutes after the open, or no trade today), no bars (the
+  stock did not trade, or the source has none outside trading hours), and bars
+  and quote from different dates.
+- In session, and in multi-day windows after the close, Yahoo ends with a row
+  stamped at the last trade time (e.g. 09:02:16 or 16:14:43); it is a snapshot,
+  not a bar, and is left out, in `idx.history.v1` too. Bars sit on the
+  interval's grid from the window's first bar (09:00), so a row off that grid,
+  or one that repeats the time of the row before it, is the snapshot.
 - With `--provider stockbit` the bars are Stockbit's realtime one-minute
   candles for the day (none outside the session).
 
