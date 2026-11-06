@@ -576,7 +576,11 @@ pub async fn brief(
                 v.label.as_str(),
                 v.score,
                 v.inputs_available,
-                match (f.valuation.pe_trailing, f.valuation.price_to_book) {
+                // A P/B over statements in another currency is not a ratio.
+                match (
+                    f.valuation.pe_trailing,
+                    f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
+                ) {
                     (Some(pe), Some(pb)) => format!("; P/E {pe:.1}, P/B {pb:.2}"),
                     (Some(pe), None) => format!("; P/E {pe:.1}"),
                     _ => String::new(),

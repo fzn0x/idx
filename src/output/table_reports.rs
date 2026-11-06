@@ -23,6 +23,35 @@ fn ratio_x(v: Option<f64>) -> String {
         .unwrap_or_else(|| f::DASH.into())
 }
 
+/// Marks a multiple that divides the price by statement figures in another
+/// currency (see `Fundamentals::mixed_currency`).
+fn mixed(s: String, fd: &Fundamentals) -> String {
+    if fd.mixed_currency() && s != f::DASH {
+        format!("{s}*")
+    } else {
+        s
+    }
+}
+
+/// Names the currency of an amount taken from the statements when it is not
+/// the price's.
+fn in_statement_currency(s: String, fd: &Fundamentals) -> String {
+    match &fd.financial_currency {
+        Some(c) if fd.mixed_currency() && s != f::DASH => format!("{s} {c}"),
+        _ => s,
+    }
+}
+
+/// `(statements, price)` currencies when they differ.
+fn currency_pair(fd: &Fundamentals) -> Option<(&str, &str)> {
+    match (&fd.financial_currency, &fd.currency) {
+        (Some(statements), Some(price)) if fd.mixed_currency() => {
+            Some((statements.as_str(), price.as_str()))
+        }
+        _ => None,
+    }
+}
+
 fn date_opt(d: Option<chrono::NaiveDate>) -> String {
     d.map(|d| d.to_string()).unwrap_or_else(|| f::DASH.into())
 }
@@ -204,10 +233,16 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("P/E (trailing)".into(), right(f::ratio(v.pe_trailing))),
         ("P/E (forward)".into(), right(f::ratio(v.pe_forward))),
         ("PEG".into(), right(f::ratio(v.peg))),
-        ("P/B".into(), right(f::ratio(v.price_to_book))),
-        ("P/S".into(), right(f::ratio(v.price_to_sales))),
-        ("EV/EBITDA".into(), right(f::ratio(v.ev_to_ebitda))),
-        ("EV/Revenue".into(), right(f::ratio(v.ev_to_revenue))),
+        ("P/B".into(), right(mixed(f::ratio(v.price_to_book), fd))),
+        ("P/S".into(), right(mixed(f::ratio(v.price_to_sales), fd))),
+        (
+            "EV/EBITDA".into(),
+            right(mixed(f::ratio(v.ev_to_ebitda), fd)),
+        ),
+        (
+            "EV/Revenue".into(),
+            right(mixed(f::ratio(v.ev_to_revenue), fd)),
+        ),
         ("".into(), section(color, "profitability")),
         ("ROE".into(), right(pct_opt(p.roe_pct))),
         ("ROA".into(), right(pct_opt(p.roa_pct))),
@@ -221,8 +256,14 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("Debt / equity".into(), right(ratio_x(h.debt_to_equity))),
         ("Current ratio".into(), right(f::ratio(h.current_ratio))),
         ("Quick ratio".into(), right(f::ratio(h.quick_ratio))),
-        ("Total debt".into(), right(f::compact(h.total_debt))),
-        ("Total cash".into(), right(f::compact(h.total_cash))),
+        (
+            "Total debt".into(),
+            right(in_statement_currency(f::compact(h.total_debt), fd)),
+        ),
+        (
+            "Total cash".into(),
+            right(in_statement_currency(f::compact(h.total_cash), fd)),
+        ),
         ("".into(), section(color, "growth")),
         (
             "Revenue growth (yoy)".into(),
@@ -247,8 +288,14 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("".into(), section(color, "per share")),
         ("EPS (ttm)".into(), right(f::price(ps.eps_ttm))),
         ("EPS (forward)".into(), right(f::price(ps.eps_forward))),
-        ("Book value".into(), right(f::price(ps.book_value))),
-        ("Revenue".into(), right(f::price(ps.revenue))),
+        (
+            "Book value".into(),
+            right(in_statement_currency(f::price(ps.book_value), fd)),
+        ),
+        (
+            "Revenue".into(),
+            right(in_statement_currency(f::price(ps.revenue), fd)),
+        ),
         ("".into(), section(color, "analysts")),
         (
             "Recommendation".into(),
@@ -281,6 +328,13 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
     ];
     out.push_str(&kv_table(color, rows).to_string());
     out.push('\n');
+    if let Some((c, price)) = currency_pair(fd) {
+        out.push_str(&format!(
+            "* Statements in {c}, price in {price}: P/B, P/S and EV multiples divide the price \
+             by {c} figures, so they are not comparable, and the verdict does not score P/B. \
+             Amounts marked {c} come from the statements.\n"
+        ));
+    }
     if let Some(v) = &fd.verdict {
         out.push_str(&summary_line(fd));
         out.push('\n');
@@ -325,14 +379,17 @@ pub fn compare(list: &[Fundamentals], color: bool) -> String {
         fd.valuation.pe_forward
     )));
     row!("PEG", |fd: &Fundamentals| right(f::ratio(fd.valuation.peg)));
-    row!("P/B", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.price_to_book
+    row!("P/B", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.price_to_book),
+        fd
     )));
-    row!("P/S", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.price_to_sales
+    row!("P/S", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.price_to_sales),
+        fd
     )));
-    row!("EV/EBITDA", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.ev_to_ebitda
+    row!("EV/EBITDA", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.ev_to_ebitda),
+        fd
     )));
     row!("ROE", |fd: &Fundamentals| right(pct_opt(
         fd.profitability.roe_pct
@@ -387,6 +444,20 @@ pub fn compare(list: &[Fundamentals], color: bool) -> String {
 
     let mut out = t.to_string();
     out.push('\n');
+    let mixed: Vec<String> = list
+        .iter()
+        .filter_map(|fd| {
+            currency_pair(fd)
+                .map(|(c, price)| format!("{} (statements in {c}, price in {price})", fd.symbol))
+        })
+        .collect();
+    if !mixed.is_empty() {
+        out.push_str(&format!(
+            "* P/B, P/S and EV/EBITDA divide the price by statement figures in another \
+             currency, so they are not comparable: {}.\n",
+            mixed.join("; ")
+        ));
+    }
     out.push_str("Verdicts are heuristics from public ratios, not investment advice.\n");
     out
 }
@@ -614,13 +685,18 @@ pub fn brief(b: &Brief, color: bool) -> String {
             f::text(&f.industry),
             f::ratio(f.valuation.pe_trailing),
             f::ratio(f.valuation.pe_forward),
-            f::ratio(f.valuation.price_to_book),
-            f::ratio(f.valuation.ev_to_ebitda),
+            mixed(f::ratio(f.valuation.price_to_book), f),
+            mixed(f::ratio(f.valuation.ev_to_ebitda), f),
             pct_opt(f.profitability.roe_pct),
             pct_opt(f.profitability.net_margin_pct),
             ratio_x(f.health.debt_to_equity),
             pct_opt(f.dividend.yield_pct),
         ));
+        if let Some((c, price)) = currency_pair(f) {
+            out.push_str(&format!(
+                "    * Statements in {c}, price in {price}: P/B and EV/EBITDA are not comparable\n"
+            ));
+        }
         if let Some(v) = &f.verdict {
             for r in v.reasons.iter().take(4) {
                 out.push_str(&format!("    - {r}\n"));
@@ -1198,6 +1274,35 @@ mod tests {
         assert!(s.contains("21.80%"));
         assert!(s.contains("insufficient data"));
         assert!(s.contains(f::DASH));
+    }
+
+    #[test]
+    fn mixed_currency_multiples_are_marked() {
+        let mut fd = Fundamentals::empty(Symbol::parse("ITMG").unwrap(), "t");
+        fd.currency = Some("IDR".into());
+        fd.financial_currency = Some("USD".into());
+        fd.valuation.price_to_book = Some(14103.308);
+        fd.valuation.pe_trailing = Some(7.46);
+        fd.per_share.book_value = Some(1.723);
+        fd.health.total_cash = Some(804_017_024.0);
+        let s = fundamentals(&fd, false);
+        assert!(s.contains("14,103.31*"), "{s}");
+        assert!(s.contains("1.72 USD"), "{s}");
+        assert!(s.contains("804.0M USD"), "{s}");
+        assert!(!s.contains("7.46*"), "P/E is consistent: {s}");
+        assert!(
+            s.contains("* Statements in USD, price in IDR: P/B, P/S and EV multiples"),
+            "{s}"
+        );
+        let c = compare(&[fd.clone()], false);
+        assert!(c.contains("14,103.31*"), "{c}");
+        assert!(c.contains("ITMG (statements in USD, price in IDR)"), "{c}");
+
+        // Same currency: no marks, no note.
+        fd.financial_currency = Some("IDR".into());
+        let s = fundamentals(&fd, false);
+        assert!(!s.contains('*'), "{s}");
+        assert!(!s.contains("USD"), "{s}");
     }
 
     #[test]
