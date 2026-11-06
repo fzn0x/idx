@@ -178,8 +178,9 @@ idx -o csv ownership institutions BBRI > holders.csv
 The KSEI register stops at 1 %, so most foreign funds never appear in it.
 `ownership institutions` fills that gap from MSN Money: the `ownershipSummary`
 block of the same `Finance/Equities` response that `stocks profile` and
-`stocks fundamental` read through the MSN provider (one request, cached 6 h,
-served stale with `--offline`). Nothing is imported or stored in the database.
+`stocks fundamental` read through the MSN provider (one request, cached with
+the fundamentals TTL, 6 h by default, served stale with `--offline`). Nothing
+is imported or stored in the database.
 
 Each report carries:
 

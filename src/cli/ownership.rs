@@ -104,8 +104,8 @@ From MSN Money's ownership data (its vendor's fund and institution filings), not
 register: up to 15 institutions and 20 funds, each as of its own report date, with the change
 since that holder's previous report. The signal is computed by idx: new (position opened),
 buyer, seller, exited (sold out), unchanged. Funds are part of their managers' institutional
-positions, so never add the two lists. Needs no import; MSN's response is cached for 6 hours.
-With no holders, -o csv prints the holder header alone.")]
+positions, so never add the two lists. Needs no import; MSN's response is cached with the
+fundamentals TTL (6 hours by default). With no holders, -o csv prints the holder header alone.")]
     Institutions {
         #[arg(value_name = "SYMBOL")]
         symbol: String,

@@ -198,7 +198,7 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 # dir = "/path/to/cache"     # (env: IDX_CACHE_DIR)
 # quote_ttl_secs = 60        # (env: IDX_QUOTE_TTL_SECS)
 # history_ttl_secs = 3600    # (env: IDX_HISTORY_TTL_SECS)
-# fundamentals_ttl_secs = 21600  # profile, ratios, earnings (env: IDX_FUNDAMENTALS_TTL_SECS)
+# fundamentals_ttl_secs = 21600  # profile, ratios, earnings, institutional holders (env: IDX_FUNDAMENTALS_TTL_SECS)
 # financials_ttl_secs = 86400    # statements (env: IDX_FINANCIALS_TTL_SECS)
 
 [msn]
