@@ -1681,7 +1681,7 @@ pub async fn intraday(
 ) -> Result<Sourced<Intraday>> {
     if !interval.is_intraday() {
         return Err(IdxError::Usage(format!(
-            "intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not {interval}; use `stocks history` for daily bars"
+            "intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not {interval}; use history (stocks history, idx_history) for daily bars"
         )));
     }
     let wanted = std::slice::from_ref(symbol);
@@ -1694,7 +1694,7 @@ pub async fn intraday(
             Ok(wider) => match wider.data.candles.last().map(|c| c.date()) {
                 Some(day) => {
                     warnings.push(format!(
-                        "no {interval} bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, {day}"
+                        "no {interval} bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, {day}"
                     ));
                     history = wider;
                 }
@@ -2172,7 +2172,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 r.warnings,
-                ["no 1m bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, 2026-11-05"]
+                ["no 1m bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, 2026-11-05"]
             );
             let d = &r.data;
             assert_eq!(d.session.unwrap().to_string(), "2026-11-05");

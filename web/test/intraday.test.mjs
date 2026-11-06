@@ -137,7 +137,7 @@ test("/api/intraday just after the open: the 1-day window is empty, the 5-day on
     throw new Error("unexpected fetch " + u);
   }, async () => {
     const out = await intraday(env, "BBCA");
-    assert.deepEqual(out.warnings, ["no 1m bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, 2026-11-05"]);
+    assert.deepEqual(out.warnings, ["no 1m bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, 2026-11-05"]);
     assert.equal(out.data.session, "2026-11-05");
     assert.equal(out.data.bars.length, 333, "the 16:14:43 snapshot row is not a bar");
     assert.equal(out.data.summary.vwap, 5089.98);

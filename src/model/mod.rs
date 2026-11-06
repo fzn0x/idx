@@ -395,11 +395,11 @@ impl Interval {
         match (self, period) {
             (Interval::Min1, Period::D1 | Period::D5) => Ok(()),
             (Interval::Min1, _) => Err(IdxError::Usage(
-                "1-minute bars cover at most 5 days; use --period 1d or 5d".into(),
+                "1-minute bars cover at most 5 days; use period 1d or 5d".into(),
             )),
             (Interval::Min2, Period::D1 | Period::D5 | Period::M1) => Ok(()),
             (Interval::Min2, _) => Err(IdxError::Usage(
-                "2-minute bars cover at most a month; use --period 1d, 5d or 1mo".into(),
+                "2-minute bars cover at most a month; use period 1d, 5d or 1mo".into(),
             )),
             _ => Ok(()),
         }
@@ -574,7 +574,7 @@ mod tests {
         assert!(Interval::Min2.check_period(Period::M1).is_ok());
         let e = Interval::Min1.check_period(Period::M1).unwrap_err();
         assert_eq!(e.exit_code(), 2);
-        assert!(e.to_string().contains("--period 1d or 5d"), "{e}");
+        assert!(e.to_string().contains("use period 1d or 5d"), "{e}");
         for p in [Period::M3, Period::Y1, Period::Max, Period::Ytd] {
             assert!(Interval::Min1.check_period(p).is_err());
             assert!(Interval::Min2.check_period(p).is_err());

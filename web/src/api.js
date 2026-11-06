@@ -192,8 +192,8 @@ const INTRADAY = ["1m","2m","5m","15m","30m","1h"];
 
 /** Interval::check_period: Yahoo serves 1m bars for 8 days per request and 2m for 60 days. */
 export function checkPeriod(period, interval) {
-  if (interval === "1m" && !["1d","5d"].includes(period)) throw usage("1-minute bars cover at most 5 days; use --period 1d or 5d");
-  if (interval === "2m" && !["1d","5d","1mo"].includes(period)) throw usage("2-minute bars cover at most a month; use --period 1d, 5d or 1mo");
+  if (interval === "1m" && !["1d","5d"].includes(period)) throw usage("1-minute bars cover at most 5 days; use period 1d or 5d");
+  if (interval === "2m" && !["1d","5d","1mo"].includes(period)) throw usage("2-minute bars cover at most a month; use period 1d, 5d or 1mo");
 }
 
 export async function history(env, symbolRaw, period = "1y", interval = "1d", limit = 0) {
@@ -221,11 +221,12 @@ export async function history(env, symbolRaw, period = "1y", interval = "1d", li
  * service::intraday: the latest session's bars (history 1d at `interval`), the
  * quote alongside (board snapshot, live fallback; a failure is a warning) and
  * the bars' summary with VWAP. Yahoo's 1-day window is empty for the first
- * minutes after the open, so an empty one is retried over 5 days.
+ * minutes after the open (and for a stock with no trade today), so an empty one
+ * is retried over 5 days.
  */
 export async function intraday(env, symbolRaw, interval = "1m", limit = 0) {
   const symbol = parseSymbol(symbolRaw);
-  if (!INTRADAY.includes(interval)) throw usage(`intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not ${interval}; use history for daily bars`);
+  if (!INTRADAY.includes(interval)) throw usage(`intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not ${interval}; use history (stocks history, idx_history) for daily bars`);
   let [h, q] = await Promise.all([
     history(env, symbol, "1d", interval, 0),
     quote(env, symbol).catch((error) => ({ error })),
@@ -237,7 +238,7 @@ export async function intraday(env, symbolRaw, interval = "1m", limit = 0) {
       const wider = await history(env, symbol, "5d", interval, 0);
       const last = wider.data.candles[wider.data.candles.length - 1];
       if (last) {
-        retry.push(`no ${interval} bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, ${last.time.slice(0, 10)}`);
+        retry.push(`no ${interval} bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, ${last.time.slice(0, 10)}`);
         h = wider;
       } else window = "the last 5 days";
     } catch (e) {
