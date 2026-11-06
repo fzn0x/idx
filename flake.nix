@@ -46,8 +46,10 @@
           );
 
           # What the crate compiles and its tests read (Cargo.toml `include`
-          # without the docs): sources, the bundled CSVs, the recorded fixtures.
-          # Add a path here if the crate starts embedding files from elsewhere.
+          # without most docs): sources, the bundled CSVs, the recorded
+          # fixtures, and the JSON reference whose -o jsonl table a unit test
+          # checks against the code. Add a path here if the crate starts
+          # embedding files from elsewhere.
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -57,6 +59,7 @@
               ./src
               ./data
               ./tests
+              ./docs/json-output.md
             ];
           };
 
