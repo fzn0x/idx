@@ -601,6 +601,7 @@ async function run(line) {
       else if (sub === "changes") { need(pos, 3, cmd.usage); env = await api(`ownership/changes?${qs({ from: pos[1], to: pos[2], symbol: pos[3], min_change: opt["min-change"], limit: opt.limit, offset: opt.offset })}`); render = R.changes; }
       else if (sub === "foreign") { env = await api(`ownership/foreign?${qs({ symbol: pos[1], from: opt.from, to: opt.to, limit: opt.limit })}`); render = R.foreign; }
       else if (sub === "releases") { env = await api("ownership/releases"); render = R.releases; }
+      else if (sub === "institutions") return { local: "CLI and MCP only", node: R.cliOnly(byName("idx_ownership_institutions")) };
       else throw Object.assign(new Error(`usage: ${cmd.usage}`), { code: "usage" });
       break;
     }
