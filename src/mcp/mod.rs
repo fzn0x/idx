@@ -333,7 +333,7 @@ pub struct AstroArgs {
     /// Add the backtest of IHSG daily returns by lunar phase, Mercury retrograde, pasaran and Sun sign (default false; fetches ^JKSE history).
     #[serde(default)]
     pub backtest: Option<bool>,
-    /// Backtest look-back: 1y, 2y, 5y, 10y or max (default max, since 1990).
+    /// Backtest look-back, only with backtest=true: 1y, 2y, 5y, 10y or max (default max, since 1990).
     #[serde(default)]
     pub period: Option<String>,
 }
@@ -989,12 +989,19 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
+                // As on the CLI (--period requires --backtest) and the web.
+                let backtest = a.backtest.unwrap_or(false);
+                if !backtest && a.period.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+                    return Err(IdxError::Usage(
+                        "period is the backtest's look-back; pass it with backtest=true".into(),
+                    ));
+                }
                 let period = parse_opt(&a.period, AstroPeriod::Max)?;
                 let q = service::AstroQuery {
                     date: parse_date(&a.date)?.unwrap_or_else(service::today_wib),
                     days: a.days.unwrap_or(service::ASTRO_DEFAULT_DAYS),
                     natal: parse_opt(&a.natal, NatalChoice::Launch)?,
-                    backtest: a.backtest.unwrap_or(false).then_some(period),
+                    backtest: backtest.then_some(period),
                 };
                 ok(
                     SCHEMA_ASTRO,
@@ -1933,6 +1940,8 @@ mod tests {
         for bad in [
             args(Some("2026-11-06"), Some("birth"), None, None),
             args(Some("2026-11-06"), None, Some(true), Some("6mo")),
+            args(Some("2026-11-06"), None, None, Some("2y")),
+            args(Some("2026-11-06"), None, Some(false), Some("6mo")),
             args(Some("1700-01-01"), None, None, None),
             args(Some("06/11/2026"), None, None, None),
         ] {

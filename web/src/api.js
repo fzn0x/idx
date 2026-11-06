@@ -583,6 +583,8 @@ export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, period
   if (!Number.isInteger(days) || days < 1 || days > ASTRO_WEB_MAX_DAYS) throw usage(`days must be 1 to ${ASTRO_WEB_MAX_DAYS} in the web terminal (the CLI takes 366); got ${daysRaw}`);
   const natal = String(natalRaw || "launch").trim().toLowerCase();
   if (!["launch", "base", "none"].includes(natal)) throw usage(`invalid natal chart "${natalRaw}"; use launch, base or none`);
+  // As on the CLI (--period requires --backtest) and over MCP.
+  if (!truthy(backtestRaw) && periodRaw != null && String(periodRaw).trim() !== "") throw usage("period is the backtest's look-back; pass it with backtest=1 (astro --backtest --period 2y)");
   const period = String(periodRaw || "5y").trim().toLowerCase();
   if (period === "max") throw usage("the web terminal backtests up to 10y; the CLI runs max (idx market astro --backtest)");
   if (!ASTRO_WEB_PERIODS.includes(period)) throw usage(`invalid backtest period "${periodRaw}"; use ${ASTRO_WEB_PERIODS.join(", ")}`);
