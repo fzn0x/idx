@@ -40,7 +40,8 @@ src/
     stockbit/        OPT-IN realtime (exodus.stockbit.com), the one provider that carries a credential
                      (the user's own session) and the one not in the Auto chain: orderbook endpoint ->
                      quote + full depth ladder (model/orderbook.rs), charts/daily -> candles; auth.rs is
-                     the rotating-token session store (file 0600 + env seed, POST /login/refresh), login.rs
+                     the rotating-token session store (file 0600 + env seed, POST /login/refresh; one
+                     store per session file per process, refreshes under a lock file), login.rs
                      captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL),
                      sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),

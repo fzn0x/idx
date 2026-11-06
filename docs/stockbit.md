@@ -96,11 +96,12 @@ provider: `idx --provider stockbit mcp`.
 ## Where the session lives
 
 The session file holds the rotating tokens and is written with `0600`
-permissions on Unix. By default it sits beside the config file (e.g.
+permissions on Unix. By default it sits beside the *default* config file (e.g.
 `%APPDATA%\idx\stockbit-session.json` on Windows,
-`~/.config/idx/stockbit-session.json` on Linux). Override it:
+`~/.config/idx/stockbit-session.json` on Linux), also when `--config` points
+elsewhere. Move it with:
 
-- `--config`-relative default, or `stockbit.session` in `config.toml`;
+- `stockbit.session` in `config.toml`;
 - `IDX_STOCKBIT_SESSION=/path/to/session.json`.
 
 For an unattended deployment (a server, the web worker) seed the tokens through
@@ -120,6 +121,17 @@ another bot) at the *same* Stockbit session, they will retire each other's token
 and both get logged out. Give each its own `idx stockbit login` / account, or
 let one own the refresh and feed the other its current token.
 
+Inside idx, refreshes are serialised so that one session does have one
+refresher: a process keeps one session store per session file (the CLI
+handler, the `--provider stockbit` provider, every MCP tool call and every
+MCP HTTP session share it), and a refresh also takes a lock file beside the
+session (`stockbit-session.lock`) so a CLI command and a running MCP server do
+not refresh at the same moment. Inside both locks the file is read again: a
+pair another holder just stored is used, not refreshed a second time. A lock
+older than a minute counts as left behind by a crashed process and is taken
+over. A refresh token Stockbit refuses is not presented again by the same
+process; `idx stockbit login` is the way back.
+
 ## What `idx` talks to
 
 All on `https://exodus.stockbit.com`, with `Authorization: Bearer <access JWT>`
@@ -130,6 +142,13 @@ and browser-shaped `origin`/`referer` headers:
 | `GET /company-price-feed/v2/orderbook/companies/{SYM}` | quote (OHLC, volume, value, foreign flow only while `has_foreign_bs` is true) and the full depth ladder |
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
+
+The same API places orders and moves cash, so idx keeps an allowlist of the
+read-only paths above and refuses any other URL before a token is read. A 401,
+or a 403 with a JSON body, means Stockbit refused the access token: idx
+refreshes once and retries once. A 403 with an HTML body is Stockbit's CDN
+(CloudFront) refusing this client or network; a refresh cannot change that,
+so idx reports it and does not retry.
 
 Indices use Stockbit's own code (`IHSG`, `LQ45`), mapped from idx's caret form
 (`^JKSE`, `^JKLQ45`). The token is never written to a log, an error message or a
