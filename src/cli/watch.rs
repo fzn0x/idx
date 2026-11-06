@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::error::{IdxError, Result};
-use crate::model::{Symbol, Watchlist};
+use crate::model::{Symbol, Watchlist, IDX_EXCHANGE};
 use crate::output::json::{SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_WATCHLIST};
 use crate::output::{table, table_reports as reports};
 use crate::providers::Sourced;
@@ -68,7 +68,9 @@ pub fn load(path: &std::path::Path) -> Result<Vec<Symbol>> {
         if line.is_empty() {
             continue;
         }
-        let sym = Symbol::parse(line)
+        // Entries are stored canonically (BBCA, D05.SI), so a later
+        // IDX_EXCHANGE never changes what a saved line means.
+        let sym = Symbol::parse_on(line, IDX_EXCHANGE)
             .map_err(|e| IdxError::Config(format!("watchlist line {}: {e}", i + 1)))?;
         if !out.contains(&sym) {
             out.push(sym);
@@ -121,7 +123,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
     let mut symbols = load(&file)?;
     match args.cmd {
         Some(WatchCmd::Add { symbols: raw }) => {
-            for s in Symbol::parse_list(input::symbol_args(&raw)?)? {
+            for s in Symbol::parse_list_on(input::symbol_args(&raw)?, &ctx.settings.exchange)? {
                 if !symbols.contains(&s) {
                     symbols.push(s);
                 }
@@ -130,7 +132,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
         }
         Some(WatchCmd::Remove { symbols: raw }) => {
-            let drop = Symbol::parse_list(input::symbol_args(&raw)?)?;
+            let drop = Symbol::parse_list_on(input::symbol_args(&raw)?, &ctx.settings.exchange)?;
             symbols.retain(|s| !drop.contains(s));
             save(&file, &symbols)?;
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
@@ -200,5 +202,20 @@ mod tests {
         std::fs::write(&file, "BB CA\n").unwrap();
         assert!(load(&file).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn other_markets_are_stored_with_their_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("watchlist.txt");
+        let syms = vec![
+            Symbol::parse_on("D05", "SI").unwrap(),
+            Symbol::parse_on("BBCA.JK", "SI").unwrap(),
+        ];
+        save(&file, &syms).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.ends_with("D05.SI\nBBCA\n"), "{text}");
+        // Loaded the same way whatever IDX_EXCHANGE says later.
+        assert_eq!(load(&file).unwrap(), syms);
     }
 }

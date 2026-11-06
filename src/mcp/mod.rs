@@ -25,6 +25,7 @@ use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -54,6 +55,9 @@ pub mod schema;
 const INSTRUCTIONS: &str = "\
 idx: Indonesian stock market (IDX / IHSG) data and analysis from free public sources.
 Tickers are IDX codes such as BBCA, BBRI, TLKM (no .JK suffix needed).
+The quote, history, profile, financials, earnings, dividends, returns, fundamental,
+technical and compare tools also take a ticker from another Yahoo Finance market
+with its suffix, e.g. D05.SI; every other tool is IDX only.
 Every tool returns the same JSON envelope as the `idx -o json` CLI:
 {schema, provider, fetched_at, cached, stale, warnings?, data}. Fields the source did
 not return are null; nothing is estimated. Prices are delayed as published.
@@ -553,7 +557,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 ok(SCHEMA_QUOTES, self.provider.quotes(&symbols).await?)
             }
             .await,
@@ -570,7 +574,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = parse_opt(&a.period, Period::Y1)?;
                 let interval = parse_opt(&a.interval, Interval::Day1)?;
                 let mut h = self.provider.history(&symbol, period, interval).await?;
@@ -598,7 +602,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(SCHEMA_PROFILE, self.provider.profile(&symbol).await?)
             }
             .await,
@@ -615,7 +619,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = match a.period.as_deref().map(str::trim) {
                     None | Some("") | Some("annual") => StatementPeriod::Annual,
                     Some("quarterly") => StatementPeriod::Quarterly,
@@ -645,7 +649,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(SCHEMA_EARNINGS, self.provider.earnings(&symbol).await?)
             }
             .await,
@@ -662,7 +666,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_DIVIDENDS,
                     service::dividends(self.provider.as_ref(), &symbol).await?,
@@ -967,11 +971,11 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 let bench = match a.benchmark.as_deref().map(str::trim) {
                     None | Some("") => Some(Symbol::parse("^JKSE")?),
                     Some(s) if s.eq_ignore_ascii_case("none") => None,
-                    Some(s) => Some(Symbol::parse(s)?),
+                    Some(s) => Some(Symbol::parse_on(s, IDX_EXCHANGE)?),
                 };
                 ok(
                     SCHEMA_RETURNS,
@@ -992,7 +996,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_FUNDAMENTALS,
                     service::fundamentals(self.provider.as_ref(), &symbol).await?,
@@ -1012,7 +1016,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = parse_opt(&a.period, Period::Y1)?;
                 ok(
                     SCHEMA_TECHNICAL,
@@ -1033,7 +1037,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_COMPARE,
                     service::compare(self.provider.as_ref(), &symbols).await?,

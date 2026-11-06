@@ -1567,3 +1567,108 @@ fn quiet_silences_notes_but_not_the_payload_or_errors() {
         .assert()
         .code(2);
 }
+
+const YAHOO_CHART_D05_5D: &str =
+    "https://query1.finance.yahoo.com/v8/finance/chart/D05.SI?range=5d&interval=1d&includePrePost=false";
+
+#[test]
+fn other_markets_on_the_yahoo_backed_commands() {
+    let sb = seeded();
+    seed(
+        &sb.cache,
+        YAHOO_CHART_D05_5D,
+        "yahoo/chart_d05si_5d_1d.json",
+    );
+    let history = |c: &mut Command| -> serde_json::Value {
+        let out = c.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    // An explicit suffix.
+    let v = history(idx(&sb.cache, &sb.config).args([
+        "-o", "json", "stocks", "history", "d05.si", "--period", "5d",
+    ]));
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    assert_eq!(v["data"]["currency"], "SGD");
+    assert_eq!(v["data"]["candles"].as_array().unwrap().len(), 5);
+    // A default suffix for bare tickers.
+    let v = history(
+        idx(&sb.cache, &sb.config)
+            .env("IDX_EXCHANGE", "SI")
+            .args(["-o", "json", "stocks", "history", "D05", "--period", "5d"]),
+    );
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", ".si"])
+        .assert()
+        .success();
+    idx(&sb.cache, &sb.config)
+        .args(["config", "get", "exchange"])
+        .assert()
+        .success()
+        .stdout("SI\n");
+    let v = history(
+        idx(&sb.cache, &sb.config)
+            .args(["-o", "json", "stocks", "history", "D05", "--period", "5d"]),
+    );
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    // `.JK` still means IDX whatever the default (the BBCA.JK chart is seeded).
+    let v = history(idx(&sb.cache, &sb.config).args([
+        "-o", "json", "stocks", "history", "bbca.jk", "--period", "1mo",
+    ]));
+    assert_eq!(v["data"]["symbol"], "BBCA");
+    std::fs::remove_file(&sb.config).unwrap();
+
+    // Quote: v7 is not cached here, so the chart fallback answers.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "D05.SI"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"][0]["symbol"], "D05.SI");
+    assert_eq!(v["data"][0]["currency"], "SGD");
+    assert_eq!(v["data"][0]["source"], "yahoo:chart");
+    assert!(v["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("reduced fields"));
+
+    // IDX-only commands refuse it by name; MSN cannot serve it.
+    for args in [
+        vec!["broker", "D05.SI"],
+        vec!["ownership", "ticker", "D05.SI"],
+        vec!["bandar", "detect", "D05.SI"],
+        vec!["stocks", "brief", "D05.SI"],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(&args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("another exchange (SI)"));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "msn", "stocks", "quote", "D05.SI"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("outside IDX"));
+    // A bad exchange setting is a config error.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_EXCHANGE", "S1")
+        .args(["stocks", "quote", "BBCA"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("exchange"));
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", "ABCDE"])
+        .assert()
+        .code(6);
+}

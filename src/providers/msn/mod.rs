@@ -69,7 +69,12 @@ impl Msn {
     }
 
     /// Resolves the MSN security id for an IDX ticker (cached 30 days).
+    /// MSN keeps only the IDX row, so a ticker from another market
+    /// (`D05.SI`) is unsupported here and `auto` leaves it to Yahoo.
     async fn lookup(&self, symbol: &Symbol) -> Result<String> {
+        if symbol.exchange().is_some() {
+            return Err(IdxError::unsupported(NAME, "tickers outside IDX"));
+        }
         let url = Self::autosuggest_url(symbol);
         let f = match self.fetcher.get(&url, &[], self.ttls.lookup, None).await {
             Ok(f) => f,
@@ -287,6 +292,19 @@ mod tests {
 
     fn sym(s: &str) -> Symbol {
         Symbol::parse(s).unwrap()
+    }
+
+    #[tokio::test]
+    async fn other_markets_are_unsupported_before_any_request() {
+        let (m, be, _d) = msn(FixtureBackend::new(), CacheMode::Normal);
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        let unsupported = |e: IdxError| matches!(e, IdxError::Unsupported { .. });
+        assert!(unsupported(
+            m.quotes(std::slice::from_ref(&d05)).await.unwrap_err()
+        ));
+        assert!(unsupported(m.profile(&d05).await.unwrap_err()));
+        assert!(unsupported(m.fundamentals(&d05).await.unwrap_err()));
+        assert_eq!(be.call_count(), 0);
     }
 
     #[tokio::test]

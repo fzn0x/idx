@@ -33,17 +33,17 @@ pub enum Statement {
 pub enum StocksCmd {
     /// Delayed quote for one or more tickers (comma or space separated).
     #[command(
-        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n  echo BBCA BBRI | idx stocks quote -          # tickers from stdin\n  idx stocks quote - < watchlist.txt\n\n`-` reads tickers from stdin: text (spaces, commas or lines; # starts a comment) or\nidx's own -o json / -o jsonl output, taking each row's symbol."
+        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n  echo BBCA BBRI | idx stocks quote -          # tickers from stdin\n  idx stocks quote - < watchlist.txt\n\n`-` reads tickers from stdin: text (spaces, commas or lines; # starts a comment) or\nidx's own -o json / -o jsonl output, taking each row's symbol.\n\nOther Yahoo Finance markets: give the suffix (idx stocks quote D05.SI) or set the default\nfor bare tickers with IDX_EXCHANGE / `idx config set exchange SI`. Applies to quote, history,\nprofile, financials, earnings, dividends, returns, fundamental, technical and compare."
     )]
     Quote {
-        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional; `-` reads them from stdin.
+        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional; another market's suffix works too (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
 
     /// OHLCV price history.
     #[command(
-        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0"
+        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history D05.SI --period 5d             # another Yahoo Finance market, by its suffix"
     )]
     History {
         /// IDX ticker, e.g. BBCA.
@@ -375,7 +375,7 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
 }
 
 async fn quote(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let result = ctx.provider.quotes(&symbols).await?;
     emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
 }
@@ -387,7 +387,7 @@ async fn history(
     interval: Interval,
     limit: usize,
 ) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.history(&symbol, period, interval).await?;
     let limit = if limit == 0 { None } else { Some(limit) };
     emit(ctx, SCHEMA_HISTORY, result, |d| {
@@ -396,7 +396,7 @@ async fn history(
 }
 
 async fn profile(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.profile(&symbol).await?;
     emit(ctx, SCHEMA_PROFILE, result, |d| {
         reports::profile(d, ctx.color)
@@ -409,7 +409,7 @@ async fn financials(
     period: StatementPeriod,
     statement: Statement,
 ) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.financials(&symbol, period).await?;
     let flags = StatementFlags {
         income: matches!(statement, Statement::All | Statement::Income),
@@ -422,7 +422,7 @@ async fn financials(
 }
 
 async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.earnings(&symbol).await?;
     emit(ctx, SCHEMA_EARNINGS, result, |d| {
         reports::earnings(d, ctx.color)
@@ -430,7 +430,7 @@ async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn dividends(ctx: &Context, raw: &str, limit: usize) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::dividends(ctx.provider.as_ref(), &symbol).await?;
     emit(ctx, SCHEMA_DIVIDENDS, result, |d| {
         reports::dividends(d, limit, ctx.color)
@@ -438,11 +438,11 @@ async fn dividends(ctx: &Context, raw: &str, limit: usize) -> Result<()> {
 }
 
 async fn returns(ctx: &Context, raw: &[String], benchmark: &str, none: bool) -> Result<()> {
-    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let bench = if none || benchmark.eq_ignore_ascii_case("none") {
         None
     } else {
-        Some(Symbol::parse(benchmark)?)
+        Some(Symbol::parse_on(benchmark, &ctx.settings.exchange)?)
     };
     let result = service::returns(ctx.provider.as_ref(), &symbols, bench.as_ref()).await?;
     emit(ctx, SCHEMA_RETURNS, result, |d| {
@@ -465,7 +465,7 @@ async fn brief(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn fundamental(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::fundamentals(ctx.provider.as_ref(), &symbol).await?;
     emit(ctx, SCHEMA_FUNDAMENTALS, result, |d| {
         reports::fundamentals(d, ctx.color)
@@ -473,7 +473,7 @@ async fn fundamental(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::technical(ctx.provider.as_ref(), &symbol, period).await?;
     emit(ctx, SCHEMA_TECHNICAL, result, |d| {
         reports::technical(d, ctx.color)
@@ -481,7 +481,7 @@ async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {
 }
 
 async fn compare(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let result = service::compare(ctx.provider.as_ref(), &symbols).await?;
     emit(ctx, SCHEMA_COMPARE, result, |d| {
         reports::compare(d, ctx.color)

@@ -82,6 +82,7 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
             }
             s.push_str(&format!("color       : {}\n", settings.color));
             s.push_str(&format!("timeout     : {}s\n", settings.timeout_secs));
+            s.push_str(&format!("exchange    : {}\n", settings.exchange));
             s.push_str(&format!("cache dir   : {}\n", settings.cache_dir.display()));
             s.push_str(&format!(
                 "cache ttl   : quote {}s · history {}s\n",

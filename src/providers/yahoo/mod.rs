@@ -13,6 +13,9 @@
 //! - `GET https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{SYM}.JK?type=..`
 //!   No auth. Annual, quarterly and trailing statement items.
 //!
+//! `{SYM}.JK` is an IDX ticker; a ticker from another market keeps its own
+//! suffix (`D05.SI`, from `Symbol::parse_on`), and index codes their caret.
+//!
 //! Recorded responses live in `tests/fixtures/yahoo/`.
 
 use std::sync::Arc;
@@ -638,6 +641,58 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert!(calls[0].contains("type=annualTotalRevenue"), "{}", calls[0]);
         assert!(!calls[0].contains("crumb"));
+    }
+
+    const CHART_D05: &str = include_str!("../../../tests/fixtures/yahoo/chart_d05si_5d_1d.json");
+    const CHART_BBCA_SI_404: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_bbca_si_404.json");
+
+    #[tokio::test]
+    async fn another_market_keeps_its_suffix() {
+        let be = FixtureBackend::new()
+            .route("v8/finance/chart/D05.SI", 200, CHART_D05)
+            .route("v8/finance/chart/BBCA.SI", 404, CHART_BBCA_SI_404);
+        let (y, be, _d) = yahoo(be, CacheMode::Normal);
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        let h = y.history(&d05, Period::D5, Interval::Day1).await.unwrap();
+        assert_eq!(h.data.symbol, d05);
+        assert_eq!(h.data.currency.as_deref(), Some("SGD"));
+        assert_eq!(h.data.name.as_deref(), Some("DBS Group Holdings Ltd"));
+        assert_eq!(h.data.candles.len(), 5);
+        // Times stay in WIB: the instant is right, the wall clock is Jakarta's.
+        assert_eq!(h.data.candles[0].time.offset().local_minus_utc(), 7 * 3600);
+        {
+            let calls = be.calls.lock().unwrap();
+            assert!(
+                calls[0].ends_with("chart/D05.SI?range=5d&interval=1d&includePrePost=false"),
+                "{}",
+                calls[0]
+            );
+        }
+        // A bare IDX code under the wrong suffix is a clean not-found.
+        let wrong = Symbol::parse_on("BBCA", "SI").unwrap();
+        let e = y
+            .history(&wrong, Period::D5, Interval::Day1)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, IdxError::NotFound(_)), "{e}");
+    }
+
+    #[test]
+    fn quote_key_carries_each_symbols_own_suffix() {
+        let list = vec![
+            Symbol::parse("BBCA").unwrap(),
+            Symbol::parse_on("D05.SI", "JK").unwrap(),
+            Symbol::parse("^JKSE").unwrap(),
+        ];
+        assert_eq!(
+            Yahoo::quote_cache_key(&list),
+            "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,D05.SI,^JKSE"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&list[1], Period::D5, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/D05.SI?range=5d&interval=1d&includePrePost=false"
+        );
     }
 
     #[test]

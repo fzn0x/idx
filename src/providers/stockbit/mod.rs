@@ -57,6 +57,15 @@ pub fn request_headers(bearer: &str) -> Vec<(String, String)> {
     ]
 }
 
+/// Stockbit lists IDX only: a ticker from another market (`D05.SI`) is
+/// unsupported, before any request (and before the session is touched).
+fn idx_only(symbol: &Symbol) -> Result<()> {
+    match symbol.exchange() {
+        Some(_) => Err(IdxError::unsupported(NAME, "tickers outside IDX")),
+        None => Ok(()),
+    }
+}
+
 /// Stockbit's code for a symbol: indices drop idx's caret and use Stockbit's
 /// own name (`^JKSE` -> `IHSG`, `^JKLQ45` -> `LQ45`).
 pub fn stockbit_code(symbol: &Symbol) -> String {
@@ -146,6 +155,7 @@ impl Stockbit {
     /// The full depth ladder for one symbol (realtime; not in the `Provider`
     /// trait, called directly by the orderbook command and tool).
     pub async fn orderbook(&self, symbol: &Symbol) -> Result<Sourced<OrderBook>> {
+        idx_only(symbol)?;
         let url = Self::orderbook_url(symbol);
         let f = self.get(&url, REALTIME_TTL, "order book").await?;
         if f.status == 404 || parse::is_not_found(&f.body) {
@@ -166,6 +176,7 @@ impl Stockbit {
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {
+        idx_only(symbol)?;
         let url = Self::orderbook_url(symbol);
         let f = self.get(&url, REALTIME_TTL, "quote").await?;
         if f.status == 404 || parse::is_not_found(&f.body) {
@@ -224,6 +235,7 @@ impl Provider for Stockbit {
         period: Period,
         interval: Interval,
     ) -> Result<Sourced<History>> {
+        idx_only(symbol)?;
         let (tf, prev) = parse::timeframe_for(period, interval);
         let mut url = format!(
             "{EXODUS}/charts/{}/daily?timeframe={tf}&chart_type=PRICE_CHART_TYPE_CANDLE",
@@ -264,5 +276,37 @@ impl Provider for Stockbit {
             ));
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::Cache;
+    use crate::http::{CacheMode, FixtureBackend};
+
+    #[tokio::test]
+    async fn other_markets_are_unsupported_before_any_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = Arc::new(FixtureBackend::new());
+        let fetcher = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path()),
+            CacheMode::Normal,
+        ));
+        let store = Arc::new(SessionStore::new(dir.path().join("s.json"), None, None));
+        let sb = Stockbit::new(fetcher, Ttls::default(), store);
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        let unsupported = |e: IdxError| matches!(e, IdxError::Unsupported { .. });
+        assert!(unsupported(
+            sb.quotes(std::slice::from_ref(&d05)).await.unwrap_err()
+        ));
+        assert!(unsupported(
+            sb.history(&d05, Period::M1, Interval::Day1)
+                .await
+                .unwrap_err()
+        ));
+        assert!(unsupported(sb.orderbook(&d05).await.unwrap_err()));
+        assert_eq!(be.call_count(), 0);
     }
 }

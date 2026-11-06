@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{IdxError, Result};
 use crate::http::CacheMode;
+use crate::model::IDX_EXCHANGE;
 use crate::output::{ColorMode, OutputFormat, OutputSetting};
 use crate::providers::ProviderKind;
 
@@ -32,6 +33,9 @@ pub struct FileConfig {
     pub color: Option<String>,
     /// Per-request timeout.
     pub timeout_secs: Option<u64>,
+    /// Yahoo Finance suffix a bare ticker gets in the Yahoo-backed commands
+    /// (`JK`, IDX, by default).
+    pub exchange: Option<String>,
     pub cache: CacheSection,
     pub msn: MsnSection,
     pub ownership: OwnershipSection,
@@ -106,6 +110,7 @@ impl FileConfig {
                 self.color = Some(value.to_string());
             }
             "timeout_secs" => self.timeout_secs = Some(value.parse().map_err(|_| bad())?),
+            "exchange" => self.exchange = Some(parse_exchange(value)?),
             "cache.dir" => self.cache.dir = Some(PathBuf::from(value)),
             "cache.quote_ttl_secs" => {
                 self.cache.quote_ttl_secs = Some(value.parse().map_err(|_| bad())?)
@@ -139,6 +144,7 @@ impl FileConfig {
             "output" => self.output.clone(),
             "color" => self.color.clone(),
             "timeout_secs" => self.timeout_secs.map(|v| v.to_string()),
+            "exchange" => self.exchange.clone(),
             "cache.dir" => self.cache.dir.as_ref().map(|p| p.display().to_string()),
             "cache.quote_ttl_secs" => self.cache.quote_ttl_secs.map(|v| v.to_string()),
             "cache.history_ttl_secs" => self.cache.history_ttl_secs.map(|v| v.to_string()),
@@ -168,6 +174,7 @@ pub const KEYS: &[&str] = &[
     "output",
     "color",
     "timeout_secs",
+    "exchange",
     "cache.dir",
     "cache.quote_ttl_secs",
     "cache.history_ttl_secs",
@@ -193,6 +200,12 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 
 # Per-request network timeout in seconds.
 # timeout_secs = 15          # (env: IDX_TIMEOUT_SECS)
+
+# Yahoo Finance suffix a bare ticker gets in stocks quote, history, profile,
+# financials, earnings, dividends, returns, fundamental, technical, compare and
+# watch. JK is IDX; SI would read D05 as D05.SI (Singapore). An explicit suffix
+# always works, and every other command reads IDX tickers only.
+# exchange = "JK"            # (env: IDX_EXCHANGE)
 
 [cache]
 # dir = "/path/to/cache"     # (env: IDX_CACHE_DIR)
@@ -249,6 +262,9 @@ pub struct Settings {
     pub history_ttl_secs: u64,
     pub fundamentals_ttl_secs: u64,
     pub financials_ttl_secs: u64,
+    /// Yahoo Finance suffix for bare tickers in the Yahoo-backed commands,
+    /// upper-case without the dot (`JK` is IDX).
+    pub exchange: String,
     /// Not serialised; `config get` reports whether it is set.
     #[serde(skip)]
     pub msn_api_key: Option<String>,
@@ -342,6 +358,22 @@ fn truthy(v: &str) -> bool {
         v.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+/// Normalises an exchange suffix: one to four ASCII letters, an optional
+/// leading dot, any case (`.si` -> `SI`); `IDX` is an alias of `JK`.
+pub fn parse_exchange(raw: &str) -> Result<String> {
+    let v = raw.trim();
+    let v = v.strip_prefix('.').unwrap_or(v).to_ascii_uppercase();
+    if v == "IDX" {
+        return Ok(IDX_EXCHANGE.to_string());
+    }
+    if (1..=4).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Ok(v);
+    }
+    Err(IdxError::Config(format!(
+        "exchange: invalid value {raw:?}; expected a Yahoo Finance suffix of 1-4 letters such as JK (IDX) or SI"
+    )))
 }
 
 /// `--quiet`, or `IDX_QUIET` set to `1`/`true`/`yes`/`on` when no `-v` asks
@@ -445,6 +477,11 @@ pub fn resolve(
         (None, Some(f)) => f,
         _ => DEFAULT_FINANCIALS_TTL_SECS,
     };
+    let exchange = match (env_s("EXCHANGE"), &file.exchange) {
+        (Some(e), _) => parse_exchange(&e)?,
+        (None, Some(f)) => parse_exchange(f)?,
+        _ => IDX_EXCHANGE.to_string(),
+    };
     let msn_api_key = env_s("MSN_API_KEY").or_else(|| file.msn.api_key.clone());
     let ownership_db = env_s("OWNERSHIP_DB")
         .map(PathBuf::from)
@@ -471,6 +508,7 @@ pub fn resolve(
         history_ttl_secs,
         fundamentals_ttl_secs,
         financials_ttl_secs,
+        exchange,
         msn_api_key,
         ownership_db,
         stockbit_session,
@@ -681,12 +719,7 @@ mod tests {
             OutputFormat::Table
         );
         // The file's output counts (it did not for errors before).
-        std::fs::write(
-            &path,
-            "output = \"json\"
-",
-        )
-        .unwrap();
+        std::fs::write(&path, "output = \"json\"\n").unwrap();
         assert_eq!(
             requested_output(None, &path, &none, true),
             OutputFormat::Json
@@ -749,5 +782,36 @@ mod tests {
             let env = env_from(&[("IDX_QUIET", v)]);
             assert!(!quiet_requested(false, 0, &env), "{v}");
         }
+    }
+
+    #[test]
+    fn exchange_defaults_to_idx_and_validates() {
+        let s = resolve(
+            &CliOverrides::default(),
+            &FileConfig::default(),
+            "x".into(),
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(s.exchange, "JK");
+        let file = FileConfig {
+            exchange: Some(".si".into()),
+            ..Default::default()
+        };
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.exchange, "SI");
+        let env = env_from(&[("IDX_EXCHANGE", "hk")]);
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap();
+        assert_eq!(s.exchange, "HK", "env beats file");
+        for bad in ["S1", "ABCDE", ".", "S I", "JK.SI"] {
+            let env = env_from(&[("IDX_EXCHANGE", bad)]);
+            let e = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap_err();
+            assert_eq!(e.exit_code(), 6, "{bad}");
+        }
+        assert_eq!(parse_exchange("idx").unwrap(), "JK");
+        let mut cfg = FileConfig::default();
+        cfg.set("exchange", "si").unwrap();
+        assert_eq!(cfg.get("exchange").unwrap().as_deref(), Some("SI"));
+        assert_eq!(cfg.set("exchange", "S1").unwrap_err().exit_code(), 6);
     }
 }
