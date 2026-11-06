@@ -312,7 +312,7 @@ The root is 112.5% (18px) at every width, phones included, so body text never re
 ### Hierarchy
 - **Wordmark** (Libre Franklin 800, 1.5rem, -0.02em): the `idx` beside the mark in the masthead, over "oleh Midori Research" at 0.75rem 600 in on-navy-2.
 - **Page title** (Libre Franklin 800, 2.1rem, line-height 1.2): "Pasar Saham Indonesia", the docs page title; 1.7rem on phones. The 404 code is Libre Franklin 800 at 4.5rem.
-- **Section title** (Libre Franklin 800, 1.2rem): the name in a navy band, with a subline in 0.9rem on-navy-2 and an age stamp pushed right. Docs `##` bands set 1.35rem.
+- **Section title** (Libre Franklin 800, 1.2rem): the name in a navy band, with a subline in 0.9rem on-navy-2 and an age stamp pushed right. Docs `##` bands set 1.35rem. The home page's reference sections set 1.35rem in ink on the sheet, with an ink-2 subline.
 - **Panel title** (Libre Franklin 800, 1.05rem): terminal rail and dialog heads. Terminal result heads set the command line in the mono face at 1rem 700.
 - **Lead figure** (Atkinson Hyperlegible Next 800, 3.6rem, line-height 1, tabular): the IHSG close; 3rem on phones. The change beside it is 1.3rem 700 in a tinted chip; the session name 1.35rem 800.
 - **Body** (Atkinson Hyperlegible Next 400, 1rem, line-height 1.55): running text at a 62ch measure (docs 31em, about 66 characters, line-height 1.6).
@@ -337,6 +337,8 @@ Modules pad 16px to 22px; navy bands 11px by 18px; table cells 10px by 14px with
 Breakpoints: under 72rem the columns, the lead, the three faces and the terminal stack to one column (the lead figure splits into two columns over the chart) and the status line drops its source; under 48rem the gutter and root step down, the nav wraps into a scrolling row under the brand with 48px links, the search button goes full width, the board keeps only name plate, price and percent (with the triangle beside the percent), the command and help tables stack each row, and the status line keeps the lamp and the age; under 24rem the brand drops its subline. The docs collapse their page list into a wrapped row under 64rem.
 
 **The Ruled Module Rule.** Content lives in modules: a white sheet with a 1px hairline outline, opened by a navy band. Rows inside are split by hairlines, never by gaps or alternating fills.
+
+**The Two Heads Rule.** The navy band means live data. On the home page only the two tables of the day (Saham Unggulan, Pergerakan Saham) wear it; the reference sections below them (about, install, sample output, notes, command list) open like articles under a 4px ink rule, the lead's own rule, with an ink head over a hairline. Stacked on phones, the install half opens under a 2px ink rule.
 
 **The One Plot Rule.** One chart owns the home page, the IHSG minute chart in the lead. Everything else is a table or a line of text.
 
