@@ -6,6 +6,76 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-06
+
+### Fixed
+
+- Fundamentals verdict: negative shareholders' equity scores against the
+  company and sets the P/B, ROE and debt/equity rules aside, and multiples
+  that divide an IDR price by USD statements are marked and not scored
+  (new optional `financial_currency`) (#70).
+- Ownership register: a holder's several KSEI accounts in one issuer are
+  summed (`accounts`), every row keeps its own date, and the 30 Oct 2026
+  controller/affiliate flag is stored (`controller_or_affiliate`); web D1
+  migration `0004_ownership_accounts.sql` (#77).
+- Stockbit order book: foreign buy/sell/net are left empty, with a warning,
+  while Stockbit marks them as not current (`has_foreign_bs`) (#67).
+
+### Added
+
+- Data freshness: quotes carry `behind_session` when their last trade
+  predates the latest IDX session, and stale envelopes say why
+  (`stale_reason`: `offline` or `fetch_failed`) (#71).
+- CLI input and output: `-o jsonl`, opt-in `-o auto`, `-` reads tickers from
+  stdin, `--quiet`, and other Yahoo Finance markets by suffix (`D05.SI`,
+  `IDX_EXCHANGE`) in the Yahoo-backed commands (#74).
+- `ownership search`, `cross-holders`, `concentration` (HHI), `graph` and
+  `resolve`, with MCP tools `idx_ownership_search`, `idx_ownership_rankings`
+  and `idx_ownership_graph` (#84).
+- `ownership composition` from KSEI's monthly "Kepemilikan Efek" archive,
+  `ownership discover --family`, and the JSON error code `blocked` (exit 3)
+  when Cloudflare refuses a request; MCP `idx_ownership_composition` (#83).
+- `ownership sync` and `ownership status`: a prebuilt SQLite snapshot
+  published on the `ownership-data` mirror; MCP `idx_ownership_snapshot`
+  (#82).
+- `ownership institutions`: institutional and fund holders with
+  buyer/seller signals from MSN; MCP `idx_ownership_institutions` (#69).
+- `stocks insights` (MSN's rated statements and peers) and screener presets
+  with MSN return-window keys (`ret1w`..`ret1y`, `range`); MCP
+  `idx_insights` (#76).
+- `stocks growth`, `stocks valuation` and `stocks risk` lenses, and a `lens`
+  argument on `idx_fundamental` (#81).
+- `history_provider` setting, earnings filters (`--annual`, `--quarterly`,
+  `--reported`, `--estimates`) and several statements per
+  `stocks financials --statement` (#72).
+- `stocks foreign --source ipot` with `--from`/`--to`: foreign flow in
+  rupiah from IPOT, also in the web terminal; a range's foreign net is
+  rebuilt from single sessions, and a one-side broker summary reports what
+  that side bought and sold (#78).
+- `stocks intraday`: the latest session by the minute (1m and 2m bars), with
+  the quote and VWAP; MCP `idx_intraday` (#75).
+- Stockbit `actions`, `calendar` and `movements` on your own session, and a
+  local sign-in page (`stockbit login --page`); MCP `idx_stockbit_actions`
+  and `idx_stockbit_movements` (#85).
+- `market astro`: the sky, weton and shio for IHSG with a descriptive
+  backtest of its daily returns; MCP `idx_astro`. `--period max` with daily
+  or weekly bars now returns them instead of Yahoo's monthly ones (#80).
+- Nix flake with packages, apps, a dev shell and checks, built in CI (#66).
+- `ihsg-mcp` npm package: `npx -y ihsg-mcp` runs `idx mcp` (#73).
+- Web docs pages with Markdown twins, `llms.txt` and `llms-full.txt`, and
+  one security header set for the Worker and static assets (#79).
+
+### Changed
+
+- Site redesign ("Papan Stasiun"): a live market monitor home page, the
+  terminal in the same shell, and a GitHub star button (#68).
+- The MCP server lists 47 tools, 36 in 0.8.1 (#84, #83, #82, #69, #76, #75,
+  #85, #80).
+- Minimum Rust version 1.89 (#66).
+- The ownership database moves to schema version 4 (register lines,
+  resolution rules, composition tables); older files are migrated on first
+  open (#77, #84, #83).
+
 ## [0.8.1] - 2026-10-18
 
 ### Fixed
