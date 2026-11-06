@@ -170,7 +170,7 @@ idx -o json stocks history TLKM --period 1y --interval 1wk \
 ```
 
 - stdout carries exactly one JSON document; everything else goes to stderr.
-- The envelope records `provider`, `fetched_at`, `cached`, `stale` and `warnings`.
+- The envelope records `provider`, `fetched_at`, `cached`, `stale`, `stale_reason` (`offline` or `fetch_failed`, only when stale) and `warnings`.
 - Fields the source did not return are `null`. Nothing is estimated.
 - Exit codes: `0` ok · `2` usage · `3` network/provider · `4` not found · `5` offline cache miss · `6` config.
 

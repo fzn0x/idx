@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cache::Cache;
 use crate::error::{IdxError, Result};
+use crate::model::StaleReason;
 
 pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -242,9 +243,13 @@ pub struct Fetched {
     pub body: String,
     pub headers: Vec<(String, String)>,
     pub cached: bool,
+    /// `true` when a cached copy older than the TTL is served.
     pub stale: bool,
+    /// Why a stale copy is served; `None` exactly when `stale` is false.
+    pub stale_reason: Option<StaleReason>,
     pub fetched_at: DateTime<Utc>,
-    /// Why the live fetch failed when a stale copy is served instead.
+    /// Why the live fetch failed when a stale copy is served instead (URL
+    /// query strings removed).
     pub failure: Option<String>,
 }
 
@@ -356,7 +361,7 @@ impl Fetcher {
         if let Some(h) = &hit {
             if h.fresh {
                 tracing::debug!(key, age_secs = h.age.as_secs(), "cache hit");
-                return Ok(from_hit(h, false));
+                return Ok(from_hit(h, None));
             }
         }
 
@@ -368,7 +373,7 @@ impl Fetcher {
                         age_secs = h.age.as_secs(),
                         "offline: serving stale cache"
                     );
-                    Ok(from_hit(&h, true))
+                    Ok(from_hit(&h, Some(StaleReason::Offline)))
                 }
                 None => Err(IdxError::OfflineMiss(format!("no cached copy of {key}"))),
             };
@@ -388,7 +393,7 @@ impl Fetcher {
                 return match hit {
                     Some(h) => {
                         tracing::info!(key, %why, "source failed recently: serving stale cache");
-                        let mut f = from_hit(&h, true);
+                        let mut f = from_hit(&h, Some(StaleReason::FetchFailed));
                         f.failure = Some(why);
                         Ok(f)
                     }
@@ -414,6 +419,7 @@ impl Fetcher {
                     headers: resp.headers,
                     cached: false,
                     stale: false,
+                    stale_reason: None,
                     fetched_at: Utc::now(),
                     failure: None,
                 })
@@ -432,8 +438,10 @@ impl Fetcher {
                 }
                 match hit {
                     Some(h) => {
-                        tracing::warn!(error = %why, key, "network failed: serving stale cache");
-                        let mut f = from_hit(&h, true);
+                        // The caller reports the cause (a warning and
+                        // `stale_reason`); `-v` shows it here as well.
+                        tracing::info!(error = %why, key, "network failed: serving stale cache");
+                        let mut f = from_hit(&h, Some(StaleReason::FetchFailed));
                         f.failure = Some(why);
                         Ok(f)
                     }
@@ -444,13 +452,15 @@ impl Fetcher {
     }
 }
 
-fn from_hit(h: &crate::cache::Hit, stale: bool) -> Fetched {
+/// A cache hit, stale when `reason` says why it is served anyway.
+fn from_hit(h: &crate::cache::Hit, reason: Option<StaleReason>) -> Fetched {
     Fetched {
         status: h.stored.status,
         body: h.stored.body.clone(),
         headers: vec![],
         cached: true,
-        stale,
+        stale: reason.is_some(),
+        stale_reason: reason,
         fetched_at: h.stored.fetched_at,
         failure: None,
     }
@@ -531,6 +541,7 @@ mod tests {
             .await
             .unwrap();
         assert!(b.cached && !b.stale);
+        assert_eq!(b.stale_reason, None);
         assert_eq!(b.body, "{\"x\":1}");
     }
 
@@ -558,6 +569,9 @@ mod tests {
             .await
             .unwrap();
         assert!(got.cached && got.body == "old");
+        assert!(got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::Offline));
+        assert!(got.failure.is_none(), "offline names no failure");
         let err = f
             .get("https://example.test/missing", &[], Duration::ZERO, None)
             .await
@@ -583,6 +597,8 @@ mod tests {
             .await
             .unwrap();
         assert!(got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert!(got.failure.unwrap().contains("no route"));
     }
 
     #[tokio::test]
@@ -635,6 +651,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(got.stale);
+            assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
             assert_eq!(got.body, "old");
             assert!(got.failure.unwrap().contains("no route"));
         }

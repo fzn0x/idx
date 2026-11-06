@@ -41,6 +41,7 @@ Every successful command wraps its payload:
 | `fetched_at` | RFC 3339 UTC | When the underlying response left the network. For cached responses this is the original fetch time. |
 | `cached` | bool | Served from the local cache. |
 | `stale` | bool | The cached copy was older than its TTL and was used anyway (`--offline`, or the network failed). |
+| `stale_reason` | string? | Why `stale` is true: `offline` (`--offline`: the network was not tried) or `fetch_failed` (the live request failed; a `live fetch failed (...); showing cached copy` warning names the failure). Omitted when `stale` is false. |
 | `warnings` | string[] | Non-fatal notes. Omitted when empty. |
 | `data` | object or array | The payload, see below. |
 

@@ -18,8 +18,8 @@ use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
     BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Fundamentals,
     History, Interval, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
-    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport, Symbol,
-    Technical,
+    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport,
+    StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
@@ -46,14 +46,7 @@ pub async fn technical(
     let Some(report) = analysis::technical::analyse(&hist.data) else {
         return Err(IdxError::NotFound(format!("no daily candles for {symbol}")));
     };
-    Ok(Sourced {
-        data: report,
-        provider: hist.provider,
-        cached: hist.cached,
-        stale: hist.stale,
-        fetched_at: hist.fetched_at,
-        warnings: hist.warnings,
-    })
+    Ok(hist.map(|_| report))
 }
 
 /// Fundamentals for several symbols, fetched concurrently. Symbols that fail
@@ -171,6 +164,7 @@ pub async fn screen(
     let need_fund =
         opts.with_fundamentals || !fund_filters.is_empty() || opts.sort.needs_fundamentals();
     let mut checked = 0usize;
+    let mut failed_live = 0usize;
     let mut capped = false;
     if need_fund && !rows.is_empty() {
         scr::sort_rows(&mut rows, Key::Mcap, true);
@@ -192,8 +186,12 @@ pub async fn screen(
             match r {
                 Ok(f) => {
                     checked += 1;
-                    out.cached &= f.cached;
-                    out.stale |= f.stale;
+                    // Freshness only: one summary line below instead of a
+                    // failure warning per company.
+                    out.absorb_freshness(&f);
+                    if f.stale_reason == Some(StaleReason::FetchFailed) {
+                        failed_live += 1;
+                    }
                     if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
                         scr::apply_fundamentals(row, &f.data);
                     }
@@ -202,6 +200,11 @@ pub async fn screen(
             }
         }
         rows.retain(|r| scr::matches(r, &fund_filters));
+        if failed_live > 0 {
+            out.warnings.push(format!(
+                "fundamentals for {failed_live} of {checked} companies are stale cached copies: the live fetch failed"
+            ));
+        }
         if capped {
             out.warnings.push(format!(
                 "fundamentals were fetched for the {cap} largest companies that passed the quote filters; raise --max-fundamentals to widen"
@@ -726,7 +729,8 @@ pub async fn news(
     company_only: bool,
 ) -> Result<Sourced<NewsReport>> {
     let feeds = newsfeed::select(sources)?;
-    let (items, warnings, cached, stale) = newsfeed::fetch(fetcher, &feeds).await?;
+    let batch = newsfeed::fetch(fetcher, &feeds).await?;
+    let items = batch.items;
     let scanned = items.len();
     let matched_name = symbol.and_then(|s| {
         universe
@@ -753,9 +757,10 @@ pub async fn news(
         },
         newsfeed::NAME,
     );
-    s.cached = cached;
-    s.stale = stale;
-    s.warnings = warnings;
+    s.cached = batch.cached;
+    s.stale = batch.stale_reason.is_some();
+    s.stale_reason = batch.stale_reason;
+    s.warnings = batch.warnings;
     Ok(s)
 }
 

@@ -55,8 +55,11 @@ const INSTRUCTIONS: &str = "\
 idx: Indonesian stock market (IDX / IHSG) data and analysis from free public sources.
 Tickers are IDX codes such as BBCA, BBRI, TLKM (no .JK suffix needed).
 Every tool returns the same JSON envelope as the `idx -o json` CLI:
-{schema, provider, fetched_at, cached, stale, warnings?, data}. Fields the source did
-not return are null; nothing is estimated. Prices are delayed as published.
+{schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data}. Fields the
+source did not return are null; nothing is estimated. Prices are delayed as published.
+stale=true means a cached copy older than its TTL was served: stale_reason is offline
+(the server runs with --offline) or fetch_failed (the source failed; a warning names
+the failure).
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
 means the ticker is unknown, offline_miss means --offline with nothing cached.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);

@@ -77,6 +77,17 @@ pub fn wib_from_unix(secs: i64) -> Option<DateTime<FixedOffset>> {
         .map(|dt| dt.with_timezone(&wib()))
 }
 
+/// Why a cached copy older than its TTL was served (`stale: true`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StaleReason {
+    /// `--offline` (or `IDX_OFFLINE`): the network was not tried.
+    Offline,
+    /// The live request failed, or failed moments ago and is not retried
+    /// yet; a warning names the failure.
+    FetchFailed,
+}
+
 /// An IDX ticker such as `BBCA`, always stored upper-case without any exchange suffix.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,

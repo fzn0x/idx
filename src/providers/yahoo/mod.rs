@@ -138,14 +138,7 @@ impl Yahoo {
     }
 
     fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
-        Sourced {
-            data,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        }
+        Sourced::from_fetched(data, NAME, f)
     }
 
     fn quote_cache_key(symbols: &[Symbol]) -> String {
@@ -201,14 +194,9 @@ impl Yahoo {
                     list.join(", ")
                 )));
             }
-            return Ok(Sourced {
-                data: quotes,
-                provider: NAME,
-                cached: fetched.cached,
-                stale: fetched.stale,
-                fetched_at: fetched.fetched_at,
-                warnings,
-            });
+            let mut out = Self::sourced(quotes, &fetched);
+            out.warnings.extend(warnings);
+            return Ok(out);
         }
         unreachable!("loop returns on the second attempt")
     }
@@ -227,8 +215,7 @@ impl Yahoo {
                     format!("chart endpoint HTTP {}", f.status),
                 ));
             }
-            let q = parse_chart_quote(&f.body)?;
-            Ok::<_, IdxError>((q, f.cached, f.stale, f.fetched_at))
+            Ok::<_, IdxError>(Self::sourced(parse_chart_quote(&f.body)?, &f))
         });
         let results = join_all(futs).await;
 
@@ -237,11 +224,9 @@ impl Yahoo {
         let mut first_err: Option<IdxError> = None;
         for (sym, r) in symbols.iter().zip(results) {
             match r {
-                Ok((q, cached, stale, at)) => {
-                    out.cached &= cached;
-                    out.stale |= stale;
-                    out.fetched_at = out.fetched_at.min(at);
-                    out.data.push(q);
+                Ok(q) => {
+                    out.absorb(&q);
+                    out.data.push(q.data);
                 }
                 Err(IdxError::NotFound(_)) => out.warnings.push(format!("no data for {sym}")),
                 Err(e) => {
@@ -333,15 +318,7 @@ impl Provider for Yahoo {
                 ),
             ));
         }
-        let history = parse_chart(&f.body, period, interval)?;
-        Ok(Sourced {
-            data: history,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        })
+        Ok(Self::sourced(parse_chart(&f.body, period, interval)?, &f))
     }
 
     async fn profile(&self, symbol: &Symbol) -> Result<Sourced<Profile>> {
@@ -465,6 +442,7 @@ mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
+    use crate::model::StaleReason;
 
     const V7: &str = include_str!("../../../tests/fixtures/yahoo/quote_v7_bbca_bbri_tlkm.json");
     const V7_PARTIAL: &str =
@@ -522,6 +500,35 @@ mod tests {
         let again = y.quotes(&syms(&["BBCA", "BBRI", "TLKM"])).await.unwrap();
         assert!(again.cached);
         assert_eq!(be.call_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn stale_quote_says_why_without_the_crumb() {
+        // A session but no quote route: the live request fails like a
+        // refused connection, and the URL it names carries the crumb.
+        let be = session_routes(FixtureBackend::new());
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let symbols = syms(&["BBCA", "BBRI", "TLKM"]);
+        cache
+            .put_at(
+                &Yahoo::quote_cache_key(&symbols),
+                200,
+                V7,
+                chrono::Utc::now() - chrono::Duration::hours(1),
+            )
+            .unwrap();
+        let fetcher = Arc::new(Fetcher::new(Arc::new(be), cache, CacheMode::Normal));
+        let y = Yahoo::new(fetcher, Ttls::default());
+        let got = y.quotes(&symbols).await.unwrap();
+        assert_eq!(got.data.len(), 3);
+        assert!(got.cached && got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(got.warnings.len(), 1, "{:?}", got.warnings);
+        let w = &got.warnings[0];
+        assert!(w.starts_with("live fetch failed ("), "{w}");
+        assert!(w.contains("v7/finance/quote"), "{w}");
+        assert!(!w.contains("crumb") && !w.contains("symbols="), "{w}");
     }
 
     #[tokio::test]

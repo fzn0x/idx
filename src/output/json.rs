@@ -10,7 +10,7 @@ use crate::model::{
     DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials, ForeignFlowReport,
     ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport, IndexBoard,
     InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
-    Release, ScreenReport, SentimentReport, Technical, Watchlist,
+    Release, ScreenReport, SentimentReport, StaleReason, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::providers::Sourced;
@@ -29,6 +29,11 @@ pub struct Envelope<T> {
     pub cached: bool,
     /// `true` when the cached copy is older than its TTL (offline or network failure).
     pub stale: bool,
+    /// Why `stale` is true: `offline` (`--offline`, the network was not
+    /// tried) or `fetch_failed` (the live request failed; a warning names
+    /// the failure). Omitted when the data is not stale.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stale_reason: Option<StaleReason>,
     /// Non-fatal notes, e.g. symbols the source did not know.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub warnings: Vec<String>,
@@ -43,6 +48,7 @@ impl<T> Envelope<T> {
             fetched_at: s.fetched_at.trunc_subsecs(0),
             cached: s.cached,
             stale: s.stale,
+            stale_reason: s.stale_reason,
             warnings: s.warnings,
             data: s.data,
         }
@@ -276,8 +282,31 @@ mod tests {
         assert_eq!(v["provider"], "yahoo");
         assert_eq!(v["cached"], false);
         assert!(v.get("warnings").is_none(), "empty warnings are omitted");
+        assert!(v.get("stale_reason").is_none(), "fresh data has no reason");
         assert_eq!(v["data"][0]["symbol"], "BBCA");
         assert!(v["data"][0]["price"].is_null());
+    }
+
+    #[test]
+    fn stale_envelope_says_why() {
+        let mut s = Sourced::fresh(Vec::<Quote>::new(), "yahoo");
+        s.cached = true;
+        s.stale = true;
+        s.stale_reason = Some(StaleReason::FetchFailed);
+        s.warnings
+            .push(crate::providers::fetch_failed_warning("connection refused"));
+        let text = to_pretty(&Envelope::from_sourced(SCHEMA_QUOTES, s)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["stale_reason"], "fetch_failed");
+        assert_eq!(
+            v["warnings"][0],
+            "live fetch failed (connection refused); showing cached copy"
+        );
+        let stale = text.find("\"stale\"").unwrap();
+        let reason = text.find("\"stale_reason\"").unwrap();
+        assert!(stale < reason && reason < text.find("\"warnings\"").unwrap());
+        let schema = schema_for("quotes").unwrap().to_string();
+        assert!(schema.contains("stale_reason") && schema.contains("fetch_failed"));
     }
 
     #[test]

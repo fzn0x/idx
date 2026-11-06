@@ -363,6 +363,10 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
   carries only protocol frames.
 - Responses are cached exactly like the CLI, so an agent calling
   `idx_quote` twice within the quote TTL hits the network once.
+- A cached copy older than its TTL is served when the source fails (or the
+  server runs with `--offline`): the envelope then has `stale: true`,
+  `stale_reason` (`fetch_failed` or `offline`) and, after a failure, a warning
+  naming it.
 - The server exits cleanly when the client closes stdin.
 - Verdicts and signals are heuristics; the tool descriptions and the server
   instructions say so, and so should any agent that repeats them.

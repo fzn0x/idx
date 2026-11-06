@@ -18,10 +18,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{IdxError, Result};
-use crate::http::Fetcher;
+use crate::http::{Fetched, Fetcher};
 use crate::model::{
     DividendHistory, Earnings, Financials, Fundamentals, History, Interval, Period, Profile, Quote,
-    StatementPeriod, Symbol,
+    StaleReason, StatementPeriod, Symbol,
 };
 
 pub mod idx;
@@ -38,8 +38,16 @@ pub struct Sourced<T> {
     pub provider: &'static str,
     pub cached: bool,
     pub stale: bool,
+    /// Why `stale` is true; `None` when it is not.
+    pub stale_reason: Option<StaleReason>,
     pub fetched_at: DateTime<Utc>,
     pub warnings: Vec<String>,
+}
+
+/// The warning a stale copy served after a failed fetch carries; news and
+/// the web Worker use the same words.
+pub fn fetch_failed_warning(why: &str) -> String {
+    format!("live fetch failed ({why}); showing cached copy")
 }
 
 impl<T> Sourced<T> {
@@ -49,8 +57,24 @@ impl<T> Sourced<T> {
             provider,
             cached: false,
             stale: false,
+            stale_reason: None,
             fetched_at: Utc::now(),
             warnings: vec![],
+        }
+    }
+
+    /// `data` with the provenance of the response it was parsed from. A
+    /// stale copy served after a failed fetch also gets a warning naming
+    /// the failure.
+    pub fn from_fetched(data: T, provider: &'static str, f: &Fetched) -> Self {
+        Sourced {
+            data,
+            provider,
+            cached: f.cached,
+            stale: f.stale,
+            stale_reason: f.stale_reason,
+            fetched_at: f.fetched_at,
+            warnings: f.failure.iter().map(|w| fetch_failed_warning(w)).collect(),
         }
     }
 
@@ -60,16 +84,26 @@ impl<T> Sourced<T> {
             provider: self.provider,
             cached: self.cached,
             stale: self.stale,
+            stale_reason: self.stale_reason,
             fetched_at: self.fetched_at,
             warnings: self.warnings,
         }
     }
 
-    /// Folds another response's provenance into this one (earliest fetch,
-    /// cached only if both were, stale if either was).
-    pub fn absorb<U>(&mut self, other: &Sourced<U>) {
+    /// Folds another response's freshness into this one: cached only if
+    /// both were, stale if either was (keeping the first reason found).
+    pub fn absorb_freshness<U>(&mut self, other: &Sourced<U>) {
         self.cached &= other.cached;
         self.stale |= other.stale;
+        if self.stale_reason.is_none() {
+            self.stale_reason = other.stale_reason;
+        }
+    }
+
+    /// Folds another response's provenance into this one: its freshness,
+    /// the earliest fetch time and its warnings (each once).
+    pub fn absorb<U>(&mut self, other: &Sourced<U>) {
+        self.absorb_freshness(other);
         self.fetched_at = self.fetched_at.min(other.fetched_at);
         for w in &other.warnings {
             if !self.warnings.contains(w) {
@@ -511,6 +545,73 @@ mod tests {
         assert_eq!(got.data.valuation.pe_trailing, Some(9.0));
         assert_eq!(got.data.valuation.price_to_book, Some(2.0));
         assert_eq!(got.data.sources, vec!["ok".to_string(), "ok2".to_string()]);
+    }
+
+    fn fetched(stale_reason: Option<StaleReason>, failure: Option<&str>) -> Fetched {
+        Fetched {
+            status: 200,
+            body: String::new(),
+            headers: vec![],
+            cached: stale_reason.is_some(),
+            stale: stale_reason.is_some(),
+            stale_reason,
+            fetched_at: Utc::now(),
+            failure: failure.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn from_fetched_names_the_failure() {
+        let s = Sourced::from_fetched(
+            1,
+            "t",
+            &fetched(Some(StaleReason::FetchFailed), Some("boom")),
+        );
+        assert!(s.cached && s.stale);
+        assert_eq!(s.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (boom); showing cached copy"]
+        );
+        let off = Sourced::from_fetched(1, "t", &fetched(Some(StaleReason::Offline), None));
+        assert!(off.stale && off.warnings.is_empty());
+        assert_eq!(off.stale_reason, Some(StaleReason::Offline));
+        let live = Sourced::from_fetched(1, "t", &fetched(None, None));
+        assert!(!live.stale && !live.cached && live.warnings.is_empty());
+        assert_eq!(live.stale_reason, None);
+        assert_eq!(live.map(|n| n + 1).data, 2);
+    }
+
+    #[test]
+    fn absorb_keeps_the_first_reason() {
+        let mut acc = Sourced::fresh((), "t");
+        acc.cached = true;
+        let fresh_hit = Sourced::from_fetched((), "t", &{
+            let mut f = fetched(None, None);
+            f.cached = true;
+            f
+        });
+        acc.absorb(&fresh_hit);
+        assert!(acc.cached && !acc.stale && acc.stale_reason.is_none());
+        let failed = Sourced::from_fetched(
+            (),
+            "t",
+            &fetched(Some(StaleReason::FetchFailed), Some("boom")),
+        );
+        acc.absorb(&failed);
+        acc.absorb(&failed);
+        acc.absorb(&Sourced::from_fetched(
+            (),
+            "t",
+            &fetched(Some(StaleReason::Offline), None),
+        ));
+        assert!(acc.stale);
+        assert_eq!(acc.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(acc.warnings.len(), 1, "{:?}", acc.warnings);
+        let mut only = Sourced::fresh((), "t");
+        only.absorb_freshness(&failed);
+        assert!(only.stale && only.warnings.is_empty());
+        assert!(!only.cached, "fresh data absorbed stays uncached");
     }
 
     #[test]

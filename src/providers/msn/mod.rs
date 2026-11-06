@@ -113,14 +113,7 @@ impl Msn {
                 other => other,
             })?;
         let q = parse_quotes(&f.body)?.into_iter().next();
-        Ok(Sourced {
-            data: q,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        })
+        Ok(Sourced::from_fetched(q, NAME, &f))
     }
 
     async fn equity(&self, symbol: &Symbol, id: &str) -> Result<Sourced<String>> {
@@ -136,14 +129,7 @@ impl Msn {
                 "MSN has no company data for {symbol}"
             )));
         }
-        Ok(Sourced {
-            data: f.body,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        })
+        Ok(Sourced::from_fetched((), NAME, &f).map(|_| f.body))
     }
 }
 
@@ -198,14 +184,9 @@ impl Provider for Msn {
         if quotes.is_empty() {
             return Err(IdxError::NotFound("MSN returned no quotes".into()));
         }
-        Ok(Sourced {
-            data: quotes,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings,
-        })
+        let mut out = Sourced::from_fetched(quotes, NAME, &f);
+        out.warnings.extend(warnings);
+        Ok(out)
     }
 
     async fn history(
@@ -227,14 +208,7 @@ impl Provider for Msn {
             quote.as_ref().and_then(|q| q.data.as_ref()),
         )?
         .ok_or_else(|| IdxError::NotFound(format!("MSN has no company data for {symbol}")))?;
-        let mut out = Sourced {
-            data: profile,
-            provider: NAME,
-            cached: eq.cached,
-            stale: eq.stale,
-            fetched_at: eq.fetched_at,
-            warnings: vec![],
-        };
+        let mut out = eq.map(|_| profile);
         if let Some(q) = &quote {
             out.absorb(q);
         }
@@ -251,14 +225,7 @@ impl Provider for Msn {
             quote.as_ref().and_then(|q| q.data.as_ref()),
         )?
         .ok_or_else(|| IdxError::NotFound(format!("MSN has no company data for {symbol}")))?;
-        let mut out = Sourced {
-            data: f,
-            provider: NAME,
-            cached: eq.cached,
-            stale: eq.stale,
-            fetched_at: eq.fetched_at,
-            warnings: vec![],
-        };
+        let mut out = eq.map(|_| f);
         if let Some(q) = &quote {
             out.absorb(q);
         }

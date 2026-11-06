@@ -614,6 +614,63 @@ fn seed(cache: &std::path::Path, url: &str, fixture: &str) {
     idx::cache::Cache::new(cache).put(url, 200, &body).unwrap();
 }
 
+const V7_BBCA_BBRI_TLKM: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK";
+
+#[test]
+fn stale_copies_say_why() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        V7_BBCA_BBRI_TLKM,
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
+    // Fresh: no reason, no notice.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["stale"], false);
+    assert!(v.get("stale_reason").is_none(), "{v}");
+
+    // Older than the TTL and offline: stale, and why.
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_QUOTE_TTL_SECS", "0")
+        .args(["-o", "json", "stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "JSON mode keeps notices in the envelope"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["cached"], true);
+    assert_eq!(v["stale"], true);
+    assert_eq!(v["stale_reason"], "offline");
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUOTE_TTL_SECS", "0")
+        .args(["stocks", "quote", "BBCA,BBRI,TLKM"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: showing stale cached data from 20",
+        ))
+        .stderr(predicate::str::contains(" WIB (--offline)"));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "quotes"])
+        .output()
+        .unwrap();
+    let schema = String::from_utf8(out.stdout).unwrap();
+    assert!(schema.contains("stale_reason") && schema.contains("fetch_failed"));
+}
+
 #[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();

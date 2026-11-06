@@ -23,7 +23,7 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
-use crate::model::{wib, NewsItem};
+use crate::model::{wib, NewsItem, StaleReason};
 
 pub const NAME: &str = "news";
 pub const TTL: Duration = Duration::from_secs(15 * 60);
@@ -174,12 +174,23 @@ pub fn parse_feed(xml: &str, source: &str) -> Result<Vec<NewsItem>> {
         .collect())
 }
 
+/// What [`fetch`] read from the feeds that answered.
+#[derive(Debug, Clone)]
+pub struct FeedBatch {
+    /// Newest first, one per URL.
+    pub items: Vec<NewsItem>,
+    /// Feeds that failed, and feeds served from a stale copy with the cause.
+    pub warnings: Vec<String>,
+    /// Every feed used came from the cache.
+    pub cached: bool,
+    /// Why a feed used was a stale cached copy (the first one met); `None`
+    /// when none was.
+    pub stale_reason: Option<StaleReason>,
+}
+
 /// Fetches the given feeds concurrently. Feeds that fail become warnings;
 /// the call fails only when none succeed.
-pub async fn fetch(
-    fetcher: &Arc<Fetcher>,
-    feeds: &[Feed],
-) -> Result<(Vec<NewsItem>, Vec<String>, bool, bool)> {
+pub async fn fetch(fetcher: &Arc<Fetcher>, feeds: &[Feed]) -> Result<FeedBatch> {
     let futs = feeds.iter().map(|f| async move {
         let r = fetcher
             .get_with_backoff(
@@ -198,21 +209,18 @@ pub async fn fetch(
     let mut items = Vec::new();
     let mut warnings = Vec::new();
     let mut cached = true;
-    let mut stale = false;
+    let mut stale_reason = None;
     let mut ok = 0;
     for (feed, r) in join_all(futs).await {
         match r {
             Ok(f) if f.is_success() => match parse_feed(&f.body, feed.id) {
                 Ok(list) => {
                     if let Some(why) = &f.failure {
-                        warnings.push(format!(
-                            "{}: live fetch failed ({why}); showing cached copy",
-                            feed.id
-                        ));
+                        warnings.push(format!("{}: {}", feed.id, super::fetch_failed_warning(why)));
                     }
                     ok += 1;
                     cached &= f.cached;
-                    stale |= f.stale;
+                    stale_reason = stale_reason.or(f.stale_reason);
                     items.extend(list);
                 }
                 Err(e) => warnings.push(e.to_string()),
@@ -232,7 +240,12 @@ pub async fn fetch(
     }
     items.sort_by_key(|a| std::cmp::Reverse(a.published));
     items.dedup_by(|a, b| a.url == b.url);
-    Ok((items, warnings, cached, stale))
+    Ok(FeedBatch {
+        items,
+        warnings,
+        cached,
+        stale_reason,
+    })
 }
 
 #[cfg(test)]
@@ -256,15 +269,65 @@ mod tests {
             CacheMode::Normal,
         ));
         let feeds = select(&[]).unwrap();
-        let (items, warnings, _, _) = fetch(&fetcher, &feeds).await.unwrap();
-        assert!(!items.is_empty());
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        let first = fetch(&fetcher, &feeds).await.unwrap();
+        assert!(!first.items.is_empty());
+        assert_eq!(first.warnings.len(), 3, "{:?}", first.warnings);
+        assert_eq!(first.stale_reason, None);
         assert_eq!(backend.calls_matching("kontan.co.id"), 3);
 
-        let (_, again, _, _) = fetch(&fetcher, &feeds).await.unwrap();
+        let again = fetch(&fetcher, &feeds).await.unwrap().warnings;
         assert_eq!(backend.calls_matching("kontan.co.id"), 3);
         assert_eq!(again.len(), 3);
         assert!(again.iter().all(|w| w.contains("next try in")), "{again:?}");
+    }
+
+    /// A cache holding every default feed, fetched an hour ago (older than
+    /// the 15-minute TTL).
+    fn hour_old_feeds(dir: &std::path::Path) -> (Cache, Vec<Feed>) {
+        let cache = Cache::new(dir);
+        let feeds = select(&[]).unwrap();
+        let at = chrono::Utc::now() - chrono::Duration::hours(1);
+        for f in &feeds {
+            let body = if f.url.contains("kontan") {
+                KONTAN
+            } else {
+                CNBC
+            };
+            cache.put_at(f.url, 200, body, at).unwrap();
+        }
+        (cache, feeds)
+    }
+
+    #[tokio::test]
+    async fn stale_feeds_say_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, feeds) = hour_old_feeds(dir.path());
+        let offline = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache.clone(),
+            CacheMode::Offline,
+        ));
+        let b = fetch(&offline, &feeds).await.unwrap();
+        assert!(b.cached && !b.items.is_empty());
+        assert_eq!(b.stale_reason, Some(StaleReason::Offline));
+        assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+
+        // Every feed down: the same copies, each with its cause.
+        let down = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache,
+            CacheMode::Normal,
+        ));
+        let b = fetch(&down, &feeds).await.unwrap();
+        assert_eq!(b.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(b.warnings.len(), feeds.len(), "{:?}", b.warnings);
+        assert!(
+            b.warnings
+                .iter()
+                .all(|w| w.contains(": live fetch failed (") && w.ends_with("showing cached copy")),
+            "{:?}",
+            b.warnings
+        );
     }
 
     #[test]

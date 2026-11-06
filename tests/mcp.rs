@@ -13,6 +13,8 @@ fn spawn_server(dir: &std::path::Path) -> std::process::Child {
         .env("IDX_CACHE_DIR", dir.join("cache"))
         .env("IDX_CONFIG", dir.join("config.toml"))
         .env("IDX_OFFLINE", "1")
+        // Every cached quote is older than its TTL: stale, served offline.
+        .env("IDX_QUOTE_TTL_SECS", "0")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -23,9 +25,33 @@ fn spawn_server(dir: &std::path::Path) -> std::process::Child {
     cmd.spawn().expect("spawn idx mcp")
 }
 
+/// Puts a recorded response in the server's cache under its URL.
+fn seed(dir: &std::path::Path, url: &str, fixture: &str) {
+    let body = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture),
+    )
+    .unwrap();
+    idx::cache::Cache::new(dir.join("cache"))
+        .put(url, 200, &body)
+        .unwrap();
+}
+
+/// The JSON envelope inside a successful tool result.
+fn tool_body(r: &serde_json::Value) -> serde_json::Value {
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
 #[test]
 fn mcp_server_speaks_json_rpc_over_stdio() {
     let dir = tempfile::tempdir().unwrap();
+    seed(
+        dir.path(),
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK",
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
     let mut child = spawn_server(dir.path());
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -58,10 +84,9 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     assert_eq!(r["id"], 1);
     assert_eq!(r["result"]["serverInfo"]["name"], "idx");
     assert!(r["result"]["capabilities"]["tools"].is_object());
-    assert!(r["result"]["instructions"]
-        .as_str()
-        .unwrap()
-        .contains("idx -o json"));
+    let instructions = r["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("idx -o json"));
+    assert!(instructions.contains("stale_reason"));
 
     writeln!(
         stdin,
@@ -154,6 +179,19 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("usage"));
+
+    // A cached copy older than its TTL, served offline: stale, and why.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "idx_quote", "arguments": {"symbols": "BBCA,BBRI,TLKM"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let body = tool_body(&next());
+    assert_eq!(body["schema"], "idx.quotes.v1");
+    assert_eq!(body["cached"], true);
+    assert_eq!(body["stale"], true);
+    assert_eq!(body["stale_reason"], "offline");
+    assert_eq!(body["data"].as_array().unwrap().len(), 3);
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");
