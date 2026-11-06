@@ -547,7 +547,7 @@ const R = {
     return frag;
   },
   releases(list) {
-    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Positions", f: (r) => (r.positions == null ? "" : fmt.int(r.positions)) }, { h: "Source", k: "source", l: true }], list));
+    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Positions", f: (r) => fmt.int(r.positions) }, { h: "Source", k: "source", l: true }], list));
   },
 };
 
