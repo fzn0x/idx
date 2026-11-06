@@ -43,6 +43,27 @@ test("search on one month: kinds, order and the 2-character rule", () => {
   for (const bad of ["x", "%%", " ! "]) assert.throws(() => own.search(known, SEP, bad), own.UsageError);
 });
 
+test("search reads the spellings normalised once, with the same answers", () => {
+  // A spelling whose key differs from its holder's (a merged name).
+  const rows = [
+    { symbol: "WGSH", entity_key: "WALDEN GLOBAL SERVICES", holder: "WALDEN GLOBAL SERVICES", holder_raw: "WALDEN GLOBAL SERVICES", shares_total: 1, pct: 33.14 },
+    { symbol: "WGSH", entity_key: "WALDEN GLOBAL SERVICES", holder: "WALDEN GLOBAL SERVICES", holder_raw: "Walden Global Services Pte. Ltd.", shares_total: 1, pct: 1.86 },
+  ];
+  const known = own.knownFromMonth(rows, "2026-09-30");
+  assert.deepEqual(known[0].norm, ["WALDEN GLOBAL SERVICES", "WALDEN GLOBAL SERVICES PTE LTD"]);
+  const kinds = (k, q) => own.search(k, rows, q).map((m) => m.matched);
+  const bare = known.map(({ norm, ...k }) => k);
+  for (const [q, kind] of [["walden global services pte. ltd.", "spelling"], ["Walden Global Services Pte Ltd", "contains"], ["pte ltd", "contains"], ["ltd wald", "words"], ["services walden", "words"], ["walden", "prefix"], ["nobody", null]]) {
+    assert.deepEqual(kinds(known, q), kind ? [kind] : [], q);
+    assert.deepEqual(own.search(bare, rows, q), own.search(known, rows, q), q);
+  }
+  // Every holder of a real month: precomputed and computed spellings agree.
+  const sep = own.knownFromMonth(SEP, "2026-09-30");
+  for (const q of ["permadi", "salim anthoni", "uob kay hian", "persada", "tbk", "dwi muria"]) {
+    assert.deepEqual(own.search(sep.map(({ norm, ...k }) => k), SEP, q), own.search(sep, SEP, q), q);
+  }
+});
+
 test("cross-holders like the CLI", () => {
   const all = own.crossHolders(SEP, { min_issuers: 2 });
   assert.equal(all.length, 8);

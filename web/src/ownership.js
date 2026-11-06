@@ -30,17 +30,22 @@ export function searchKey(query) {
 
 export const KINDS = ["exact", "spelling", "prefix", "contains", "words"];
 
-/** How a key and its spellings match the normalised query `qk` and the collapsed query `qs`. */
-export function matchKind(qk, qs, key, spellings) {
+/**
+ * How a key and its spellings match the normalised query `qk` and the collapsed query `qs`.
+ * `norm`: the spellings normalised, in their order (knownFromMonth computes them once).
+ */
+export function matchKind(qk, qs, key, spellings, norm = spellings.map(entityKey)) {
   if (key === qk) return "exact";
-  if (spellings.some((s) => collapseUpper(s) === qs)) return "spelling";
+  // A spelling that collapses to the query also normalises to it, so only those are compared.
+  if (spellings.some((s, i) => norm[i] === qk && collapseUpper(s) === qs)) return "spelling";
   if (key.startsWith(qk)) return "prefix";
-  const norm = spellings.map(entityKey);
   if (key.includes(qk) || norm.some((n) => n.includes(qk))) return "contains";
-  const words = new Set([...key.split(" "), ...norm.flatMap((n) => n.split(" "))]);
-  if (qk.split(" ").every((w) => [...words].some((x) => x.startsWith(w)))) return "words";
+  if (qk.split(" ").every((w) => hasWord(key, w) || norm.some((n) => n !== key && hasWord(n, w)))) return "words";
   return null;
 }
+
+// Keys hold single spaces: a word of `x` starts with `w` when `x` starts with `w` or holds " w".
+const hasWord = (x, w) => x.startsWith(w) || x.includes(` ${w}`);
 
 function presence(stakes) {
   const out = new Map();
@@ -64,7 +69,7 @@ export function search(known, present, query) {
   const here = presence(present);
   const out = [];
   for (const k of known) {
-    const kind = matchKind(qk, qs, k.entity_key, k.spellings);
+    const kind = matchKind(qk, qs, k.entity_key, k.spellings, k.norm);
     if (!kind) continue;
     const p = here.get(k.entity_key);
     out.push({
@@ -80,13 +85,19 @@ export function search(known, present, query) {
   return out;
 }
 
-/** The holders of one month as `search` candidates: the web has that month's spellings only. */
+/**
+ * The holders of one month as `search` candidates: the web has that month's spellings only.
+ * `norm` holds each spelling normalised; a spelling printed as its key is its own key.
+ */
 export function knownFromMonth(rows, asOf) {
   const m = new Map();
   for (const r of rows) {
     let k = m.get(r.entity_key);
-    if (!k) { k = { entity_key: r.entity_key, holder: r.holder, spellings: [], last_seen: asOf }; m.set(r.entity_key, k); }
-    if (r.holder_raw && !k.spellings.includes(r.holder_raw)) k.spellings.push(r.holder_raw);
+    if (!k) { k = { entity_key: r.entity_key, holder: r.holder, spellings: [], norm: [], last_seen: asOf }; m.set(r.entity_key, k); }
+    if (r.holder_raw && !k.spellings.includes(r.holder_raw)) {
+      k.spellings.push(r.holder_raw);
+      k.norm.push(r.holder_raw === r.entity_key ? r.entity_key : entityKey(r.holder_raw));
+    }
   }
   return [...m.values()];
 }
