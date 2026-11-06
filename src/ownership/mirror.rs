@@ -120,6 +120,9 @@ pub fn to_discovered(base: &str, index: &MirrorIndex) -> Vec<DiscoveredFile> {
             origin: ORIGIN.to_string(),
             sha256: Some(r.sha256.clone()),
             source_url: r.source_url.clone(),
+            // The mirror holds the above-1 % register only.
+            family: "above1".to_string(),
+            importable: true,
         })
         .collect();
     out.sort_by_key(|f| std::cmp::Reverse(f.as_of));

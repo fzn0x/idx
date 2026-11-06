@@ -121,7 +121,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 39, "{names:?}");
+    assert_eq!(names.len(), 40, "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -133,6 +133,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     ] {
         assert!(names.contains(&name), "{names:?}");
     }
+    assert!(names.contains(&"idx_ownership_composition"), "{names:?}");
     assert!(names.contains(&"idx_holidays"), "{names:?}");
     assert!(names.contains(&"idx_orderbook"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
@@ -297,6 +298,20 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         rankings["inputSchema"]["properties"]["view"]["type"],
         "string"
     );
+
+    // KSEI's composition: nothing imported and IDX_OFFLINE=1, so no download.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+        "params": {"name": "idx_ownership_composition", "arguments": {"symbol": "BBCA"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 11);
+    assert_eq!(r["result"]["isError"], true);
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "offline_miss", "{body}");
+    assert_eq!(body["exit_code"], 5, "{body}");
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

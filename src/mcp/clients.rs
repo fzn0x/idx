@@ -291,6 +291,12 @@ pub struct Setup {
     pub notes: Vec<String>,
 }
 
+/// The number of tools the server lists, so the setup text cannot fall
+/// behind the router.
+fn tool_count() -> usize {
+    super::IdxServer::tool_router().list_all().len()
+}
+
 fn pretty(v: serde_json::Value) -> String {
     serde_json::to_string_pretty(&v).unwrap_or_default()
 }
@@ -362,9 +368,10 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
                     wrapped("mcpServers", stdio_entry(l, json!({}))),
                 ));
             }
-            notes.push(
-                "Check with `claude mcp list`; inside a session `/mcp` shows the 39 tools.".into(),
-            );
+            notes.push(format!(
+                "Check with `claude mcp list`; inside a session `/mcp` shows the {} tools.",
+                tool_count()
+            ));
         }
         "claude-desktop" => {
             if http {
@@ -906,7 +913,10 @@ pub fn render(s: &Setup) -> String {
             out.push_str(&format!("Note: {n}\n"));
         }
     }
-    out.push_str("\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists 39 tools; idx_brief is the one-call starting point.\n");
+    out.push_str(&format!(
+        "\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists {} tools; idx_brief is the one-call starting point.\n",
+        tool_count()
+    ));
     out
 }
 
@@ -965,6 +975,23 @@ mod tests {
         assert!(find("Claude").is_some());
         assert!(find("roo").is_some());
         assert!(find("nope").is_none());
+    }
+
+    #[test]
+    fn the_setup_text_counts_the_tools_the_server_lists() {
+        let n = tool_count();
+        assert!(n > 30, "{n}");
+        let l = Launcher::Binary("/opt/idx/bin/idx".into());
+        let s = setup(find("claude-code").unwrap(), &l);
+        let text = render(&s);
+        assert!(
+            text.contains(&format!("`/mcp` shows the {n} tools.")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("The server lists {n} tools;")),
+            "{text}"
+        );
     }
 
     #[test]

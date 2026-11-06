@@ -6,11 +6,11 @@ use serde::Serialize;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CorporateActions,
-    DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials, ForeignFlowReport,
-    ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport, IndexBoard,
-    InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
-    Release, ScreenReport, SentimentReport, StaleReason, Technical, Watchlist,
+    BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
+    CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
+    ForeignFlowReport, ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport,
+    IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance,
+    Profile, Quote, Release, ScreenReport, SentimentReport, StaleReason, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::model::{
@@ -104,6 +104,7 @@ pub const SCHEMA_OWNERSHIP_GRAPH: &str = "idx.ownership.graph.v1";
 pub const SCHEMA_OWNERSHIP_RESOLVE_CANDIDATES: &str = "idx.ownership.resolve-candidates.v1";
 pub const SCHEMA_OWNERSHIP_RESOLUTION: &str = "idx.ownership.resolution.v1";
 pub const SCHEMA_OWNERSHIP_RESOLUTIONS: &str = "idx.ownership.resolutions.v1";
+pub const SCHEMA_OWNERSHIP_COMPOSITION: &str = "idx.ownership.composition.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
@@ -150,6 +151,7 @@ pub type OwnershipGraphEnvelope = Envelope<GraphReport>;
 pub type OwnershipResolveCandidatesEnvelope = Envelope<ResolveCandidates>;
 pub type OwnershipResolutionEnvelope = Envelope<Vec<ResolutionReport>>;
 pub type OwnershipResolutionsEnvelope = Envelope<Vec<Resolution>>;
+pub type OwnershipCompositionEnvelope = Envelope<CompositionReport>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -160,7 +162,8 @@ pub struct ErrorEnvelope {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ErrorBody {
-    /// `usage` | `config` | `network` | `provider` | `not_found` | `offline_miss` | `io` | `internal`
+    /// `usage` | `config` | `network` | `provider` | `blocked` | `not_found` | `offline_miss` | `unsupported` | `io` | `internal`.
+    /// `blocked` (exit 3): the source's bot protection (Cloudflare) refused this network.
     pub code: String,
     pub message: String,
 }
@@ -231,6 +234,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-resolve-candidates",
         "ownership-resolution",
         "ownership-resolutions",
+        "ownership-composition",
         "error",
         "quote",
         "candle",
@@ -286,6 +290,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         }
         "ownership-resolution" => schemars::schema_for!(OwnershipResolutionEnvelope),
         "ownership-resolutions" => schemars::schema_for!(OwnershipResolutionsEnvelope),
+        "ownership-composition" => schemars::schema_for!(OwnershipCompositionEnvelope),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),
@@ -358,5 +363,12 @@ mod tests {
         let env = ErrorEnvelope::from(&e);
         assert_eq!(env.exit_code, 4);
         assert_eq!(env.error.code, "not_found");
+        let e = IdxError::blocked(
+            "idx",
+            crate::http::cloudflare::Refusal::Block,
+            "www.idx.co.id answered with a Cloudflare block page (HTTP 403)",
+        );
+        let env = ErrorEnvelope::from(&e);
+        assert_eq!((env.error.code.as_str(), env.exit_code), ("blocked", 3));
     }
 }

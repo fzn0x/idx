@@ -2,3 +2,5 @@
 *.sh text eol=lf
 *.png binary
 *.ico binary
+# KSEI composition excerpts keep the archive's CRLF line endings byte for byte.
+tests/fixtures/ownership/*.txt -text

@@ -255,4 +255,12 @@ set +e
 set -e
 if [ "$code" = 0 ]; then pass "ownership discover reached idx.co.id"; else echo "  skip ownership discover (exit $code): $(head -c 160 "$TMP/od.err")"; fi
 
+echo "ksei (composition archive)"
+"$IDX" ownership discover --family composition --limit 2 >"$TMP/kd.txt" || fail "ownership discover --family composition"
+expect "$TMP/kd.txt" "BalanceposEfek" "ksei.co.id lists the Kepemilikan Efek archives"
+"$IDX" -o json ownership composition BBCA >"$TMP/kc.json" || fail "ownership composition"
+expect "$TMP/kc.json" '"schema": "idx.ownership.composition.v1"' "composition json schema"
+expect "$TMP/kc.json" '"scripless_pct":' "composition reports the scripless share"
+expect "$TMP/kc.json" '"code": "MF"' "composition lists the investor types"
+
 echo "all live checks passed"

@@ -53,7 +53,8 @@ fn help_lists_commands_and_exit_codes() {
         .assert()
         .success()
         .stdout(predicate::str::contains("stocks"))
-        .stdout(predicate::str::contains("Exit codes"));
+        .stdout(predicate::str::contains("Exit codes"))
+        .stdout(predicate::str::contains("JSON code blocked"));
     idx(&sb.cache, &sb.config)
         .args(["stocks", "quote", "--help"])
         .assert()
@@ -1424,6 +1425,15 @@ fn ownership_import_and_queries_work_offline() {
         .assert()
         .code(5);
     own(&sb).args(["ownership", "import"]).assert().code(2);
+    // --force combines with --latest/--all (idx 0.8.1 refused it as a usage error).
+    own(&sb)
+        .args(["ownership", "import", "--all", "--force"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args(["ownership", "import", "--all", "--latest"])
+        .assert()
+        .code(2);
 }
 
 #[test]
@@ -2744,4 +2754,331 @@ fn other_markets_on_the_yahoo_backed_commands() {
         .args(["config", "set", "exchange", "ABCDE"])
         .assert()
         .code(6);
+}
+
+#[test]
+fn ownership_composition_and_families_work_offline() {
+    let sb = sandbox();
+    let db = sb.cache.join("composition.sqlite");
+    let fx = |name: &str| {
+        format!(
+            "{}/tests/fixtures/ownership/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    };
+    let own = |sb: &Sandbox| {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+    // Nothing imported and --offline (the test harness): no download.
+    own(&sb)
+        .args(["ownership", "composition", "BBCA"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("--family composition"));
+    // The ZIP and the TXT inside it are both detected from their content.
+    let out = own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "import",
+            "--file",
+            &fx("ksei_balancepos_20261030_excerpt_constructed.zip"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.import.v1");
+    assert_eq!(v["data"][0]["family"], "composition");
+    assert_eq!(v["data"][0]["release"]["rows"], 6);
+    assert_eq!(v["data"][0]["release"]["format"], "zip");
+    assert_eq!(v["data"][0]["other_securities"], 7);
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--file",
+            &fx("ksei_balancepos_20260930_excerpt.txt"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Imported KSEI composition 2026-09-30 (txt): 6 stocks, 7 other securities left out",
+        ));
+    own(&sb)
+        .args(["ownership", "composition", "bbca"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "BBCA · KSEI composition 2026-10-30",
+        ))
+        .stdout(predicate::str::contains("scripless"))
+        .stdout(predicate::str::contains("42.55% of listed"))
+        .stdout(predicate::str::contains("ID individual"))
+        .stdout(predicate::str::contains("Imported months"));
+    let out = own(&sb)
+        .args(["-o", "json", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.composition.v1");
+    assert_eq!(v["provider"], "local-db");
+    assert_eq!(v["data"]["scripless_pct"], 42.5501);
+    assert_eq!(v["data"]["foreign_pct"], 67.2201);
+    assert_eq!(v["data"]["history"].as_array().unwrap().len(), 2);
+    assert!(v["data"]["history"][0]["foreign_change_pp"].is_null());
+    let out = own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "composition",
+            "BBCA",
+            "--as-of",
+            "2026-09-30",
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["as_of"], "2026-09-30");
+    own(&sb)
+        .args(["-o", "csv", "ownership", "composition", "BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "symbol,as_of,code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct\n\
+             BBCA,2026-10-30,IS,INSURANCE,",
+        ));
+    own(&sb)
+        .args(["ownership", "composition", "ZZZZ"])
+        .assert()
+        .code(4);
+    // A month that is not imported needs ksei.co.id.
+    own(&sb)
+        .args(["ownership", "composition", "BBCA", "--as-of", "2026-08-31"])
+        .assert()
+        .code(5);
+    // The register of holders above 1 % is untouched.
+    let out = own(&sb)
+        .args(["-o", "json", "ownership", "releases"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"], serde_json::json!([]));
+    own(&sb)
+        .args(["ownership", "ticker", "BBCA"])
+        .assert()
+        .code(4);
+    // A register workbook is still a register.
+    own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "import",
+            "--file",
+            &fx("above1_20260831_excerpt.xlsx"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\": \"above1\""));
+    // Families and limits.
+    own(&sb)
+        .args(["ownership", "discover", "--family", "nope"])
+        .assert()
+        .code(2);
+    own(&sb)
+        .args(["ownership", "discover", "--family", "composition"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args(["ownership", "discover", "--family", "all", "--limit", "2"])
+        .assert()
+        .code(5);
+    own(&sb).args(["ownership", "discover"]).assert().code(5);
+    own(&sb)
+        .args(["ownership", "import", "--latest", "--family", "composition"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--family",
+            "composition",
+            "--file",
+            &fx("ksei_balancepos_20261030_excerpt_constructed.zip"),
+        ])
+        .assert()
+        .code(2);
+    own(&sb)
+        .args(["ownership", "discover", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("investor-type"))
+        .stdout(predicate::str::contains("--limit"));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "ownership-composition"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["$schema"].as_str().unwrap().contains("json-schema.org"));
+    assert!(v.to_string().contains("scripless_pct"));
+}
+
+#[test]
+fn ownership_composition_csv_keeps_its_columns_however_many_months() {
+    let sb = sandbox();
+    let db = sb.cache.join("composition.sqlite");
+    let sep = include_str!("fixtures/ownership/ksei_balancepos_20260930_excerpt.txt");
+    let dir = sb.cache.join("months");
+    std::fs::create_dir_all(&dir).unwrap();
+    // Ten months, one more than the nine investor types: September's excerpt
+    // dated January to October.
+    let months = [
+        ("20260130", "30-JAN-2026"),
+        ("20260227", "27-FEB-2026"),
+        ("20260331", "31-MAR-2026"),
+        ("20260430", "30-APR-2026"),
+        ("20260529", "29-MAY-2026"),
+        ("20260630", "30-JUN-2026"),
+        ("20260731", "31-JUL-2026"),
+        ("20260831", "31-AUG-2026"),
+        ("20260930", "30-SEP-2026"),
+        ("20261030", "30-OCT-2026"),
+    ];
+    for (name, cell) in months {
+        let path = dir.join(format!("Balancepos{name}.txt"));
+        std::fs::write(&path, sep.replace("30-SEP-2026", cell)).unwrap();
+        idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(["ownership", "import", "--file"])
+            .arg(&path)
+            .assert()
+            .success();
+    }
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "json", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["history"].as_array().unwrap().len(), 10);
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "csv", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(
+        lines[0],
+        "symbol,as_of,code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct"
+    );
+    assert_eq!(lines.len(), 10, "a header and the nine types:\n{csv}");
+    assert!(lines[9].starts_with("BBCA,2026-10-30,OT,OTHERS,"), "{csv}");
+}
+
+/// A one-shot HTTP server on 127.0.0.1 answering every request with the
+/// response for its path: Cloudflare's challenge and block pages and an
+/// ordinary outage, without leaving the machine.
+fn refusal_stub() -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let challenge = include_str!("fixtures/idx/cloudflare_challenge_synthetic.html");
+    let block = include_str!("fixtures/idx/cloudflare_blocked.html");
+    let handle = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let req = String::from_utf8_lossy(&buf);
+            let (status, headers, body) = if req.starts_with("GET /challenge") {
+                (
+                    "403 Forbidden",
+                    "cf-mitigated: challenge\r\nserver: cloudflare\r\n",
+                    challenge,
+                )
+            } else if req.starts_with("GET /block") {
+                ("403 Forbidden", "server: cloudflare\r\n", block)
+            } else {
+                (
+                    "503 Service Unavailable",
+                    "server: nginx\r\n",
+                    "<html><head><title>503 Service Temporarily Unavailable</title></head></html>",
+                )
+            };
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\n{headers}content-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, handle)
+}
+
+#[test]
+fn a_cloudflare_refusal_is_blocked_and_an_outage_is_not() {
+    let sb = sandbox();
+    let (base, server) = refusal_stub();
+    let discover = |path: &str| {
+        let mut c = idx(&sb.cache, &sb.config);
+        // Loopback only: the page is the stub above, the mirror is never
+        // asked (an explicit page is not second-guessed).
+        c.env_remove("IDX_OFFLINE")
+            .env("IDX_OWNERSHIP_PAGE_URL", format!("{base}{path}"))
+            .env("IDX_OWNERSHIP_MIRROR", "off")
+            .env("IDX_CURL_IMPERSONATE", "idx-test-no-such-curl-impersonate")
+            .args(["-o", "json", "ownership", "discover"]);
+        let out = c.output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stderr)
+            .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+        (out.status.code(), v)
+    };
+    let (code, v) = discover("/challenge");
+    assert_eq!(code, Some(3));
+    assert_eq!(v["error"]["code"], "blocked", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)"),
+        "{msg}"
+    );
+    assert!(msg.contains("no curl-impersonate binary"), "{msg}");
+    let (code, v) = discover("/block");
+    assert_eq!(
+        (code, &v["error"]["code"]),
+        (Some(3), &serde_json::json!("blocked"))
+    );
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("a Cloudflare block page (HTTP 403)"));
+    let (code, v) = discover("/maintenance");
+    assert_eq!(code, Some(3));
+    assert_eq!(v["error"]["code"], "network", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("HTTP 503") && !msg.contains("Cloudflare"),
+        "{msg}"
+    );
+    server.join().unwrap();
 }

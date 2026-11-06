@@ -18,7 +18,8 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `ownership-import`, `ownership-discover`, `ownership-search`,
 `ownership-cross-holders`, `ownership-concentration`, `ownership-graph`,
 `ownership-resolve-candidates`, `ownership-resolution`,
-`ownership-resolutions`, `watchlist`, `error`, `quote`, `candle`.
+`ownership-resolutions`, `ownership-composition`, `watchlist`, `error`,
+`quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -469,6 +470,56 @@ the 0-100 scale, rounded to 4 decimals at the end):
   `resolve list` (`idx.ownership.resolutions.v1`) lists the stored
   `resolution` objects.
 
+`discover` (`idx.ownership.discover.v1`) entries add `family` (`above1`,
+`above5`, `investor-type`, `classification` or `composition`) and
+`importable` (`true` for `above1` and `composition`); `origin` can now also be
+`ksei.co.id`. The envelope's `provider` names where the entries came from:
+`idx` (idx.co.id), `github-mirror` (the mirror, when idx.co.id refused),
+`ksei` (ksei.co.id only, as with `--family composition`), or `idx+ksei` and
+`github-mirror+ksei` when the families were listed from both.
+`import` (`idx.ownership.import.v1`) reports add `family`
+(`above1` or `composition`) and `other_securities` (composition only: rows of
+other security types left out). For a composition month `release.rows` and
+`release.issuers` count the stocks stored, `release.entities` is 0 and
+`positions`, `other_date_rows` and `controller_column` are `null`. Both stay
+`v1` (added fields).
+
+## `idx.ownership.composition.v1` (`ownership composition`)
+
+KSEI's monthly "Kepemilikan Efek" archive for one stock (see
+[ownership.md](ownership.md#ksei-composition-kepemilikan-efek)). `provider` is
+`ksei` when the call downloaded the month, `local-db` otherwise. With `-o csv`
+the rows are the nine investor types, whatever the number of imported months:
+`symbol, as_of, code, investor_type, local_shares, foreign_shares, local_pct,
+foreign_pct`.
+
+```json
+{
+  "symbol": "BBCA", "as_of": "2026-10-30", "price": 4980.0,
+  "shares_listed": 123275050000, "shares_scripless": 52453691120, "scripless_pct": 42.5501,
+  "local_shares": 17194269088, "foreign_shares": 35259422032,
+  "local_pct": 32.7799, "foreign_pct": 67.2201,
+  "by_type": [
+    {"code": "ID", "investor_type": "INDIVIDUAL", "local_shares": 12030567470,
+     "foreign_shares": 324800480, "local_pct": 22.9356, "foreign_pct": 0.6192}
+  ],
+  "history": [
+    {"as_of": "2026-09-30", "local_pct": 31.1106, "foreign_pct": 68.8894, "scripless_pct": 42.5501, "foreign_change_pp": null},
+    {"as_of": "2026-10-30", "local_pct": 32.7799, "foreign_pct": 67.2201, "scripless_pct": 42.5501, "foreign_change_pp": -1.6693}
+  ],
+  "source": "https://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip"
+}
+```
+
+`shares_scripless` is the local total plus the foreign total: the shares held
+in KSEI accounts. Shares still held as certificates are outside the archive.
+Every `*_pct` but `scripless_pct` is a percent of `shares_scripless` (4
+decimals, `null` when it is 0); `scripless_pct` is `shares_scripless` over
+`shares_listed`. `by_type` always lists the nine types in KSEI's order (`IS`,
+`CP`, `PF`, `IB`, `ID`, `MF`, `SC`, `FD`, `OT`). `history` is every imported
+month for the stock, oldest first; `foreign_change_pp` is the change from the
+previous imported month. `price` is `null` when KSEI left it blank.
+
 ## `idx.watchlist.v1` (`watch add|rm|list|clear`)
 
 `path` and `symbols[]`. `idx watch` itself returns `idx.quotes.v1` and
@@ -624,7 +675,7 @@ where one helps:
 | --- | --- | --- |
 | 1 | `internal`, `io` | unexpected failure |
 | 2 | `usage` | bad flags or symbol |
-| 3 | `network`, `provider` | network failure or the source returned an error |
+| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused this network with a challenge or a block page. Retry later or from another network, use cached data (`--offline`), or for the ownership register the GitHub mirror |
 | 4 | `not_found` | symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` and nothing cached |
 | 6 | `config`, `unsupported` | bad config file or env value; or the selected provider cannot serve this command (`--provider auto` can) |

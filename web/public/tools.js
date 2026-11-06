@@ -1,7 +1,8 @@
-// The 39 MCP tools, each with its CLI command and, where the web terminal can
+// The 40 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
-// idx.co.id ones (idx.co.id refuses requests from this site's host) and the
-// Stockbit realtime ones (they carry a personal account session).
+// idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
+// composition one (its archive is imported into the CLI's local database) and
+// the Stockbit realtime ones (they carry a personal account session).
 // The landing page table and test/tools.test.mjs keep to this list, and the
 // test checks it against docs/mcp.md.
 
@@ -42,6 +43,7 @@ export const TOOLS = [
   { tool: "idx_ownership_search", cli: "idx ownership search salim", web: "ownership search salim", what: "find a holder by name: key, spellings, issuers held" },
   { tool: "idx_ownership_rankings", cli: "idx ownership cross-holders", web: "ownership cross-holders", what: "holders in the most issuers, or issuers by concentration (HHI)" },
   { tool: "idx_ownership_graph", cli: "idx ownership graph BBCA", web: "ownership graph BBCA", what: "network of holders and issuers around a ticker or holder" },
+  { tool: "idx_ownership_composition", cli: "idx ownership composition BBCA", web: null, what: "local vs foreign shares by investor type (KSEI monthly archive)" },
   { tool: "idx_orderbook", cli: "idx stockbit orderbook BBCA", web: null, what: "realtime order book: full depth ladder and foreign flow (your Stockbit session)" },
   { tool: "idx_stockbit_status", cli: "idx stockbit status", web: null, what: "is a Stockbit session stored, and when its tokens expire" },
   { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in your browser, once" },

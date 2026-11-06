@@ -13,6 +13,10 @@
 //! - `resolutions`    the user's rules from `ownership resolve` (merge two
 //!   holders, map one spelling to a holder), applied to every release and
 //!   every later import (`resolve.rs`)
+//! - `composition_releases`, `composition`  KSEI's monthly "Kepemilikan
+//!   Efek" archive, one row per (month, stock): local and foreign shares by
+//!   investor type. A dataset of its own, never mixed into the register (see
+//!   [`super::composition`]).
 //!
 //! KSEI lists a holder once per SID and once per scrip account without an
 //! SID, so one holder can have several lines in one issuer (typically a scrip
@@ -44,9 +48,10 @@ mod resolve;
 
 /// `PRAGMA user_version` this idx writes. 0 is a file created by idx 0.8.1
 /// or older (the pragma was never set) or a brand-new file; 2 adds register
-/// lines and summed positions; 3 adds the `resolutions` rules. A later
-/// schema change adds an `if v < 4` step to `migrate` and bumps this.
-pub const SCHEMA_VERSION: i64 = 3;
+/// lines and summed positions; 3 adds the `resolutions` rules; 4 adds the
+/// KSEI composition tables. A later
+/// schema change adds an `if v < 5` step to `migrate` and bumps this.
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// The idx 0.8.1 tables, frozen. Every file is created from them and then
 /// migrated, so new and upgraded files end up identical.
@@ -132,7 +137,7 @@ pub struct OwnershipDb {
     path: PathBuf,
 }
 
-fn db_err(e: rusqlite::Error) -> IdxError {
+pub(super) fn db_err(e: rusqlite::Error) -> IdxError {
     IdxError::Other(format!("ownership database: {e}"))
 }
 
@@ -193,6 +198,10 @@ fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
         }
         if v < 3 {
             tx.execute_batch(resolve::V3_TABLES).map_err(db_err)?;
+        }
+        if v < 4 {
+            tx.execute_batch(super::composition::TABLES)
+                .map_err(db_err)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(db_err)?;
@@ -450,6 +459,16 @@ impl OwnershipDb {
         &self.path
     }
 
+    /// The connection, for the sibling modules that keep their own tables
+    /// ([`super::composition`]).
+    pub(super) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub(super) fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     /// `PRAGMA user_version` of the open file ([`SCHEMA_VERSION`] once open).
     pub fn schema_version(&self) -> Result<i64> {
         user_version(&self.conn)
@@ -564,6 +583,8 @@ impl OwnershipDb {
             },
             replaced: existing.is_some(),
             database: self.path.display().to_string(),
+            family: "above1".into(),
+            other_securities: None,
         })
     }
 
@@ -1330,7 +1351,7 @@ pub fn summarise(changes: &[Change]) -> ChangesSummary {
     }
 }
 
-fn round4(v: f64) -> f64 {
+pub(super) fn round4(v: f64) -> f64 {
     let r = (v * 10_000.0).round() / 10_000.0;
     if r == 0.0 {
         0.0 // never -0.0 in JSON
@@ -1339,7 +1360,7 @@ fn round4(v: f64) -> f64 {
     }
 }
 
-fn parse_date(s: &str) -> NaiveDate {
+pub(super) fn parse_date(s: &str) -> NaiveDate {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap_or_default()
 }
 
@@ -1973,5 +1994,36 @@ mod tests {
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
         assert!(db.releases().unwrap().is_empty());
         assert!(db.release_notes(&[date(2026, 9, 30)]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_version_2_file_gains_the_composition_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ownership.sqlite");
+        {
+            // A file as idx left it at schema 2: register tables only.
+            let mut db = OwnershipDb::open(&path).unwrap();
+            db.import(&parse_xlsx(SEP).unwrap(), "xlsx", "sep.xlsx", "s")
+                .unwrap();
+            db.conn
+                .execute_batch(
+                    "DROP TABLE composition; DROP TABLE composition_releases;
+                     PRAGMA user_version = 2;",
+                )
+                .unwrap();
+        }
+        let db = OwnershipDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        let tables: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE name IN ('composition', 'composition_releases', 'composition_symbol')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 3);
+        assert_eq!(db.releases().unwrap()[0].positions, Some(43));
     }
 }

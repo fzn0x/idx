@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 39 tools; several
+plain `GET /healthz`. It is the same server and the same 40 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -331,6 +331,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_search` | `query`, `limit?` (default 20, 0 = all, at most 100), `as_of?` | `idx.ownership.search.v1`: holders matching a name (every spelling, words in any order) with their `entity_key`, spellings, issuers held and `last_seen` |
 | `idx_ownership_rankings` | `view?` (`holders` default \| `issuers`); holders: `min_issuers?` (default 2), `investor_type?`, `origin?` (`foreign` \| `local`); issuers: `symbols?`, `by?` (`hhi` default \| `top1` \| `top3`), `ascending?`; `limit?` (default 25, 0 = all), `as_of?` | `idx.ownership.cross-holders.v1` (holders by the issuers they own above 1 %) or `idx.ownership.concentration.v1` (issuers by HHI, top-1 and top-3 stakes, undisclosed percent, controller stake) |
 | `idx_ownership_graph` | `root` (ticker or holder), `depth?` (1-6, default 2), `min_pct?`, `max_nodes?` (default 100, at most 1000), `holder?`, `as_of?` | `idx.ownership.graph.v1`: issuers and holders with hop counts and the links between them; `truncated` when `max_nodes` stopped the walk |
+| `idx_ownership_composition` | `symbol`, `as_of?` | `idx.ownership.composition.v1`: KSEI's monthly archive, local vs foreign shares in nine investor types as a percent of the scripless shares, `scripless_pct`, and every imported month. Downloads the newest month from ksei.co.id on first use (not with `--offline`) |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current, seen during trading). Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
@@ -359,6 +360,14 @@ unless it holds its default: `symbols`, `by` other than `hhi` or
 `idx ownership resolve` (merging holders KSEI printed two ways) change the
 user's database, so they stay in the CLI; the MCP tools read the result.
 
+`idx_ownership_composition` reads a second dataset: KSEI's "Kepemilikan Efek"
+archive, which counts every holder and names none. It covers the shares held
+in KSEI accounts only, so its percents are of those (`scripless_pct` says how
+much of the listed shares that is). The first call downloads the newest month
+(about 125 KB) into the same local database; later calls read it and ask
+ksei.co.id again only once a newer month can exist. `provider` is `ksei` when
+the call imported a month, `local-db` otherwise.
+
 ## Harness compatibility
 
 Input schemas are rewritten before they are advertised: no `$schema`, no
@@ -374,7 +383,10 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
 {"error":{"code":"not_found","message":"not found: ZZZZ: Quote not found for symbol: ZZZZ.JK"},"exit_code":4}
 ```
 
-`code` values and their meaning are listed in json-output.md.
+`code` values and their meaning are listed in json-output.md. `blocked`
+(exit 3) means the source's bot protection (Cloudflare, idx.co.id) refused
+this network: retry later, rely on cached data, or for the ownership register
+let the GitHub mirror serve it.
 
 ## Behaviour notes
 

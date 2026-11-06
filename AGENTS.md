@@ -57,13 +57,16 @@ src/
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
                      bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers
-  ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
-                     mirror fallback), ingest.rs (XLSX/PDF, text numbers, controller column), normalize.rs
-                     (entity keys), db.rs (SQLite schema with `PRAGMA user_version` migrations, register lines
-                     and summed positions, queries; db/analytics.rs the analytics queries, db/resolve.rs the
-                     `resolutions` rules and the import's entity resolver), analytics.rs (pure: search,
-                     cross-holders, HHI concentration, graph walk and DOT, spelling candidates); mod.rs query
-                     wrappers shared by cli/, mcp/ and the brief. Imported once, queried locally.
+  ownership/         KSEI >1% register: discover.rs (idx.co.id page and its families, Cloudflare strategy,
+                     `discover --family`), mirror.rs (GitHub mirror fallback), ingest.rs (XLSX/PDF, text
+                     numbers, controller column), normalize.rs (entity keys), db.rs (SQLite schema with
+                     `PRAGMA user_version` migrations, register lines and summed positions, queries;
+                     db/analytics.rs the analytics queries, db/resolve.rs the `resolutions` rules and the
+                     import's entity resolver), analytics.rs (pure: search, cross-holders, HHI concentration,
+                     graph walk and DOT, spelling candidates); KSEI's composition archive: ksei.rs (ksei.co.id
+                     "Kepemilikan Efek" listing + ZIP download), composition.rs (ZIP/TXT parser with zip-slip
+                     and size limits, its own tables, report); mod.rs query wrappers shared by cli/, mcp/ and
+                     the brief. Imported once, queried locally.
   mcp/               rmcp server; one #[tool] per command, same JSON envelope as -o json;
                      schema.rs rewrites input schemas into the subset every harness accepts;
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
@@ -74,7 +77,8 @@ src/
                      jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
                      mod.rs OutputSetting (auto resolved against the terminal) and print_notice
                      (stderr lines --quiet hides); cli/mod.rs emit() picks the format for every handler
-  http/              Fetcher: cache in front of a Backend (reqwest live / FixtureBackend tests)
+  http/              Fetcher: cache in front of a Backend (reqwest live / FixtureBackend tests);
+                     cloudflare.rs tells a Cloudflare challenge or block page from an HTTP error (`blocked`)
   progress.rs        the CLI's loading line on stderr: hosts in flight and their wait; fetcher and
                      IPOT retries report to it, only the CLI turns it on (stderr a terminal, no -v)
   cache/             content-addressed file cache, TTL decided by the caller at read time
@@ -100,7 +104,7 @@ CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, 
 fundamental, technical, brief, compare, screen, news, sentiment, actions, foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
 `ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
-releases, discover, path),
+composition, releases, discover, path),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in
 realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 
@@ -123,7 +127,8 @@ realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`
    `idx schema <name>` (`output/json.rs`).
 5. **Providers are interchangeable.** Nothing outside `src/providers/<name>/`
    may know about a source's URL or field names. The one exception is
-   `src/ownership/`, which *is* the idx.co.id source module.
+   `src/ownership/`, which *is* the source module for the KSEI registers
+   (idx.co.id and ksei.co.id).
 6. **Cache keys exclude secrets.** Session tokens (crumbs, cookies) never form
    part of a cache key; pass an explicit `cache_key` to `Fetcher::get`.
 

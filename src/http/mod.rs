@@ -17,6 +17,8 @@ use crate::cache::Cache;
 use crate::error::{IdxError, Result};
 use crate::model::StaleReason;
 
+pub mod cloudflare;
+
 pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone)]

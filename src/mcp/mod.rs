@@ -41,7 +41,7 @@ use crate::output::json::{
 };
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
-    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
+    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
 };
 use crate::ownership::{self, OwnershipDb};
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
@@ -66,7 +66,9 @@ stale=true means a cached copy older than its TTL was served: stale_reason is of
 (the server runs with --offline) or fetch_failed (the source failed; a warning names
 the failure).
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
-means the ticker is unknown, offline_miss means --offline with nothing cached.
+means the ticker is unknown, offline_miss means --offline with nothing cached, blocked
+means the source's bot protection (Cloudflare, idx.co.id) refused this network: retry
+later, rely on cached data or, for the ownership register, the GitHub mirror.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
@@ -74,6 +76,8 @@ Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
 idx_ownership_search finds a holder's entity_key by name; idx_ownership_rankings ranks
 holders by issuers held or issuers by concentration; idx_ownership_graph walks the network.
+idx_ownership_composition reads KSEI's monthly composition archive (local vs foreign by
+investor type, every holder, none named) and downloads the newest month on first use.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 // Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
@@ -143,6 +147,15 @@ pub struct OwnershipTickerArgs {
     /// One IDX ticker, e.g. "BBCA".
     pub symbol: String,
     /// Release date YYYY-MM-DD (default: newest imported). idx_ownership_releases lists them.
+    #[serde(default)]
+    pub as_of: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OwnershipCompositionArgs {
+    /// One IDX ticker, e.g. "BBCA".
+    pub symbol: String,
+    /// Month YYYY-MM-DD, the archive's date (a month's last trading day, e.g. 2026-10-30); default: the newest. A listed month that is not imported yet is downloaded.
     #[serde(default)]
     pub as_of: Option<String>,
 }
@@ -1677,6 +1690,34 @@ impl IdxServer {
     }
 
     #[tool(
+        name = "idx_ownership_composition",
+        description = "KSEI's monthly composition of one IDX stock (ksei.co.id \"Kepemilikan Efek\" archive): local versus foreign shares in nine investor types (insurance, corporate, pension fund, financial institution, individual, mutual fund, securities company, foundation, others) as a percent of the shares held in KSEI accounts (scripless), the scripless share of all listed shares (`scripless_pct`; shares held as certificates are outside the archive), and the foreign share for every imported month with the change in percentage points. Covers every holder, not only those above 1%, and names none. Downloads the newest month (about 125 KB) into the local database on first use and when a newer month can exist; `as_of` downloads a listed month that is missing. Returns the idx.ownership.composition.v1 envelope."
+    )]
+    async fn ownership_composition(
+        &self,
+        Parameters(a): Parameters<OwnershipCompositionArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbol = Symbol::parse(&a.symbol)?;
+                let as_of = parse_date(&a.as_of)?;
+                let mut db = self.db()?;
+                let report = ownership::composition::report(
+                    &mut db,
+                    &self.fetcher,
+                    symbol.as_str(),
+                    as_of,
+                    std::time::Duration::from_secs(60),
+                    service::today_wib(),
+                )
+                .await?;
+                ok(SCHEMA_OWNERSHIP_COMPOSITION, report)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         name = "idx_orderbook",
         description = "Realtime order book for one IDX ticker from the user's Stockbit session: the full depth ladder (bids and asks, sizes in shares), last/open/high/low, session volume and value, and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current with has_foreign_bs not true; a book recorded during trading carried the previous session's figures that way). Returns the idx.orderbook.v1 envelope. Needs a Stockbit login (idx_stockbit_status says whether one exists); errors with 'no Stockbit session' otherwise."
     )]
@@ -1882,6 +1923,7 @@ mod tests {
                 "idx_news",
                 "idx_orderbook",
                 "idx_ownership_changes",
+                "idx_ownership_composition",
                 "idx_ownership_entity",
                 "idx_ownership_foreign",
                 "idx_ownership_graph",
@@ -2304,6 +2346,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(code(&r), "not_found");
+    }
+
+    #[tokio::test]
+    async fn a_cloudflare_refusal_is_a_blocked_tool_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let challenge =
+            include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html");
+        let backend = crate::http::FixtureBackend::new()
+            .route_with_headers(
+                "GetTradingInfoSS",
+                403,
+                challenge,
+                &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+            )
+            .route("GetStockSummary", 503, "maintenance");
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(backend),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let r = s
+            .foreign(Parameters(ForeignArgs {
+                symbol: "BBCA".into(),
+                days: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "blocked", "{v}");
+        assert_eq!(v["exit_code"], 3);
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Cloudflare challenge"));
+    }
+
+    #[tokio::test]
+    async fn composition_tool_never_downloads_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Offline,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let call = |symbol: &str, as_of: Option<&str>| OwnershipCompositionArgs {
+            symbol: symbol.into(),
+            as_of: as_of.map(Into::into),
+        };
+        let r = s
+            .ownership_composition(Parameters(call("BBCA", None)))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "offline_miss", "{v}");
+        let r = s
+            .ownership_composition(Parameters(call("BBCA", Some("30/10/2026"))))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "usage", "{v}");
+
+        let mut db = OwnershipDb::open(&dir.path().join("ownership.sqlite")).unwrap();
+        ownership::import_file(
+            &mut db,
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/ownership/ksei_balancepos_20261030_excerpt_constructed.zip"
+            )),
+        )
+        .unwrap();
+        let r = s
+            .ownership_composition(Parameters(call("bbca", None)))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.composition.v1", "{v}");
+        assert_eq!(v["provider"], "local-db");
+        assert_eq!(v["data"]["foreign_pct"], 67.2201);
+        assert_eq!(v["data"]["by_type"].as_array().unwrap().len(), 9);
     }
 
     #[tokio::test]
