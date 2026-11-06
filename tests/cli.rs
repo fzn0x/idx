@@ -1388,7 +1388,6 @@ fn ownership_snapshot_sync_and_status_work_offline() {
                 .success();
         }
     };
-    // A mirror directory: the snapshot of `files`, the raw files and index.json.
     // A mirror directory: the snapshot of the first `in_snapshot` files, all
     // `files` as raw files and index.json.
     let make_mirror_lagging = |name: &str,
