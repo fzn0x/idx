@@ -2,32 +2,34 @@
 version: 1
 slug: "web-public-index-html"
 primary_target: "web/public/index.html"
-related_targets: ["web/public/terminal.html"]
+related_targets: ["web/public/terminal.html","web/public/en/index.html","web/public/en/terminal.html"]
 ---
 
-# Surface: ihsg.midoriresearch.com home monitor (web/public/index.html) and the web terminal (web/public/terminal.html)
+# Surface: ihsg.midoriresearch.com home (web/public/index.html, en/index.html) and the web terminal (terminal.html, en/terminal.html)
 
-Scope: Persuade (the home page, now a live market monitor) with the terminal as an Operate surface in the same world.
-Audience: IDX retail investors and analysts arriving from GitHub or a shared link; AI-agent builders evaluating the MCP server.
-Job: see idx prove itself on a working market screen, understand in seconds that it is one free binary with three faces, then type a command, install, or star the repo.
-Proof/content: the live board from /api/market (minute-refreshed), real CLI output and JSON, the real tool list from public/tools.js, the live GitHub star count through the Worker. No testimonials, logos or benchmarks exist and none are invented.
-Constraints: English UI with the Indonesian section names kept (Papan Harga, Saham Teraktif, Keterangan, Catatan, Ikhtisar, Daftar Perintah); brand mark (the Material 3 Expressive cookie of 2026-11-06) and idx green kept; the notes, the three-faces output and the full command table kept; keyboard-first with the mouse fully working; no em dashes anywhere in the copy; disclaimers one sentence; copy readable without JS; AA contrast; reduced motion honoured; CSP forbids inline scripts and only Google Fonts may serve fonts.
+Scope: Operate (the home page is where older investors read the market and find a stock); the terminal is an Operate surface for power users in the same world.
+Audience: Indonesian retail investors, many over 50, who have read the market page of the morning paper for decades; they check IHSG and their stocks on a phone by day and on a laptop or tablet at home. Second: developers and AI-agent builders who arrive from GitHub.
+Job: read today's IHSG, the session, the heavyweights and the movers at a glance, in Bahasa Indonesia; find a stock by code or company name; developers find the install line, MCP and the command table further down.
+Action/task: search a stock (the result opens in the terminal), switch tabs between Naik, Turun and Teramai, switch language, open the terminal, copy an install line.
+Proof/content: the live board from /api/market, the IHSG minute tape, breadth, the session timetable from clock.js, real CLI output and JSON, the tool list from public/tools.js, the live star count. Nothing invented: no testimonials, logos or benchmarks.
+Constraints: Bahasa Indonesia at the plain paths and English under /en/ with a switch on every page; Indonesian number and time style (5.050,43; 16.14 WIB; M = miliar, T = triliun); light by day and dark when the device asks; body text at 18px or more; colour never the only carrier of a move (sign and triangle too); AA contrast; reduced motion honoured; CSP forbids inline scripts and only Google Fonts may serve fonts; no em dashes; the M3 Expressive mark of 2026-11-06 and idx mint kept; the notes, the three-faces output and the full command table kept; not affiliated with PT Bursa Efek Indonesia, said plainly.
 
 ## Direction contract
 
-THESIS: The IDX session read like a Jakarta KRL departure board run as an institutional terminal: fixed rows that flip in place, a station clock and timetable for the session, a command line at the gate. The product proves itself live before it explains itself. It refuses the dark developer-tool landing (headline and install beside a terminal screenshot, feature cards) and the neon-on-black terminal costume.
+THESIS: The market read the way older Indonesian investors have always read it: the morning paper's market page, made live, large and calm. IHSG leads like the paper's headline figure, the closing table and the movers follow, and every move is printed with its sign, its triangle and its colour. It refuses the dark trading dashboard and the white fintech card grid.
 
-OWN-WORLD: Black glass ground #0b0f14 (the ink of the mark's candles), flush panels split by 1px rules #1b242d; no cards, shadows, radius or glow. Lit text #e6edf3, dim #8b98a5, ghost #17202a. idx mint #4ade80 is the one live circuit (focus, caret, live state) and gains; rose #f43f5e losses and errors; amber #e3b341 only for delayed or stale. Doto dot-matrix only for the band's big figures; Martian Mono for everything else, condensed for tables, tabular figures. Panels open with a numbered Indonesian title, an English subtitle and an age stamp, and close with a machine line.
+OWN-WORLD: Day: cool newsprint grey #f3f4f1 with white sheets #ffffff, ink #15191e, secondary #454e58, hairlines #cfd4cd, a navy masthead and navy section bands #123a64 with white type, gains #11743a, losses #b42318, late #8a5300, fresh-ink highlighter #ffe680. Night: blue charcoal #0f151c, sheets #151d26, ink #e9edf2, navy #173d66, gains in idx mint #4ade80, losses #ff8f85. Libre Franklin 800 for headings; Atkinson Hyperlegible Next for text and every figure, tabular. 4px corners, a 4px ink rule over the lead, 2px ink rules under table heads.
 
-STORY: A visitor lands on a working market screen, watches IHSG, the session clock and the heavyweights board update in place, reads in Keterangan that idx gives one answer as table, JSON and MCP, then types a command or ticker at the gate, copies the install line, or stars the repo.
+STORY: A reader lands, sees today's date and whether the exchange is open, reads IHSG and its move, glances at breadth and the session chart, scans the heavyweights by name, flips to the day's gainers, then types a company name into the search and opens it. A developer scrolls on to the install line, the three faces and the command table.
 
-FIRST VIEWPORT: At 1440x900: a 40px top bar (mark, idx wordmark, Monitor / Terminal / Docs, Star button with live count at right); a full-width command line with typeahead; an LED band with IHSG in Doto near 56px, change, the WIB clock, session state and countdown, breadth, the index tape along its foot; then 01 PAPAN HARGA at two thirds width, about 16 rows, beside a right column stacking 02 SAHAM TERAKTIF (tabs) over 03 KETERANGAN (three lines, install and MCP lines with copy, open terminal); a sticky 28px status bar with live state, snapshot age, source and key hints.
+FIRST VIEWPORT: At 1440x900: a 68px navy masthead (mark, idx and Midori Research, Pasar / Terminal / Panduan, ID-EN switch, Star with count); the page head with "Pasar Saham Indonesia", the date line and the session pill; a 58px search with its Cari button; the IHSG box across the width, five twelfths figure (close at 3.6rem, the move in a tinted chip, breadth to scale, the session and clock) beside seven twelfths of session chart, with the freshness line under it; the top of Saham Unggulan below.
 
-FORM: Grounded candidate 6 of my ordered list (KRL and MRT Jakarta dot-matrix departure boards), seed key e925621a, mode persuade, fused with the user-pinned Bloomberg, TradingView and TUI brief. Raises: addressable panels and results, Back retraces the trail (HyperCard); every panel states its age (brine calendar); one live circuit in idx green (neon circuit); a machine line closing each panel (passport); one region owns the screen (zoo map). Signature interaction: the board flips; each minute changed cells swap instantly through a one-frame dot invert, never a tween, while the station clock ticks; under reduced motion values swap with no flash. Terminal: the same shell, the gate on top, each result a numbered panel with its machine line, newest under the gate, a rail of commands and history on wide screens.
+FORM: Grounded candidate 4 of my ordered list (the Indonesian morning paper's stock market page), seed key bc07890b, mode operate, assigned by the roll and chosen by the owner. Raises: one reading size at a fixed measure (acetate tab manual); ruled modules without whitespace inflation (Japanese high-density web); every bar to scale (Labanotation); one plot owns the field, the IHSG chart (catalog sleeve); every stock carries its name plate, code over full name (character catalog); one tonal ramp shared by day and night (exposure record). Signature move: fresh ink, a figure that changed in the minute refresh is marked with the highlighter and fades back to paper over two seconds; under reduced motion the value only changes.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
 ## Unresolved
-- Settled 2026-11-06: the timetable and countdown follow IDX's regular-market hours from its "Trading Hours and Mechanism" page (Decree Kep-00158/BEI/10-2026, Rule II-A), checked against the live page; web/public/clock.js holds them.
+- The timetable and countdown follow IDX's regular-market hours (Decree Kep-00158/BEI/10-2026, Rule II-A); web/public/clock.js holds them.
 - Ownership data on the web: only what the register mirror syncs; the terminal states the limitation.
-- Screenshots for the README come from this build once reviewed.
+- The terminal's command results keep the CLI's English column names on both languages; its shell, help and states are translated.
+- The docs pages stay in English (generated from README and docs/); their shell follows this world.
