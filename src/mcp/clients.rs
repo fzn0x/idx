@@ -8,25 +8,39 @@
 use serde::Serialize;
 use serde_json::json;
 
+/// The npm package whose only command runs `idx mcp` (`npm-mcp/` in this
+/// repository); it downloads and verifies the idx binary on first start.
+pub const NPM_MCP_PACKAGE: &str = "ihsg-mcp";
+
 /// How the client should launch or reach idx.
 #[derive(Debug, Clone)]
 pub enum Launcher {
     /// Absolute path of the idx binary, run as `idx mcp`.
     Binary(String),
-    /// `npx -y ihsg-cli mcp` (no install step).
+    /// `npx -y ihsg-mcp` (npm package, no install step); `cmd /c npx -y
+    /// ihsg-mcp` on Windows, where clients start commands without a shell
+    /// and npx is a .cmd script.
     Npx,
     /// A running `idx mcp --http` endpoint, usually behind a tunnel.
     Http { url: String, token: Option<String> },
+}
+
+/// The npx command line for a client on Windows (`windows`) or elsewhere.
+fn npx_command(windows: bool) -> (String, Vec<String>) {
+    let args = ["-y", NPM_MCP_PACKAGE];
+    if windows {
+        let all = ["/c", "npx"].iter().chain(&args);
+        ("cmd".into(), all.map(|s| s.to_string()).collect())
+    } else {
+        ("npx".into(), args.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 impl Launcher {
     fn command(&self) -> (String, Vec<String>) {
         match self {
             Launcher::Binary(p) => (p.clone(), vec!["mcp".into()]),
-            Launcher::Npx => (
-                "npx".into(),
-                vec!["-y".into(), "ihsg-cli".into(), "mcp".into()],
-            ),
+            Launcher::Npx => npx_command(cfg!(windows)),
             Launcher::Http { .. } => (String::new(), vec![]),
         }
     }
@@ -831,7 +845,9 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
                         "export IDX_MCP_TOKEN={token}\n{} --http 127.0.0.1:8765 --allowed-host '*'",
                         match l {
                             Launcher::Binary(p) => format!("{p} mcp"),
-                            _ => "idx mcp".into(),
+                            // Typed into a terminal, where npx resolves on every OS.
+                            Launcher::Npx => format!("npx -y {NPM_MCP_PACKAGE}"),
+                            Launcher::Http { .. } => "idx mcp".into(),
                         }
                     ),
                 ));
@@ -993,7 +1009,107 @@ mod tests {
             v["mcpServers"]["idx"]["headers"]["Authorization"],
             "Bearer s3cret"
         );
-        let npx = setup(find("claude-code").unwrap(), &Launcher::Npx);
-        assert!(npx.steps[0].body.contains("npx -y ihsg-cli mcp"));
+    }
+
+    #[test]
+    fn npx_recipes_run_the_ihsg_mcp_package() {
+        // The command a client spawns, on both kinds of host.
+        assert_eq!(
+            npx_command(false),
+            ("npx".to_string(), vec!["-y".to_string(), "ihsg-mcp".into()])
+        );
+        assert_eq!(
+            npx_command(true),
+            (
+                "cmd".to_string(),
+                vec!["/c", "npx", "-y", "ihsg-mcp"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        let l = Launcher::Npx;
+        let (cmd, args) = npx_command(cfg!(windows));
+        let line = if cfg!(windows) {
+            "cmd /c npx -y ihsg-mcp"
+        } else {
+            "npx -y ihsg-mcp"
+        };
+        assert_eq!(l.shell(), line);
+
+        let claude = setup(find("claude-code").unwrap(), &l);
+        assert_eq!(
+            claude.steps[0].body,
+            format!("claude mcp add --scope user idx -- {line}")
+        );
+        assert_eq!(claude.launcher, line);
+        let cursor = setup(find("cursor").unwrap(), &l);
+        let v: serde_json::Value = serde_json::from_str(&cursor.steps[0].body).unwrap();
+        assert_eq!(v["mcpServers"]["idx"]["command"], cmd.as_str());
+        assert_eq!(v["mcpServers"]["idx"]["args"], json!(args));
+        let codex = setup(find("codex").unwrap(), &l);
+        assert!(codex.steps[1].body.contains(&format!(
+            "command = {}\nargs = {}",
+            toml_str(&cmd),
+            toml_arr(&args)
+        )));
+
+        // ChatGPT's first step is typed into a terminal, where plain npx works
+        // on every OS; it must not tell the user to run an `idx` they lack.
+        let chatgpt = setup(find("chatgpt").unwrap(), &l);
+        assert!(chatgpt.steps[0]
+            .body
+            .contains("\nnpx -y ihsg-mcp --http 127.0.0.1:8765 --allowed-host '*'"));
+
+        // Every client: the package name, never the old `ihsg-cli mcp` form
+        // (the package runs `idx mcp` itself, so no `mcp` argument follows),
+        // and every JSON entry launches exactly the npx command.
+        fn values<'a>(v: &'a serde_json::Value, key: &str, out: &mut Vec<&'a serde_json::Value>) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k, x) in m {
+                        if k == key {
+                            out.push(x);
+                        }
+                        values(x, key, out);
+                    }
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|x| values(x, key, out)),
+                _ => {}
+            }
+        }
+        let mut full = vec![cmd.clone()];
+        full.extend(args.clone());
+        for c in CLIENTS {
+            let s = setup(c, &l);
+            let text = render(&s);
+            assert!(!text.contains("ihsg-cli"), "{}: old package\n{text}", c.id);
+            assert!(!text.contains("ihsg-mcp mcp"), "{}:\n{text}", c.id);
+            if c.kind != Kind::Remote {
+                assert!(text.contains("ihsg-mcp"), "{}:\n{text}", c.id);
+            }
+            for st in &s.steps {
+                if st.lang != "json" {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_str(&st.body)
+                    .unwrap_or_else(|e| panic!("{}: invalid JSON {e}\n{}", c.id, st.body));
+                let (mut a, mut cmds) = (Vec::new(), Vec::new());
+                values(&v, "args", &mut a);
+                values(&v, "command", &mut cmds);
+                for x in a {
+                    assert_eq!(x, &json!(args), "{}: {}", c.id, st.body);
+                }
+                for x in cmds {
+                    // OpenCode takes the command line as one array.
+                    assert!(
+                        x == &json!(cmd) || x == &json!(full),
+                        "{}: {}",
+                        c.id,
+                        st.body
+                    );
+                }
+            }
+        }
     }
 }
