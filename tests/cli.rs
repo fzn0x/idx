@@ -1299,3 +1299,104 @@ fn jsonl_streams_ownership_changes() {
     assert!(!changes.is_empty());
     assert_eq!(&rows, changes);
 }
+
+#[test]
+fn auto_output_is_json_when_piped() {
+    let sb = sandbox();
+    // assert_cmd captures stdout, so auto resolves to the JSON envelope.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "auto", "market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.holidays.v1");
+    let env = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "auto")
+        .args(["market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert_eq!(env.stdout, out.stdout);
+
+    // The config file accepts it; `config get` reports setting and result.
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "output", "auto"])
+        .assert()
+        .success();
+    let out = idx(&sb.cache, &sb.config)
+        .args(["config", "get", "output"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["output"], "auto");
+    let out = idx(&sb.cache, &sb.config)
+        .args(["config", "get"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["output"], "json");
+    assert_eq!(v["output_setting"], "auto");
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "output", "yaml"])
+        .assert()
+        .code(6);
+
+    // Errors follow the resolved format too.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "ZZZZ"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let e: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(e["error"]["code"], "offline_miss");
+}
+
+#[test]
+fn error_format_follows_the_resolved_output() {
+    let sb = sandbox();
+    // The flag beats IDX_OUTPUT for the error as for the payload.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .args(["-o", "table", "stocks", "quote", "ZZZZ"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::starts_with("error: "))
+        .stderr(predicate::str::contains("hint:"));
+    // A JSON default in the config file gives JSON errors.
+    std::fs::write(&sb.config, "output = \"json\"\n").unwrap();
+    let out = idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "ZZZZ"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let e: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(e["exit_code"], 5);
+    // ...and the meta commands follow it as well.
+    let out = idx(&sb.cache, &sb.config).arg("version").output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    std::fs::remove_file(&sb.config).unwrap();
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .arg("version")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .arg("schema")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.as_array().unwrap().contains(&"quotes".into()));
+    // An invalid IDX_OUTPUT still fails a command (exit 6), reported as text.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "yaml")
+        .args(["market", "holidays"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::starts_with(
+            "error: config: unknown output format",
+        ));
+}

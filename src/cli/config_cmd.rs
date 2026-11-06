@@ -75,7 +75,11 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 }
             ));
             s.push_str(&format!("provider    : {}\n", settings.provider));
-            s.push_str(&format!("output      : {}\n", settings.output));
+            if settings.output_setting == crate::output::OutputSetting::Auto {
+                s.push_str("output      : auto (table on a terminal, json when piped)\n");
+            } else {
+                s.push_str(&format!("output      : {}\n", settings.output));
+            }
             s.push_str(&format!("color       : {}\n", settings.color));
             s.push_str(&format!("timeout     : {}s\n", settings.timeout_secs));
             s.push_str(&format!("cache dir   : {}\n", settings.cache_dir.display()));

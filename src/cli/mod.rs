@@ -10,7 +10,7 @@ use crate::cache::Cache;
 use crate::config::{self, CliOverrides, FileConfig, Settings};
 use crate::error::{IdxError, Result};
 use crate::http::{Fetcher, ReqwestBackend};
-use crate::output::{self, ColorMode, OutputFormat};
+use crate::output::{self, ColorMode, OutputFormat, OutputSetting};
 use crate::progress;
 use crate::providers::{
     self, Provider, ProviderKind, ProviderOptions, Sourced, StockbitOptions, Ttls,
@@ -79,9 +79,9 @@ pub struct Cli {
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct GlobalOpts {
-    /// Output format: table for people, json for scripts and agents, jsonl for one record per line, csv for spreadsheets.
+    /// Output format: table for people, json for scripts and agents, jsonl for one record per line, csv for spreadsheets, auto for a table on a terminal and json when piped.
     #[arg(short = 'o', long, global = true, value_enum, value_name = "FORMAT")]
-    pub output: Option<OutputFormat>,
+    pub output: Option<OutputSetting>,
 
     /// Data provider. `auto` tries each one in turn.
     #[arg(long, global = true, value_enum, value_name = "NAME")]
@@ -261,6 +261,7 @@ pub fn resolve_settings(global: &GlobalOpts) -> Result<Settings> {
     let overrides = CliOverrides {
         provider: global.provider,
         output: global.output,
+        stdout_is_terminal: std::io::IsTerminal::is_terminal(&std::io::stdout()),
         no_color: global.no_color,
         offline: global.offline,
         no_cache: global.no_cache,
@@ -433,19 +434,31 @@ impl VersionInfo {
 }
 
 /// The output format of commands that build no [`Context`] (`version`,
-/// `schema`, `config`, `mcp setup`) and of error reports.
+/// `schema`, `config`, `mcp setup`) and of error reports: the flag,
+/// `IDX_OUTPUT`, then the config file's `output`, skipping a layer that does
+/// not parse ([`config::requested_output`]), with `auto` resolved.
 pub fn requested_format(global: &GlobalOpts) -> OutputFormat {
-    global.output.unwrap_or(OutputFormat::Table)
+    lenient_format(global.output, global.config.clone())
+}
+
+fn lenient_format(flag: Option<OutputSetting>, config: Option<PathBuf>) -> OutputFormat {
+    let path = config.unwrap_or_else(config::default_config_path);
+    config::requested_output(
+        flag,
+        &path,
+        &|k| std::env::var(k).ok(),
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    )
 }
 
 /// Prints an error the way the chosen output format expects: one JSON line
 /// in json and jsonl modes, `error:` (and a `hint:`) otherwise.
 pub fn report_error(global: Option<&GlobalOpts>, err: &IdxError) {
-    let json = global.is_some_and(|g| requested_format(g).is_json())
-        || std::env::var("IDX_OUTPUT").is_ok_and(|v| {
-            v.trim().eq_ignore_ascii_case("json") || v.trim().eq_ignore_ascii_case("jsonl")
-        });
-    if json {
+    let format = match global {
+        Some(g) => requested_format(g),
+        None => lenient_format(None, std::env::var_os("IDX_CONFIG").map(PathBuf::from)),
+    };
+    if format.is_json() {
         let env = output::json::ErrorEnvelope::from(err);
         output::print_stderr(&serde_json::to_string(&env).unwrap_or_default());
     } else {
@@ -472,13 +485,20 @@ mod tests {
     #[test]
     fn parses_global_flags_anywhere() {
         let cli = Cli::parse_from(["idx", "stocks", "quote", "BBCA", "-o", "json", "--offline"]);
-        assert_eq!(cli.global.output, Some(OutputFormat::Json));
+        assert_eq!(cli.global.output, Some(OutputSetting::Json));
         assert!(cli.global.offline);
         let cli = Cli::parse_from([
             "idx", "-o", "table", "stocks", "history", "TLKM", "--period", "5y",
         ]);
-        assert_eq!(cli.global.output, Some(OutputFormat::Table));
+        assert_eq!(cli.global.output, Some(OutputSetting::Table));
         assert!(matches!(cli.command, Command::Stocks(_)));
+        for (v, want) in [
+            ("auto", OutputSetting::Auto),
+            ("jsonl", OutputSetting::Jsonl),
+        ] {
+            let cli = Cli::parse_from(["idx", "-o", v, "version"]);
+            assert_eq!(cli.global.output, Some(want));
+        }
     }
 
     #[test]

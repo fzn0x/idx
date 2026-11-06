@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{IdxError, Result};
 use crate::http::CacheMode;
-use crate::output::{ColorMode, OutputFormat};
+use crate::output::{ColorMode, OutputFormat, OutputSetting};
 use crate::providers::ProviderKind;
 
 pub const ENV_PREFIX: &str = "IDX_";
@@ -26,7 +26,7 @@ pub const ENV_PREFIX: &str = "IDX_";
 pub struct FileConfig {
     /// `auto` | `yahoo` | `msn`
     pub provider: Option<String>,
-    /// `table` | `json`
+    /// `auto` | `table` | `json` | `jsonl` | `csv`
     pub output: Option<String>,
     /// `auto` | `always` | `never`
     pub color: Option<String>,
@@ -98,7 +98,7 @@ impl FileConfig {
                 self.provider = Some(value.to_string());
             }
             "output" => {
-                value.parse::<OutputFormat>()?;
+                value.parse::<OutputSetting>()?;
                 self.output = Some(value.to_string());
             }
             "color" => {
@@ -185,8 +185,8 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 # Data source: "auto" tries providers in order and falls back when one fails.
 # provider = "auto"          # auto | yahoo | msn      (env: IDX_PROVIDER)
 
-# Default output format.
-# output = "table"           # table | json | csv      (env: IDX_OUTPUT)
+# Default output format. auto: a table on a terminal, JSON when piped.
+# output = "table"           # auto | table | json | jsonl | csv  (env: IDX_OUTPUT)
 
 # ANSI colours in tables.
 # color = "auto"             # auto | always | never   (env: IDX_COLOR, NO_COLOR)
@@ -222,7 +222,9 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 #[derive(Debug, Default, Clone)]
 pub struct CliOverrides {
     pub provider: Option<ProviderKind>,
-    pub output: Option<OutputFormat>,
+    pub output: Option<OutputSetting>,
+    /// Whether stdout is a terminal in this run (resolves `auto`).
+    pub stdout_is_terminal: bool,
     pub no_color: bool,
     pub offline: bool,
     pub no_cache: bool,
@@ -234,7 +236,10 @@ pub struct CliOverrides {
 #[derive(Debug, Clone, Serialize)]
 pub struct Settings {
     pub provider: ProviderKind,
+    /// The format of this run (`auto` already resolved).
     pub output: OutputFormat,
+    /// What was asked for, `auto` included.
+    pub output_setting: OutputSetting,
     pub color: ColorMode,
     pub timeout_secs: u64,
     pub cache_dir: PathBuf,
@@ -355,12 +360,13 @@ pub fn resolve(
         _ => ProviderKind::Auto,
     };
 
-    let output = match (&cli.output, env_s("OUTPUT"), &file.output) {
+    let output_setting = match (&cli.output, env_s("OUTPUT"), &file.output) {
         (Some(o), _, _) => *o,
         (None, Some(e), _) => e.parse()?,
         (None, None, Some(f)) => f.parse()?,
-        _ => OutputFormat::Table,
+        _ => OutputSetting::Table,
     };
+    let output = output_setting.resolve(cli.stdout_is_terminal);
 
     let color = if cli.no_color || env("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         ColorMode::Never
@@ -450,6 +456,7 @@ pub fn resolve(
     Ok(Settings {
         provider,
         output,
+        output_setting,
         color,
         timeout_secs,
         cache_dir,
@@ -465,6 +472,33 @@ pub fn resolve(
         stockbit_refresh_seed,
         config_path,
     })
+}
+
+/// The output format for code that must answer even when the configuration
+/// is broken: error reports and the commands that build no context (`version`,
+/// `schema`, `config`, `mcp setup`). Same precedence as [`resolve`] (flag,
+/// `IDX_OUTPUT`, the config file's `output`, `table`), but a layer that does
+/// not parse or load is skipped instead of failing.
+pub fn requested_output(
+    cli: Option<OutputSetting>,
+    config_path: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    stdout_is_terminal: bool,
+) -> OutputFormat {
+    let setting = cli
+        .or_else(|| {
+            env(&format!("{ENV_PREFIX}OUTPUT"))
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse().ok())
+        })
+        .or_else(|| {
+            FileConfig::load(config_path)
+                .ok()
+                .and_then(|f| f.output)
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(OutputSetting::Table);
+    setting.resolve(stdout_is_terminal)
 }
 
 #[cfg(test)]
@@ -519,7 +553,7 @@ mod tests {
         // cli beats env
         let cli = CliOverrides {
             provider: Some(ProviderKind::Yahoo),
-            output: Some(OutputFormat::Table),
+            output: Some(OutputSetting::Table),
             timeout_secs: Some(1),
             ..Default::default()
         };
@@ -593,5 +627,105 @@ mod tests {
         // The template must itself be valid TOML.
         let t: FileConfig = toml::from_str(TEMPLATE).unwrap();
         assert_eq!(t, FileConfig::default());
+    }
+
+    #[test]
+    fn auto_output_follows_the_terminal_and_jsonl_parses() {
+        let file = FileConfig {
+            output: Some("auto".into()),
+            ..Default::default()
+        };
+        let on_tty = CliOverrides {
+            stdout_is_terminal: true,
+            ..Default::default()
+        };
+        let s = resolve(&on_tty, &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.output, OutputFormat::Table);
+        assert_eq!(s.output_setting, OutputSetting::Auto);
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.output, OutputFormat::Json, "auto when piped");
+        let env = env_from(&[("IDX_OUTPUT", "jsonl")]);
+        let s = resolve(&on_tty, &file, "x".into(), &env).unwrap();
+        assert_eq!(s.output, OutputFormat::Jsonl);
+        assert_eq!(s.output_setting, OutputSetting::Jsonl);
+        // An invalid value is still a config error here.
+        let env = env_from(&[("IDX_OUTPUT", "yaml")]);
+        let e = resolve(&on_tty, &file, "x".into(), &env).unwrap_err();
+        assert_eq!(e.exit_code(), 6);
+        // Without any layer the default stays a table, terminal or not.
+        let s = resolve(
+            &CliOverrides::default(),
+            &FileConfig::default(),
+            "x".into(),
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(s.output, OutputFormat::Table);
+        assert_eq!(s.output_setting, OutputSetting::Table);
+    }
+
+    #[test]
+    fn requested_output_is_lenient_with_the_same_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let none = |_: &str| None;
+        // Nothing anywhere: a table.
+        assert_eq!(
+            requested_output(None, &path, &none, false),
+            OutputFormat::Table
+        );
+        // The file's output counts (it did not for errors before).
+        std::fs::write(
+            &path,
+            "output = \"json\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            requested_output(None, &path, &none, true),
+            OutputFormat::Json
+        );
+        // Env beats the file, the flag beats env.
+        let env = env_from(&[("IDX_OUTPUT", "jsonl")]);
+        assert_eq!(
+            requested_output(None, &path, &env, true),
+            OutputFormat::Jsonl
+        );
+        assert_eq!(
+            requested_output(Some(OutputSetting::Table), &path, &env, false),
+            OutputFormat::Table
+        );
+        // An invalid env value is skipped, not fatal.
+        let bad = env_from(&[("IDX_OUTPUT", "yaml")]);
+        assert_eq!(
+            requested_output(None, &path, &bad, true),
+            OutputFormat::Json
+        );
+        // A file that does not parse is skipped too.
+        std::fs::write(&path, "output = 3").unwrap();
+        assert_eq!(
+            requested_output(None, &path, &none, true),
+            OutputFormat::Table
+        );
+        // auto resolves against the terminal.
+        let auto = env_from(&[("IDX_OUTPUT", "auto")]);
+        assert_eq!(
+            requested_output(None, &path, &auto, true),
+            OutputFormat::Table
+        );
+        assert_eq!(
+            requested_output(None, &path, &auto, false),
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn output_key_accepts_auto_and_jsonl() {
+        let mut cfg = FileConfig::default();
+        cfg.set("output", "auto").unwrap();
+        assert_eq!(cfg.get("output").unwrap().as_deref(), Some("auto"));
+        cfg.set("output", "jsonl").unwrap();
+        assert_eq!(cfg.get("output").unwrap().as_deref(), Some("jsonl"));
+        assert_eq!(cfg.set("output", "yaml").unwrap_err().exit_code(), 6);
     }
 }
