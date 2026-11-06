@@ -276,9 +276,16 @@ pub fn risk(r: &RiskLens, color: bool) -> String {
             (
                 "Window".into(),
                 right(format!(
-                    "{} – {} · {} matched sessions",
+                    "{} – {} · {} daily returns",
                     p.from, p.to, p.observations
                 )),
+            ),
+            (
+                "Zero returns".into(),
+                right(match p.zero_returns {
+                    Some(z) => format!("{z} of {} (close unchanged)", p.observations),
+                    None => f::DASH.into(),
+                }),
             ),
             (
                 "Beta".into(),

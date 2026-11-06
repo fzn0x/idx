@@ -198,7 +198,7 @@ const R = {
     const p = r.price, dd = p?.max_drawdown;
     return lensView(r, "risk", [
       ["Balance sheet", [["Negative equity", yesNo(r.negative_equity)], ["Debt / equity", x(r.debt_to_equity)], ["Current ratio", fmt.ratio(r.current_ratio)], ["Quick ratio", fmt.ratio(r.quick_ratio)], ["Financial company", yesNo(r.financial_company)], ["Net margin", pct(r.net_margin_pct)], ["EPS (ttm)", fmt.price(r.eps_ttm)]]],
-      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} – ${p.to}`], ["Matched sessions", fmt.int(p.observations)], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
+      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} – ${p.to}`], ["Daily returns", fmt.int(p.observations)], ["Zero returns", p.zero_returns == null ? null : `${fmt.int(p.zero_returns)} of ${fmt.int(p.observations)}`], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
       ["Volatility and falls", p ? [["Volatility", pct(p.volatility_pct)], ["IHSG volatility", pct(p.benchmark_volatility_pct)], ["Largest fall", dd ? pct(dd.pct) : "none"], ["Peak to trough", dd ? `${dd.peak_date} to ${dd.trough_date}` : null], ["IHSG largest fall", pct(p.benchmark_max_drawdown_pct)]] : []],
     ], "points add risk");
   },

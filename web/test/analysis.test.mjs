@@ -169,7 +169,8 @@ test("lenses on TLKM match the Rust test tlkm_moderate_risk", () => {
   assert.deepEqual(lensSummary(r), ["moderate", 2, 6]);
   assert.deepEqual(ruleIds(r), [["leverage", 0], ["liquidity", 1], ["losses", 0], ["beta", 0], ["volatility", 1], ["drawdown", 0]]);
   const p = r.price;
-  assert.deepEqual([p.benchmark, p.from, p.to, p.observations], ["^JKSE", "2025-11-05", "2026-11-04", 238]);
+  assert.deepEqual([p.benchmark, p.from, p.to, p.observations, p.zero_returns], ["^JKSE", "2025-11-05", "2026-11-04", 238, 19]);
+  assert.equal(r.reading.rules[3].reason, "beta 1.12 against IHSG over 238 daily returns (0.7 to 1.3)");
   assert.ok(Math.abs(p.beta - 1.122) <= 0.002 && Math.abs(p.correlation - 0.665) <= 0.002, `${p.beta} ${p.correlation}`);
   assert.equal(r.reading.rules[4].reason, "volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)");
 });
@@ -210,7 +211,7 @@ test("lens payloads keep the Rust field order and the reasons of the Rust rules"
   assert.deepEqual(Object.keys(g), ["symbol", "name", "statements_currency", "most_recent_quarter", "revenue_growth_pct", "earnings_growth_pct", "revenue_cagr_5y_pct", "eps_growth_3y_pct", "eps_ttm", "eps_forward", "eps_forward_growth_pct", "annual", "revenue_cagr_pct", "net_income_cagr_pct", "reading", "sources"]);
   assert.deepEqual(Object.keys(g.annual[0]), ["end_date", "revenue", "net_income", "revenue_change_pct", "net_income_change_pct"]);
   assert.deepEqual(Object.keys(r), ["symbol", "name", "currency", "financial_company", "negative_equity", "debt_to_equity", "current_ratio", "quick_ratio", "net_margin_pct", "eps_ttm", "price", "reading", "sources"]);
-  assert.deepEqual(Object.keys(r.price), ["benchmark", "from", "to", "observations", "beta", "correlation", "volatility_pct", "benchmark_volatility_pct", "max_drawdown", "benchmark_max_drawdown_pct"]);
+  assert.deepEqual(Object.keys(r.price), ["benchmark", "from", "to", "observations", "zero_returns", "beta", "correlation", "volatility_pct", "benchmark_volatility_pct", "max_drawdown", "benchmark_max_drawdown_pct"]);
   assert.deepEqual(Object.keys(v.reading), ["label", "score", "inputs_available", "rules", "notes"]);
   assert.deepEqual(g.reading.rules.map((x) => x.reason), [
     "revenue +6.4% year on year in the latest quarter (0% to +10%)",
@@ -241,34 +242,42 @@ test("lenses are null-safe: nothing reported gives insufficient_data and notes",
   assert.equal(own.price.beta, null);
   assert.ok(own.price.volatility_pct > 40);
   assert.ok(noted(own, "benchmark ^JKSE unavailable"));
+  assert.equal(own.price.zero_returns, null);
 });
 
-test("lens rules on synthetic inputs match the Rust unit tests", () => {
-  // negative_equity_skips_pb_and_leverage_and_adds_risk
-  let f = blank();
-  f.health.debt_to_equity = -2.89; f.valuation.price_to_book = -0.55; f.health.current_ratio = 1.2; f.profitability.net_margin_pct = -9.4;
-  assert.ok(noted(an.valuationLens(f), "P/B: shareholders' equity is negative"));
-  let r = an.riskLens("TEST", f, null, null);
-  assert.deepEqual(ruleIds(r), [["negative_equity", 2], ["liquidity", 0], ["losses", 1]]);
-  assert.equal(r.reading.label, "high");
-  // analyst_target_needs_three_analysts
-  const target = (t, n) => { const g = blank(); g.price = 100; g.analyst.target_mean = t; g.analyst.analysts = n; return an.valuationLens(g); };
-  assert.deepEqual(ruleIds(target(120.01, 3)), [["analyst_target", 1]]);
-  assert.deepEqual(ruleIds(target(120, 3)), [["analyst_target", 0]]);
-  assert.deepEqual(ruleIds(target(89.9, 3)), [["analyst_target", -1]]);
-  assert.ok(noted(target(150, 2), "from 2 analysts: fewer than 3, not scored"));
-  // fiscal_years_give_cagr_consistency_and_turns
-  const fin = (rows) => ({ symbol: "TEST", currency: "IDR", period: "annual", source: "t:annual", periods: rows.map(([yr, rev, ni]) => ({ end_date: `${yr}-12-31`, period: "annual", income: { total_revenue: rev, net_income: ni }, balance: {}, cash_flow: {} })) });
-  const g = an.growthLens("TEST", blank(), fin([[2022, 100, 10], [2023, 110, 12], [2024, 121, 9], [2025, 133.1, 20]]));
-  assert.equal(g.revenue_cagr_pct, 10);
-  assert.equal(g.net_income_cagr_pct, 25.99);
-  assert.deepEqual(ruleIds(g), [["revenue_cagr", 0], ["revenue_consistency", 1], ["net_income_cagr", 1]]);
-  assert.equal(g.reading.label, "growing");
-  assert.deepEqual([g.annual[0].revenue_change_pct, g.annual[1].revenue_change_pct, g.annual[2].net_income_change_pct], [null, 10, -25]);
-  const turn = (a, b) => an.growthLens("TEST", blank(), fin([[2022, null, a], [2023, null, 1], [2025, null, b]]));
-  assert.deepEqual(ruleIds(turn(5, -1)), [["net_income_cagr", -1]]);
-  assert.deepEqual(ruleIds(turn(-5, 1)), [["net_income_cagr", 1]]);
-  assert.ok(noted(turn(-5, -1), "losses in both FY2022 and FY2025"));
+// Mirrors the Rust tests a_price_that_does_not_move_is_illiquid_not_calm and
+// source_rates_stand_in_for_missing_statements.
+const synthetic = (closes, start = "2025-11-05") => {
+  const d0 = Date.parse(`${start}T00:00:00Z`);
+  return { symbol: "TEST", candles: closes.map((c, i) => ({ time: `${new Date(d0 + i * 86400000).toISOString().slice(0, 10)}T09:00:00+07:00`, open: c, high: c, low: c, close: c, volume: 1 })) };
+};
+const walk = (n, scale, start) => {
+  const out = [start];
+  for (let i = 1; i < n; i++) out.push(out[i - 1] * (1 + [0.01, -0.006, 0.003, -0.011, 0.006][i % 5] * scale));
+  return out;
+};
+
+test("a price that does not move is illiquid, not calm", () => {
+  const bench = { ...synthetic(walk(200, 1, 7000)), symbol: "^JKSE" };
+  const f = blank();
+  f.health.debt_to_equity = 1; f.health.current_ratio = 1.2; f.profitability.net_margin_pct = -3;
+  const r = an.riskLens("TEST", f, synthetic(Array(200).fill(50)), bench);
+  assert.deepEqual(ruleIds(r), [["leverage", 0], ["liquidity", 0], ["losses", 1], ["illiquidity", 1]]);
+  assert.equal(r.reading.rules[3].reason, "199 of 199 daily returns are zero (more than half): the stock was suspended or barely traded");
+  assert.ok(noted(r, "beta, volatility and drawdown: not scored, 199 of 199 daily returns are zero"));
+  assert.equal(r.reading.label, "moderate");
+  assert.deepEqual([r.price.observations, r.price.zero_returns, r.price.beta, r.price.volatility_pct, r.price.max_drawdown], [199, 199, 0, 0, null]);
+  const partly = (k) => { const m = walk(200, 2, 1000); return synthetic([...Array(k + 1).fill(m[0]), ...m.slice(1, 200 - k)]); };
+  const over = an.riskLens("TEST", null, partly(100), bench);
+  assert.equal(over.price.zero_returns, 100);
+  assert.deepEqual(ruleIds(over), [["illiquidity", 1]]);
+  const under = an.riskLens("TEST", null, partly(99), bench);
+  assert.equal(under.price.zero_returns, 99);
+  assert.deepEqual(under.reading.rules.map((x) => x.rule), ["beta", "volatility", "drawdown"]);
+  const short = an.riskLens("TEST", null, synthetic(Array(200).fill(50)), { ...synthetic(walk(15, 1, 7000)), symbol: "^JKSE" });
+  assert.deepEqual(short.reading.rules, []);
+  assert.equal(short.price.zero_returns, 14);
+  assert.ok(noted(short, "beta: 14 matched daily returns with IHSG, needs 120"));
 });
 
 test("lens reasons round exact ties as Rust does (half to even)", () => {

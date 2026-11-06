@@ -429,8 +429,8 @@ from them, a `reading` and `sources`:
   their sum and `inputs_available` their number. `notes[]` names every rule
   that could not run and why (not reported, a financial company, statements
   in another currency, negative equity, fewer than 3 analysts, fewer than
-  three fiscal years, benchmark unavailable). Fewer than three rules give
-  `insufficient_data`.
+  three fiscal years, benchmark unavailable, a price that barely moved).
+  Fewer than three rules give `insufficient_data`.
 - Rule ids are stable; the thresholds are heuristics, not advice. The
   valuation lens can disagree with the verdict of `stocks fundamental`,
   which also weighs quality and growth.
@@ -492,12 +492,14 @@ more), `shrinking` (-2 or less), `mixed` (points both ways), `stable`,
 `price` is computed by idx from a year of daily closes on the dates the stock
 and IHSG both traded (Yahoo's `^JKSE` bar often lags the shares by a session):
 `benchmark` (`^JKSE`), `from`, `to`, `observations` (matched daily returns),
-`beta` and `correlation` (from simple daily returns, 3 dp, `null` under 120
-observations), `volatility_pct` and `benchmark_volatility_pct` (annualised
-standard deviation of daily log returns), `max_drawdown` (`pct`,
-`peak_date`, `trough_date`, `recovered`; `null` when the price never fell) and
-`benchmark_max_drawdown_pct`. Without IHSG the price rules become notes and
-`price` carries the stock's own volatility and drawdown over its own dates.
+`zero_returns` (how many of them left the stock's close unchanged; `null`
+without IHSG), `beta` and `correlation` (from simple daily returns, 3 dp,
+`null` under 120 observations), `volatility_pct` and
+`benchmark_volatility_pct` (annualised standard deviation of daily log
+returns), `max_drawdown` (`pct`, `peak_date`, `trough_date`, `recovered`;
+`null` when the price never fell) and `benchmark_max_drawdown_pct`. Without
+IHSG the price rules become notes and `price` carries the stock's own
+volatility and drawdown over its own dates.
 Label: `high` (score 3 or more), `low` (-2 or less), `moderate`,
 `insufficient_data`.
 
@@ -507,14 +509,21 @@ Label: `high` (score 3 or more), `low` (-2 or less), `moderate`,
 | `leverage` | debt/equity over 2x: +1; under 0.5x: -1; else 0. Not for a financial company |
 | `liquidity` | current ratio under 1: +1; 1.5 or more: -1; else 0. Not for a financial company |
 | `losses` | negative net margin or EPS over the trailing twelve months: +1; else 0 |
-| `beta` | against IHSG, 120 or more sessions: over 1.3: +1; under 0.7: -1; else 0 |
+| `beta` | against IHSG, 120 or more daily returns: over 1.3: +1; under 0.7: -1; else 0 |
 | `volatility` | the stock's over IHSG's: over 1.5x: +1; under 0.8x: -1; else 0 |
 | `drawdown` | the stock's largest fall minus IHSG's: 15 points or more deeper: +1; 15 points or more shallower: -1; else 0 |
+| `illiquidity` | more than half of 20 or more matched daily returns are zero: +1, and `beta`, `volatility` and `drawdown` are not scored |
 
 Price risk is relative to IHSG so that a market-wide fall (IHSG fell 46 %
 peak to trough in the year to 2026-11-04) does not make every stock look
-risky. Thin trading biases a daily beta toward 0; `observations` and
-`correlation` show how much it rests on.
+risky. A price that does not move would look calm on all three price rules
+(beta 0, no volatility, no fall), yet a suspended share, one stuck at the
+floor price or one that barely trades is hard to sell: when the close is
+unchanged on more than half the matched sessions, the `illiquidity` rule
+scores instead and the three become a note (their figures stay in `price`).
+Below that line thin trading still biases a daily beta toward 0 and
+understates volatility; `zero_returns`, `observations` and `correlation`
+show how much they rest on.
 
 
 ## `idx.compare.v1` (`stocks compare`)

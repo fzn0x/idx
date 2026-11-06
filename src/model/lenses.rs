@@ -72,7 +72,7 @@ pub struct Reading<L> {
     pub rules: Vec<LensRule>,
     /// Rules that could not run, and why (not reported, not applicable to a
     /// financial company, statements in another currency, negative equity,
-    /// too few analysts, benchmark unavailable).
+    /// too few analysts, benchmark unavailable, a price that barely moved).
     pub notes: Vec<String>,
 }
 
@@ -227,6 +227,11 @@ pub struct PriceRisk {
     pub to: NaiveDate,
     /// Matched daily returns behind `beta` and `correlation` (0 without the benchmark).
     pub observations: usize,
+    /// Of those, the ones on which the stock's close did not change (computed
+    /// by idx); `null` without the benchmark. More than half (over 20 or more
+    /// returns) reads as suspended or barely traded: the `illiquidity` rule
+    /// replaces beta, volatility and drawdown.
+    pub zero_returns: Option<usize>,
     /// Against the benchmark, from simple daily returns on the shared dates;
     /// `null` under 120 observations.
     pub beta: Option<f64>,

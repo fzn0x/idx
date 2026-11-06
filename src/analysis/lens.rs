@@ -668,6 +668,7 @@ pub fn risk(
                 from: own[0].0,
                 to: own[own.len() - 1].0,
                 observations: 0,
+                zero_returns: None,
                 beta: None,
                 correlation: None,
                 volatility_pct: returns::volatility(&own),
@@ -713,6 +714,9 @@ pub fn risk(
 }
 
 /// Beta, relative volatility and relative drawdown over the shared sessions.
+/// A stock whose close did not move on more than half of them (suspended,
+/// stuck at the floor price, barely traded) would look calm on all three, so
+/// it scores one `illiquidity` point instead and the three become notes.
 fn price_rules(
     r: &mut Rules,
     benchmark: Symbol,
@@ -720,6 +724,93 @@ fn price_rules(
     cb: &[(chrono::NaiveDate, f64)],
 ) -> PriceRisk {
     let stats = returns::beta(cs, cb);
+    let n = stats.observations;
+    // Over the same pairs as the beta: the stock's close equals the one before.
+    let zero = cs
+        .windows(2)
+        .zip(cb.windows(2))
+        .filter(|(s, b)| s[0].1 > 0.0 && b[0].1 > 0.0 && s[1].1 == s[0].1)
+        .count();
+    let vs = returns::volatility(cs);
+    let vb = returns::volatility(cb);
+    let ds = returns::max_drawdown(cs);
+    let db = returns::max_drawdown(cb).map(|d| d.pct);
+
+    if n >= MIN_PRICE_RETURNS && zero * 2 > n {
+        r.add(
+            "illiquidity",
+            1,
+            format!(
+                "{zero} of {n} daily returns are zero (more than half): the stock was suspended or barely traded"
+            ),
+        );
+        r.note(format!(
+            "beta, volatility and drawdown: not scored, {zero} of {n} daily returns are zero"
+        ));
+    } else {
+        rate_beta(r, &stats);
+        match (vs, vb) {
+            (Some(s), Some(b)) if b > 0.0 => {
+                let rel = s / b;
+                let (points, why) = if rel > 1.5 {
+                    (1, "over 1.5x")
+                } else if rel < 0.8 {
+                    (-1, "under 0.8x")
+                } else {
+                    (0, "0.8x to 1.5x")
+                };
+                r.add(
+                    "volatility",
+                    points,
+                    format!("volatility {s:.1}% a year is {rel:.2}x IHSG's {b:.1}% ({why})"),
+                );
+            }
+            _ => r.note(format!(
+                "volatility against IHSG: fewer than {MIN_PRICE_RETURNS} matched daily returns"
+            )),
+        }
+        if cs.len() > MIN_PRICE_RETURNS {
+            // No fall over the window is a 0 % drawdown.
+            let s = ds.as_ref().map_or(0.0, |d| d.pct);
+            let b = db.unwrap_or(0.0);
+            let gap = s - b;
+            let (points, why) = if gap <= -15.0 {
+                (1, "15 points or more deeper")
+            } else if gap >= 15.0 {
+                (-1, "15 points or more shallower")
+            } else {
+                (0, "within 15 points")
+            };
+            r.add(
+                "drawdown",
+                points,
+                format!(
+                    "largest fall {s:.1}% against IHSG's {b:.1}% over the same sessions ({why})"
+                ),
+            );
+        } else {
+            r.note(format!(
+                "drawdown against IHSG: fewer than {MIN_PRICE_RETURNS} matched daily returns"
+            ));
+        }
+    }
+
+    PriceRisk {
+        benchmark,
+        from: cs[0].0,
+        to: cs[cs.len() - 1].0,
+        observations: n,
+        zero_returns: Some(zero),
+        beta: stats.beta,
+        correlation: stats.correlation,
+        volatility_pct: vs,
+        benchmark_volatility_pct: vb,
+        max_drawdown: ds,
+        benchmark_max_drawdown_pct: db,
+    }
+}
+
+fn rate_beta(r: &mut Rules, stats: &returns::BetaStats) {
     let n = stats.observations;
     match stats.beta {
         Some(b) => {
@@ -733,75 +824,14 @@ fn price_rules(
             r.add(
                 "beta",
                 points,
-                format!("beta {b:.2} against IHSG over {n} sessions ({why})"),
+                format!("beta {b:.2} against IHSG over {n} daily returns ({why})"),
             );
         }
         None if n < returns::MIN_BETA_OBSERVATIONS => r.note(format!(
-            "beta: {n} matched sessions with IHSG, needs {}",
+            "beta: {n} matched daily returns with IHSG, needs {}",
             returns::MIN_BETA_OBSERVATIONS
         )),
         None => r.note("beta: IHSG did not move over the window"),
-    }
-
-    let vs = returns::volatility(cs);
-    let vb = returns::volatility(cb);
-    match (vs, vb) {
-        (Some(s), Some(b)) if b > 0.0 => {
-            let rel = s / b;
-            let (points, why) = if rel > 1.5 {
-                (1, "over 1.5x")
-            } else if rel < 0.8 {
-                (-1, "under 0.8x")
-            } else {
-                (0, "0.8x to 1.5x")
-            };
-            r.add(
-                "volatility",
-                points,
-                format!("volatility {s:.1}% a year is {rel:.2}x IHSG's {b:.1}% ({why})"),
-            );
-        }
-        _ => r.note(format!(
-            "volatility against IHSG: fewer than {MIN_PRICE_RETURNS} matched sessions"
-        )),
-    }
-
-    let ds = returns::max_drawdown(cs);
-    let db = returns::max_drawdown(cb).map(|d| d.pct);
-    if cs.len() > MIN_PRICE_RETURNS {
-        // No fall over the window is a 0 % drawdown.
-        let s = ds.as_ref().map_or(0.0, |d| d.pct);
-        let b = db.unwrap_or(0.0);
-        let gap = s - b;
-        let (points, why) = if gap <= -15.0 {
-            (1, "15 points or more deeper")
-        } else if gap >= 15.0 {
-            (-1, "15 points or more shallower")
-        } else {
-            (0, "within 15 points")
-        };
-        r.add(
-            "drawdown",
-            points,
-            format!("largest fall {s:.1}% against IHSG's {b:.1}% over the same sessions ({why})"),
-        );
-    } else {
-        r.note(format!(
-            "drawdown against IHSG: fewer than {MIN_PRICE_RETURNS} matched sessions"
-        ));
-    }
-
-    PriceRisk {
-        benchmark,
-        from: cs[0].0,
-        to: cs[cs.len() - 1].0,
-        observations: n,
-        beta: stats.beta,
-        correlation: stats.correlation,
-        volatility_pct: vs,
-        benchmark_volatility_pct: vb,
-        max_drawdown: ds,
-        benchmark_max_drawdown_pct: db,
     }
 }
 
@@ -1411,6 +1441,72 @@ mod tests {
             [("beta", -1), ("volatility", -1), ("drawdown", 0)]
         );
         assert_eq!(r.reading.label, RiskLabel::Low);
+        assert_eq!(r.price.unwrap().zero_returns, Some(0));
+    }
+
+    #[test]
+    fn a_price_that_does_not_move_is_illiquid_not_calm() {
+        let d0 = NaiveDate::from_ymd_opt(2025, 11, 5).unwrap();
+        let bench = history("^JKSE", d0, &path(200, 1.0, 7000.0));
+        // A loss-maker suspended at Rp 50 for the whole year.
+        let mut f = base();
+        f.health.debt_to_equity = Some(1.0);
+        f.health.current_ratio = Some(1.2);
+        f.profitability.net_margin_pct = Some(-3.0);
+        let flat = history("TEST", d0, &[50.0; 200]);
+        let r = risk(&f.symbol, Some(&f), Some(&flat), Some(&bench));
+        assert_eq!(
+            ids(&r.reading),
+            [
+                ("leverage", 0),
+                ("liquidity", 0),
+                ("losses", 1),
+                ("illiquidity", 1)
+            ]
+        );
+        assert_eq!(
+            r.reading.rules[3].reason,
+            "199 of 199 daily returns are zero (more than half): the stock was suspended or barely traded"
+        );
+        assert!(has_note(
+            &r.reading,
+            "beta, volatility and drawdown: not scored, 199 of 199 daily returns are zero"
+        ));
+        assert_eq!(r.reading.label, RiskLabel::Moderate, "not low");
+        let p = r.price.unwrap();
+        assert_eq!((p.observations, p.zero_returns), (199, Some(199)));
+        // The figures are still shown, only not scored.
+        assert_eq!(p.beta, Some(0.0));
+        assert_eq!(p.volatility_pct, Some(0.0));
+        assert_eq!(p.max_drawdown, None);
+
+        // The line is more than half: 100 zero returns of 199 is illiquid,
+        // 99 is not.
+        let partly = |k: usize| {
+            let moving = path(200, 2.0, 1000.0);
+            let mut s = vec![moving[0]; k + 1];
+            s.extend_from_slice(&moving[1..200 - k]);
+            history("TEST", d0, &s)
+        };
+        let r = risk(&sym("TEST"), None, Some(&partly(100)), Some(&bench));
+        assert_eq!(r.price.as_ref().unwrap().zero_returns, Some(100));
+        assert_eq!(ids(&r.reading), [("illiquidity", 1)]);
+        let r = risk(&sym("TEST"), None, Some(&partly(99)), Some(&bench));
+        assert_eq!(r.price.as_ref().unwrap().zero_returns, Some(99));
+        assert_eq!(
+            r.reading
+                .rules
+                .iter()
+                .map(|x| x.rule.as_str())
+                .collect::<Vec<_>>(),
+            ["beta", "volatility", "drawdown"]
+        );
+
+        // Too short an overlap to call: the usual notes.
+        let short = history("^JKSE", d0, &path(15, 1.0, 7000.0));
+        let r = risk(&sym("TEST"), None, Some(&flat), Some(&short));
+        assert!(r.reading.rules.is_empty(), "{:?}", r.reading);
+        assert_eq!(r.price.unwrap().zero_returns, Some(14));
     }
 
     #[test]
@@ -1433,7 +1529,7 @@ mod tests {
         assert!(r.reading.rules.is_empty());
         assert!(has_note(
             &r.reading,
-            "beta: 14 matched sessions with IHSG, needs 120"
+            "beta: 14 matched daily returns with IHSG, needs 120"
         ));
         assert!(has_note(&r.reading, "drawdown against IHSG: fewer than 20"));
         // No overlap at all.

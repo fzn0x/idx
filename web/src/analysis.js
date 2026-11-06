@@ -478,25 +478,34 @@ export function riskLens(symbol, f, h, b) {
     const [cs, cb] = ex.common(own, b ? ex.series(b.candles || []) : []);
     if (cs.length < 2) {
       r.note(b ? `beta, volatility and drawdown against IHSG: no sessions in common with ${benchmark}` : `beta, volatility and drawdown against IHSG: benchmark ${benchmark} unavailable`);
-      price = { benchmark, from: own[0][0], to: own[own.length - 1][0], observations: 0, beta: null, correlation: null, volatility_pct: ex.volatility(own), benchmark_volatility_pct: null, max_drawdown: ex.maxDrawdown(own), benchmark_max_drawdown_pct: null };
+      price = { benchmark, from: own[0][0], to: own[own.length - 1][0], observations: 0, zero_returns: null, beta: null, correlation: null, volatility_pct: ex.volatility(own), benchmark_volatility_pct: null, max_drawdown: ex.maxDrawdown(own), benchmark_max_drawdown_pct: null };
     } else {
       const st = ex.beta(cs, cb), n = st.observations;
-      if (st.beta != null) { const bt = st.beta; const [p, why] = bt > 1.3 ? [1, "over 1.3"] : bt < 0.7 ? [-1, "under 0.7"] : [0, "0.7 to 1.3"]; r.add("beta", p, `beta ${fixed(bt, 2)} against IHSG over ${n} sessions (${why})`); }
-      else if (n < ex.MIN_BETA_OBSERVATIONS) r.note(`beta: ${n} matched sessions with IHSG, needs ${ex.MIN_BETA_OBSERVATIONS}`);
-      else r.note("beta: IHSG did not move over the window");
+      // Over the same pairs as the beta: the stock's close equals the one before.
+      let zero = 0;
+      for (let i = 1; i < Math.min(cs.length, cb.length); i++) if (cs[i - 1][1] > 0 && cb[i - 1][1] > 0 && cs[i][1] === cs[i - 1][1]) zero++;
       const vs = ex.volatility(cs), vb = ex.volatility(cb);
-      if (vs != null && vb != null && vb > 0) {
-        const rel = vs / vb;
-        const [p, why] = rel > 1.5 ? [1, "over 1.5x"] : rel < 0.8 ? [-1, "under 0.8x"] : [0, "0.8x to 1.5x"];
-        r.add("volatility", p, `volatility ${fixed(vs, 1)}% a year is ${fixed(rel, 2)}x IHSG's ${fixed(vb, 1)}% (${why})`);
-      } else r.note(`volatility against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched sessions`);
       const ds = ex.maxDrawdown(cs), db = ex.maxDrawdown(cb)?.pct ?? null;
-      if (cs.length > LENS_MIN_PRICE_RETURNS) {
-        const s = ds ? ds.pct : 0, bb = db ?? 0, gap = s - bb;
-        const [p, why] = gap <= -15 ? [1, "15 points or more deeper"] : gap >= 15 ? [-1, "15 points or more shallower"] : [0, "within 15 points"];
-        r.add("drawdown", p, `largest fall ${fixed(s, 1)}% against IHSG's ${fixed(bb, 1)}% over the same sessions (${why})`);
-      } else r.note(`drawdown against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched sessions`);
-      price = { benchmark, from: cs[0][0], to: cs[cs.length - 1][0], observations: n, beta: st.beta, correlation: st.correlation, volatility_pct: vs, benchmark_volatility_pct: vb, max_drawdown: ds, benchmark_max_drawdown_pct: db };
+      if (n >= LENS_MIN_PRICE_RETURNS && zero * 2 > n) {
+        // Suspended, stuck at the floor price or barely traded: a flat price would look calm on all three.
+        r.add("illiquidity", 1, `${zero} of ${n} daily returns are zero (more than half): the stock was suspended or barely traded`);
+        r.note(`beta, volatility and drawdown: not scored, ${zero} of ${n} daily returns are zero`);
+      } else {
+        if (st.beta != null) { const bt = st.beta; const [p, why] = bt > 1.3 ? [1, "over 1.3"] : bt < 0.7 ? [-1, "under 0.7"] : [0, "0.7 to 1.3"]; r.add("beta", p, `beta ${fixed(bt, 2)} against IHSG over ${n} daily returns (${why})`); }
+        else if (n < ex.MIN_BETA_OBSERVATIONS) r.note(`beta: ${n} matched daily returns with IHSG, needs ${ex.MIN_BETA_OBSERVATIONS}`);
+        else r.note("beta: IHSG did not move over the window");
+        if (vs != null && vb != null && vb > 0) {
+          const rel = vs / vb;
+          const [p, why] = rel > 1.5 ? [1, "over 1.5x"] : rel < 0.8 ? [-1, "under 0.8x"] : [0, "0.8x to 1.5x"];
+          r.add("volatility", p, `volatility ${fixed(vs, 1)}% a year is ${fixed(rel, 2)}x IHSG's ${fixed(vb, 1)}% (${why})`);
+        } else r.note(`volatility against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched daily returns`);
+        if (cs.length > LENS_MIN_PRICE_RETURNS) {
+          const s = ds ? ds.pct : 0, bb = db ?? 0, gap = s - bb;
+          const [p, why] = gap <= -15 ? [1, "15 points or more deeper"] : gap >= 15 ? [-1, "15 points or more shallower"] : [0, "within 15 points"];
+          r.add("drawdown", p, `largest fall ${fixed(s, 1)}% against IHSG's ${fixed(bb, 1)}% over the same sessions (${why})`);
+        } else r.note(`drawdown against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched daily returns`);
+      }
+      price = { benchmark, from: cs[0][0], to: cs[cs.length - 1][0], observations: n, zero_returns: zero, beta: st.beta, correlation: st.correlation, volatility_pct: vs, benchmark_volatility_pct: vb, max_drawdown: ds, benchmark_max_drawdown_pct: db };
     }
   }
 

@@ -1099,6 +1099,7 @@ fn risk_lens_reads_a_year_against_ihsg() {
     );
     assert_eq!(d["price"]["benchmark"], "^JKSE");
     assert_eq!(d["price"]["observations"], 238);
+    assert_eq!(d["price"]["zero_returns"], 19);
     assert_eq!(d["price"]["to"], "2026-11-04");
     assert!((d["price"]["beta"].as_f64().unwrap() - 1.122).abs() < 0.003);
 
@@ -1125,7 +1126,8 @@ fn risk_lens_reads_a_year_against_ihsg() {
         .success()
         .stdout(predicate::str::contains("TLKM · "))
         .stdout(predicate::str::contains("PRICE VS ^JKSE (1Y DAILY)"))
-        .stdout(predicate::str::contains("238 matched sessions"))
+        .stdout(predicate::str::contains("238 daily returns"))
+        .stdout(predicate::str::contains("19 of 238 (close unchanged)"))
         .stdout(predicate::str::contains("MODERATE (score +2, 6 rules)"))
         .stdout(predicate::str::contains(
             "  +1  volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)",
