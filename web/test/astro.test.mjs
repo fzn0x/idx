@@ -32,14 +32,15 @@ function horizons(text, skip = 0) {
 const arcsec = (a, b) => Math.abs(((a - b + 540) % 360) - 180) * 3600;
 
 test("longitudes match JPL Horizons 1800-2050 within the Rust tolerances", () => {
-  const tol = { sun: 40, moon: 30, mercury: 60, venus: 120, mars: 120, jupiter: 120, saturn: 180, uranus: 150, neptune: 90, pluto: 90 };
+  // Back the claim in METHOD: Sun and Moon within 0.01° (36″), planets within 0.04° (144″).
+  const tol = { sun: 36, moon: 30, mercury: 60, venus: 120, mars: 120, jupiter: 120, saturn: 144, uranus: 144, neptune: 90, pluto: 90 };
   for (const body of A.BODIES) {
     const rows = horizons(fixture("astro", `horizons_${body}_1800_2050.txt`));
     assert.ok(rows.length >= 33, body);
     const worst = Math.max(...rows.map((r) => arcsec(A.position(body, r.ms).lon, r.lon)));
     assert.ok(worst < tol[body], `${body}: ${worst.toFixed(1)}″`);
   }
-  for (const [body, t] of [["mercury", 60], ["saturn", 180]]) {
+  for (const [body, t] of [["mercury", 60], ["saturn", 144]]) {
     const rows = horizons(fixture("astro", `horizons_${body}_2025_2027_daily.txt`));
     assert.equal(rows.length, 1095);
     assert.ok(Math.max(...rows.map((r) => arcsec(A.position(body, r.ms).lon, r.lon))) < t, body);

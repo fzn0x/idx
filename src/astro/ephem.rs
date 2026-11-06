@@ -466,8 +466,10 @@ pub(crate) mod tests {
         };
     }
 
+    /// Longitude tolerances in arcseconds. They back the claim in `METHOD`
+    /// (Sun and Moon within 0.01° = 36″, planets within 0.04° = 144″).
     const HISTORICAL: [(Body, &str, f64); 10] = [
-        (Body::Sun, fixture!("horizons_sun_1800_2050.txt"), 40.0),
+        (Body::Sun, fixture!("horizons_sun_1800_2050.txt"), 36.0),
         (Body::Moon, fixture!("horizons_moon_1800_2050.txt"), 30.0),
         (
             Body::Mercury,
@@ -484,12 +486,12 @@ pub(crate) mod tests {
         (
             Body::Saturn,
             fixture!("horizons_saturn_1800_2050.txt"),
-            180.0,
+            144.0,
         ),
         (
             Body::Uranus,
             fixture!("horizons_uranus_1800_2050.txt"),
-            150.0,
+            144.0,
         ),
         (
             Body::Neptune,
@@ -534,7 +536,7 @@ pub(crate) mod tests {
             (
                 Body::Saturn,
                 fixture!("horizons_saturn_2025_2027_daily.txt"),
-                180.0,
+                144.0,
             ),
         ] {
             let rows = horizons(text, 0);
