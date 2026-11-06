@@ -1667,10 +1667,12 @@ pub async fn bandar_broker(
 /// The name is the source's, else the bundled universe's.
 ///
 /// Yahoo's one-day window is empty for the first minutes after the open
-/// (observed 09:00 to past 09:02 WIB on 2026-11-06) while its five-day window
-/// still ends with the previous session, so an empty one-day answer is retried
-/// over five days and the last session there is shown, with a warning.
-/// Stockbit is not retried: its five-day window is hourly.
+/// (observed from 09:00 until about 09:10 WIB on 2026-11-06) while its five-day window
+/// still ends with the previous session, and a stock that has not traded today
+/// has none either, so an empty one-day answer is retried over five days and
+/// the last session there is shown, with a warning. A source whose five-day
+/// window has another bar size (Stockbit's is hourly) is not retried
+/// (`Provider::serves_interval`).
 pub async fn intraday(
     p: &dyn Provider,
     universe: &[Issuer],
@@ -1687,7 +1689,7 @@ pub async fn intraday(
     let mut history = history?;
     let mut warnings = Vec::new();
     let mut window = "the latest session";
-    if history.data.candles.is_empty() && p.name() != crate::providers::stockbit::NAME {
+    if history.data.candles.is_empty() && p.serves_interval(Period::D5, interval) {
         match p.history(symbol, Period::D5, interval).await {
             Ok(wider) => match wider.data.candles.last().map(|c| c.date()) {
                 Some(day) => {
@@ -1915,8 +1917,10 @@ mod tests {
 
         /// History from a list of candles (the same for every window), a
         /// quote dated `quote_secs` or an error; records the windows asked for.
+        /// `hourly_week` makes the five-day window another bar size, as
+        /// Stockbit's is.
         struct Stub {
-            name: &'static str,
+            hourly_week: bool,
             candles: Vec<Candle>,
             quote_secs: Option<i64>,
             asked: Mutex<Vec<Period>>,
@@ -1924,7 +1928,7 @@ mod tests {
 
         fn stub(candles: Vec<Candle>, quote_secs: Option<i64>) -> Stub {
             Stub {
-                name: "stub",
+                hourly_week: false,
                 candles,
                 quote_secs,
                 asked: Mutex::new(vec![]),
@@ -1934,7 +1938,10 @@ mod tests {
         #[async_trait]
         impl Provider for Stub {
             fn name(&self) -> &'static str {
-                self.name
+                "stub"
+            }
+            fn serves_interval(&self, p: Period, i: Interval) -> bool {
+                !(self.hourly_week && p == Period::D5 && i != Interval::Hour1)
             }
             async fn quotes(&self, s: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
                 let Some(secs) = self.quote_secs else {
@@ -2061,15 +2068,38 @@ mod tests {
                 ["no bars for BBCA: it did not trade in the last 5 days, or the source has none outside trading hours"]
             );
 
-            // Stockbit's 5-day window is hourly: no retry.
+            // A five-day window of another bar size (Stockbit's is hourly):
+            // no retry, whatever the provider is called.
             let mut p = stub(vec![], Some(DAY));
-            p.name = crate::providers::stockbit::NAME;
+            p.hourly_week = true;
             let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
             assert_eq!(*p.asked.lock().unwrap(), [Period::D1]);
             assert_eq!(
                 r.warnings,
                 ["no bars for BBCA: it did not trade in the latest session, or the source has none outside trading hours"]
             );
+            // Hourly bars are what that window holds, so 1h is retried.
+            let r = intraday(&p, &[], &bbca(), Interval::Hour1).await.unwrap();
+            assert_eq!(
+                *p.asked.lock().unwrap(),
+                [Period::D1, Period::D1, Period::D5]
+            );
+            assert!(
+                r.warnings[0].contains("the last 5 days"),
+                "{:?}",
+                r.warnings
+            );
+
+            // Behind a chain, one link with another bar size stops the retry.
+            let mut hourly = stub(vec![], Some(DAY));
+            hourly.hourly_week = true;
+            let chain = crate::providers::Chain::new(vec![
+                Box::new(stub(vec![], Some(DAY))),
+                Box::new(hourly),
+            ]);
+            assert!(chain.serves_interval(Period::D5, Interval::Hour1));
+            assert!(!chain.serves_interval(Period::D5, Interval::Min1));
+            assert!(chain.serves_interval(Period::D1, Interval::Min1));
         }
 
         #[tokio::test]

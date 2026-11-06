@@ -163,6 +163,12 @@ pub fn granularity_note(tf: &str, interval: Interval) -> Option<String> {
     ))
 }
 
+/// Whether the window `period` maps to has bars of `interval`: the same-day
+/// window is one-minute, the five-day one hourly (`Provider::serves_interval`).
+pub fn serves_interval(period: Period, interval: Interval) -> bool {
+    granularity_note(timeframe_for(period, interval).0, interval).is_none()
+}
+
 /// Candles from `/charts/{SYM}/daily`. `prices[]` rows carry `date` (epoch ms,
 /// the bar start in WIB), string OHLC and a `value` that is the close; `volume`
 /// is in lots and is converted to shares. Rows without a usable close or time
@@ -375,5 +381,11 @@ mod tests {
             .unwrap()
             .contains("weekly"));
         assert_eq!(granularity_note("1y", Interval::Day1), None);
+
+        assert!(serves_interval(Period::D1, Interval::Min1));
+        assert!(!serves_interval(Period::D5, Interval::Min1));
+        assert!(!serves_interval(Period::D1, Interval::Min5));
+        assert!(serves_interval(Period::D5, Interval::Hour1));
+        assert!(serves_interval(Period::Y1, Interval::Day1));
     }
 }

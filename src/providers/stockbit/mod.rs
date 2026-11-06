@@ -257,4 +257,8 @@ impl Provider for Stockbit {
         }
         Ok(out)
     }
+
+    fn serves_interval(&self, period: Period, interval: Interval) -> bool {
+        parse::serves_interval(period, interval)
+    }
 }

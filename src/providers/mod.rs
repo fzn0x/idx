@@ -152,6 +152,14 @@ pub trait Provider: Send + Sync {
         interval: Interval,
     ) -> Result<Sourced<History>>;
 
+    /// Whether `history` returns bars of `interval` over `period`. A source
+    /// that picks its own bar size per window (Stockbit's five-day window is
+    /// hourly) answers `false` where the two differ, so a caller that needs
+    /// the size asked for can skip that window.
+    fn serves_interval(&self, _period: Period, _interval: Interval) -> bool {
+        true
+    }
+
     async fn profile(&self, _symbol: &Symbol) -> Result<Sourced<Profile>> {
         Err(IdxError::unsupported(self.name(), "company profiles"))
     }
@@ -293,6 +301,13 @@ impl Provider for Chain {
         interval: Interval,
     ) -> Result<Sourced<History>> {
         first_ok!(self, p => p.history(symbol, period, interval))
+    }
+
+    /// Any link may answer, so every link has to serve the size.
+    fn serves_interval(&self, period: Period, interval: Interval) -> bool {
+        self.providers
+            .iter()
+            .all(|p| p.serves_interval(period, interval))
     }
 
     /// First provider's profile, with the board and founding year filled from
