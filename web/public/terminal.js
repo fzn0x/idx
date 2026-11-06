@@ -1362,6 +1362,14 @@ function boardWords(m) {
 
 const LAMP = { live: t("Langsung", "Live"), closed: t("Bursa tutup", "Closed"), stale: t("Tertunda", "Stale"), offline: t("Terputus", "Offline") };
 
+/** What follows the count: the phase while a session runs, otherwise only why the exchange is shut,
+ *  since the lamp already says it is (nothing after hours on a trading day). */
+function trailWords(s) {
+  if (s.open) return phaseWords(s);
+  if (s.holiday) return s.holiday;
+  return s.tradingDay ? "" : t("akhir pekan", "weekend");
+}
+
 /** The status bar: the lamp and the snapshot's age, read with the board once a minute; a phone keeps just those. */
 async function board() {
   try {
@@ -1371,8 +1379,9 @@ async function board() {
     const age = Math.max(0, (Date.now() - at) / 1000);
     const kind = !s.open ? "closed" : age > 180 ? "stale" : "live";
     lamp(kind, LAMP[kind]);
+    const trail = trailWords(s);
     document.getElementById("st-age").replaceChildren(t("Papan ", "Snapshot "), el("b", { text: `${hhmm(wib(at).secs).replace(":", TIME_SEP)} WIB` }), t(` · ${fmt.ago(age)} lalu`, ` · ${fmt.ago(age)} ago`),
-      el("span", { class: "st-next", text: t(` · ${fmt.int(m.data.quoted)} saham · ${phaseWords(s)}`, ` · ${fmt.int(m.data.quoted)} quoted · ${phaseWords(s)}`) }));
+      el("span", { class: "st-next", text: t(` · ${fmt.int(m.data.quoted)} saham`, ` · ${fmt.int(m.data.quoted)} quoted`) + (trail ? ` · ${trail}` : "") }));
   } catch {
     lamp("offline", LAMP.offline);
   }
