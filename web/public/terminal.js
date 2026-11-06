@@ -81,6 +81,13 @@ const newsTable = (items) => wrapScroll(table([
   { h: "Headline", f: (i) => el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.title }), l: true },
 ], items));
 
+// Statements in another currency than the price (USD statements, IDR price):
+// the source's book, sales and EV multiples then divide one by the other.
+// Same test as Fundamentals::mixed_currency in the CLI.
+const mixedCurrency = (f) => !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
+const mixedRatio = (f, v) => (v != null && mixedCurrency(f) ? `${fmt.ratio(v)}*` : fmt.ratio(v));
+const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} ${f.financial_currency}` : s);
+
 const BANDAR_NOTE = "Bandarmology from the IPOT broker summary: the top N buyers against the top N sellers (ranked by lots), net value as a share of the value traded: +15% big accumulation, +5% accumulation, -5% distribution, -15% big distribution. Heuristic, not advice.";
 
 const R = {
@@ -131,11 +138,12 @@ const R = {
     const grid = el("div", { class: "three" });
     const stmt = (title, pairs) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]);
     grid.append(
-      stmt("Valuation", [["Market cap", fmt.compact(v.market_cap)], ["Enterprise value", fmt.compact(v.enterprise_value)], ["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", fmt.ratio(v.price_to_book)], ["P/S", fmt.ratio(v.price_to_sales)], ["EV/EBITDA", fmt.ratio(v.ev_to_ebitda)]]),
-      stmt("Profitability & health", [["ROE", pct(p.roe_pct)], ["ROA", pct(p.roa_pct)], ["Gross margin", pct(p.gross_margin_pct)], ["Operating margin", pct(p.operating_margin_pct)], ["Net margin", pct(p.net_margin_pct)], ["Debt / equity", x(h.debt_to_equity)], ["Current ratio", fmt.ratio(h.current_ratio)], ["Total cash", fmt.compact(h.total_cash)]]),
+      stmt("Valuation", [["Market cap", fmt.compact(v.market_cap)], ["Enterprise value", fmt.compact(v.enterprise_value)], ["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", mixedRatio(f, v.price_to_book)], ["P/S", mixedRatio(f, v.price_to_sales)], ["EV/EBITDA", mixedRatio(f, v.ev_to_ebitda)]]),
+      stmt("Profitability & health", [["ROE", pct(p.roe_pct)], ["ROA", pct(p.roa_pct)], ["Gross margin", pct(p.gross_margin_pct)], ["Operating margin", pct(p.operating_margin_pct)], ["Net margin", pct(p.net_margin_pct)], ["Debt / equity", x(h.debt_to_equity)], ["Current ratio", fmt.ratio(h.current_ratio)], ["Total cash", inStatementCurrency(f, h.total_cash, fmt.compact(h.total_cash))]]),
       stmt("Growth, dividend, analysts", [["Revenue growth", fmt.pct(g.revenue_growth_pct)], ["Earnings growth", fmt.pct(g.earnings_growth_pct)], ["Dividend yield", pct(d.yield_pct)], ["Payout", pct(d.payout_ratio_pct)], ["Ex-dividend", d.ex_dividend_date], ["EPS (ttm)", fmt.price(f.per_share.eps_ttm)], ["Rating", a.recommendation ? a.recommendation.replace("_", " ") : null], ["Target mean", fmt.price(a.target_mean)]]),
     );
     frag.append(grid);
+    if (mixedCurrency(f)) frag.append(el("p", { class: "warn", text: `* Statements in ${f.financial_currency}, price in ${f.currency}: P/B, P/S and EV multiples divide the price by ${f.financial_currency} figures, so they are not comparable, and the verdict does not score P/B.` }));
     if (f.verdict) {
       const vv = f.verdict;
       const cls = vv.label === "undervalued" ? "up" : vv.label === "overvalued" ? "dn" : "";
@@ -192,11 +200,16 @@ const R = {
     const cols = [{ h: "Metric", k: "label", l: true }, ...list.map((f, i) => ({ h: f.symbol, f: (r) => r.vals[i], cls: "num" }))];
     const rowsDef = [
       ["Price", (f) => fmt.price(f.price)], ["Market cap", (f) => fmt.compact(f.valuation.market_cap)], ["P/E (ttm)", (f) => fmt.ratio(f.valuation.pe_trailing)], ["P/E (fwd)", (f) => fmt.ratio(f.valuation.pe_forward)],
-      ["P/B", (f) => fmt.ratio(f.valuation.price_to_book)], ["EV/EBITDA", (f) => fmt.ratio(f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
+      ["P/B", (f) => mixedRatio(f, f.valuation.price_to_book)], ["EV/EBITDA", (f) => mixedRatio(f, f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
       ["Debt/equity", (f) => x(f.health.debt_to_equity)], ["Rev growth", (f) => fmt.pct(f.growth.revenue_growth_pct)], ["Div yield", (f) => pct(f.dividend.yield_pct)], ["Target (mean)", (f) => fmt.price(f.analyst.target_mean)],
       ["Verdict", (f) => f.verdict?.label.replace("_", " ") || NA],
     ];
-    return wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
+    const t = wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
+    const mixed = list.filter(mixedCurrency).map((f) => `${f.symbol} (statements in ${f.financial_currency}, price in ${f.currency})`);
+    if (!mixed.length) return t;
+    const frag = document.createDocumentFragment();
+    frag.append(t, el("p", { class: "warn", text: `* P/B and EV/EBITDA divide the price by statement figures in another currency, so they are not comparable: ${mixed.join("; ")}.` }));
+    return frag;
   },
   screen(s) {
     const frag = document.createDocumentFragment();

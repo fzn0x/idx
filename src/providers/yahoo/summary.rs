@@ -126,7 +126,15 @@ pub fn parse_fundamentals(body: &str, symbol: &Symbol) -> Result<Fundamentals> {
 
     let mut f = Fundamentals::empty(symbol.clone(), SOURCE);
     f.name = text(price, "longName").or_else(|| text(price, "shortName"));
-    f.currency = text(price, "currency").or_else(|| text(fd, "financialCurrency"));
+    // The price's currency only: financialCurrency is the statements' and goes
+    // to its own field, so a missing price currency stays unknown rather than
+    // hiding a USD/IDR mix.
+    f.currency = text(price, "currency").or_else(|| text(sd, "currency"));
+    // USD for coal, oil and gas, and airline issuers (ITMG, MEDC, GIAA): their
+    // priceToBook, priceToSalesTrailing12Months and enterpriseTo* divide the
+    // IDR price by USD figures, and bookValue, revenuePerShare, totalDebt and
+    // totalCash are USD. trailingEps, trailingPE and the yield are in IDR.
+    f.financial_currency = text(fd, "financialCurrency");
     f.sector = text(ap, "sector");
     f.industry = text(ap, "industry");
     f.price = raw(fd, "currentPrice").or_else(|| raw(price, "regularMarketPrice"));
@@ -308,6 +316,10 @@ mod tests {
         include_str!("../../../tests/fixtures/yahoo/quote_summary_fundamentals_bbca.json");
     const TLKM: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_fundamentals_tlkm.json");
+    const GIAA: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_fundamentals_giaa.json");
+    const ITMG: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_fundamentals_itmg.json");
     const EARN_BBCA: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_statements_bbca.json");
     const EARN_TLKM: &str =
@@ -364,6 +376,9 @@ mod tests {
             Some(NaiveDate::from_ymd_opt(2025, 12, 31).unwrap())
         );
         assert!(f.is_financial_sector());
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert_eq!(f.financial_currency.as_deref(), Some("IDR"));
+        assert!(!f.mixed_currency());
         assert_eq!(f.sources, vec!["yahoo:quoteSummary".to_string()]);
     }
 
@@ -375,6 +390,66 @@ mod tests {
         assert_eq!(f.valuation.ev_to_ebitda, Some(3.562));
         assert!((f.profitability.gross_margin_pct.unwrap() - 59.959).abs() < 1e-3);
         assert!(!f.is_financial_sector());
+    }
+
+    #[test]
+    fn fundamentals_giaa_negative_equity() {
+        // Recorded 2026-11-06: Yahoo sends debtToEquity, priceToBook and
+        // returnOnEquity as {} but keeps a negative (USD) bookValue.
+        let f = parse_fundamentals(GIAA, &sym("GIAA")).unwrap();
+        assert_eq!(f.per_share.book_value, Some(-0.001));
+        assert_eq!(f.health.debt_to_equity, None);
+        assert_eq!(f.valuation.price_to_book, None);
+        assert_eq!(f.profitability.roe_pct, None);
+        assert_eq!(f.price, Some(39.0));
+        assert!((f.profitability.net_margin_pct.unwrap() + 9.375).abs() < 1e-9);
+        assert!((f.growth.revenue_growth_pct.unwrap() - 8.2).abs() < 1e-9);
+        assert_eq!(f.growth.earnings_growth_pct, None);
+        assert_eq!(f.per_share.eps_ttm, Some(-23.54));
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert_eq!(f.financial_currency.as_deref(), Some("USD"));
+        assert_eq!(f.negative_equity(), Some(true));
+    }
+
+    #[test]
+    fn fundamentals_itmg_reports_in_usd() {
+        // Recorded 2026-11-06: an IDR price over USD statements, so Yahoo's
+        // book, sales and EV multiples are off by the exchange rate.
+        let f = parse_fundamentals(ITMG, &sym("ITMG")).unwrap();
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert_eq!(f.financial_currency.as_deref(), Some("USD"));
+        assert!(f.mixed_currency());
+        assert_eq!(f.price, Some(24300.0));
+        assert!((f.valuation.price_to_book.unwrap() - 14103.308).abs() < 1e-3);
+        assert!((f.valuation.price_to_sales.unwrap() - 13807.103).abs() < 1e-3);
+        assert!((f.valuation.ev_to_ebitda.unwrap() - 91203.72).abs() < 1e-2);
+        assert_eq!(f.per_share.book_value, Some(1.723));
+        // P/E and EPS are in IDR and agree with each other.
+        assert!((f.valuation.pe_trailing.unwrap() - 7.456572).abs() < 1e-6);
+        assert_eq!(f.per_share.eps_ttm, Some(3258.87));
+        assert_eq!(f.negative_equity(), Some(false));
+    }
+
+    #[test]
+    fn currency_never_falls_back_to_the_statement_currency() {
+        // The ITMG body without price.currency: summaryDetail also names the
+        // trading currency.
+        let mut body: Value = serde_json::from_str(ITMG).unwrap();
+        let r = body.pointer_mut("/quoteSummary/result/0").unwrap();
+        r["price"].as_object_mut().unwrap().remove("currency");
+        let f = parse_fundamentals(&body.to_string(), &sym("ITMG")).unwrap();
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert!(f.mixed_currency());
+
+        // Without either, the price currency is unknown, not USD.
+        let r = body.pointer_mut("/quoteSummary/result/0").unwrap();
+        r["summaryDetail"]
+            .as_object_mut()
+            .unwrap()
+            .remove("currency");
+        let f = parse_fundamentals(&body.to_string(), &sym("ITMG")).unwrap();
+        assert_eq!(f.currency, None);
+        assert_eq!(f.financial_currency.as_deref(), Some("USD"));
     }
 
     #[test]

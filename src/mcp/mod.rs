@@ -984,7 +984,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_fundamental",
-        description = "Fundamentals report for one IDX ticker: valuation (P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA), profitability (ROE, ROA, margins), balance sheet (debt/equity, current ratio, cash, debt), growth, dividend, per-share figures, analyst targets, and a plain-language verdict (undervalued | fair | overvalued | insufficient_data) with every rule that fired listed in reasons. Returns the idx.fundamentals.v1 envelope."
+        description = "Fundamentals report for one IDX ticker: valuation (P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA), profitability (ROE, ROA, margins), balance sheet (debt/equity, current ratio, cash, debt), growth, dividend, per-share figures, analyst targets, and a plain-language verdict (undervalued | fair | overvalued | insufficient_data) with every rule that fired listed in reasons. When financial_currency differs from currency (USD statements, IDR price), P/B, P/S and the EV multiples divide the IDR price by USD figures and are not comparable, book value, revenue per share, total debt and total cash are in financial_currency, and the verdict does not score P/B. Returns the idx.fundamentals.v1 envelope."
     )]
     async fn fundamental(
         &self,

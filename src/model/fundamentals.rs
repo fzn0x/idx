@@ -124,7 +124,9 @@ pub struct Profitability {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Health {
-    /// Total debt / shareholders' equity as a ratio (`0.6` = 60 %).
+    /// Total debt / shareholders' equity as a ratio (`0.6` = 60 %). `null` when
+    /// the source has none, including MSN's placeholder for a company with
+    /// negative equity.
     pub debt_to_equity: Option<f64>,
     pub current_ratio: Option<f64>,
     pub quick_ratio: Option<f64>,
@@ -205,7 +207,15 @@ pub struct Verdict {
 pub struct Fundamentals {
     pub symbol: Symbol,
     pub name: Option<String>,
+    /// Trading currency of the price.
     pub currency: Option<String>,
+    /// Currency of the financial statements when the source says (Yahoo
+    /// `financialData.financialCurrency`). When it differs from `currency`,
+    /// the book, sales and EV multiples divide the price by figures in another
+    /// currency, and book value, revenue per share, total debt and total cash
+    /// are in this currency: none of them is filled from a source that names
+    /// no statement currency.
+    pub financial_currency: Option<String>,
     pub sector: Option<String>,
     pub industry: Option<String>,
     pub price: Option<f64>,
@@ -233,6 +243,7 @@ impl Fundamentals {
             symbol,
             name: None,
             currency: None,
+            financial_currency: None,
             sector: None,
             industry: None,
             price: None,
@@ -254,6 +265,15 @@ impl Fundamentals {
     }
 
     /// Fills every `null` field from `other`, keeping existing values.
+    ///
+    /// Book value and revenue per share, total debt and total cash are in the
+    /// statement currency, and P/B, P/S and the EV multiples divide the price
+    /// by them. Those, and `financial_currency` itself, are not filled from a
+    /// record whose statements are in another currency, so every one of them
+    /// published next to `financial_currency` is in that currency. A record
+    /// that names no statement currency (MSN) is read as reporting in its
+    /// price currency: under `auto` it fills none of them into a Yahoo record
+    /// with USD statements.
     pub fn fill_from(&mut self, other: &Fundamentals) {
         macro_rules! fill {
             ($($path:ident).+) => {
@@ -261,6 +281,21 @@ impl Fundamentals {
                     self.$($path).+ = other.$($path).+.clone();
                 }
             };
+        }
+        let foreign_statements = match (self.statement_currency(), other.statement_currency()) {
+            (Some(ours), Some(theirs)) => !ours.eq_ignore_ascii_case(theirs),
+            _ => false,
+        };
+        if !foreign_statements {
+            fill!(financial_currency);
+            fill!(valuation.price_to_book);
+            fill!(valuation.price_to_sales);
+            fill!(valuation.ev_to_ebitda);
+            fill!(valuation.ev_to_revenue);
+            fill!(health.total_debt);
+            fill!(health.total_cash);
+            fill!(per_share.book_value);
+            fill!(per_share.revenue);
         }
         fill!(name);
         fill!(currency);
@@ -275,10 +310,6 @@ impl Fundamentals {
         fill!(valuation.pe_trailing);
         fill!(valuation.pe_forward);
         fill!(valuation.peg);
-        fill!(valuation.price_to_book);
-        fill!(valuation.price_to_sales);
-        fill!(valuation.ev_to_ebitda);
-        fill!(valuation.ev_to_revenue);
         fill!(profitability.roe_pct);
         fill!(profitability.roa_pct);
         fill!(profitability.gross_margin_pct);
@@ -287,8 +318,6 @@ impl Fundamentals {
         fill!(health.debt_to_equity);
         fill!(health.current_ratio);
         fill!(health.quick_ratio);
-        fill!(health.total_debt);
-        fill!(health.total_cash);
         fill!(growth.revenue_growth_pct);
         fill!(growth.earnings_growth_pct);
         fill!(growth.revenue_cagr_5y_pct);
@@ -298,8 +327,6 @@ impl Fundamentals {
         fill!(dividend.ex_dividend_date);
         fill!(per_share.eps_ttm);
         fill!(per_share.eps_forward);
-        fill!(per_share.book_value);
-        fill!(per_share.revenue);
         fill!(analyst.recommendation);
         fill!(analyst.target_mean);
         fill!(analyst.target_high);
@@ -335,6 +362,44 @@ impl Fundamentals {
         let s = self.sector.as_deref().unwrap_or("").to_ascii_lowercase();
         let i = self.industry.as_deref().unwrap_or("").to_ascii_lowercase();
         s.contains("financ") || i.contains("bank") || i.contains("insurance")
+    }
+
+    /// Whether shareholders' equity is below zero, read from the signs the
+    /// sources report: `Some(true)` when book value per share, P/B or
+    /// debt/equity is negative (P/B and debt/equity both divide by equity),
+    /// `Some(false)` when at least one of them is reported and none is
+    /// negative, `None` when none is reported. Yahoo blanks P/B, debt/equity
+    /// and ROE for such a company but keeps `bookValue` negative; MSN keeps
+    /// `bookValuePerShare` negative (GIAA, INAF, POLY, SRIL, WSKT on
+    /// 2026-11-06). The sign does not depend on the statement currency.
+    pub fn negative_equity(&self) -> Option<bool> {
+        let signs = [
+            self.per_share.book_value,
+            self.valuation.price_to_book,
+            self.health.debt_to_equity,
+        ];
+        if signs.iter().all(Option::is_none) {
+            return None;
+        }
+        Some(signs.iter().flatten().any(|x| *x < 0.0))
+    }
+
+    /// The statements are in another currency than the price (both known),
+    /// e.g. a coal miner or an airline that reports in USD while its shares
+    /// trade in IDR.
+    pub fn mixed_currency(&self) -> bool {
+        match (&self.currency, &self.financial_currency) {
+            (Some(price), Some(statements)) => !price.eq_ignore_ascii_case(statements),
+            _ => false,
+        }
+    }
+
+    /// The statement currency, or the price's when the source names none.
+    /// Only `fill_from` uses it, to keep one record's amounts in one unit.
+    fn statement_currency(&self) -> Option<&str> {
+        self.financial_currency
+            .as_deref()
+            .or(self.currency.as_deref())
     }
 }
 
@@ -508,6 +573,110 @@ mod tests {
         assert_eq!(a.valuation.price_to_book, Some(2.0));
         assert_eq!(a.name.as_deref(), Some("Bank"));
         assert_eq!(a.sources, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn fill_from_keeps_statement_figures_in_one_currency() {
+        // GIAA on 2026-11-06: Yahoo has USD statements, MSN names none and its
+        // per-share amounts are in IDR terms (book value -9.829, revenue
+        // 515.77). The other MSN figures are made up.
+        let sym = Symbol::parse("GIAA").unwrap();
+        let mut yahoo = Fundamentals::empty(sym.clone(), "yahoo");
+        yahoo.currency = Some("IDR".into());
+        yahoo.financial_currency = Some("USD".into());
+        yahoo.per_share.book_value = Some(-0.001);
+        let mut msn = Fundamentals::empty(sym, "msn");
+        msn.currency = Some("IDR".into());
+        msn.per_share.book_value = Some(-9.829);
+        msn.per_share.revenue = Some(515.77);
+        msn.valuation.price_to_book = Some(-3.97);
+        msn.valuation.price_to_sales = Some(0.2652);
+        msn.valuation.ev_to_ebitda = Some(6.1);
+        msn.valuation.ev_to_revenue = Some(1.4);
+        msn.health.total_debt = Some(5.9e13);
+        msn.health.total_cash = Some(7.4e12);
+        msn.health.debt_to_equity = Some(-2.89);
+        msn.growth.earnings_growth_pct = Some(-92.482);
+
+        // `auto`: Yahoo first, MSN fills the nulls.
+        let mut merged = yahoo.clone();
+        merged.fill_from(&msn);
+        assert_eq!(merged.financial_currency.as_deref(), Some("USD"));
+        assert!(merged.mixed_currency());
+        assert_eq!(merged.per_share.book_value, Some(-0.001));
+        assert_eq!(merged.per_share.revenue, None, "no IDR amount labelled USD");
+        assert_eq!(merged.health.total_debt, None);
+        assert_eq!(merged.health.total_cash, None);
+        assert_eq!(merged.valuation.price_to_book, None);
+        assert_eq!(merged.valuation.price_to_sales, None);
+        assert_eq!(merged.valuation.ev_to_ebitda, None);
+        assert_eq!(merged.valuation.ev_to_revenue, None);
+        // Ratios of two statement figures and growth rates do not depend on it.
+        assert_eq!(merged.health.debt_to_equity, Some(-2.89));
+        assert_eq!(merged.growth.earnings_growth_pct, Some(-92.482));
+        assert_eq!(merged.sources, vec!["yahoo".to_string(), "msn".to_string()]);
+
+        // The other way round, MSN's own amounts are not relabelled USD.
+        let mut merged = msn.clone();
+        merged.fill_from(&yahoo);
+        assert_eq!(merged.financial_currency, None);
+        assert!(!merged.mixed_currency());
+        assert_eq!(merged.per_share.book_value, Some(-9.829));
+
+        // Statements in the price's currency (BBCA): MSN fills them as before.
+        let mut bbca = Fundamentals::empty(Symbol::parse("BBCA").unwrap(), "yahoo");
+        bbca.currency = Some("IDR".into());
+        bbca.financial_currency = Some("IDR".into());
+        bbca.fill_from(&msn);
+        assert_eq!(bbca.per_share.revenue, Some(515.77));
+        assert_eq!(bbca.valuation.price_to_sales, Some(0.2652));
+        assert_eq!(bbca.health.total_debt, Some(5.9e13));
+
+        // Nothing known about either currency: fills as before.
+        let mut unknown = Fundamentals::empty(Symbol::parse("GIAA").unwrap(), "a");
+        let mut other = Fundamentals::empty(Symbol::parse("GIAA").unwrap(), "b");
+        other.financial_currency = Some("USD".into());
+        other.per_share.book_value = Some(-0.001);
+        unknown.fill_from(&other);
+        assert_eq!(unknown.financial_currency.as_deref(), Some("USD"));
+        assert_eq!(unknown.per_share.book_value, Some(-0.001));
+    }
+
+    #[test]
+    fn negative_equity_reads_any_sign() {
+        let mut f = Fundamentals::empty(Symbol::parse("GIAA").unwrap(), "t");
+        assert_eq!(f.negative_equity(), None, "nothing reported");
+        f.per_share.book_value = Some(1200.0);
+        assert_eq!(f.negative_equity(), Some(false));
+        // Yahoo rounds a tiny USD book value to zero, sometimes with a sign.
+        f.per_share.book_value = Some(-0.0);
+        assert_eq!(f.negative_equity(), Some(false));
+        f.per_share.book_value = Some(0.0);
+        assert_eq!(f.negative_equity(), Some(false));
+        f.per_share.book_value = Some(-0.001);
+        assert_eq!(f.negative_equity(), Some(true));
+
+        let mut f = Fundamentals::empty(Symbol::parse("INAF").unwrap(), "t");
+        f.valuation.price_to_book = Some(-0.55);
+        assert_eq!(f.negative_equity(), Some(true));
+        let mut f = Fundamentals::empty(Symbol::parse("INAF").unwrap(), "t");
+        f.health.debt_to_equity = Some(-2.89);
+        f.per_share.book_value = Some(10.0);
+        assert_eq!(f.negative_equity(), Some(true), "any negative sign wins");
+    }
+
+    #[test]
+    fn mixed_currency_needs_both_currencies() {
+        let mut f = Fundamentals::empty(Symbol::parse("ITMG").unwrap(), "t");
+        assert!(!f.mixed_currency());
+        f.currency = Some("IDR".into());
+        assert!(!f.mixed_currency(), "statement currency unknown");
+        f.financial_currency = Some("IDR".into());
+        assert!(!f.mixed_currency());
+        f.financial_currency = Some("usd".into());
+        assert!(f.mixed_currency());
+        f.currency = None;
+        assert!(!f.mixed_currency(), "price currency unknown");
     }
 
     #[test]

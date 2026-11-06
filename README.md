@@ -115,7 +115,7 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stocks dividends <SYMBOL>` | Every cash dividend (ex-date, split-adjusted amount) and split; yearly totals, TTM total and yield, payout streak |
 | `stocks returns <SYMBOLS> [--benchmark ^JKSE]` | 1w/1m/3m/6m/YTD/1y/3y/5y returns, CAGR, volatility, max drawdown, best/worst day, 52-week position, and excess over IHSG |
 | `stocks brief <SYMBOL>` | One page: quote, verdict, signal, returns vs IHSG, dividends, top holders, headlines, with plain-language key points |
-| `stocks fundamental <SYMBOL>` | P/E, P/B, PEG, EV/EBITDA, ROE, ROA, margins, leverage, growth, dividend, analyst targets, plus a plain-language verdict that lists every rule it applied |
+| `stocks fundamental <SYMBOL>` | P/E, P/B, PEG, EV/EBITDA, ROE, ROA, margins, leverage, growth, dividend, analyst targets, plus a plain-language verdict that lists every rule it applied (negative equity counts against a company; multiples that mix USD statements with an IDR price are marked and not scored) |
 | `stocks technical <SYMBOL> [--period 1y]` | RSI, MACD, SMA/EMA 20/50/200, Bollinger, ATR, volume, support/resistance, trend, buy/sell/neutral signal with reasons |
 | `stocks compare <SYMBOLS>` | Side-by-side fundamentals for two or more tickers |
 | `stocks screen -f "pe<15,roe>15,sector=financial"` | Screener over ~950 IDX tickers: one batch quote for valuation/size/dividend keys, per-company fundamentals for the rest (capped, largest first) |
