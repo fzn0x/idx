@@ -14,6 +14,11 @@ cargo test
 Rust stable (1.89+) is the only requirement. `rust-toolchain.toml` pins
 `rustfmt` and `clippy` as components.
 
+With Nix, `nix develop` gives that toolchain plus rust-analyzer and Node 22
+(for `web/` and `npm/`); the commands are the same. `nix flake check` runs fmt,
+clippy, the tests, a build with the declared minimum Rust and a smoke test of
+the packaged binary in a sandbox.
+
 ## Before you open a pull request
 
 ```sh

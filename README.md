@@ -80,6 +80,8 @@ cargo install ihsg-cli                    # crates.io, builds from source (Rust 
 npm install -g github:fzn0x/idx           # npm, straight from this repository
 npx github:fzn0x/idx stocks quote BBCA    # npm, no install
 curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh   # Linux, macOS
+nix profile install github:fzn0x/idx      # Nix (Linux, Apple silicon macOS), with shell completions
+nix run github:fzn0x/idx -- stocks quote BBCA   # Nix, no install
 ```
 
 npm installs a small launcher from this repository; the first `idx` command
@@ -93,6 +95,15 @@ Windows without npm: download `idx-<version>-x86_64-pc-windows-msvc.zip` from
 the [releases page](https://github.com/fzn0x/idx/releases). Static Linux
 binaries are musl builds and run on any distribution. The development version installs
 with `cargo install --git https://github.com/fzn0x/idx`.
+
+With Nix, `nix run github:fzn0x/idx#mcp` is a ready MCP server command
+(`"command": "nix", "args": ["run", "github:fzn0x/idx#mcp"]`), `overlays.default`
+adds `pkgs.idx` for NixOS and home-manager configurations, and `nix develop` in
+a clone gives the toolchain from `rust-toolchain.toml` plus Node for `web/`.
+`idx mcp setup` prints the binary's resolved `/nix/store` path, which an upgrade
+followed by garbage collection removes, so register `~/.nix-profile/bin/idx` or
+the `nix run` command instead. On NixOS, point `idx stockbit login` at a browser
+with `IDX_BROWSER=$(command -v chromium)`.
 
 Shell completions:
 

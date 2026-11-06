@@ -85,6 +85,10 @@ npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies
                      (postinstall when allowed, otherwise on first run)
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
                      register to the `ownership-data` prerelease (raw files, index.json, JSON parts)
+flake.nix            Nix flake (crane + rust-overlay, built from Cargo.lock): packages idx and idx-mcp,
+                     apps (default, mcp), dev shell (rust-toolchain.toml + rust-analyzer + node 22),
+                     checks (fmt, clippy, test, msrv, smoke), overlays.default; flake.lock pins the
+                     inputs and .github/workflows/nix.yml builds it (uploads a fresh lock as an artifact)
 ```
 
 CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, returns,
@@ -158,7 +162,12 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ./scripts/smoke.sh               # live providers, needs network
 ./target/debug/idx -vv stocks quote BBCA   # -vv prints every request to stderr
+nix flake check                  # optional: the same gates in a Nix sandbox, plus the MSRV build
 ```
+
+The flake builds only from `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `src/`,
+`data/` and `tests/`. If the crate starts embedding a file from anywhere else,
+add the path to `src` in `flake.nix`.
 
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`,
 `chore:`, `ci:`). Keep each commit buildable.

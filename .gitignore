@@ -11,6 +11,11 @@
 !.env.example
 /web/dist
 
+# Nix: build results and direnv's cache
+/result
+/result-*
+/.direnv
+
 # Impeccable review captures are regenerated; surface briefs and config stay tracked
 /.impeccable/review/
 /.impeccable/mocks/
