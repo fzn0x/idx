@@ -462,7 +462,7 @@ const R = {
     frag.append(el("pre", { text: `${t.cli}\n${t.cli.replace(/^idx /, "idx -o json ")}` }));
     const stockbit = t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit");
     const reason = stockbit
-      ? "The Stockbit tools carry your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page."
+      ? "The Stockbit tools carry your own account session (captured once by `idx stockbit login`), so they run in the CLI and the MCP server only, never this public page."
       : CLI_ONLY_REASON;
     frag.append(el("p", { class: "warn", text: `${reason} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
     return frag;

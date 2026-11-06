@@ -10,8 +10,8 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
-`ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
-`candle`.
+`ownership-import`, `ownership-discover`, `watchlist`, `stockbit-actions`,
+`stockbit-movements`, `stockbit-status`, `error`, `quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -483,6 +483,23 @@ source's id for the holder, the same on all of that holder's rows), `roles`
 `estimated_price` and `estimated_value` (the source's estimate when no price
 was filed; `null` otherwise), `purpose` (as filed), `broker` and
 `broker_group` (seen on KSEI rows).
+
+## `stockbit status` (`idx schema stockbit-status`)
+
+A bare object, not an envelope, and never a token value (the MCP tool
+`idx_stockbit_status` returns the same): `logged_in` (`true` when a refresh
+token is stored, live or not), `access` and `refresh` (each `present`,
+`expires_at` in Unix seconds and `expires_in_secs`, negative once expired;
+both `null` when the token is absent or not a JWT), and `session_file` (the
+absolute path). `sign_in` is MCP only: the reply of `idx_stockbit_login`, and
+in `idx_stockbit_status` the latest page sign-in that tool started in the same
+server; it is absent otherwise (the CLI never sets it). Its fields: `state` (`waiting`, `signed_in`, `failed` or
+`already_signed_in`), `method` (`page`, `browser` or `none`), `url` and `port`
+(the page on 127.0.0.1 while `waiting`), `ssh_forward` (an `ssh -N -L` command
+when the server is reached over SSH), `expires_in_secs` (until the page stops
+listening), `already_open` (an earlier page was still open and is returned),
+`warning` (the latest note, such as why Stockbit refused a pasted session) and
+`error` (why it `failed`).
 
 ## Errors
 
