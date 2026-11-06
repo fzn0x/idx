@@ -44,10 +44,29 @@ export const PAGES = [
 export const SUMMARY =
   "Indonesian stock market (IDX / IHSG) analysis for people and AI agents: one open-source binary with a CLI that prints tables, a JSON mode for scripts (`idx -o json`) and an MCP server for agents (`idx mcp`), built on free public data with no API keys.";
 
-const FACTS = [
+/** A Markdown table of exit codes under `heading` (docs/json-output.md's
+ *  `## Errors`, docs/agent-guide.md's `## Exit codes`): exit code -> the
+ *  `error.code` values in its second column, in table order. */
+export function exitCodes(md, heading) {
+  const section = md.replace(/\r\n?/g, "\n").split(`\n${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  return new Map([...section.matchAll(/^\| (\d) \|([^|]*)\|/gm)].map((m) => [m[1], [...m[2].matchAll(/`([a-z_]+)`/g)].map((c) => c[1])]));
+}
+
+/** llms.txt's exit-code line, built from docs/json-output.md's Errors table so
+ *  a new error code reaches agents without anyone editing this file. */
+export function exitCodesFact(jsonOutputMd) {
+  const codes = exitCodes(jsonOutputMd, "## Errors");
+  if (codes.size < 6 || [...codes.values()].some((c) => !c.length)) {
+    throw new Error("docs.mjs: no exit-code table under `## Errors` in docs/json-output.md");
+  }
+  const rows = [...codes].map(([exit, names]) => `${exit} ${names.map((c) => `\`${c}\``).join(", ")}`);
+  return `Exit codes, each with its \`error.code\` values: 0 ok; ${rows.join("; ")}. [Errors](${ORIGIN}/docs/json-output.md#errors) says when each occurs.`;
+}
+
+const facts = (root) => [
   "Tickers are IDX codes (`BBCA`, `TLKM`); the `.JK` suffix is optional and `^JKSE` is the IHSG composite.",
   "`idx -o json <command>` prints one envelope on stdout: `schema`, `provider`, `fetched_at`, `cached`, `stale`, `warnings`, `data`. Errors go to stderr as `{\"error\":{\"code\":...,\"message\":...},\"exit_code\":N}`.",
-  "Exit codes: 0 ok, 1 internal, 2 usage, 3 network or provider, 4 not found, 5 offline with nothing cached, 6 config or a provider that cannot serve the command.",
+  exitCodesFact(read(root, "docs/json-output.md")),
   "`idx mcp` serves the commands as typed MCP tools over stdio (`idx mcp --http` for URL-only clients); `idx mcp setup <client>` prints the registration for each agent.",
   "A value the source does not publish is `null`; nothing is estimated. Verdicts and signals are labelled rule-based heuristics, not investment advice.",
   "Every page below is Markdown; the same page as HTML drops the `.md` (`/docs/mcp`).",
@@ -245,7 +264,7 @@ ${body}
 
 export function llmsTxt(root = ROOT) {
   const lines = ["# idx", "", `> ${SUMMARY}`, "", `Version ${version(root)}; these pages follow the main branch of ${REPO} (\`idx version\` prints the installed one).`, ""];
-  for (const f of FACTS) lines.push(`- ${f}`);
+  for (const f of facts(root)) lines.push(`- ${f}`);
   lines.push("", "## Docs", "");
   for (const p of PAGES) {
     const { title } = pageMarkdown(p, root);

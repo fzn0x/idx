@@ -8,7 +8,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { render, inline, slugger } from "../scripts/md.mjs";
-import { PAGES, ORIGIN, REPO, ROOT, build, htmlPath, mdPath, llmsTxt, resolveHref } from "../scripts/docs.mjs";
+import { PAGES, ORIGIN, REPO, ROOT, build, exitCodes, exitCodesFact, htmlPath, mdPath, llmsTxt, resolveHref } from "../scripts/docs.mjs";
 
 const files = build(ROOT);
 const html = (slug) => files.get(`docs/${slug}.html`);
@@ -182,17 +182,22 @@ test("llms.txt follows llmstxt.org and lists every page", () => {
   assert.doesNotMatch(t, /\b\d+ (tools|clients|commands)\b/, "no counts that go stale");
 });
 
-// docs/json-output.md's Errors table: exit code -> error codes.
-function exitCodes(md, heading) {
-  const table = md.split(heading)[1].split("\n## ")[0];
-  return new Map([...table.matchAll(/^\| (\d) \|([^|]*)\|/gm)].map((m) => [m[1], [...m[2].matchAll(/`([a-z_]+)`/g)].map((c) => c[1])]));
-}
-
-test("llms.txt states the same exit codes as docs/json-output.md", () => {
+test("llms.txt states the exit codes and error codes of docs/json-output.md", () => {
   const codes = exitCodes(readRepo("docs/json-output.md"), "## Errors");
   assert.ok(codes.size >= 6);
-  const line = llmsTxt(ROOT).split("\n").find((l) => l.startsWith("- Exit codes:"));
-  for (const exit of ["0", ...codes.keys()]) assert.match(line, new RegExp(`\\b${exit} `), `exit ${exit}`);
+  const line = llmsTxt(ROOT).split("\n").find((l) => l.startsWith("- Exit codes"));
+  assert.ok(line, "llms.txt has an exit-code line");
+  assert.match(line, /\b0 ok\b/);
+  for (const [exit, names] of codes) {
+    assert.ok(names.length, `exit ${exit} has error codes`);
+    assert.ok(line.includes(`${exit} ${names.map((c) => `\`${c}\``).join(", ")}`), `llms.txt: exit ${exit} with ${names.join(", ")}`);
+  }
+});
+
+test("llms.txt follows a new error code in docs/json-output.md", () => {
+  const md = readRepo("docs/json-output.md").replace("| 3 | `network`, `provider` |", "| 3 | `network`, `provider`, `blocked` |");
+  assert.match(exitCodesFact(md), /; 3 `network`, `provider`, `blocked`;/);
+  assert.throws(() => exitCodesFact("# JSON output\n\nno table\n"), /Errors/);
 });
 
 test("the agent guide's exit codes match docs/json-output.md", () => {
