@@ -137,6 +137,9 @@ function scopeLabel(s) {
   return `showing ${period}${kind}`;
 }
 const x = (v) => (v == null ? NA : `${fmt.num(v, 2)}x`);
+// Yahoo's marketState in words, as the CLI prints it (market_state in src/output/format.rs).
+const STATES = { REGULAR: "open", PRE: "pre-market", POST: "after hours", PREPRE: "closed", POSTPOST: "closed", CLOSED: "closed" };
+const marketState = (code) => STATES[code.toUpperCase()] || code.toLowerCase();
 
 const newsTable = (items) => wrapScroll(table([
   { h: "WIB", f: (i) => (i.published ? fmt.wib(i.published).slice(5, 16) : NA), l: true }, { h: "Source", k: "source", l: true },
@@ -226,7 +229,7 @@ const R = {
   intraday(d) {
     const frag = document.createDocumentFragment();
     const q = d.quote, s = d.summary;
-    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${q.market_state.toLowerCase()}`].filter(Boolean);
+    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${marketState(q.market_state)}`].filter(Boolean);
     frag.append(el("p", { class: "prose", text: head.join(" · ") }));
     if (q) {
       frag.append(el("p", { class: "prose" }, [

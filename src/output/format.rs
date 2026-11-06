@@ -99,6 +99,19 @@ pub fn text(v: &Option<String>) -> String {
     v.clone().unwrap_or_else(|| DASH.to_string())
 }
 
+/// Yahoo's `marketState` in plain words for tables. `REGULAR` is the session, `PRE` and
+/// `POST` its extended hours, and `PREPRE`, `POSTPOST` and `CLOSED` all mean no session is
+/// running. An unknown code is shown lower-cased as it came. JSON keeps the raw code.
+pub fn market_state(code: &str) -> String {
+    match code.to_ascii_uppercase().as_str() {
+        "REGULAR" => "open".into(),
+        "PRE" => "pre-market".into(),
+        "POST" => "after hours".into(),
+        "PREPRE" | "POSTPOST" | "CLOSED" => "closed".into(),
+        _ => code.to_lowercase(),
+    }
+}
+
 /// Truncates with an ellipsis so names do not blow up table width.
 pub fn clip(s: &str, max: usize) -> String {
     let n = s.chars().count();
@@ -152,6 +165,17 @@ mod tests {
         assert_eq!(num(-900.0, 0), "-900");
         assert_eq!(num(12.0, 0), "12");
         assert_eq!(num(f64::NAN, 2), DASH);
+    }
+
+    #[test]
+    fn market_state_reads_as_words() {
+        assert_eq!(market_state("REGULAR"), "open");
+        assert_eq!(market_state("PRE"), "pre-market");
+        assert_eq!(market_state("POST"), "after hours");
+        for shut in ["PREPRE", "POSTPOST", "CLOSED", "postpost"] {
+            assert_eq!(market_state(shut), "closed", "{shut}");
+        }
+        assert_eq!(market_state("HALTED"), "halted");
     }
 
     #[test]

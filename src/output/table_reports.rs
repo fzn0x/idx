@@ -934,7 +934,8 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
             f::change(ix.change),
             f::pct(ix.change_pct),
             m.market_state
-                .clone()
+                .as_deref()
+                .map(|s| format!("market {}", f::market_state(s)))
                 .unwrap_or_else(|| "state unknown".into()),
             m.as_of
                 .map(|t| format!(" · last trade {}", t.format("%Y-%m-%d %H:%M WIB")))
@@ -1425,7 +1426,7 @@ mod tests {
         let s = market(&m, false);
         assert!(
             s.contains(
-                "PREPRE · last trade 2026-11-05 16:14 WIB\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+                "market closed · last trade 2026-11-05 16:14 WIB\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
             ),
             "{s}"
         );

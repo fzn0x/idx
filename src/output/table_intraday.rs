@@ -21,7 +21,7 @@ pub fn intraday(d: &Intraday, limit: Option<usize>, provider: &str, color: bool)
     }
     head.push(format!("{} bars", d.interval));
     if let Some(state) = d.quote.as_ref().and_then(|q| q.market_state.as_deref()) {
-        head.push(format!("market {}", state.to_lowercase()));
+        head.push(format!("market {}", f::market_state(state)));
     }
     out.push_str(&head.join(" · "));
     out.push('\n');
@@ -166,7 +166,7 @@ mod tests {
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(
             lines[0],
-            "BBCA · Bank Central Asia Tbk · session 2026-11-05 · 1m bars · market prepre"
+            "BBCA · Bank Central Asia Tbk · session 2026-11-05 · 1m bars · market closed"
         );
         assert_eq!(
             lines[1],
