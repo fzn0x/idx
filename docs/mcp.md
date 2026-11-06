@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 39 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -324,10 +324,13 @@ local agents can share one process and one cache this way.
 | `idx_bandar_screen` | `preset?`, `filter?`, `period?`, `top?`, `sort?`, `ascending?`, `limit?`, `scan?` (default 100), `symbols?` | `idx.bandar.screen.v1`: the most traded stocks the top brokers accumulate or distribute |
 | `idx_bandar_broker` | `code`, `period?`, `limit?` (default 20), `scan?` (default 100), `symbols?` | `idx.bandar.broker.v1`: where one broker is a top-10 buyer or seller across the scanned stocks, with net where both sides are visible |
 | `idx_ownership_ticker` | `symbol`, `as_of?` | `idx.ownership.holders.v1` |
-| `idx_ownership_entity` | `name`, `as_of?` | `idx.ownership.entity.v1` |
+| `idx_ownership_entity` | `name`, `as_of?`, `exact?` (match one `entity_key`) | `idx.ownership.entity.v1` |
 | `idx_ownership_changes` | `from`, `to`, `symbol?`, `min_pct_change?`, `limit?`, `offset?` | `idx.ownership.changes.v1`: `summary` over every match, one page of rows |
 | `idx_ownership_foreign` | `symbol?`, `from?`, `to?`, `limit?` | `idx.ownership.foreign.v1` (one issuer over time) or `idx.ownership.foreign-flow.v1` (every issuer between two months) |
 | `idx_ownership_releases` | none | `idx.ownership.releases.v1` |
+| `idx_ownership_search` | `query`, `limit?` (default 20, at most 100), `as_of?` | `idx.ownership.search.v1`: holders matching a name (every spelling, words in any order) with their `entity_key`, spellings, issuers held and `last_seen` |
+| `idx_ownership_rankings` | `view?` (`holders` default \| `issuers`); holders: `min_issuers?` (default 2), `investor_type?`, `origin?` (`foreign` \| `local`); issuers: `symbols?`, `by?` (`hhi` default \| `top1` \| `top3`), `ascending?`; `limit?` (default 25, 0 = all), `as_of?` | `idx.ownership.cross-holders.v1` (holders by the issuers they own above 1 %) or `idx.ownership.concentration.v1` (issuers by HHI, top-1 and top-3 stakes, undisclosed percent, controller stake) |
+| `idx_ownership_graph` | `root` (ticker or holder), `depth?` (1-6, default 2), `min_pct?`, `max_nodes?` (default 100, at most 1000), `holder?`, `as_of?` | `idx.ownership.graph.v1`: issuers and holders with hop counts and the links between them; `truncated` when `max_nodes` stopped the walk |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net. Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
@@ -345,6 +348,15 @@ accounts) are summed, with `accounts` saying how many, and from the 30 Oct
 2026 register each row carries `controller_or_affiliate`
 (`controller_reported` on the report says whether the release has it).
 `idx_ownership_entity` needs at least 3 letters or digits in `name`.
+
+To look a holder up, call `idx_ownership_search` first and pass the
+`entity_key` it returns to `idx_ownership_entity` with `exact: true`, or to
+`idx_ownership_graph` as `root`. `idx_ownership_rankings` passes view-specific
+arguments to one view only: `symbols`, `by` or `ascending` with
+`view: "holders"` (or `min_issuers`, `investor_type`, `origin` with
+`view: "issuers"`) is a usage error. The spelling rules of
+`idx ownership resolve` (merging holders KSEI printed two ways) change the
+user's database, so they stay in the CLI; the MCP tools read the result.
 
 ## Harness compatibility
 

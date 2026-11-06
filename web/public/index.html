@@ -172,7 +172,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="stmt">
-        <h3 class="stmt-title">For agents<small>idx mcp · 36 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 39 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
@@ -187,17 +187,17 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_market_brokers · idx_indices</td><td>top brokers, every index</td></tr>
             <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividends, rights, RUPS, holidays</td></tr>
             <tr><td>idx_instruments · idx_members</td><td>listed stocks, broker codes</td></tr>
-            <tr><td>idx_ownership_*</td><td>holders, changes, foreign flow</td></tr>
+            <tr><td>idx_ownership_*</td><td>holders, search, rankings, networks, changes, foreign flow</td></tr>
             <tr><td>idx_orderbook · idx_stockbit_*</td><td>realtime book, Stockbit login (opt-in)</td></tr>
           </tbody>
         </table>
-        <p class="foot"><a href="#cmd-h">All 36 tools with their CLI and web commands ↓</a></p>
+        <p class="foot"><a href="#cmd-h">All 39 tools with their CLI and web commands ↓</a></p>
       </div>
     </div>
   </section>
 
   <section class="section" aria-labelledby="cmd-h">
-    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 36 MCP tools, the CLI command behind each, and 28 that run in the web terminal</small></h2>
+    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 39 MCP tools, the CLI command behind each, and 31 that run in the web terminal</small></h2>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -235,6 +235,9 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_ownership_changes</td><td><code>idx ownership changes --from 2026-08-31 --to 2026-09-30</code></td><td><a href="/terminal?cmd=ownership%20changes%202026-08-31%202026-09-30">ownership changes 2026-08-31 2026-09-30</a></td><td class="muted">monthly changes with a summary</td></tr>
             <tr><td>idx_ownership_foreign</td><td><code>idx ownership foreign</code></td><td><a href="/terminal?cmd=ownership%20foreign">ownership foreign</a></td><td class="muted">disclosed foreign vs local stakes</td></tr>
             <tr><td>idx_ownership_releases</td><td><code>idx ownership releases</code></td><td><a href="/terminal?cmd=ownership%20releases">ownership releases</a></td><td class="muted">imported monthly registers</td></tr>
+            <tr><td>idx_ownership_search</td><td><code>idx ownership search salim</code></td><td><a href="/terminal?cmd=ownership%20search%20salim">ownership search salim</a></td><td class="muted">find a holder by name: key, spellings, issuers held</td></tr>
+            <tr><td>idx_ownership_rankings</td><td><code>idx ownership cross-holders</code></td><td><a href="/terminal?cmd=ownership%20cross-holders">ownership cross-holders</a></td><td class="muted">holders in the most issuers, or issuers by concentration (HHI)</td></tr>
+            <tr><td>idx_ownership_graph</td><td><code>idx ownership graph BBCA</code></td><td><a href="/terminal?cmd=ownership%20graph%20BBCA">ownership graph BBCA</a></td><td class="muted">network of holders and issuers around a ticker or holder</td></tr>
             <tr><td>idx_orderbook</td><td><code>idx stockbit orderbook BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">realtime order book: full depth ladder and foreign flow (your Stockbit session)</td></tr>
             <tr><td>idx_stockbit_status</td><td><code>idx stockbit status</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">is a Stockbit session stored, and when its tokens expire</td></tr>
             <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in your browser, once</td></tr>
