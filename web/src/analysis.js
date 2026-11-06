@@ -180,9 +180,28 @@ export function isFinancial(f) {
   const s = (f.sector || "").toLowerCase(), i = (f.industry || "").toLowerCase();
   return s.includes("financ") || i.includes("bank") || i.includes("insurance");
 }
+// Shareholders' equity below zero, read from the signs the sources report:
+// true when book value per share, P/B or debt/equity is negative, false when
+// one of them is reported and none is, null when none is. Port of
+// Fundamentals::negative_equity.
+export function negativeEquity(f) {
+  const signs = [f.per_share?.book_value, f.valuation?.price_to_book, f.health?.debt_to_equity].filter((x) => x != null);
+  return signs.length ? signs.some((x) => x < 0) : null;
+}
+// Statements in another currency than the price, both known (USD statements,
+// IDR price). Port of Fundamentals::mixed_currency.
+export function mixedCurrency(f) {
+  return !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
+}
+export const NEGATIVE_EQUITY_REASON = "negative shareholders' equity (book value below zero): P/B, ROE and debt/equity rules skipped";
 export function verdict(f) {
   let score = 0, inputs = 0; const reasons = [];
   const v = f.valuation, p = f.profitability, bank = isFinancial(f);
+  // Negative equity scores -2 and sets P/B, ROE and debt/equity aside (they
+  // still count as inputs); a P/B over statements in another currency is
+  // neither scored nor counted.
+  const neg = negativeEquity(f) === true;
+  const mixed = mixedCurrency(f) ? `statements in ${f.financial_currency} and price in ${f.currency}` : null;
   if (v.pe_trailing != null) {
     inputs++; const pe = v.pe_trailing;
     if (pe <= 0) { score--; reasons.push("negative trailing earnings"); }
@@ -192,12 +211,25 @@ export function verdict(f) {
     else if (pe > 25) { score--; reasons.push(`trailing P/E ${pe.toFixed(1)} is elevated (over 25)`); }
     else reasons.push(`trailing P/E ${pe.toFixed(1)} is in a normal range`);
   }
-  if (v.price_to_book != null) { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
+  if (neg) { inputs++; score -= 2; reasons.push(NEGATIVE_EQUITY_REASON); }
+  if (v.price_to_book != null) {
+    if (neg) inputs++;
+    else if (mixed) reasons.push(`${mixed}: P/B rule skipped`);
+    else { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
+  }
   if (v.peg != null) { inputs++; if (v.peg > 0 && v.peg < 1) { score++; reasons.push(`PEG ${v.peg.toFixed(2)} under 1: growth is cheap`); } else if (v.peg > 2) { score--; reasons.push(`PEG ${v.peg.toFixed(2)} over 2: paying up for growth`); } }
-  if (p.roe_pct != null) { inputs++; if (p.roe_pct > 15) { score++; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is strong (over 15%)`); } else if (p.roe_pct < 5) { score--; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is weak (under 5%)`); } }
+  if (p.roe_pct != null) {
+    inputs++;
+    const loss = (p.net_margin_pct != null && p.net_margin_pct < 0) || (f.per_share?.eps_ttm != null && f.per_share.eps_ttm < 0);
+    if (!neg) {
+      if (p.roe_pct > 15 && loss) reasons.push(`ROE ${p.roe_pct.toFixed(1)}% alongside a net loss: rule skipped`);
+      else if (p.roe_pct > 15) { score++; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is strong (over 15%)`); }
+      else if (p.roe_pct < 5) { score--; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is weak (under 5%)`); }
+    }
+  }
   if (p.net_margin_pct != null) { inputs++; if (p.net_margin_pct > 20) { score++; reasons.push(`net margin ${p.net_margin_pct.toFixed(1)}% is wide`); } else if (p.net_margin_pct < 5) { score--; reasons.push(`net margin ${p.net_margin_pct.toFixed(1)}% is thin`); } }
   if (!bank) {
-    if (f.health.debt_to_equity != null) { inputs++; const de = f.health.debt_to_equity; if (de > 2) { score--; reasons.push(`debt is ${de.toFixed(1)}x equity: heavily leveraged`); } else if (de < 0.5) { score++; reasons.push(`debt is ${de.toFixed(2)}x equity: conservative balance sheet`); } }
+    if (f.health.debt_to_equity != null) { inputs++; const de = f.health.debt_to_equity; if (neg) { /* set aside above */ } else if (de > 2) { score--; reasons.push(`debt is ${de.toFixed(1)}x equity: heavily leveraged`); } else if (de < 0.5) { score++; reasons.push(`debt is ${de.toFixed(2)}x equity: conservative balance sheet`); } }
   } else reasons.push("leverage and margin rules relaxed for a financial company");
   const g = f.growth;
   if (g.revenue_growth_pct != null) { inputs++; if (g.revenue_growth_pct > 10) { score++; reasons.push(`revenue growing ${g.revenue_growth_pct.toFixed(1)}% year on year`); } else if (g.revenue_growth_pct < 0) { score--; reasons.push(`revenue shrinking ${(-g.revenue_growth_pct).toFixed(1)}% year on year`); } }

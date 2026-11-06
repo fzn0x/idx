@@ -42,6 +42,90 @@ test("fundamentals parse and verdict agree with the Rust expectations", () => {
   const v = an.verdict(f);
   assert.ok(v.inputs_available >= 6);
   assert.ok(v.reasons.some((x) => x.includes("financial company")));
+  assert.equal(f.financial_currency, "IDR");
+  // Same figures as the Rust test bbca_is_unchanged.
+  assert.deepEqual([v.label, v.score, v.inputs_available], ["undervalued", 5, 8]);
+});
+
+// Fundamentals shaped like idx.fundamentals.v1 with nothing reported.
+const blank = () => ({ symbol: "TEST", currency: null, financial_currency: null, sector: null, industry: null, price: null, valuation: {}, profitability: {}, health: {}, growth: {}, dividend: {}, per_share: {}, analyst: {} });
+const brief = (v) => [v.label, v.score, v.inputs_available];
+const rewardsBookOrLeverage = (v) => v.reasons.some((r) => r.includes("conservative") || r.includes("below book") || r.includes("strong"));
+
+test("negative equity: GIAA (2026-11-06) is not a conservative balance sheet", () => {
+  const r = JSON.parse(fixture("yahoo/quote_summary_fundamentals_giaa.json")).quoteSummary.result[0];
+  const f = y.parseFundamentals(r, "GIAA");
+  assert.equal(f.per_share.book_value, -0.001);
+  assert.equal(f.health.debt_to_equity, null);
+  assert.equal(f.valuation.price_to_book, null);
+  assert.equal(f.financial_currency, "USD");
+  assert.equal(an.negativeEquity(f), true);
+  const v = an.verdict(f);
+  // Yahoo alone (the web never asks MSN): the Rust test giaa_yahoo_only_matches_the_web.
+  assert.deepEqual(brief(v), ["fair", -2, 4]);
+  assert.deepEqual(v.reasons, [an.NEGATIVE_EQUITY_REASON, "net margin -9.4% is thin", "analyst mean target implies 233% upside"]);
+});
+
+test("negative equity and ROE rules match the Rust tests", () => {
+  // negative_equity_is_adverse_and_sets_pb_roe_and_leverage_aside
+  let f = blank();
+  Object.assign(f, { price: 39 });
+  Object.assign(f.per_share, { book_value: -0.001, eps_ttm: -23.54 });
+  Object.assign(f.profitability, { net_margin_pct: -9.375 });
+  Object.assign(f.growth, { revenue_growth_pct: 8.2, earnings_growth_pct: -92.482 });
+  Object.assign(f.dividend, { yield_pct: 0 });
+  Object.assign(f.analyst, { target_mean: 130 });
+  let v = an.verdict(f);
+  assert.deepEqual(brief(v), ["overvalued", -3, 5]);
+  assert.equal(v.reasons[0], an.NEGATIVE_EQUITY_REASON);
+  assert.ok(!rewardsBookOrLeverage(v), v.reasons.join(" | "));
+
+  // negative_ratios_mean_negative_equity: a negative P/B is not "below book"...
+  f = blank();
+  f.valuation.price_to_book = -0.55; f.profitability.net_margin_pct = -51.5; f.growth.revenue_growth_pct = -17.6;
+  v = an.verdict(f);
+  assert.deepEqual(brief(v), ["overvalued", -4, 4]);
+  assert.ok(!rewardsBookOrLeverage(v), v.reasons.join(" | "));
+  // ...and a negative debt/equity is not conservative, nor its flipped ROE strong.
+  f = blank();
+  f.health.debt_to_equity = -2.89; f.profitability.roe_pct = 92; f.profitability.net_margin_pct = -9.4;
+  v = an.verdict(f);
+  assert.deepEqual(brief(v), ["overvalued", -3, 4]);
+  assert.ok(!rewardsBookOrLeverage(v), v.reasons.join(" | "));
+
+  // positive_roe_next_to_a_loss_is_not_rewarded
+  f = blank();
+  f.valuation.pe_trailing = 12; f.profitability.roe_pct = 40; f.profitability.net_margin_pct = -12; f.health.debt_to_equity = 0.3;
+  v = an.verdict(f);
+  assert.ok(v.reasons.includes("ROE 40.0% alongside a net loss: rule skipped"), v.reasons.join(" | "));
+  assert.ok(!v.reasons.some((r) => r.includes("is strong")));
+  assert.deepEqual(brief(v), ["fair", 1, 4]);
+
+  // zero_book_value_is_not_negative_equity (Yahoo rounds tiny USD book values)
+  for (const bv of [0, -0]) {
+    f = blank();
+    f.per_share.book_value = bv; f.health.debt_to_equity = 0.3;
+    assert.equal(an.negativeEquity(f), false);
+    assert.ok(an.verdict(f).reasons.some((r) => r.includes("conservative")));
+  }
+  assert.equal(an.negativeEquity(blank()), null, "nothing reported");
+});
+
+test("USD statements: ITMG's P/B is not scored, BBCA's is", () => {
+  const r = JSON.parse(fixture("yahoo/quote_summary_fundamentals_itmg.json")).quoteSummary.result[0];
+  const f = y.parseFundamentals(r, "ITMG");
+  assert.equal(f.currency, "IDR");
+  assert.equal(f.financial_currency, "USD");
+  assert.ok(an.mixedCurrency(f));
+  assert.ok(f.valuation.price_to_book > 14000, "the reported value is kept");
+  const v = an.verdict(f);
+  assert.ok(!v.reasons.some((x) => x.includes("is rich")), v.reasons.join(" | "));
+  assert.ok(v.reasons.includes("statements in USD and price in IDR: P/B rule skipped"));
+  // Same figures as the Rust test itmg_pb_is_set_aside.
+  assert.deepEqual(brief(v), ["undervalued", 7, 8]);
+  const same = { ...f, financial_currency: "idr" };
+  assert.ok(!an.mixedCurrency(same));
+  assert.ok(an.verdict(same).reasons.some((x) => x.includes("is rich")));
 });
 
 test("earnings parse: padded zero quarters become null", () => {

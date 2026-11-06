@@ -277,6 +277,9 @@ export function parseFundamentals(r, symbol) {
     symbol,
     name: text(price, "longName") || text(price, "shortName"),
     currency: text(price, "currency") || text(fd, "financialCurrency"),
+    // USD for coal, oil and gas, and airline issuers: Yahoo's P/B, P/S and EV
+    // multiples then divide the IDR price by USD figures.
+    financial_currency: text(fd, "financialCurrency"),
     sector: text(ap, "sector"), industry: text(ap, "industry"),
     price: raw(fd, "currentPrice") ?? raw(price, "regularMarketPrice"),
     beta: raw(sd, "beta"), week52_high: raw(sd, "fiftyTwoWeekHigh"), week52_low: raw(sd, "fiftyTwoWeekLow"),
