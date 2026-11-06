@@ -46,7 +46,7 @@ pub enum StockbitCmd {
     Logout,
     /// Live order book (depth ladder) and foreign flow for one ticker.
     #[command(
-        after_help = "Examples:\n  idx stockbit orderbook BBCA\n  idx stockbit orderbook BBRI --depth 5\n  idx -o json stockbit orderbook TLKM | jq '.data.bids[0]'\n\nRealtime via your Stockbit session. Sizes are shares; values IDR."
+        after_help = "Examples:\n  idx stockbit orderbook BBCA\n  idx stockbit orderbook BBRI --depth 5\n  idx -o json stockbit orderbook TLKM | jq '.data.bids[0]'\n\nRealtime via your Stockbit session. Sizes are shares; values IDR.\nForeign buy/sell/net stay empty, with a warning, while Stockbit marks them as\nnot current (it does during trading, when they are the previous session's)."
     )]
     Orderbook {
         /// IDX ticker, e.g. BBCA.

@@ -2,7 +2,8 @@
 //! source (Stockbit) fills this; the free delayed sources do not have depth.
 //!
 //! Prices are IDR. Sizes are **shares** (one IDX lot is 100 shares). Foreign
-//! buy/sell/net are values in IDR. A field the source did not return is `null`.
+//! buy/sell/net are values in IDR, and `null` while the source marks them as
+//! not current. A field the source did not return is `null`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,11 +42,16 @@ pub struct OrderBook {
     pub bids: Vec<BookLevel>,
     /// Offers (sell side), best price first.
     pub asks: Vec<BookLevel>,
-    /// Foreign buy value over the session, IDR.
+    /// Foreign buy value over the session, IDR. `null` while Stockbit marks
+    /// the foreign figures as not current (`has_foreign_bs` not true, seen
+    /// during trading, when they are the previous session's); a warning then
+    /// says so.
     pub foreign_buy: Option<f64>,
-    /// Foreign sell value over the session, IDR.
+    /// Foreign sell value over the session, IDR. `null` while Stockbit marks
+    /// the foreign figures as not current, as for `foreign_buy`.
     pub foreign_sell: Option<f64>,
-    /// Foreign net (buy minus sell), IDR.
+    /// Foreign net (buy minus sell), IDR. `null` while Stockbit marks the
+    /// foreign figures as not current, as for `foreign_buy`.
     pub foreign_net: Option<f64>,
 }
 

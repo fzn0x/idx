@@ -4,6 +4,8 @@
 //!
 //! Units, measured and fixed by the exchange:
 //! - orderbook `volume` and the depth ladder's `volume` are **shares**;
+//! - orderbook `fbuy` / `fsell` / `fnet` are IDR values, read only while
+//!   `has_foreign_bs` is `true` (see [`foreign_withheld`]);
 //! - chart candle `volume` is **lots**, converted to shares here (×100) so a
 //!   Stockbit candle's volume matches Yahoo's and the orderbook's.
 
@@ -79,13 +81,50 @@ pub fn parse_quote(symbol: &Symbol, body: &str) -> Result<Quote> {
     Ok(q)
 }
 
-/// The full depth ladder plus the session figures and foreign flow.
+/// The orderbook fields that carry foreign flow, IDR values.
+const FOREIGN_FIELDS: [&str; 3] = ["fbuy", "fsell", "fnet"];
+
+/// Whether `fbuy`/`fsell`/`fnet` describe the current session. Stockbit sets
+/// `has_foreign_bs: false` while they still hold the previous session's
+/// figures: BBCA's book in session 2 on 2026-11-03 carried 2026-11-02's
+/// foreign net (-116.1B, IPOT's figure for that day; 2026-11-03 itself closed
+/// at -28.8B). Only an explicit `true` counts; a missing or odd flag does not.
+fn foreign_is_current(d: &Value) -> bool {
+    d.get("has_foreign_bs").and_then(Value::as_bool) == Some(true)
+}
+
+/// When [`parse_orderbook`] left out foreign figures the book carries because
+/// Stockbit does not mark them as current, the `has_foreign_bs` value it sent
+/// instead (`false`, `null`, `"true"`, or `missing`), for the warning that
+/// says why. `None` when nothing was withheld: the flag is `true`, or the book
+/// has no foreign figures to withhold.
+pub fn foreign_withheld(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let d = v.get("data")?;
+    if foreign_is_current(d)
+        || !FOREIGN_FIELDS
+            .iter()
+            .any(|k| d.get(*k).and_then(num).is_some())
+    {
+        return None;
+    }
+    Some(match d.get("has_foreign_bs") {
+        Some(flag) => flag.to_string(),
+        None => "missing".into(),
+    })
+}
+
+/// The full depth ladder plus the session figures and foreign flow; the
+/// foreign flow only while Stockbit marks it as current (`has_foreign_bs`
+/// exactly `true`), otherwise `None`.
 pub fn parse_orderbook(symbol: &Symbol, body: &str) -> Result<OrderBook> {
     let v: Value = serde_json::from_str(body)?;
     let d = v
         .get("data")
         .ok_or_else(|| IdxError::provider(NAME, "orderbook response had no data"))?;
     let g = |k: &str| d.get(k).and_then(num);
+    let current = foreign_is_current(d);
+    let foreign = |k: &str| g(k).filter(|_| current);
     let levels = |key: &str| -> Vec<BookLevel> {
         d.get(key)
             .and_then(|a| a.as_array())
@@ -116,9 +155,9 @@ pub fn parse_orderbook(symbol: &Symbol, body: &str) -> Result<OrderBook> {
         value: g("value"),
         bids: levels("bid"),
         asks: levels("offer"),
-        foreign_buy: g("fbuy"),
-        foreign_sell: g("fsell"),
-        foreign_net: g("fnet"),
+        foreign_buy: foreign("fbuy"),
+        foreign_sell: foreign("fsell"),
+        foreign_net: foreign("fnet"),
     })
 }
 
@@ -229,6 +268,9 @@ mod tests {
     const ORDERBOOK: &str = include_str!("../../../tests/fixtures/stockbit/orderbook_bbca.json");
     const ORDERBOOK_IHSG: &str =
         include_str!("../../../tests/fixtures/stockbit/orderbook_ihsg.json");
+    /// BBCA in session 2 on 2026-11-03, `has_foreign_bs: false`.
+    const IN_SESSION: &str =
+        include_str!("../../../tests/fixtures/stockbit/orderbook_bbca_in_session.json");
     const NOT_FOUND: &str = include_str!("../../../tests/fixtures/stockbit/orderbook_zzzz.json");
     const CHART_1M: &str =
         include_str!("../../../tests/fixtures/stockbit/chart_candle_bbca_1m.json");
@@ -282,6 +324,84 @@ mod tests {
         assert_eq!(sum, 331_908_100);
         assert_eq!(ob.foreign_net, Some(-2_329_493_087_500.0));
         assert_eq!(ob.last, Some(5175.0));
+    }
+
+    #[test]
+    fn foreign_flow_only_when_stockbit_marks_it_current() {
+        // In session the flag is false and fbuy/fsell/fnet are the previous
+        // session's: left out, while the ladder and today's figures still parse.
+        let ob = parse_orderbook(&sym("BBCA"), IN_SESSION).unwrap();
+        assert_eq!(
+            (ob.foreign_buy, ob.foreign_sell, ob.foreign_net),
+            (None, None, None)
+        );
+        assert_eq!(foreign_withheld(IN_SESSION).as_deref(), Some("false"));
+        assert_eq!(ob.volume, Some(134_744_100));
+        assert_eq!(ob.value, Some(666_978_580_500.0));
+        assert_eq!(ob.last, Some(4860.0));
+        assert_eq!(ob.previous_close, Some(4980.0));
+        assert_eq!((ob.bids.len(), ob.asks.len()), (22, 64));
+        assert_eq!(
+            ob.bids[0],
+            BookLevel {
+                price: 4850.0,
+                shares: 7_255_100,
+                orders: 1_649
+            }
+        );
+        assert_eq!(
+            ob.asks[0],
+            BookLevel {
+                price: 4860.0,
+                shares: 86_800,
+                orders: 1
+            }
+        );
+        // Both sides sum to total_bid_offer.*.raw_lot (shares).
+        let bid: u64 = ob.bids.iter().map(|l| l.shares).sum();
+        let ask: u64 = ob.asks.iter().map(|l| l.shares).sum();
+        assert_eq!((bid, ask), (36_866_000, 70_567_200));
+
+        // After the close (weekend recordings) the flag is true: kept, no warning.
+        let ob = parse_orderbook(&sym("BBCA"), ORDERBOOK).unwrap();
+        assert_eq!(ob.foreign_buy, Some(1_616_461_977_500.0));
+        assert_eq!(ob.foreign_net, Some(-2_329_493_087_500.0));
+        assert_eq!(foreign_withheld(ORDERBOOK), None);
+        let ob = parse_orderbook(&sym("^JKSE"), ORDERBOOK_IHSG).unwrap();
+        assert_eq!(ob.foreign_net, Some(-3_397_459_968_400.0));
+        assert_eq!(foreign_withheld(ORDERBOOK_IHSG), None);
+    }
+
+    #[test]
+    fn foreign_flow_needs_an_explicit_true_flag() {
+        let with_flag = |flag: Option<Value>| {
+            let mut v: Value = serde_json::from_str(ORDERBOOK).unwrap();
+            let d = v["data"].as_object_mut().unwrap();
+            match flag {
+                Some(f) => d.insert("has_foreign_bs".into(), f),
+                None => d.remove("has_foreign_bs"),
+            };
+            v.to_string()
+        };
+        for (flag, said) in [
+            (None, "missing"),
+            (Some(Value::Null), "null"),
+            (Some(serde_json::json!("true")), "\"true\""),
+            (Some(serde_json::json!(1)), "1"),
+        ] {
+            let body = with_flag(flag);
+            let ob = parse_orderbook(&sym("BBCA"), &body).unwrap();
+            assert_eq!(ob.foreign_net, None, "{said}");
+            assert_eq!(ob.foreign_buy, None, "{said}");
+            assert_eq!(foreign_withheld(&body).as_deref(), Some(said));
+        }
+        // Nothing to withhold: no foreign figures in a not-current book.
+        let mut v: Value = serde_json::from_str(IN_SESSION).unwrap();
+        for k in FOREIGN_FIELDS {
+            v["data"].as_object_mut().unwrap().remove(k);
+        }
+        assert_eq!(foreign_withheld(&v.to_string()), None);
+        assert_eq!(foreign_withheld("not json"), None);
     }
 
     #[test]

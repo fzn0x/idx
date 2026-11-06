@@ -8,9 +8,17 @@ The token belongs to a real account. Responses were checked for its username, em
 full name and user id, and for per-user flags such as `is_holding_exist`, before they
 were copied here. Nothing in this directory is a credential.
 
+One file, `orderbook_bbca_in_session.json`, was recorded during trading by the
+reference CLI 0xrsydn/idx-cli (MIT License, Copyright (c) 2026 idx-cli contributors)
+and is copied unchanged (same bytes as its
+`crates/idx-core/tests/fixtures/stockbit_exodus_orderbook_bbca_in_session.json`); it is
+credited in its row. Its keys are the same as `orderbook_bbca.json`'s, with no user,
+account, holding or token field.
+
 | file | request | notes |
 | --- | --- | --- |
-| orderbook_bbca.json | `/company-price-feed/v2/orderbook/companies/BBCA` | quote fields (`lastprice`, `open`, `high`, `low`, `previous`, `volume` in SHARES, `value` IDR) plus the depth: `bid[]` / `offer[]` of `{price, que_num, volume}` as strings, volume in SHARES (the offer levels sum to `total_bid_offer.offer.raw_lot`, which is therefore shares too despite its name). BBCA closed at ARB with no bids, so `bid` is `[]` |
+| orderbook_bbca.json | `/company-price-feed/v2/orderbook/companies/BBCA` | quote fields (`lastprice`, `open`, `high`, `low`, `previous`, `volume` in SHARES, `value` IDR) plus the depth: `bid[]` / `offer[]` of `{price, que_num, volume}` as strings, volume in SHARES (the offer levels sum to `total_bid_offer.offer.raw_lot`, which is therefore shares too despite its name). BBCA closed at ARB with no bids, so `bid` is `[]`. `has_foreign_bs: true`: `fbuy` / `fsell` / `fnet` (IDR) are that day's foreign flow |
+| orderbook_bbca_in_session.json | `/company-price-feed/v2/orderbook/companies/BBCA`, recorded in session 2 on 2026-11-03 by 0xrsydn/idx-cli (MIT), copied unchanged | `has_foreign_bs: false` (`orderbook_active_feature_mobile: ORDER_BOOK_FEATURE_UNSPECIFIED`): `fbuy` / `fsell` / `fnet` (and the `foreign` / `domestic` percentages) are 2026-11-02's, not the session's. `fnet` -116.1B is IPOT's BBCA foreign net for 2026-11-02; 2026-11-03 closed at -28.8B. Volume 134,744,100 shares and value 667.0B are the session's own. 22 bid / 64 offer levels summing to `total_bid_offer.*.raw_lot` (shares) |
 | orderbook_ihsg.json | `/company-price-feed/v2/orderbook/companies/IHSG` | indices answer on the same route: OHLC, volume in shares, empty book |
 | orderbook_zzzz.json | same, `ZZZZ` | HTTP 404 `{"message":"Company not found","error_type":"NOT_FOUND"}` |
 | chart_candle_bbca_1m.json | `/charts/BBCA/daily?timeframe=1m&chart_type=PRICE_CHART_TYPE_CANDLE` | daily bars; `prices[]` of `{date (epoch ms, bar start WIB), formatted_date, open, high, low, value (= close), volume (LOTS)}` as strings |
