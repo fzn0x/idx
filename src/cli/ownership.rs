@@ -14,6 +14,7 @@ use crate::output::json::{
     SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
 };
 use crate::output::{self, table_composition, table_ownership as tbl};
+use crate::ownership::discover::Family;
 use crate::ownership::{self, composition, ksei, OwnershipDb};
 use crate::providers::Sourced;
 
@@ -97,8 +98,11 @@ pub enum OwnershipCmd {
     )]
     Releases,
 
-    /// List the monthly files currently published on idx.co.id (needs network).
-    Discover,
+    /// List the files currently published on idx.co.id and ksei.co.id (needs network).
+    #[command(
+        after_help = "Examples:\n  idx ownership discover                                 # monthly >1% registers on idx.co.id\n  idx ownership discover --family all --limit 2           # every family, newest two each\n  idx ownership discover --family composition --limit 24  # KSEI Kepemilikan Efek archives (ksei.co.id)\n  idx -o json ownership discover --family above5          # family and importable on every entry\n\nFamilies: above1 (importable), above5, investor-type, classification (idx.co.id, listed only),\ncomposition (KSEI \"Kepemilikan Efek\" ZIP on ksei.co.id, importable). --limit counts per\nfamily; without it every idx.co.id file is listed and one ksei.co.id page (8 months); 0 lists\nall (the composition walks up to 10 pages). A family that fails is a warning while the others\nanswer; when every family fails the command fails, with JSON code `blocked` if Cloudflare\nrefused idx.co.id."
+    )]
+    Discover(DiscoverArgs),
 
     /// KSEI's monthly composition of one stock: local and foreign shares by investor type.
     #[command(
@@ -154,6 +158,32 @@ pub enum ImportFamily {
     Above1,
     /// KSEI's composition archive.
     Composition,
+}
+
+#[derive(Debug, Args)]
+pub struct DiscoverArgs {
+    /// Which files to list.
+    #[arg(long, value_enum, value_name = "FAMILY", default_value_t = Family::Above1)]
+    pub family: Family,
+    /// Entries per family, newest first; 0 for all. Default: every idx.co.id file, 8 composition months.
+    #[arg(long, short = 'n', value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+/// The `provider` of a discovery envelope: where the files came from.
+fn discovery_provider(files: &[crate::model::DiscoveredFile]) -> &'static str {
+    let has = |o: &str| files.iter().any(|f| f.origin == o);
+    match (
+        has("idx.co.id"),
+        has(ownership::mirror::ORIGIN),
+        has(ksei::ORIGIN),
+    ) {
+        (false, true, false) => ownership::mirror::ORIGIN,
+        (false, false, true) => ksei::PROVIDER,
+        (true, false, true) => "idx+ksei",
+        (false, true, true) => "github-mirror+ksei",
+        _ => "idx",
+    }
 }
 
 fn open(ctx: &Context) -> Result<OwnershipDb> {
@@ -245,36 +275,44 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 tbl::releases(r, &ctx.settings.ownership_db, ctx.color)
             })
         }
-        OwnershipCmd::Discover => {
-            if ctx.settings.cache_mode == crate::http::CacheMode::Offline {
-                return Err(IdxError::OfflineMiss("discover needs the network".into()));
-            }
-            let (files, notes) = ownership::discover::discover(ctx.settings.timeout()).await?;
-            let via_mirror = files
-                .first()
-                .is_some_and(|f| f.origin == ownership::mirror::ORIGIN);
-            let mut s = Sourced::fresh(
-                files,
-                if via_mirror {
-                    ownership::mirror::ORIGIN
-                } else {
-                    "idx"
-                },
-            );
+        OwnershipCmd::Discover(args) => {
+            let offline = ctx.settings.cache_mode == crate::http::CacheMode::Offline;
+            let (files, notes) = ownership::discover::discover_families(
+                &ctx.fetcher,
+                args.family,
+                args.limit,
+                offline,
+                ctx.settings.timeout(),
+            )
+            .await?;
+            let provider = discovery_provider(&files);
+            let mut s = Sourced::fresh(files, provider);
             s.warnings.extend(notes);
-            let have: Vec<NaiveDate> = open(ctx)?.releases()?.iter().map(|r| r.as_of).collect();
-            let missing: Vec<String> = s
-                .data
-                .iter()
-                .filter(|f| !have.contains(&f.as_of))
-                .map(|f| f.as_of.to_string())
-                .collect();
-            if !missing.is_empty() {
-                s.warnings
-                    .push(format!("not imported yet: {}", missing.join(", ")));
+            let db = open(ctx)?;
+            let have: Vec<NaiveDate> = db.releases()?.iter().map(|r| r.as_of).collect();
+            let have_composition = composition::months(&db)?;
+            for (family, list) in [("above1", &have), ("composition", &have_composition)] {
+                let missing: Vec<String> = s
+                    .data
+                    .iter()
+                    .filter(|f| f.family == family && !list.contains(&f.as_of))
+                    .map(|f| f.as_of.to_string())
+                    .collect();
+                if !missing.is_empty() {
+                    s.warnings.push(format!(
+                        "{}not imported yet: {}",
+                        if family == "above1" {
+                            ""
+                        } else {
+                            "composition "
+                        },
+                        missing.join(", ")
+                    ));
+                }
             }
+            let show_family = args.family != Family::Above1;
             emit(ctx, SCHEMA_OWNERSHIP_DISCOVER, s, |r| {
-                tbl::discovered(r, &have, ctx.color)
+                tbl::discovered(r, &have, &have_composition, show_family, ctx.color)
             })
         }
         OwnershipCmd::Composition { symbol, as_of } => {

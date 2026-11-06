@@ -1350,7 +1350,7 @@ fn completions_generate() {
 }
 
 #[test]
-fn ownership_composition_works_offline() {
+fn ownership_composition_and_families_work_offline() {
     let sb = sandbox();
     let db = sb.cache.join("composition.sqlite");
     let fx = |name: &str| {
@@ -1481,7 +1481,20 @@ fn ownership_composition_works_offline() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"family\": \"above1\""));
-    // Downloads need the network.
+    // Families and limits.
+    own(&sb)
+        .args(["ownership", "discover", "--family", "nope"])
+        .assert()
+        .code(2);
+    own(&sb)
+        .args(["ownership", "discover", "--family", "composition"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args(["ownership", "discover", "--family", "all", "--limit", "2"])
+        .assert()
+        .code(5);
+    own(&sb).args(["ownership", "discover"]).assert().code(5);
     own(&sb)
         .args(["ownership", "import", "--latest", "--family", "composition"])
         .assert()
@@ -1497,6 +1510,12 @@ fn ownership_composition_works_offline() {
         ])
         .assert()
         .code(2);
+    own(&sb)
+        .args(["ownership", "discover", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("investor-type"))
+        .stdout(predicate::str::contains("--limit"));
     let out = idx(&sb.cache, &sb.config)
         .args(["schema", "ownership-composition"])
         .output()

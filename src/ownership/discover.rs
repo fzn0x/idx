@@ -3,7 +3,10 @@
 //! The "Data Kepemilikan Saham" page is a Nuxt app whose payload embeds
 //! `{Description:"Pemegang Saham di Atas 1% per 31 Agustus 2026",
 //! Prospectus:"https://www.idx.co.id/Media/...xlsx", ...}`
-//! entries. We parse those pairs out of the HTML without a JS engine.
+//! entries. We parse those pairs out of the HTML without a JS engine. The
+//! page lists four families (see [`Family`]); idx imports the above-1 %
+//! register and lists the others. KSEI's composition archive, the fifth
+//! family, is listed on ksei.co.id ([`super::ksei`]).
 //!
 //! idx.co.id sits behind Cloudflare bot management: some networks get a
 //! challenge or a block page instead of the file ([`crate::http::cloudflare`]).
@@ -16,12 +19,14 @@
 //! `file://` URLs read a saved page or file.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDate;
 
 use crate::error::{IdxError, Result};
 use crate::http::cloudflare::{self, Refusal};
+use crate::http::Fetcher;
 use crate::model::DiscoveredFile;
 
 use super::ingest::parse_indonesian_date;
@@ -39,6 +44,111 @@ const IMPERSONATE_BINARIES: &[&str] = &[
 
 /// What to do when Cloudflare refuses idx.co.id.
 pub const MANUAL_HINT: &str = "Ways out: retry later or from another network; let `idx ownership import --latest` use the GitHub mirror (the default, or IDX_OWNERSHIP_SOURCE=mirror); install curl-impersonate (https://github.com/lexiforest/curl-impersonate) and put curl_chrome131 on PATH; or open https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/ in a browser, download the workbook and run `idx ownership import --file <path>`";
+
+/// The ownership file families idx can list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
+pub enum Family {
+    /// "Pemegang Saham di Atas 1%": the monthly register (idx.co.id, importable).
+    Above1,
+    /// "Pemegang Saham di Atas 5%": a daily register of holders above 5 % (idx.co.id, listed only).
+    Above5,
+    /// "... per Tipe Investor": IDX's monthly summary per investor type (idx.co.id, listed only).
+    InvestorType,
+    /// "... Berdasarkan Klasifikasi Investor": IDX's monthly summary per classification (idx.co.id, listed only).
+    Classification,
+    /// KSEI's monthly "Kepemilikan Efek" archive (ksei.co.id, importable).
+    Composition,
+    /// Every family above.
+    All,
+}
+
+impl Family {
+    /// Every family, in listing order (`All` excluded).
+    pub const LISTED: [Family; 5] = [
+        Family::Above1,
+        Family::Above5,
+        Family::InvestorType,
+        Family::Classification,
+        Family::Composition,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Family::Above1 => "above1",
+            Family::Above5 => "above5",
+            Family::InvestorType => "investor-type",
+            Family::Classification => "classification",
+            Family::Composition => "composition",
+            Family::All => "all",
+        }
+    }
+
+    /// Whether `idx ownership import` reads this family's files.
+    pub fn importable(self) -> bool {
+        matches!(self, Family::Above1 | Family::Composition)
+    }
+
+    /// Listed on idx.co.id's "Data Kepemilikan Saham" page.
+    pub fn on_idx_page(self) -> bool {
+        matches!(
+            self,
+            Family::Above1 | Family::Above5 | Family::InvestorType | Family::Classification
+        )
+    }
+
+    /// The families `self` stands for.
+    pub fn expand(self) -> Vec<Family> {
+        match self {
+            Family::All => Family::LISTED.to_vec(),
+            f => vec![f],
+        }
+    }
+
+    /// Entries listed when `--limit` is not given: every file on the
+    /// idx.co.id page (0), one ksei.co.id listing page for the composition.
+    pub fn default_limit(self) -> usize {
+        match self {
+            Family::Composition => super::ksei::PER_PAGE,
+            _ => 0,
+        }
+    }
+}
+
+impl std::fmt::Display for Family {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The family of an entry on idx.co.id's page, from its title.
+pub fn classify_title(title: &str) -> Option<Family> {
+    let t = title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let above = |n: &str| {
+        [
+            format!("di atas {n}%"),
+            format!("di atas {n} %"),
+            format!("diatas {n}%"),
+            format!("diatas {n} %"),
+        ]
+        .iter()
+        .any(|p| t.contains(p.as_str()))
+    };
+    if above("1") {
+        Some(Family::Above1)
+    } else if above("5") {
+        Some(Family::Above5)
+    } else if t.contains("klasifikasi investor") {
+        Some(Family::Classification)
+    } else if t.contains("tipe investor") {
+        Some(Family::InvestorType)
+    } else {
+        None
+    }
+}
 
 pub(super) fn unescape_js(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -98,10 +208,10 @@ pub fn as_of_from_title(title: &str) -> Option<NaiveDate> {
     parse_indonesian_date(tail).or_else(|| super::ingest::parse_text_date(tail))
 }
 
-/// Every `Description`/`Prospectus` pair in the page, newest first. Only the
-/// above-1 % register is kept; the above-5 % and investor-type workbooks live
-/// on the same page but have other layouts.
-pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
+/// Every `Description`/`Prospectus` pair in the page whose family is known:
+/// grouped by family in [`Family::LISTED`] order, newest first in each, one
+/// entry per family and date.
+pub fn parse_page_all(html: &str) -> Vec<DiscoveredFile> {
     let mut out = Vec::new();
     let mut rest = html;
     while let Some(pos) = rest.find("Description:") {
@@ -120,13 +230,9 @@ pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
         let Some((url, _)) = js_string(&after[ppos + "Prospectus:".len()..]) else {
             continue;
         };
-        let lower = title.to_lowercase();
-        let is_above1 = lower.contains("di atas 1%")
-            || lower.contains("di atas 1 %")
-            || lower.contains("diatas 1%");
-        if !is_above1 {
+        let Some(family) = classify_title(&title) else {
             continue;
-        }
+        };
         let Some(as_of) = as_of_from_title(&title) else {
             continue;
         };
@@ -143,13 +249,28 @@ pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
             origin: "idx.co.id".to_string(),
             sha256: None,
             source_url: None,
-            family: "above1".to_string(),
-            importable: true,
+            family: family.as_str().to_string(),
+            importable: family.importable(),
         });
     }
-    out.sort_by_key(|a| std::cmp::Reverse(a.as_of));
-    out.dedup_by(|a, b| a.as_of == b.as_of);
+    let rank = |f: &DiscoveredFile| {
+        Family::LISTED
+            .iter()
+            .position(|x| x.as_str() == f.family)
+            .unwrap_or(usize::MAX)
+    };
+    out.sort_by_key(|f| (rank(f), std::cmp::Reverse(f.as_of)));
+    out.dedup_by(|a, b| a.family == b.family && a.as_of == b.as_of);
     out
+}
+
+/// The above-1 % register's files in the page, newest first. The other
+/// families live on the same page but have other layouts.
+pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
+    parse_page_all(html)
+        .into_iter()
+        .filter(|f| f.family == Family::Above1.as_str())
+        .collect()
 }
 
 type Response = (u16, Vec<(String, String)>, Vec<u8>);
@@ -333,11 +454,11 @@ fn source_setting() -> String {
         .to_ascii_lowercase()
 }
 
-/// The above-1 % files on the idx.co.id page (or `IDX_OWNERSHIP_PAGE_URL`).
+/// The idx.co.id page (or `IDX_OWNERSHIP_PAGE_URL`) parsed into every family.
 async fn idx_page(timeout: Duration) -> Result<Vec<DiscoveredFile>> {
     let page_url = std::env::var("IDX_OWNERSHIP_PAGE_URL").unwrap_or_else(|_| PAGE_URL.to_string());
     let bytes = fetch_browser(&page_url, timeout).await?;
-    Ok(parse_page(&String::from_utf8_lossy(&bytes)))
+    Ok(parse_page_all(&String::from_utf8_lossy(&bytes)))
 }
 
 /// Why the mirror is used instead, for the note.
@@ -373,7 +494,11 @@ async fn above1_from(
     page: Result<Vec<DiscoveredFile>>,
     timeout: Duration,
 ) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
-    let direct = page.and_then(|files| {
+    let direct = page.and_then(|all| {
+        let files: Vec<DiscoveredFile> = all
+            .into_iter()
+            .filter(|f| f.family == Family::Above1.as_str())
+            .collect();
         if files.is_empty() {
             Err(IdxError::provider(
                 "idx",
@@ -435,6 +560,130 @@ pub async fn discover(timeout: Duration) -> Result<(Vec<DiscoveredFile>, Vec<Str
         return mirror_only(timeout).await;
     }
     above1_from(idx_page(timeout).await, timeout).await
+}
+
+/// `ownership discover`: the files of every family `family` stands for,
+/// each family cut to `limit` entries (`None`: [`Family::default_limit`];
+/// 0: all). A family that fails becomes a note while the others still
+/// answer; the call fails only when every family failed, with the `blocked`
+/// error when there was one. idx.co.id is asked once whatever the families.
+/// `offline` skips idx.co.id and the mirror; the ksei.co.id listing then
+/// comes from the cache or fails with `offline_miss`.
+pub async fn discover_families(
+    fetcher: &Arc<Fetcher>,
+    family: Family,
+    limit: Option<usize>,
+    offline: bool,
+    timeout: Duration,
+) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
+    let families = family.expand();
+    let cut = |f: Family, mut files: Vec<DiscoveredFile>| {
+        let n = limit.unwrap_or(f.default_limit());
+        if n > 0 {
+            files.truncate(n);
+        }
+        files
+    };
+    let mut out: Vec<DiscoveredFile> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut errors: Vec<IdxError> = Vec::new();
+    let mut failed = 0usize;
+    let idx_families: Vec<Family> = families
+        .iter()
+        .copied()
+        .filter(|f| f.on_idx_page())
+        .collect();
+    if !idx_families.is_empty() {
+        let offline_miss =
+            || IdxError::OfflineMiss("listing idx.co.id's files needs the network".into());
+        let mut page = if offline {
+            Some(Err(offline_miss()))
+        } else if source_setting() == "mirror" {
+            None
+        } else {
+            Some(idx_page(timeout).await)
+        };
+        // The families other than above1 read the page directly.
+        for f in idx_families.iter().filter(|f| **f != Family::Above1) {
+            match &page {
+                Some(Ok(all)) => {
+                    let files: Vec<DiscoveredFile> = all
+                        .iter()
+                        .filter(|x| x.family == f.as_str())
+                        .cloned()
+                        .collect();
+                    if files.is_empty() {
+                        notes.push(format!("{f}: idx.co.id lists no such file at the moment"));
+                    }
+                    out.extend(cut(*f, files));
+                }
+                Some(Err(e)) => {
+                    failed += 1;
+                    notes.push(format!("{f}: not listed ({})", short(&e.to_string())));
+                }
+                None => {
+                    failed += 1;
+                    notes.push(format!(
+                        "{f}: not listed (IDX_OWNERSHIP_SOURCE=mirror; the mirror holds the above-1% register only)"
+                    ));
+                }
+            }
+        }
+        if idx_families.contains(&Family::Above1) {
+            let r = match page.take() {
+                Some(Err(e)) if offline => Err(e),
+                None => mirror_only(timeout).await,
+                Some(p) => above1_from(p, timeout).await,
+            };
+            match r {
+                Ok((files, n)) => {
+                    // The register comes first, as before.
+                    out.splice(0..0, cut(Family::Above1, files));
+                    notes.splice(0..0, n);
+                }
+                Err(e) => {
+                    failed += 1;
+                    notes.push(format!("above1: not listed ({})", short(&e.to_string())));
+                    errors.push(e);
+                }
+            }
+        } else if let Some(Err(e)) = page {
+            errors.push(e);
+        }
+    }
+    if families.contains(&Family::Composition) {
+        let n = limit.unwrap_or(Family::Composition.default_limit());
+        match super::ksei::list(fetcher, n).await {
+            Ok(s) => {
+                notes.extend(s.warnings);
+                if s.stale {
+                    notes.push(
+                        "composition: the ksei.co.id listing was served from a stale cache".into(),
+                    );
+                }
+                out.extend(s.data);
+            }
+            Err(e) => {
+                failed += 1;
+                notes.push(format!(
+                    "composition: not listed ({})",
+                    short(&e.to_string())
+                ));
+                errors.push(e);
+            }
+        }
+    }
+    if failed == families.len() && !errors.is_empty() {
+        let pick = errors
+            .iter()
+            .position(|e| matches!(e, IdxError::Blocked { .. }))
+            .unwrap_or(0);
+        return Err(errors.swap_remove(pick));
+    }
+    if failed == families.len() {
+        return Err(IdxError::Network(notes.join("; ")));
+    }
+    Ok((out, notes))
 }
 
 fn short(s: &str) -> String {
@@ -513,6 +762,61 @@ mod tests {
     }
 
     #[test]
+    fn every_family_on_the_page_with_importable() {
+        let all = parse_page_all(PAGE);
+        let got: Vec<(String, String, bool)> = all
+            .iter()
+            .map(|f| (f.family.clone(), f.as_of.to_string(), f.importable))
+            .collect();
+        let want = [
+            ("above1", "2026-08-31", true),
+            ("above1", "2026-07-31", true),
+            ("above1", "2026-02-27", true),
+            ("above5", "2026-09-23", false),
+            ("above5", "2026-08-31", false),
+            ("investor-type", "2026-08-31", false),
+            ("classification", "2026-08-31", false),
+        ];
+        assert_eq!(got, want.map(|(a, b, c)| (a.to_string(), b.to_string(), c)));
+        assert!(all[3].url.ends_with("lima-persen.xlsx"));
+        assert!(all[5].url.ends_with("-tipe.xlsx"));
+        assert!(all[6].url.ends_with("-klasifikasi.xlsx"));
+    }
+
+    #[test]
+    fn titles_name_their_family() {
+        for (title, family) in [
+            (
+                "Pemegang Saham di Atas 1% per 31 Agustus 2026",
+                Some(Family::Above1),
+            ),
+            (
+                "Pemegang Saham di  Atas 1 % per 31 Agustus 2026",
+                Some(Family::Above1),
+            ),
+            (
+                "Pemegang Saham Diatas 5% per 23 September 2026",
+                Some(Family::Above5),
+            ),
+            (
+                "Data Kepemilikan Saham Perusahaan Tercatat per Tipe Investor per 31 Agustus 2026",
+                Some(Family::InvestorType),
+            ),
+            (
+                "Data Kepemilikan Saham Perusahaan Tercatat Berdasarkan Klasifikasi Investor per 31 Agustus 2026",
+                Some(Family::Classification),
+            ),
+            ("Pengumuman lain", None),
+        ] {
+            assert_eq!(classify_title(title), family, "{title}");
+        }
+        assert_eq!(Family::All.expand(), Family::LISTED.to_vec());
+        assert!(Family::Composition.importable() && !Family::Above5.importable());
+        assert_eq!(Family::Composition.default_limit(), 8);
+        assert_eq!(Family::Above1.default_limit(), 0);
+    }
+
+    #[test]
     fn the_fallback_note_says_which_refusal() {
         let e = blocked_error(
             PAGE_URL,
@@ -559,5 +863,38 @@ mod tests {
         );
         assert_eq!(provider_for("127.0.0.1:18765"), "ownership");
         assert_eq!(provider_for("www.ksei.co.id"), "ksei");
+    }
+
+    #[tokio::test]
+    async fn offline_lists_the_cached_composition_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::cache::Cache::new(dir.path());
+        let page =
+            include_str!("../../tests/fixtures/ownership/ksei_kepemilikan_efek_page_excerpt.html");
+        cache.put(super::super::ksei::PAGE_URL, 200, page).unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            cache,
+            crate::http::CacheMode::Offline,
+        ));
+        let t = Duration::from_secs(5);
+        let (files, notes) = discover_families(&fetcher, Family::All, Some(2), true, t)
+            .await
+            .unwrap();
+        let fams: Vec<&str> = files.iter().map(|f| f.family.as_str()).collect();
+        assert_eq!(fams, ["composition", "composition"]);
+        assert_eq!(notes.len(), 4, "{notes:?}");
+        assert!(
+            notes.iter().all(|n| n.contains("needs the network")),
+            "{notes:?}"
+        );
+        let err = discover_families(&fetcher, Family::Above5, None, true, t)
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 5);
+        let (files, _) = discover_families(&fetcher, Family::Composition, None, true, t)
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 8);
     }
 }

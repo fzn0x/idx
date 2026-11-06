@@ -485,20 +485,47 @@ pub fn imports(list: &[ImportReport]) -> String {
     out
 }
 
-pub fn discovered(files: &[DiscoveredFile], have: &[NaiveDate], color: bool) -> String {
+/// `have`: imported register dates; `have_composition`: imported composition
+/// months. `show_family` adds the Family column (any `--family` but above1).
+pub fn discovered(
+    files: &[DiscoveredFile],
+    have: &[NaiveDate],
+    have_composition: &[NaiveDate],
+    show_family: bool,
+    color: bool,
+) -> String {
     let mut t = base_table(color);
-    t.set_header(header(&[
-        "As of", "Format", "Imported", "From", "Title", "URL",
-    ]));
+    let mut cols = vec!["As of", "Format", "Imported", "From", "Title", "URL"];
+    if show_family {
+        cols.insert(0, "Family");
+    }
+    t.set_header(header(&cols));
     for d in files {
-        t.add_row(vec![
+        let imported = if !d.importable {
+            "listed only"
+        } else if d.family == "composition" {
+            if have_composition.contains(&d.as_of) {
+                "yes"
+            } else {
+                "no"
+            }
+        } else if have.contains(&d.as_of) {
+            "yes"
+        } else {
+            "no"
+        };
+        let mut row = vec![
             Cell::new(d.as_of.to_string()).add_attribute(Attribute::Bold),
             Cell::new(&d.format),
-            Cell::new(if have.contains(&d.as_of) { "yes" } else { "no" }),
+            Cell::new(imported),
             Cell::new(&d.origin),
             Cell::new(f::clip(&d.title, 48)),
             Cell::new(&d.url),
-        ]);
+        ];
+        if show_family {
+            row.insert(0, Cell::new(&d.family));
+        }
+        t.add_row(row);
     }
     format!("{t}\n")
 }
