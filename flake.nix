@@ -168,7 +168,9 @@
                 echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
                 sleep 2
               } | IDX_OFFLINE=1 timeout 60 ${lib.getExe idx-mcp} > mcp.jsonl
-              grep -q '"serverInfo":{"name":"idx","version":"${version}"}' mcp.jsonl
+              # Name and version only, so a field rmcp or get_info adds later
+              # (title, description, icons, websiteUrl) does not fail it.
+              grep -q '"serverInfo":{"name":"idx",[^}]*"version":"${version}"' mcp.jsonl
               grep -q '"name":"idx_quote"' mcp.jsonl
 
               touch "$out"
