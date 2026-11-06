@@ -3,7 +3,12 @@
 Add `-o json` (or `IDX_OUTPUT=json`, or `output = "json"` in the config file)
 and every command prints one JSON document to stdout. Errors go to stderr as
 JSON too. Nothing else is ever written to stdout in JSON mode, so
-`idx -o json ... | jq` is safe.
+`idx -o json ... | jq` is safe. `-o jsonl` prints one record per line instead
+(see [JSON Lines](#json-lines--o-jsonl)). `-o auto` prints a table when stdout
+is a terminal and this JSON document when it is piped or captured; it is
+opt-in, the default stays `table`. Commands without an envelope (`version`,
+`schema`, `config get`, `cache stats|clear`, `mcp setup`, `stockbit
+status|logout`) follow the same flag, `IDX_OUTPUT` and config file.
 
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`,
@@ -17,6 +22,60 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
 become dotted columns (`valuation.pe_trailing`), arrays of scalars join with
 `|`, and a payload with no list becomes one row. Warnings still go to stderr.
+
+## JSON Lines (`-o jsonl`)
+
+`-o jsonl` (or `IDX_OUTPUT=jsonl`, or `output = "jsonl"`) writes one compact
+JSON value per line to stdout, each ending in `\n`, and nothing else. Each
+line is exactly the object `-o json` carries at that path: same keys, same
+order, nulls kept. No new schema: every line is a shape `idx schema <name>`
+already documents.
+
+- Which list becomes lines is fixed per schema (table below), not guessed from
+  the data. An empty list prints nothing and exits 0.
+- The envelope is not printed. Its `warnings` and the stale notice go to stderr
+  as `warning: ...` lines, as in table mode (`--quiet` hides them). Provenance
+  (`provider`, `fetched_at`, `cached`, `stale`) and header fields such as a
+  screen's funnel counts or the changes summary are only in `-o json`.
+- Errors are the same one-line JSON on stderr as with `-o json`.
+- Commands without an envelope print one line per item of an array, else one
+  line. `*path` commands and `completions` keep their plain output.
+- Table-only flags (`history --limit`, `broker --top`, `dividends --limit`,
+  `financials --statement`) never trim JSON, JSONL or CSV.
+
+| schema | one line per |
+| --- | --- |
+| `idx.quotes.v1`, `idx.compare.v1`, `idx.returns.v1`, `idx.broker.v1`, `idx.bandar.v1`, `idx.ownership.releases.v1`, `idx.ownership.import.v1`, `idx.ownership.discover.v1` | item of `data` |
+| `idx.history.v1` | `data.candles[]` |
+| `idx.financials.v1` | `data.periods[]` |
+| `idx.dividends.v1` | `data.dividends[]` (yearly totals, splits and TTM figures stay in `-o json`) |
+| `idx.screen.v1`, `idx.bandar.screen.v1`, `idx.ownership.foreign-flow.v1` | `data.rows[]` |
+| `idx.watchlist.v1` | `data.symbols[]`, JSON strings (`idx -o jsonl watch list \| jq -r .`) |
+| `idx.holidays.v1` | `data.holidays[]` |
+| `idx.instruments.v1` | `data.instruments[]` |
+| `idx.members.v1` | `data.members[]` |
+| `idx.indices.v1` | `data.indices[]` |
+| `idx.calendar.v1` | `data.events[]` |
+| `idx.foreign.v1` | `data.days[]` |
+| `idx.market.brokers.v1` | `data.brokers[]` |
+| `idx.news.v1` | `data.items[]` |
+| `idx.ownership.holders.v1` | `data.holders[]` |
+| `idx.ownership.entity.v1` | `data.holdings[]` |
+| `idx.ownership.changes.v1` | `data.changes[]` |
+| `idx.ownership.foreign.v1` | `data.points[]` |
+| `idx.profile.v1`, `idx.fundamentals.v1`, `idx.technical.v1`, `idx.brief.v1`, `idx.sentiment.v1` | `data` on one line (a single record) |
+| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1` | `data` on one line (several peer lists kept together) |
+
+```sh
+idx -o jsonl stocks history BBCA --period 1mo | jq -c '{time, close}'
+idx -o jsonl market holidays --year 2026 | wc -l          # 22
+```
+
+The same rule reads idx's own output back: `-` in a ticker list accepts an
+`-o json` envelope or `-o jsonl` lines on stdin and takes each row's `symbol`
+(JSON strings are tickers), so
+`idx -o jsonl stocks screen -f "pe<10" -n 5 | idx stocks compare -` works
+without jq.
 
 ## Envelope
 
@@ -52,7 +111,7 @@ with exit code 4.
 
 | field | type | notes |
 | --- | --- | --- |
-| `symbol` | string | IDX ticker without suffix, e.g. `BBCA` |
+| `symbol` | string | IDX ticker without suffix, e.g. `BBCA`; a ticker from another Yahoo Finance market keeps its suffix, e.g. `D05.SI` (see below) |
 | `name` | string? | Company name |
 | `currency` | string? | `IDR` |
 | `price` | number? | Last trade |
@@ -71,6 +130,14 @@ with exit code 4.
 `?` means the value is `null` when the source did not return it. Nothing is
 estimated. When `source` is `yahoo:chart`, expect `market_cap`, P/E, dividend
 and average-volume fields to be `null`.
+
+Other markets: the Yahoo-backed commands (`stocks quote`, `history`,
+`profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`,
+`technical`, `compare`) also take a ticker with another Yahoo Finance suffix,
+or a bare one with `IDX_EXCHANGE` set. In every payload an IDX ticker stays
+bare (`BBCA`) and another market's keeps its suffix (`D05.SI`); `currency` is
+what Yahoo reports (`SGD`), and times are still given in WIB (`+07:00`): the
+instant is right, the wall clock is Jakarta's, not the exchange's.
 
 ## `idx.history.v1` (`stocks history`)
 
@@ -440,7 +507,10 @@ omits, is absent/`null`.
 
 ## Errors
 
-Written to stderr, exit code non-zero:
+Written to stderr, exit code non-zero. With `-o json`, `-o jsonl` or `-o auto`
+when piped (from the flag, `IDX_OUTPUT` or the config file, the flag first) an
+error is one JSON line; otherwise it is `error: ...` text, with a `hint:` line
+where one helps:
 
 ```json
 {"error":{"code":"not_found","message":"not found: no quotes for ZZZZ"},"exit_code":4}

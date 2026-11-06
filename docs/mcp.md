@@ -366,6 +366,13 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
 - The server exits cleanly when the client closes stdin.
 - Verdicts and signals are heuristics; the tool descriptions and the server
   instructions say so, and so should any agent that repeats them.
+- Tickers are IDX codes. The ten Yahoo-backed tools (`idx_quote`,
+  `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`,
+  `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`,
+  `idx_compare`) also take a ticker from another Yahoo Finance market with its
+  suffix (`D05.SI`), returned with that suffix; every other tool refuses one
+  with a `usage` error. The server ignores `IDX_EXCHANGE`, so a bare code
+  always means IDX.
 
 ## Verifying
 

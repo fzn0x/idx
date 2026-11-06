@@ -59,8 +59,9 @@ idx -o json stocks quote BBCA | jq '.data[0] | {price, change_pct, pe_trailing, 
   one breaking does not take the tool down, and `auto` fills gaps in one
   source's fundamentals from the other.
 - **Built for agents.** `-o json` emits a stable, schema-documented envelope
-  (`idx schema quotes`). Exit codes mean something. `idx mcp` exposes every
-  command as a typed MCP tool that returns the very same JSON.
+  (`idx schema quotes`), `-o jsonl` one record per line. Exit codes mean
+  something, and `-` reads tickers from stdin so commands chain. `idx mcp`
+  exposes every command as a typed MCP tool that returns the very same JSON.
 - **Works offline.** Responses are cached with per-endpoint TTLs; `--offline`
   serves the cache instead of failing when the network is gone.
 - **Ownership, not just prices.** KSEI's monthly register of holders above 1 %
@@ -107,7 +108,7 @@ idx completions powershell | Out-String | Invoke-Expression
 
 | command | what it does |
 | --- | --- |
-| `stocks quote <SYMBOLS>` | Delayed quote for one or many tickers (`BBCA,BBRI` or `BBCA BBRI`; `.JK` optional) |
+| `stocks quote <SYMBOLS>` | Delayed quote for one or many tickers (`BBCA,BBRI` or `BBCA BBRI`; `.JK` optional; `-` reads them from stdin; another Yahoo Finance market by its suffix, e.g. `D05.SI`) |
 | `stocks history <SYMBOL> [--period 1y] [--interval 1d] [--limit 30]` | OHLCV candles with a summary line. Periods `1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max`, intervals `5m 15m 30m 1h 1d 1wk 1mo` |
 | `stocks profile <SYMBOL>` | Sector, industry, description, size, headquarters, management |
 | `stocks financials <SYMBOL> [--period annual\|quarterly\|ttm] [--statement all\|income\|balance\|cash]` | Income statement, balance sheet, cash flow |
@@ -153,13 +154,15 @@ Global flags work anywhere on the line:
 
 | flag | env | meaning |
 | --- | --- | --- |
-| `-o, --output table\|json\|csv` | `IDX_OUTPUT` | Output format: tables for people, the JSON envelope for programs, CSV rows of the payload's main list for spreadsheets |
+| `-o, --output table\|json\|jsonl\|csv\|auto` | `IDX_OUTPUT` | Output format: tables for people, the JSON envelope for programs, one JSON record per line (`jsonl`), CSV rows of the payload's main list for spreadsheets; `auto` is a table on a terminal and the JSON envelope when piped (opt-in: the default stays `table`) |
 | `--provider auto\|yahoo\|msn\|stockbit` | `IDX_PROVIDER` | Data source (`auto` tries Yahoo, then MSN, and merges fundamentals; `stockbit` is opt-in realtime from your own session, see [docs/stockbit.md](docs/stockbit.md)) |
 | `--offline` | `IDX_OFFLINE=1` | Never touch the network |
 | `--no-cache` | `IDX_NO_CACHE=1` | Ignore cached responses |
 | `--timeout SECS` | `IDX_TIMEOUT_SECS` | Per-request timeout (default 15) |
 | `--no-color` | `NO_COLOR` | Plain tables |
 | `-v, -vv, -vvv` | `IDX_LOG` | Diagnostics on stderr, including every URL requested |
+| `-q, --quiet` | `IDX_QUIET=1` | stderr carries errors only: no warnings, notes or loading line. stdout is unchanged and `-o json` keeps `warnings` in the envelope |
+| | `IDX_EXCHANGE=SI` | Yahoo Finance suffix a bare ticker gets in `stocks quote`, `history`, `profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`, `technical`, `compare` and `watch` (default `JK`, IDX). An explicit suffix (`D05.SI`) always works there; every other command reads IDX tickers only |
 | | `IDX_PROGRESS=never\|always` | The loading line on stderr (`⠹ 6s · waiting on investasi.kontan.co.id 6s`) shows on a terminal only; `never` hides it, `always` forces it |
 
 ## For scripts and agents
@@ -167,9 +170,20 @@ Global flags work anywhere on the line:
 ```sh
 idx -o json stocks history TLKM --period 1y --interval 1wk \
   | jq '.data.summary.change_pct'
+idx -o jsonl market holidays --year 2026 | jq -r .date      # one record per line
+idx -o jsonl stocks screen -f 'pe<10,roe>15' -n 5 | idx stocks compare -
+echo BBCA BBRI | idx stocks quote -                         # tickers from stdin
+idx -q -o csv stocks quote BBCA BBRI > quotes.csv           # stderr: errors only
 ```
 
-- stdout carries exactly one JSON document; everything else goes to stderr.
+- stdout carries exactly one JSON document (`-o json`) or one JSON record per
+  line (`-o jsonl`); everything else goes to stderr. Errors are one JSON line
+  on stderr in both modes.
+- `-o auto` (or `IDX_OUTPUT=auto`) prints a table on a terminal and the JSON
+  envelope when stdout is piped or captured.
+- `-` in a ticker list (`stocks quote|returns|compare`, `broker`, `bandar`,
+  `watch add|rm`) reads tickers from stdin: plain text (spaces, commas or lines,
+  `#` comments) or idx's own `-o json` / `-o jsonl` output.
 - The envelope records `provider`, `fetched_at`, `cached`, `stale` and `warnings`.
 - Fields the source did not return are `null`. Nothing is estimated.
 - Exit codes: `0` ok · `2` usage · `3` network/provider · `4` not found · `5` offline cache miss · `6` config.
@@ -264,7 +278,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 
 | source | used for | auth | notes |
 | --- | --- | --- | --- |
-| Yahoo Finance `v8/finance/chart` | history, quote fallback | none | IDX tickers carry the `.JK` suffix |
+| Yahoo Finance `v8/finance/chart` | history, quote fallback | none | IDX tickers carry the `.JK` suffix; another market's suffix (`D05.SI`) passes through for the Yahoo-backed commands |
 | Yahoo Finance `v7/finance/quote` | quotes | anonymous cookie + crumb, cached 6 h | Falls back to the chart endpoint (fewer fields) if rejected |
 | Yahoo Finance `v10/finance/quoteSummary` | profile, fundamentals, earnings | same session | Statement modules are empty at the source, so they are not used |
 | Yahoo Finance `fundamentals-timeseries` | financials | none | Annual, quarterly and TTM statement items |

@@ -28,7 +28,8 @@ code says `use idx::...` and users type `idx`.
 src/
   main.rs            thin binary: parse args, init tracing, map errors to exit codes
   lib.rs             module map
-  cli/               clap definitions + handlers (mod.rs builds Context; one file per group)
+  cli/               clap definitions + handlers (mod.rs builds Context; one file per group);
+                     input.rs reads `-` symbol lists from stdin (text or idx's own JSON/JSONL)
   providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
     msn/             autosuggest lookup -> Quotes / Equities (public web key)
@@ -65,7 +66,9 @@ src/
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
                      dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
-                     format.rs (numbers); cli/mod.rs emit() picks the format for every handler
+                     jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
+                     mod.rs OutputSetting (auto resolved against the terminal) and print_notice
+                     (stderr lines --quiet hides); cli/mod.rs emit() picks the format for every handler
   http/              Fetcher: cache in front of a Backend (reqwest live / FixtureBackend tests)
   progress.rs        the CLI's loading line on stderr: hosts in flight and their wait; fetcher and
                      IPOT retries report to it, only the CLI turns it on (stderr a terminal, no -v)
@@ -103,7 +106,10 @@ realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`
    test request flow (sessions, retries, fallbacks).
 3. **Tables to stdout, diagnostics to stderr, non-zero exit on failure.**
    Exit codes are documented in `src/error.rs` and `--help`; do not reuse them
-   for new meanings.
+   for new meanings. Informational stderr lines (warnings, notes,
+   confirmations) go through `output::print_notice` so `--quiet` hides them;
+   errors go through `report_error`, and instructions the user must act on
+   through `output::print_stderr`.
 4. **JSON is a contract.** Payload shapes are versioned by the `schema` field
    (`idx.quotes.v1`). Adding an optional field is fine; renaming or removing
    one means a new version string. Every shape must be reachable through
@@ -136,10 +142,16 @@ realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`
 1. Add the variant and args to the relevant `src/cli/*.rs` enum. Give it an
    `after_help` with examples; agents read `--help`.
 2. Add any new domain type to `src/model/` with `Serialize + JsonSchema`, a new
-   `SCHEMA_*` constant and `schema_for` entry in `output/json.rs`, and a table
+   `SCHEMA_*` constant and `schema_for` entry in `output/json.rs`, its row rule
+   in `output/jsonl.rs` `ROWS` (a unit test fails without one), and a table
    renderer in `output/table.rs`.
-3. Handlers call the provider, then branch on `ctx.json()`. Warnings go to
-   stderr in table mode and into `envelope.warnings` in JSON mode.
+3. Handlers call the provider, then hand the result to `emit()`, which picks
+   the format. Warnings go to stderr in table, csv and jsonl mode and into
+   `envelope.warnings` in JSON mode. A value without an envelope prints
+   through `output::print_value`. A symbol list goes through
+   `cli::input::symbol_args` so `-` reads stdin; Yahoo-backed commands parse
+   with `Symbol::parse_on(raw, &ctx.settings.exchange)`, every other one with
+   `Symbol::parse` (IDX only).
 4. Cover the parsing with fixtures and the CLI surface in `tests/cli.rs`.
 5. Add a matching `#[tool]` in `src/mcp/mod.rs` with a one-paragraph
    description and a typed argument struct, returning the same envelope.

@@ -32,8 +32,10 @@ const LONG_ABOUT: &str = "\
 Indonesian stock market (IDX / IHSG) analysis for humans and AI agents.
 
 Tables go to stdout for people; add `-o json` for a stable, schema-documented
-envelope that scripts and agents can parse. Errors go to stderr with a
-meaningful exit code. Data comes from free public endpoints, cached locally.
+envelope that scripts and agents can parse (`-o jsonl` for one record per line,
+`-o auto` for a table on a terminal and JSON when piped). Errors go to stderr
+with a meaningful exit code; `-q` keeps stderr to errors. Data comes from free
+public endpoints, cached locally.
 
 Examples:
   idx stocks quote BBCA,BBRI,TLKM
@@ -53,6 +55,7 @@ Examples:
   idx ownership ticker BBCA                # who holds more than 1%
   idx mcp                                  # MCP server over stdio for agents
   idx -o json stocks quote BBCA | jq '.data[0].price'
+  idx -o jsonl stocks screen -f 'pe<10' -n 5 | idx stocks compare -   # one record per line, - reads stdin
   idx --offline stocks quote BBCA        # serve from cache, never touch the network
   idx schema quotes                      # JSON Schema of the quote envelope";
 
