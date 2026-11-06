@@ -1,0 +1,334 @@
+{
+  "symbol": "^JKSE",
+  "period": "2y",
+  "from": "2024-11-06",
+  "to": "2026-11-04",
+  "returns": 473,
+  "mean_pct": -0.0763,
+  "median_pct": -0.0187,
+  "win_rate_pct": 49.89,
+  "tests": 27,
+  "alpha": 0.05,
+  "bonferroni_alpha": 0.001852,
+  "significant": 0,
+  "factors": [
+    {
+      "factor": "moon_phase",
+      "groups": [
+        {
+          "group": "new_moon",
+          "n": 50,
+          "mean_pct": 0.1162,
+          "median_pct": 0.0941,
+          "stdev_pct": 1.3218,
+          "win_rate_pct": 56.0,
+          "t_stat": 1.063,
+          "p_value": 0.291622,
+          "significant": false
+        },
+        {
+          "group": "waxing_crescent",
+          "n": 56,
+          "mean_pct": -0.3445,
+          "median_pct": -0.1775,
+          "stdev_pct": 1.9717,
+          "win_rate_pct": 42.86,
+          "t_stat": -1.111,
+          "p_value": 0.270553,
+          "significant": false
+        },
+        {
+          "group": "first_quarter",
+          "n": 59,
+          "mean_pct": -0.0101,
+          "median_pct": -0.0464,
+          "stdev_pct": 1.4161,
+          "win_rate_pct": 47.46,
+          "t_stat": 0.378,
+          "p_value": 0.706793,
+          "significant": false
+        },
+        {
+          "group": "waxing_gibbous",
+          "n": 60,
+          "mean_pct": -0.3119,
+          "median_pct": -0.114,
+          "stdev_pct": 1.8058,
+          "win_rate_pct": 46.67,
+          "t_stat": -1.101,
+          "p_value": 0.274749,
+          "significant": false
+        },
+        {
+          "group": "full_moon",
+          "n": 59,
+          "mean_pct": -0.276,
+          "median_pct": -0.1146,
+          "stdev_pct": 1.5554,
+          "win_rate_pct": 42.37,
+          "t_stat": -1.052,
+          "p_value": 0.296163,
+          "significant": false
+        },
+        {
+          "group": "waning_gibbous",
+          "n": 67,
+          "mean_pct": 0.0365,
+          "median_pct": 0.2969,
+          "stdev_pct": 1.4048,
+          "win_rate_pct": 58.21,
+          "t_stat": 0.694,
+          "p_value": 0.489097,
+          "significant": false
+        },
+        {
+          "group": "last_quarter",
+          "n": 66,
+          "mean_pct": 0.0464,
+          "median_pct": 0.1875,
+          "stdev_pct": 1.7375,
+          "win_rate_pct": 54.55,
+          "t_stat": 0.628,
+          "p_value": 0.532023,
+          "significant": false
+        },
+        {
+          "group": "waning_crescent",
+          "n": 56,
+          "mean_pct": 0.1334,
+          "median_pct": 0.0914,
+          "stdev_pct": 1.2233,
+          "win_rate_pct": 50.0,
+          "t_stat": 1.31,
+          "p_value": 0.193905,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "factor": "mercury",
+      "groups": [
+        {
+          "group": "retrograde",
+          "n": 93,
+          "mean_pct": -0.1281,
+          "median_pct": 0.0278,
+          "stdev_pct": 1.4694,
+          "win_rate_pct": 51.61,
+          "t_stat": -0.373,
+          "p_value": 0.709909,
+          "significant": false
+        },
+        {
+          "group": "direct",
+          "n": 380,
+          "mean_pct": -0.0636,
+          "median_pct": -0.0284,
+          "stdev_pct": 1.6034,
+          "win_rate_pct": 49.47,
+          "t_stat": 0.373,
+          "p_value": 0.709909,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "factor": "pasaran",
+      "groups": [
+        {
+          "group": "legi",
+          "n": 95,
+          "mean_pct": 0.0012,
+          "median_pct": 0.074,
+          "stdev_pct": 1.8228,
+          "win_rate_pct": 52.63,
+          "t_stat": 0.479,
+          "p_value": 0.632707,
+          "significant": false
+        },
+        {
+          "group": "pahing",
+          "n": 95,
+          "mean_pct": -0.0073,
+          "median_pct": 0.0412,
+          "stdev_pct": 1.4966,
+          "win_rate_pct": 52.63,
+          "t_stat": 0.496,
+          "p_value": 0.620766,
+          "significant": false
+        },
+        {
+          "group": "pon",
+          "n": 98,
+          "mean_pct": 0.0085,
+          "median_pct": 0.1429,
+          "stdev_pct": 1.2612,
+          "win_rate_pct": 53.06,
+          "t_stat": 0.698,
+          "p_value": 0.485939,
+          "significant": false
+        },
+        {
+          "group": "wage",
+          "n": 92,
+          "mean_pct": -0.069,
+          "median_pct": -0.0075,
+          "stdev_pct": 1.3203,
+          "win_rate_pct": 50.0,
+          "t_stat": 0.056,
+          "p_value": 0.9555,
+          "significant": false
+        },
+        {
+          "group": "kliwon",
+          "n": 93,
+          "mean_pct": -0.3225,
+          "median_pct": -0.2162,
+          "stdev_pct": 1.8945,
+          "win_rate_pct": 40.86,
+          "t_stat": -1.455,
+          "p_value": 0.148345,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "factor": "sun_sign",
+      "groups": [
+        {
+          "group": "aries",
+          "n": 31,
+          "mean_pct": 0.3219,
+          "median_pct": 0.1656,
+          "stdev_pct": 2.3278,
+          "win_rate_pct": 54.84,
+          "t_stat": 1.005,
+          "p_value": 0.32271,
+          "significant": false
+        },
+        {
+          "group": "taurus",
+          "n": 39,
+          "mean_pct": -0.2269,
+          "median_pct": 0.1196,
+          "stdev_pct": 1.3415,
+          "win_rate_pct": 53.85,
+          "t_stat": -0.72,
+          "p_value": 0.475183,
+          "significant": false
+        },
+        {
+          "group": "gemini",
+          "n": 37,
+          "mean_pct": -0.1101,
+          "median_pct": -0.2504,
+          "stdev_pct": 2.2004,
+          "win_rate_pct": 43.24,
+          "t_stat": -0.099,
+          "p_value": 0.921334,
+          "significant": false
+        },
+        {
+          "group": "cancer",
+          "n": 44,
+          "mean_pct": 0.2045,
+          "median_pct": 0.5466,
+          "stdev_pct": 1.2333,
+          "win_rate_pct": 65.91,
+          "t_stat": 1.537,
+          "p_value": 0.129726,
+          "significant": false
+        },
+        {
+          "group": "leo",
+          "n": 43,
+          "mean_pct": 0.2316,
+          "median_pct": 0.1673,
+          "stdev_pct": 0.9974,
+          "win_rate_pct": 53.49,
+          "t_stat": 1.98,
+          "p_value": 0.051782,
+          "significant": false
+        },
+        {
+          "group": "virgo",
+          "n": 41,
+          "mean_pct": -0.035,
+          "median_pct": -0.1022,
+          "stdev_pct": 0.9207,
+          "win_rate_pct": 43.9,
+          "t_stat": 0.276,
+          "p_value": 0.78327,
+          "significant": false
+        },
+        {
+          "group": "libra",
+          "n": 45,
+          "mean_pct": -0.2603,
+          "median_pct": 0.0167,
+          "stdev_pct": 2.2919,
+          "win_rate_pct": 51.11,
+          "t_stat": -0.582,
+          "p_value": 0.563057,
+          "significant": false
+        },
+        {
+          "group": "scorpio",
+          "n": 42,
+          "mean_pct": -0.2714,
+          "median_pct": -0.124,
+          "stdev_pct": 1.1242,
+          "win_rate_pct": 40.48,
+          "t_stat": -1.126,
+          "p_value": 0.264642,
+          "significant": false
+        },
+        {
+          "group": "sagittarius",
+          "n": 40,
+          "mean_pct": 0.006,
+          "median_pct": -0.0932,
+          "stdev_pct": 0.9343,
+          "win_rate_pct": 45.0,
+          "t_stat": 0.538,
+          "p_value": 0.59248,
+          "significant": false
+        },
+        {
+          "group": "capricorn",
+          "n": 32,
+          "mean_pct": 0.2634,
+          "median_pct": 0.235,
+          "stdev_pct": 0.7662,
+          "win_rate_pct": 65.63,
+          "t_stat": 2.338,
+          "p_value": 0.023102,
+          "significant": false
+        },
+        {
+          "group": "aquarius",
+          "n": 39,
+          "mean_pct": -0.3275,
+          "median_pct": -0.2014,
+          "stdev_pct": 1.8482,
+          "win_rate_pct": 48.72,
+          "t_stat": -0.897,
+          "p_value": 0.374702,
+          "significant": false
+        },
+        {
+          "group": "pisces",
+          "n": 40,
+          "mean_pct": -0.5863,
+          "median_pct": -0.6199,
+          "stdev_pct": 1.816,
+          "win_rate_pct": 35.0,
+          "t_stat": -1.878,
+          "p_value": 0.066919,
+          "significant": false
+        }
+      ]
+    }
+  ],
+  "method": "Close-to-close daily returns of the index, each session assigned the factor values at 16:00 WIB of its date (the Moon's phase sector, Mercury retrograde or direct, the pasaran, the Sun's sign). Each group is compared with all other sessions by Welch's t (two-sided p from Student's t, Welch-Satterthwaite degrees of freedom), Bonferroni over all groups. Daily returns are fat-tailed and their volatility clusters, so p-values are approximate; Sun signs track calendar months and carry month-of-year effects. Descriptive statistics, not a trading signal."
+}

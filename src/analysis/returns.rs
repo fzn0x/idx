@@ -10,7 +10,7 @@ fn round2(v: f64) -> f64 {
 }
 
 /// Closes with their dates, oldest first, one per calendar day.
-fn series(candles: &[Candle]) -> Vec<(NaiveDate, f64)> {
+pub(crate) fn series(candles: &[Candle]) -> Vec<(NaiveDate, f64)> {
     let mut out: Vec<(NaiveDate, f64)> = Vec::with_capacity(candles.len());
     for c in candles {
         let d = c.date();

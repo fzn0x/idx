@@ -13,6 +13,7 @@ crumb session (`providers/yahoo/session.rs`); `v8/finance/chart` and
 | chart_bbri_5d_1h.json | `v8/finance/chart/BBRI.JK?range=5d&interval=1h` | intraday |
 | chart_jkse_range_max_1d.json | `v8/finance/chart/%5EJKSE?range=max&interval=1d` | the bug behind `--period max`: `dataGranularity` "1mo", 440 monthly rows from 1990-05 although 1d was asked for (recorded 2026-11-06 06:57 WIB) |
 | chart_jkse_period1_max_1d.json | `v8/finance/chart/%5EJKSE?period1=0&period2=9999999999&interval=1d` | what idx asks for now: 9,221 daily rows from 1990-04-06, 8,905 with prices (holidays and the unfinished last session are null); 1990-1995 rows are close-only (open = high = low = close, volume 0) (2026-11-06 06:57 WIB) |
+| chart_jkse_2y_1d.json | `v8/finance/chart/%5EJKSE?range=2y&interval=1d` | 475 daily rows 2024-11-05 to 2026-11-05, 474 with prices (the last close is null); the `market astro --backtest --period 2y` fixture behind the literals in `src/analysis/astro.rs` and `web/test/astro.test.mjs` (2026-11-06 06:58 WIB) |
 | chart_not_found.json | `v8/finance/chart/ZZZZ.JK` | HTTP 404 |
 | quote_v7_bbca_bbri_tlkm.json | `v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK` | full quote rows |
 | quote_v7_partial_bbca_zzzz.json | `v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK` | unknown symbol silently omitted |
