@@ -1,8 +1,9 @@
 // The 37 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host), the
-// Stockbit realtime ones (they carry a personal account session) and MSN's
-// institutional holders (MSN is not checked from this site's host yet).
+// Stockbit realtime ones (they carry a personal account session) and the ones
+// whose source has not been checked from this site's host yet (`unchecked`
+// names that source). cliOnlyReason() says which.
 // The landing page table and test/tools.test.mjs keep to this list, and the
 // test checks it against docs/mcp.md.
 
@@ -40,12 +41,21 @@ export const TOOLS = [
   { tool: "idx_ownership_changes", cli: "idx ownership changes --from 2026-08-31 --to 2026-09-30", web: "ownership changes 2026-08-31 2026-09-30", what: "monthly changes with a summary" },
   { tool: "idx_ownership_foreign", cli: "idx ownership foreign", web: "ownership foreign", what: "disclosed foreign vs local stakes" },
   { tool: "idx_ownership_releases", cli: "idx ownership releases", web: "ownership releases", what: "imported monthly registers" },
-  { tool: "idx_ownership_institutions", cli: "idx ownership institutions BBCA", web: null, what: "institutions and funds holding it: buying, selling, new, exited (MSN)" },
+  { tool: "idx_ownership_institutions", cli: "idx ownership institutions BBCA", web: null, unchecked: "MSN Money", what: "institutions and funds holding it: buying, selling, new, exited (MSN)" },
   { tool: "idx_orderbook", cli: "idx stockbit orderbook BBCA", web: null, what: "realtime order book: full depth ladder and foreign flow (your Stockbit session)" },
   { tool: "idx_stockbit_status", cli: "idx stockbit status", web: null, what: "is a Stockbit session stored, and when its tokens expire" },
   { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in your browser, once" },
 ];
 
 export const CLI_ONLY_REASON = "idx.co.id refuses requests from this site's host (a Cloudflare Worker), so this tool runs in the CLI and the MCP server only.";
+
+const STOCKBIT_REASON = "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page.";
+
+/** Why a tool with `web: null` runs in the CLI and MCP only. */
+export function cliOnlyReason(t) {
+  if (t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit")) return STOCKBIT_REASON;
+  if (t.unchecked) return `${t.unchecked} has not been checked from this site's host (a Cloudflare Worker) yet, so this tool runs in the CLI and the MCP server only for now.`;
+  return CLI_ONLY_REASON;
+}
 
 export const byName = (name) => TOOLS.find((t) => t.tool === String(name || "").trim().toLowerCase());

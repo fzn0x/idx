@@ -1,7 +1,7 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
 import { api, fmt, table, wrapScroll, el, sparkline, signClass } from "/app.js";
 import { priceChart } from "/chart.js";
-import { TOOLS, CLI_ONLY_REASON, byName } from "/tools.js";
+import { TOOLS, cliOnlyReason, byName } from "/tools.js";
 import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
 
 const out = document.getElementById("out");
@@ -33,7 +33,7 @@ const COMMANDS = [
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
-  { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
+  { name: "tools", usage: "tools [idx_TOOL]", help: "the MCP tools with their CLI and web commands; tools idx_quote runs one" },
   { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
@@ -448,7 +448,7 @@ const R = {
   },
   tools() {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
+    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the Stockbit realtime tools and MSN's institutional holders) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
     frag.append(wrapScroll(table([
       { h: "Tool", k: "tool", l: true, cls: "sym" }, { h: "CLI", k: "cli", l: true },
       { h: "Web terminal", f: (t) => t.web || "CLI and MCP only", l: true }, { h: "What", k: "what", l: true, cls: "name" },
@@ -460,11 +460,7 @@ const R = {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>${t.tool}</b> · ${t.what}` }));
     frag.append(el("pre", { text: `${t.cli}\n${t.cli.replace(/^idx /, "idx -o json ")}` }));
-    const stockbit = t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit");
-    const reason = stockbit
-      ? "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page."
-      : CLI_ONLY_REASON;
-    frag.append(el("p", { class: "warn", text: `${reason} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
+    frag.append(el("p", { class: "warn", text: `${cliOnlyReason(t)} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
     return frag;
   },
   holidays(h) {

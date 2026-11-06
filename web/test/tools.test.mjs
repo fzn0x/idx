@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { TOOLS, byName } from "../public/tools.js";
+import { TOOLS, byName, cliOnlyReason, CLI_ONLY_REASON } from "../public/tools.js";
 import { instruments, members } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -27,8 +27,14 @@ test("the tool list matches docs/mcp.md", () => {
   assert.equal(byName("nope"), undefined);
 });
 
-test("only the idx.co.id, Stockbit and MSN holder tools are CLI-only, and every web command exists in the terminal", () => {
+test("only the idx.co.id, Stockbit and unchecked-source tools are CLI-only, and every web command exists in the terminal", () => {
   assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_foreign", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_ownership_institutions", "idx_stockbit_login", "idx_stockbit_status"]);
+  // Each CLI-only tool says why, by its source.
+  assert.equal(cliOnlyReason(byName("idx_calendar")), CLI_ONLY_REASON);
+  assert.match(cliOnlyReason(byName("idx_orderbook")), /^Stockbit realtime carries your own account session/);
+  assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^Stockbit realtime/);
+  assert.match(cliOnlyReason(byName("idx_ownership_institutions")), /^MSN Money has not been checked from this site's host/);
+  for (const t of TOOLS.filter((x) => x.unchecked)) assert.equal(t.web, null, t.tool);
   const terminal = read("web", "public", "terminal.js");
   const names = new Set([...terminal.matchAll(/\{ name: "([a-z]+)", usage:/g)].map((m) => m[1]));
   for (const t of TOOLS.filter((x) => x.web)) assert.ok(names.has(t.web.split(" ")[0]), `${t.tool}: ${t.web}`);
