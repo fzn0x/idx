@@ -147,6 +147,28 @@ test("/api/insights: the CLI envelope, peers resolved, cached in D1", async () =
   });
 });
 
+test("/api/insights: a Quotes 404 is a warning, and a failed peer lookup is not cached", async () => {
+  const env = memoryDb(), calls = [];
+  const quotes404 = (u, init) => (String(u).includes("Finance/Quotes") ? Promise.resolve(new Response("[]", { status: 404 })) : recordedMsn(calls)(u, init));
+  await withFetch(quotes404, async () => {
+    const out = await insights(env, "BBCA");
+    assert.deepEqual(out.data.peers, []);
+    assert.equal(out.data.good, 17);
+    assert.deepEqual(out.warnings, ["could not resolve MSN's peer list: Quotes returned HTTP 404"]);
+  });
+  assert.ok(![...env.cache.keys()].some((k) => k.startsWith("msn:peers:")), "no peer row stored");
+  const before = calls.length;
+  await withFetch(recordedMsn(calls), async () => {
+    const out = await insights(env, "BBCA");
+    assert.deepEqual(out.data.peers, ["BBKP", "BABP", "SUPA", "INPC"], "peers retried, not served from the failed lookup");
+    assert.equal(out.warnings, undefined);
+    assert.equal(out.cached, false, "the peers were fetched live");
+    assert.deepEqual(calls.slice(before).map((c) => c.split("?")[0]), ["GET https://assets.msn.com/service/Finance/Quotes"], "the insights page came from D1");
+    const again = await insights(env, "BBCA");
+    assert.deepEqual([again.cached, again.data.peers.length, calls.length], [true, 4, before + 1]);
+  });
+});
+
 const boardQuote = (symbol, price, low, high, market_cap, pe_trailing) => ({ symbol, name: null, price, change_pct: 0, market_cap, pe_trailing, week52_low: low, week52_high: high });
 
 test("/api/screen: presets expand, return windows join from one POST", async () => {

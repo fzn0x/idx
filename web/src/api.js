@@ -330,20 +330,33 @@ export async function insights(env, raw) {
   const symbol = parseSymbol(raw);
   try {
     const id = await msnId(env, symbol);
-    // The parsed report with its peers, not the raw 24 KB body, goes to D1.
+    // The parsed report and MSN's peer ids, not the raw 24 KB body, go to D1.
+    // The peers resolve under their own key, like the CLI's separate Quotes
+    // cache entry, so a failed peer lookup is a warning that is never stored.
     const r = await cached(env, `msn:insights:${symbol}`, 6 * 3600, async () => {
       const body = await msn.getJson(msn.insightsUrl(id));
       const parsed = body && msn.parseInsights(body, symbol);
       if (!parsed) throw notFound(`MSN has no insights for ${symbol}`);
-      const warnings = [...parsed.warnings];
-      if (parsed.peerIds.length) {
-        try { parsed.report.peers = msn.parsePeers(await msn.getJson(msn.quotesUrl(parsed.peerIds)), parsed.peerIds); }
-        catch (e) { warnings.push(`could not resolve MSN's peer list: ${e.message}`); }
-      }
-      return { report: parsed.report, warnings };
+      return parsed;
     });
-    const warnings = r.warning ? [...r.value.warnings, r.warning] : r.value.warnings;
-    return envelope("idx.insights.v1", r.value.report, { provider: msn.NAME, cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
+    const report = { ...r.value.report, peers: [] };
+    const warnings = [...r.value.warnings];
+    if (r.warning) warnings.push(r.warning);
+    let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at;
+    const ids = r.value.peerIds || [];
+    if (ids.length) {
+      try {
+        const p = await cached(env, `msn:peers:${ids.join(",")}`, 6 * 3600, async () => {
+          const body = await msn.getJson(msn.quotesUrl(ids));
+          if (!body) throw new Error("Quotes returned HTTP 404");
+          return msn.parsePeers(body, ids);
+        });
+        report.peers = p.value;
+        cachedAll &&= p.cached; stale ||= p.stale; fetchedAt = Math.min(fetchedAt, p.fetched_at);
+        if (p.warning) warnings.push(`MSN's peer list: ${p.warning}`);
+      } catch (e) { warnings.push(`could not resolve MSN's peer list: ${e.message}`); }
+    }
+    return envelope("idx.insights.v1", report, { provider: msn.NAME, cached: cachedAll, stale, fetched_at: fetchedAt, warnings });
   } catch (e) { throw msnFail(e); }
 }
 
