@@ -1,7 +1,7 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
 import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse } from "/app.js";
 import { priceChart } from "/chart.js";
-import { TOOLS, CLI_ONLY_REASON, byName } from "/tools.js";
+import { TOOLS, cliOnlyReason, byName } from "/tools.js";
 import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
@@ -481,7 +481,7 @@ const R = {
   },
   tools() {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool, the local ownership database tool and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
+    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool, the local ownership database tool, MSN's institutional holders and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
     frag.append(wrapScroll(table([
       { h: "Tool", k: "tool", l: true, cls: "sym" }, { h: "CLI", k: "cli", l: true },
       { h: "Web terminal", f: (t) => t.web || "CLI and MCP only", l: true }, { h: "What", k: "what", l: true, cls: "name" },
@@ -493,11 +493,7 @@ const R = {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>${t.tool}</b> · ${t.what}` }));
     frag.append(el("pre", { text: `${t.cli}\n${t.cli.replace(/^idx /, "idx -o json ")}` }));
-    const stockbit = t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit");
-    const reason = t.why || (stockbit
-      ? "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page."
-      : CLI_ONLY_REASON);
-    frag.append(el("p", { class: "warn", text: `${reason} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
+    frag.append(el("p", { class: "warn", text: `${cliOnlyReason(t)} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
     return frag;
   },
   holidays(h) {
@@ -720,6 +716,7 @@ async function run(line) {
         env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
         render = R.graph;
       }
+      else if (sub === "institutions") return { local: "CLI and MCP only", node: R.cliOnly(byName("idx_ownership_institutions")) };
       else throw Object.assign(new Error(`usage: ${cmd.usage}`), { code: "usage" });
       break;
     }

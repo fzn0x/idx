@@ -1,5 +1,6 @@
 //! `idx ownership ...`: KSEI's monthly ">1 % holders" register and KSEI's
-//! monthly composition archive ("Kepemilikan Efek") in local SQLite.
+//! monthly composition archive ("Kepemilikan Efek") in local SQLite, plus
+//! `institutions`, which asks MSN live for institutional and fund holders.
 
 use std::path::PathBuf;
 
@@ -8,15 +9,17 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::error::{IdxError, Result};
-use crate::model::{CompositionReport, Symbol};
+use crate::model::{CompositionReport, HolderKind, InstitutionalHolder, Symbol};
 use crate::output::json::{
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_OWNERSHIP_DISCOVER,
     SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
-    SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_OWNERSHIP_SNAPSHOT, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, SCHEMA_OWNERSHIP_STATUS,
+    SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_INSTITUTIONS,
+    SCHEMA_OWNERSHIP_RELEASES, SCHEMA_OWNERSHIP_SNAPSHOT, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC,
+    SCHEMA_OWNERSHIP_STATUS,
 };
 use crate::output::{
-    self, table_composition, table_ownership as tbl, table_ownership_sync as tbl_sync, OutputFormat,
+    self, table_composition, table_institutions, table_ownership as tbl,
+    table_ownership_sync as tbl_sync, OutputFormat,
 };
 use crate::ownership::discover::Family;
 use crate::ownership::{self, composition, ksei, snapshot, OwnershipDb};
@@ -26,6 +29,8 @@ use super::ownership_analytics::{
     self as analytics, ConcentrationArgs, CrossHoldersArgs, GraphArgs, ResolveCmd, SearchArgs,
 };
 use super::{emit, notices, Context};
+
+pub const LOCAL: &str = "local-db";
 
 #[derive(Debug, Subcommand)]
 pub enum OwnershipCmd {
@@ -132,6 +137,24 @@ pub enum OwnershipCmd {
         /// Rows in the market-wide view; 0 for all.
         #[arg(long, short = 'n', default_value_t = 25)]
         limit: usize,
+    },
+
+    /// Institutional and fund holders from MSN Money (live): positions, change since each holder's last report, new/buyer/seller/exited.
+    #[command(after_help = "Examples:
+  idx ownership institutions BBCA
+  idx -o json ownership institutions TLKM | jq '.data.flow'
+  idx -o json ownership institutions BBCA | jq '.data.holders[] | select(.signal == \"exited\")'
+  idx -o csv ownership institutions BBRI > holders.csv
+
+From MSN Money's ownership data (its vendor's fund and institution filings), not the KSEI
+register: up to 15 institutions and 20 funds, each as of its own report date, with the change
+since that holder's previous report. The signal is computed by idx: new (position opened),
+buyer, seller, exited (sold out), unchanged. Funds are part of their managers' institutional
+positions, so never add the two lists. Needs no import; MSN's response is cached with the
+fundamentals TTL (6 hours by default). With no holders, -o csv prints the holder header alone.")]
+    Institutions {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
     },
 
     /// Imported releases in the local database.
@@ -293,6 +316,31 @@ fn local<T>(data: T) -> Sourced<T> {
     Sourced::fresh(data, ownership::PROVIDER)
 }
 
+/// `-o csv` of `ownership institutions` for a stock without holders: the
+/// holder header alone, so files for several symbols share one layout (the
+/// generic CSV rule would print the report itself as one summary row). The
+/// columns come from a blank holder, so they follow the struct.
+fn holders_csv_header() -> Result<String> {
+    let blank = InstitutionalHolder {
+        kind: HolderKind::Institution,
+        rank: 1,
+        name: String::new(),
+        shares: None,
+        shares_change: None,
+        pct_outstanding: None,
+        pct_outstanding_change: None,
+        pct_portfolio: None,
+        report_date: None,
+        signal: None,
+    };
+    let csv = output::csv::render(&serde_json::to_value([blank])?);
+    Ok(csv
+        .lines()
+        .next()
+        .map(|h| format!("{h}\n"))
+        .unwrap_or_default())
+}
+
 pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
     match cmd {
         OwnershipCmd::Import(args) => import(ctx, args).await,
@@ -371,6 +419,17 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                     })
                 }
             }
+        }
+        OwnershipCmd::Institutions { symbol } => {
+            let sym = Symbol::parse(&symbol)?;
+            let report = ctx.provider.institutions(&sym).await?;
+            if ctx.settings.output == OutputFormat::Csv && report.data.holders.is_empty() {
+                notices(ctx, &report);
+                return output::print_stdout(&holders_csv_header()?);
+            }
+            emit(ctx, SCHEMA_OWNERSHIP_INSTITUTIONS, report, |r| {
+                table_institutions::institutions(r, ctx.color)
+            })
         }
         OwnershipCmd::Releases => {
             let db = open(ctx)?;

@@ -74,7 +74,7 @@ src/
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
                      per-agent registration recipes behind `idx mcp setup` (keep docs/mcp.md in step)
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
-                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs)
+                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, institutions.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
                      jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
                      mod.rs OutputSetting (auto resolved against the terminal) and print_notice
@@ -107,7 +107,7 @@ CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, 
 fundamental, technical, brief, compare, screen, news, sentiment, actions, foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
 `ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
-composition, releases, sync, status, discover, path; hidden build-snapshot),
+composition, institutions, releases, sync, status, discover, path; hidden build-snapshot),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in
 realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 

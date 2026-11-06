@@ -20,6 +20,18 @@ service answers 401.
 | autosuggest_giaa.json | `...csautosuggest/api/v1/Query?query=GIAA&market=en-id` | recorded 2026-11-06 (see below); the XIDX row carries SecId `bkgq5r` |
 | equities_giaa.json | `Equities?ids=bkgq5r` | negative equity, recorded 2026-11-06 (see below): `keyMetrics.debtToEquityRatio` and `companyMetrics.debtEquityRatio` are the placeholder -999.9999, `bookValuePerShare` -9.829, no `priceToBookRatio` or `returnOnEquity`; `annualStatements` show ROE positive on net losses (2020, 2021, 2024, 2025) |
 
+Recorded 2026-11-06 between 07:00 and 07:05 WIB, same client and query, for
+`ownership institutions` (the `ownershipSummary` block; `equities_bbca.json`
+and `equities_tlkm.json` above carry it too):
+
+| file | request | notes |
+| --- | --- | --- |
+| autosuggest_jtpe.json | `csautosuggest/api/v1/Query?query=JTPE&market=en-id` | one XIDX match, `SecId` `bkgwu2` |
+| autosuggest_atap.json | same, `query=ATAP` | XIDX (`bwzup2`) and a NEO Exchange listing with the same ticker |
+| equities_jtpe_all_signals.json | `Equities?ids=bkgwu2` | 4 institutions and 5 funds covering every signal: unchanged, seller, buyer, new (change equals the holding), exited (0 shares after a sale) |
+| equities_atap_empty_holders.json | `Equities?ids=bwzup2` | `ownershipSummary` with float and insider percentages only and empty holder lists |
+| equities_star_no_ownership.json | `Equities?ids=bkhrbh` | no `ownershipSummary` block at all |
+
 `Financials`, `KeyRatios`, `Overview`, `FinancialStatements` return 404 on this
 service; statements come from Yahoo's timeseries endpoint instead.
 

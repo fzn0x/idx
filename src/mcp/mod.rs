@@ -32,9 +32,9 @@ use crate::output::json::{
     SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_CONCENTRATION, SCHEMA_OWNERSHIP_CROSS_HOLDERS,
     SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
-    SCHEMA_OWNERSHIP_GRAPH, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_OWNERSHIP_SEARCH, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, SCHEMA_OWNERSHIP_STATUS,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
+    SCHEMA_OWNERSHIP_GRAPH, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_INSTITUTIONS,
+    SCHEMA_OWNERSHIP_RELEASES, SCHEMA_OWNERSHIP_SEARCH, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC,
+    SCHEMA_OWNERSHIP_STATUS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
@@ -80,6 +80,7 @@ idx_ownership_search finds a holder's entity_key by name; idx_ownership_rankings
 holders by issuers held or issuers by concentration; idx_ownership_graph walks the network.
 idx_ownership_composition reads KSEI's monthly composition archive (local vs foreign by
 investor type, every holder, none named) and downloads the newest month on first use.
+idx_ownership_institutions is the exception: it asks MSN live and needs no import.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 // Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
@@ -1777,6 +1778,26 @@ impl IdxServer {
     }
 
     #[tool(
+        name = "idx_ownership_institutions",
+        description = "Institutional and fund holders of one IDX ticker from MSN Money (live, not the KSEI register; no import needed): up to 15 institutions and 20 funds with shares, percent of shares outstanding, the change since each holder's previous report (each holder reports on its own date, see report_date) and a signal computed by idx (new, buyer, seller, exited, unchanged), plus institutional, top-10 institutional, fund and free-float percentages and signal counts per list. Funds overlap their managers: never add the two lists. A stock MSN lists no holders for returns an empty report with a warning. Returns the idx.ownership.institutions.v1 envelope."
+    )]
+    async fn ownership_institutions(
+        &self,
+        Parameters(a): Parameters<SymbolArg>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbol = Symbol::parse(&a.symbol)?;
+                ok(
+                    SCHEMA_OWNERSHIP_INSTITUTIONS,
+                    self.provider.institutions(&symbol).await?,
+                )
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         name = "idx_orderbook",
         description = "Realtime order book for one IDX ticker from the user's Stockbit session: the full depth ladder (bids and asks, sizes in shares), last/open/high/low, session volume and value, and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current with has_foreign_bs not true; a book recorded during trading carried the previous session's figures that way). Returns the idx.orderbook.v1 envelope. Needs a Stockbit login (idx_stockbit_status says whether one exists); errors with 'no Stockbit session' otherwise."
     )]
@@ -1956,7 +1977,7 @@ mod tests {
         let mut names = s.tool_names();
         names.sort();
         // The count `idx mcp setup` prints (clients::tool_count reads the router).
-        assert_eq!(names.len(), 41);
+        assert_eq!(names.len(), 42);
         assert_eq!(
             names,
             [
@@ -1988,6 +2009,7 @@ mod tests {
                 "idx_ownership_entity",
                 "idx_ownership_foreign",
                 "idx_ownership_graph",
+                "idx_ownership_institutions",
                 "idx_ownership_rankings",
                 "idx_ownership_releases",
                 "idx_ownership_search",
@@ -2554,5 +2576,83 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
         assert_eq!(v["schema"], "idx.fundamentals.v1");
         assert_eq!(v["data"]["verdict"]["label"], "insufficient_data");
+    }
+
+    #[tokio::test]
+    async fn institutions_tool_reports_an_unsupported_provider() {
+        let s = server();
+        let r = s
+            .ownership_institutions(Parameters(SymbolArg {
+                symbol: "BBCA".into(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "unsupported", "{v}");
+        assert_eq!(v["exit_code"], 6);
+    }
+
+    #[tokio::test]
+    async fn institutions_tool_returns_the_msn_envelope() {
+        use crate::http::{CacheMode, FixtureBackend};
+        use crate::providers::msn::Msn;
+        let be = FixtureBackend::new()
+            .route(
+                "csautosuggest/api/v1/Query?query=JTPE",
+                200,
+                include_str!("../../tests/fixtures/msn/autosuggest_jtpe.json"),
+            )
+            .route(
+                "csautosuggest/api/v1/Query?query=ATAP",
+                200,
+                include_str!("../../tests/fixtures/msn/autosuggest_atap.json"),
+            )
+            .route(
+                "Finance/Equities?ids=bkgwu2",
+                200,
+                include_str!("../../tests/fixtures/msn/equities_jtpe_all_signals.json"),
+            )
+            .route(
+                "Finance/Equities?ids=bwzup2",
+                200,
+                include_str!("../../tests/fixtures/msn/equities_atap_empty_holders.json"),
+            );
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(be),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Msn::new(fetcher.clone(), Ttls::default(), None)),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let call = |symbol: &str| {
+            s.ownership_institutions(Parameters(SymbolArg {
+                symbol: symbol.into(),
+            }))
+        };
+
+        let r = call("jtpe").await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.institutions.v1");
+        assert_eq!(v["provider"], "msn");
+        assert_eq!(v["data"]["symbol"], "JTPE");
+        assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 9);
+        assert!(v.get("warnings").is_none(), "{v}");
+
+        let r = call("ATAP").await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.institutions.v1");
+        assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            v["warnings"][0],
+            "MSN lists no institutional or fund holders for ATAP"
+        );
     }
 }

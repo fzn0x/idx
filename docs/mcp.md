@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 41 tools; several
+plain `GET /healthz`. It is the same server and the same 42 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -333,6 +333,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_graph` | `root` (ticker or holder), `depth?` (1-6, default 2), `min_pct?`, `max_nodes?` (default 100, at most 1000), `holder?`, `as_of?` | `idx.ownership.graph.v1`: issuers and holders with hop counts and the links between them; `truncated` when `max_nodes` stopped the walk |
 | `idx_ownership_composition` | `symbol`, `as_of?` | `idx.ownership.composition.v1`: KSEI's monthly archive, local vs foreign shares in nine investor types as a percent of the scripless shares, `scripless_pct`, and every imported month. Downloads the newest month from ksei.co.id on first use (not with `--offline`) |
 | `idx_ownership_snapshot` | `action` (`status` \| `sync`), `force?` (sync only) | `status`: `idx.ownership.status.v1`, the local database, the snapshot it came from, the mirror and what sync would do (writes nothing). `sync`: `idx.ownership.snapshot-sync.v1`, installs the prebuilt snapshot or imports the missing months; months only the local database has are kept unless `force` (a `.bak` copy is kept) |
+| `idx_ownership_institutions` | `symbol` | `idx.ownership.institutions.v1`: institutions and funds holding the stock (MSN, live, no import), each with shares, % of shares outstanding, the change since its own previous report and a signal (`new`, `buyer`, `seller`, `exited`, `unchanged`), plus institutional, fund and free-float percentages and signal counts per list |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current, seen during trading). Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |

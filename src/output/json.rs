@@ -9,9 +9,9 @@ use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
     CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
     ForeignFlowReport, ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport,
-    IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance,
-    Profile, Quote, Release, ScreenReport, SentimentReport, SnapshotManifest, StaleReason,
-    StatusReport, SyncReport, Technical, Watchlist,
+    IndexBoard, InstitutionalOwnership, InstrumentList, MarketOverview, MemberList, NewsReport,
+    OrderBook, Performance, Profile, Quote, Release, ScreenReport, SentimentReport,
+    SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::model::{
@@ -113,6 +113,7 @@ pub const SCHEMA_OWNERSHIP_STATUS: &str = "idx.ownership.status.v1";
 /// The snapshot manifest (`snapshot-v{V}.json` on the mirror, and the data
 /// of `ownership build-snapshot -o json`).
 pub const SCHEMA_OWNERSHIP_SNAPSHOT: &str = "idx.ownership.snapshot.v1";
+pub const SCHEMA_OWNERSHIP_INSTITUTIONS: &str = "idx.ownership.institutions.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
@@ -163,6 +164,7 @@ pub type OwnershipCompositionEnvelope = Envelope<CompositionReport>;
 pub type OwnershipSnapshotSyncEnvelope = Envelope<SyncReport>;
 pub type OwnershipStatusEnvelope = Envelope<StatusReport>;
 pub type OwnershipSnapshotEnvelope = Envelope<SnapshotManifest>;
+pub type OwnershipInstitutionsEnvelope = Envelope<InstitutionalOwnership>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -249,6 +251,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-snapshot-sync",
         "ownership-status",
         "ownership-snapshot",
+        "ownership-institutions",
         "error",
         "quote",
         "candle",
@@ -308,6 +311,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-snapshot-sync" => schemars::schema_for!(OwnershipSnapshotSyncEnvelope),
         "ownership-status" => schemars::schema_for!(OwnershipStatusEnvelope),
         "ownership-snapshot" => schemars::schema_for!(OwnershipSnapshotEnvelope),
+        "ownership-institutions" => schemars::schema_for!(OwnershipInstitutionsEnvelope),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),

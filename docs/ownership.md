@@ -3,7 +3,9 @@
 Since March 2026 KSEI compiles, and IDX publishes monthly, the list of every
 shareholder holding **more than 1 %** of a listed company ("Pemegang Saham di
 Atas 1%"). `idx ownership` imports those files into a local SQLite database
-and answers questions from it offline.
+and answers questions from it offline. One command reads another source:
+`idx ownership institutions` asks MSN Money live for the institutions and funds
+that hold a stock (see [the last section](#institutional-and-fund-holders-msn)).
 
 KSEI also publishes, on its own site, a monthly composition of every
 security's holders by investor type, local and foreign ("Kepemilikan Efek").
@@ -482,7 +484,8 @@ ownership-foreign|ownership-foreign-flow|ownership-releases|ownership-import|
 ownership-discover|ownership-search|ownership-cross-holders|
 ownership-concentration|ownership-graph|ownership-resolve-candidates|
 ownership-resolution|ownership-resolutions|ownership-composition|
-ownership-snapshot-sync|ownership-status|ownership-snapshot`.
+ownership-snapshot-sync|ownership-status|ownership-snapshot|
+ownership-institutions`.
 
 ## Finding a holder
 
@@ -657,3 +660,67 @@ automatic grouping.
   month, forwarded by IDX to KSEI, so it can lag a month.
 - PDF imports depend on the text layer of the announcement; numbers are
   checked but a reformatted PDF may need the parser updated.
+
+## Institutional and fund holders (MSN)
+
+```sh
+idx ownership institutions BBCA
+idx -o json ownership institutions TLKM | jq '.data.flow'
+idx -o csv ownership institutions BBRI > holders.csv
+```
+
+The KSEI register stops at 1 %, so most foreign funds never appear in it.
+`ownership institutions` fills that gap from MSN Money: the `ownershipSummary`
+block of the same `Finance/Equities` response that `stocks profile` and
+`stocks fundamental` read through the MSN provider (one request, cached with
+the fundamentals TTL, 6 h by default, served stale with `--offline`). Nothing
+is imported or stored in the database.
+
+Each report carries:
+
+- `institutions_pct`, `top10_institutions_pct`, `funds_pct`: percent of shares
+  outstanding held by all institutions, the ten largest, and funds, as MSN
+  reports them (not sums of the listed rows).
+- `float_pct`: the free float as a percent of shares outstanding, as MSN
+  reports it (BBCA 38.2 %, consistent with Yahoo's institutions against
+  institutions-of-float ratio).
+- `holders[]`: up to 15 institutions (`kind: institution`) and 20 funds
+  (`kind: fund`), each in MSN's rank order, with `shares`, `shares_change`
+  (bought or sold since that holder's previous report), `pct_outstanding`,
+  `pct_outstanding_change` (percentage points of the company),
+  `pct_portfolio` (funds only: the stock's weight in the fund, in percent),
+  `report_date` and `signal`.
+- `flow.institutions` and `flow.funds`: counts of each signal and the sum of
+  `shares_change` per list.
+
+`signal` is computed by idx from `shares` and `shares_change`: `exited` when
+the holding is 0 after a sale, `new` when the change equals the whole
+holding, otherwise `buyer`, `seller` or `unchanged` by the sign of the change.
+It is `null` when either number is missing.
+
+Read it with care:
+
+- Every holder reports on its own date (BBCA: from 2025-12-31 to 2026-10-31 on
+  2026-11-06), so a change is "since that holder's last filing", not over one
+  common period. `oldest_report` and `newest_report` give the span; exited
+  holders are often the oldest rows.
+- Funds are part of their managers' institutional positions (Fidelity the
+  manager is an institution, Fidelity's funds are funds): never add the two
+  lists or their percentages.
+- Not used on purpose: MSN's `marketValue` (a holder-level total, identical
+  for one manager across stocks), its `change` (the share change at the
+  report-date price, in an unstated currency that looks like USD; neither is
+  the value of this position in rupiah) and `insiderOwnershipPercent` (1.21 %
+  for BBCA, whose controlling holder has 54.94 % in the KSEI register).
+- Coverage: on 2026-11-06, 420 of the 887 IDX stocks MSN lists had
+  institutions, 381 had the block with empty lists and 86 had none. A stock
+  without holders gives an empty report with a warning (exit 0); a ticker MSN
+  does not list on IDX exits 4; `--provider yahoo` exits 6 (the default
+  `auto` reaches MSN).
+- Bing's `hedgefunddataprovider` API, which some tools use for holders, carries
+  US 13F filings only: it answers `{"securityOwnerships":[]}` for every IDX
+  stock, so idx does not use it.
+
+The web terminal does not run this command yet: MSN has not been checked from
+the site's Cloudflare Worker. Schema: `idx schema ownership-institutions`
+(`idx.ownership.institutions.v1`).
