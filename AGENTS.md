@@ -169,6 +169,15 @@ The flake builds only from `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `src/`,
 `data/` and `tests/`. If the crate starts embedding a file from anywhere else,
 add the path to `src` in `flake.nix`.
 
+To update the flake inputs (nixpkgs, crane, rust-overlay, and with them the
+stable Rust behind the flake's fmt and clippy checks) without a local Nix, run
+the nix workflow by hand on a branch with `update` set
+(`gh workflow run nix.yml --ref <branch> -f update=true`). Its checks run on the
+new inputs, and its last step fails until the new lock is committed: delete
+`flake.lock`, fetch the run's copy with `gh run download <run-id> -n flake-lock`
+(gh does not overwrite files) and commit it as `chore(nix): update flake inputs`,
+together with fixes for any new clippy or rustfmt findings.
+
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`,
 `chore:`, `ci:`). Keep each commit buildable.
 

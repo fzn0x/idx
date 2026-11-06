@@ -6,6 +6,7 @@ name: nix
 # flake and toolchain files), so a test that needs the network, an embedded
 # file outside the fileset or syntax newer than the MSRV fails before merge;
 # ci.yml stays the fast gate for everything else.
+# Run it by hand with `update` set to refresh the flake inputs (AGENTS.md).
 on:
   push:
     branches: [main]
@@ -22,6 +23,11 @@ on:
       - tests/**
       - .github/workflows/nix.yml
   workflow_dispatch:
+    inputs:
+      update:
+        description: Update the flake inputs (nix flake update); the run fails until its flake-lock artifact is committed
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,9 +49,14 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
       # Writes flake.lock when it is missing (the first run after flake.nix
-      # lands); with a committed lock it changes nothing.
+      # lands); with a committed lock it changes nothing, unless the run was
+      # started by hand with `update`, which moves every input to its latest
+      # revision. The steps below then build with the new lock.
       - name: Lock the inputs
-        run: nix flake lock
+        env:
+          UPDATE: ${{ inputs.update }}
+        run: |
+          if [ "$UPDATE" = true ]; then nix flake update; else nix flake lock; fi
 
       - name: Upload flake.lock
         if: always()
@@ -79,7 +90,8 @@ jobs:
 
       # Last, so the build above still runs on the first push: a lock that
       # is missing or out of date fails here, and the artifact holds the one
-      # to commit (gh run download <run-id> -n flake-lock).
+      # to commit (gh run download <run-id> -n flake-lock, after deleting the
+      # old flake.lock: gh does not overwrite files).
       # (Nix adds a lock it creates with `git add -N`, so ask HEAD, not the index.)
       - name: flake.lock is committed and current
         run: |
