@@ -312,7 +312,12 @@ the quote field), `index` (a `MarketRow` for `^JKSE`), `universe`,
 `liquid_min_market_cap`, and the lists `gainers`, `losers`, `most_active`,
 `heavyweights` of `MarketRow` (`symbol`, `name`, `price`, `change`,
 `change_pct`, `volume`, `value`, `market_cap`). The web terminal serves the
-same shape plus `index_tape` and `refreshed_at`.
+same shape plus `index_tape`, `refreshed_at` and `market_open` (false on
+weekends and IDX holidays). Its quote, market and screen answers come from a
+board a cron refreshes every minute in trading hours and every 15 minutes
+outside them; a board older than that allows (10 or 35 minutes) is served
+with `stale: true`, `stale_reason: "fetch_failed"` and a warning giving its
+time.
 
 ## `idx.brief.v1` (`stocks brief`)
 

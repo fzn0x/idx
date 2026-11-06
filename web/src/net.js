@@ -5,6 +5,12 @@
 // r.headers, r.json() and r.text().
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * Cuts the query string and fragment of every http(s) URL in `text`, so a
+ * warning never carries a session crumb or key (the CLI's redact_urls).
+ */
+export const redactUrls = (text) => String(text).replace(/(https?:\/\/[^\s)"'<>?#]*)[?#][^\s)"'<>]*/g, "$1");
 const NULL_BODY = new Set([101, 204, 205, 304]);
 
 const hostOf = (u) => { try { return new URL(u).host; } catch { return String(u); } };
