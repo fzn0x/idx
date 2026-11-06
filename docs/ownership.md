@@ -69,7 +69,9 @@ the script:
 1. fetches the IDX page with [curl_cffi](https://github.com/lexiforest/curl_cffi)
    (browser TLS fingerprint), saves it, and parses it with
    `idx ownership discover` (one parser for CLI and CI); when that fails it
-   carries on with the months already mirrored;
+   carries on with the months already mirrored, and fails the run if the
+   index lists a month whose file is missing from the release (it would
+   otherwise drop that month);
 2. reuses files already mirrored, downloads new or re-published ones (a new
    IDX URL for the same month counts as re-published) and checks they are
    real XLSX/PDF files;

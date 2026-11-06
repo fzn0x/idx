@@ -253,7 +253,11 @@ def main() -> int:
                 return 1
         else:
             if not page_ok:
-                continue
+                # Without idx.co.id this month cannot be fetched again; dropping it
+                # would remove its parts here and prune it from the web terminal.
+                print(f"error: {name} is listed in the mirror index but missing from the release, "
+                      "and idx.co.id is unreachable to fetch it again", file=sys.stderr)
+                return 1
             try:
                 data = fetch(w["source_url"], referer=PAGE_URL, timeout=180)
             except Exception as e:
