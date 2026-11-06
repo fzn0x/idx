@@ -8,8 +8,9 @@
 //!
 //! Adding a provider: see `AGENTS.md`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -126,13 +127,35 @@ pub struct StockbitOptions {
 }
 
 impl StockbitOptions {
-    /// Builds the shared session store this process will read and refresh.
+    /// The session store this process reads and refreshes. There is one per
+    /// session file (and seed) per process: the provider, the history router
+    /// and the MCP Stockbit tools all get the same store, so its refresh lock
+    /// really serialises the rotating refresh token instead of two stores each
+    /// spending it. A store nobody holds any more is rebuilt on the next call.
     pub fn store(&self) -> Arc<stockbit::SessionStore> {
-        Arc::new(stockbit::SessionStore::new(
+        type Key = (PathBuf, Option<String>, Option<String>);
+        static STORES: OnceLock<Mutex<HashMap<Key, Weak<stockbit::SessionStore>>>> =
+            OnceLock::new();
+        let key = (
             self.session_path.clone(),
             self.access_seed.clone(),
             self.refresh_seed.clone(),
-        ))
+        );
+        let mut stores = STORES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(store) = stores.get(&key).and_then(Weak::upgrade) {
+            return store;
+        }
+        stores.retain(|_, w| w.strong_count() > 0);
+        let store = Arc::new(stockbit::SessionStore::new(
+            self.session_path.clone(),
+            self.access_seed.clone(),
+            self.refresh_seed.clone(),
+        ));
+        stores.insert(key, Arc::downgrade(&store));
+        store
     }
 }
 
@@ -511,6 +534,34 @@ mod tests {
         assert_eq!(got.data.valuation.pe_trailing, Some(9.0));
         assert_eq!(got.data.valuation.price_to_book, Some(2.0));
         assert_eq!(got.data.sources, vec!["ok".to_string(), "ok2".to_string()]);
+    }
+
+    #[test]
+    fn one_session_store_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = StockbitOptions {
+            session_path: dir.path().join("stockbit-session.json"),
+            access_seed: None,
+            refresh_seed: None,
+        };
+        let a = opts.store();
+        let b = opts.clone().store();
+        assert!(Arc::ptr_eq(&a, &b), "same file, same store");
+        let other = StockbitOptions {
+            session_path: dir.path().join("other.json"),
+            ..opts.clone()
+        }
+        .store();
+        assert!(!Arc::ptr_eq(&a, &other));
+        // The registry holds no strong reference: a store nobody uses is freed
+        // and the next call builds a fresh one.
+        let weak = Arc::downgrade(&a);
+        drop((a, b));
+        assert!(weak.upgrade().is_none());
+        assert_eq!(
+            opts.store().path(),
+            dir.path().join("stockbit-session.json")
+        );
     }
 
     #[test]
