@@ -282,7 +282,7 @@ user_version`, 4 today):
   "sqlite_bytes": 20283392,
   "sqlite_sha256": "…",
   "content_sha256": "…",
-  "tables": { "aliases": 6293, "entities": 5740, "holding_lines": 57505, "holdings": 57451, "releases": 8 },
+  "tables": { "aliases": 6293, "composition": 0, "composition_releases": 0, "entities": 5740, "holding_lines": 57505, "holdings": 57451, "releases": 8, "resolutions": 0 },
   "releases": [
     { "as_of": "2026-09-30", "format": "xlsx", "sha256": "804b3bb7…",
       "source_url": "https://www.idx.co.id/Media/yqjhhsee/peng-2026-09-00024-satu-persen.xlsx",
