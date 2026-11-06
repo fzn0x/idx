@@ -168,6 +168,13 @@ export function arrangeNews(items, symbol, matchedName, limit, companyOnly, item
 
 // ---- ownership changes summary ---------------------------------------------------
 
+/** The `entity_key` a name search matches (ownership::normalize::entity_key, ASCII). */
+export function entitySearchKey(query) {
+  const toks = String(query ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(" ").filter(Boolean);
+  const kept = toks.filter((t) => !["PT", "TBK", "PERSERO"].includes(t));
+  return (kept.length ? kept : toks).join(" ");
+}
+
 /** Mirrors ownership::db::summarise over sorted changes (largest |pct_change| first). */
 export function summariseChanges(changes) {
   const brief = (c) => ({ symbol: c.symbol, holder: c.holder, kind: c.kind, pct_from: c.pct_from, pct_to: c.pct_to, pct_change: c.pct_change });

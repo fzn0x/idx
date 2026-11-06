@@ -883,6 +883,11 @@ fn ownership_import_and_queries_work_offline() {
         .assert()
         .code(4)
         .stderr(predicate::str::contains("ownership import"));
+    // ... except for a name that could never match: usage, exit 2.
+    own(&sb)
+        .args(["ownership", "entity", "!!!"])
+        .assert()
+        .code(2);
 
     own(&sb)
         .args(["-o", "json", "ownership", "import", "--file", prev])
@@ -929,6 +934,12 @@ fn ownership_import_and_queries_work_offline() {
         .args(["ownership", "entity", "al"])
         .assert()
         .code(2);
+    // No letters or digits: would match every holder, so a usage error.
+    own(&sb)
+        .args(["ownership", "entity", "%%%"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("3 letters or digits"));
     own(&sb)
         .args([
             "-o",

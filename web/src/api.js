@@ -774,8 +774,10 @@ export async function ownershipTicker(env, symbolRaw, asOf) {
 }
 export async function ownershipEntity(env, query, asOf) {
   if (!query || query.trim().length < 3) throw usage("entity name needs at least 3 characters");
+  const key = ex.entitySearchKey(query);
+  // "%%%" or "!!!" would normalise to an empty key and match every holder.
+  if (key.replace(/[^A-Z0-9]/g, "").length < 3) throw usage("name needs at least 3 letters or digits");
   const date = await ownershipRelease(env, asOf);
-  const key = query.toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(" ").filter((t) => t && !["PT","TBK","PERSERO"].includes(t)).join(" ");
   const rows = (await env.DB.prepare("SELECT * FROM own_holdings WHERE as_of = ?1 AND entity_key LIKE ?2 ORDER BY pct DESC").bind(date, `%${key}%`).all()).results;
   if (!rows.length) throw notFound(`no holder matching "${query}" as of ${date}`);
   const entities = [...new Set(rows.map((r) => r.holder))].sort();

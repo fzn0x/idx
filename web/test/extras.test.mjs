@@ -85,6 +85,26 @@ test("ownership changes summary", () => {
   assert.equal(s.top_decreases[0].holder, "C");
 });
 
+import { route } from "../src/api.js";
+
+test("ownership entity search key mirrors normalize::entity_key", () => {
+  assert.equal(ex.entitySearchKey("PT Alamtri Resources Indonesia, Tbk."), "ALAMTRI RESOURCES INDONESIA");
+  assert.equal(ex.entitySearchKey("dwimuria"), "DWIMURIA");
+  assert.equal(ex.entitySearchKey("PT"), "PT", "legal forms alone are kept, like the Rust fallback");
+  assert.equal(ex.entitySearchKey("%%%"), "");
+});
+
+test("ownership entity: a name without 3 letters or digits is a usage error (400) before any query", async () => {
+  const env = { DB: { prepare: () => { throw new Error("no query expected"); } } };
+  for (const name of ["___", "%%%", "!!!", "PT", "a.b"]) {
+    await assert.rejects(
+      route(env, new URL(`https://x/api/ownership/entity?name=${encodeURIComponent(name)}`)),
+      (e) => e.code === "usage" && e.status === 400 && /3 letters or digits|3 characters/.test(e.message),
+      name,
+    );
+  }
+});
+
 import { plan, sha256Hex } from "../src/ownership-sync.js";
 
 test("ownership sync plan: newest first, prune outside the window, reload on new sha", () => {

@@ -13,6 +13,7 @@ fn spawn_server(dir: &std::path::Path) -> std::process::Child {
         .env("IDX_CACHE_DIR", dir.join("cache"))
         .env("IDX_CONFIG", dir.join("config.toml"))
         .env("IDX_OFFLINE", "1")
+        .env("IDX_OWNERSHIP_DB", dir.join("ownership.sqlite"))
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -154,6 +155,20 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("usage"));
+
+    // An entity name without 3 letters or digits would match every holder.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "idx_ownership_entity", "arguments": {"name": "!!!"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 5);
+    assert_eq!(r["result"]["isError"], true);
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["exit_code"], 2, "{body}");
+    assert!(body.to_string().contains("3 letters or digits"), "{body}");
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

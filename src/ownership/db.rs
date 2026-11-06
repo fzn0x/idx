@@ -384,9 +384,16 @@ impl OwnershipDb {
     }
 
     /// Every position of holders whose normalised name contains `query`.
+    /// The query needs at least 3 letters or digits once normalised: `%%%` or
+    /// `!!!` would otherwise normalise to an empty key and match everyone.
     pub fn entity(&self, query: &str, as_of: Option<NaiveDate>) -> Result<EntityReport> {
-        let (release_id, date) = self.release_for(as_of)?;
         let key = normalize::entity_key(query);
+        if key.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
+            return Err(IdxError::Usage(
+                "name needs at least 3 letters or digits".into(),
+            ));
+        }
+        let (release_id, date) = self.release_for(as_of)?;
         let pattern = format!("%{key}%");
         let holdings = self.holdings_where(release_id, date, "e.entity_key LIKE ?2", &pattern)?;
         if holdings.is_empty() {
@@ -911,6 +918,24 @@ mod tests {
         assert!(!e.holdings.is_empty());
         assert!(e.entities.iter().all(|n| n.contains("ALAMTRI")));
         assert!(db.entity("no such holder", None).is_err());
+    }
+
+    #[test]
+    fn entity_search_needs_three_letters_or_digits() {
+        let empty = OwnershipDb::in_memory().unwrap();
+        let db = loaded();
+        for q in ["%%%", "!!!", "___", "  %_% ", "PT", "a.b"] {
+            for d in [&empty, &db] {
+                let err = d.entity(q, None).unwrap_err();
+                assert_eq!(err.exit_code(), 2, "{q:?}: {err}");
+                assert!(
+                    err.to_string()
+                        .contains("name needs at least 3 letters or digits"),
+                    "{err}"
+                );
+            }
+        }
+        assert!(db.entity("Adaro", None).is_ok());
     }
 
     #[test]
