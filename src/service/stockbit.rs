@@ -80,6 +80,9 @@ pub async fn stockbit_movements(
     pages: u32,
 ) -> Result<Sourced<HolderMovements>> {
     q.validate()?;
+    if let Some(s) = &q.symbol {
+        stockbit::idx_only(s)?;
+    }
     if !(1..=STOCKBIT_MOVEMENT_MAX_PAGES).contains(&pages) {
         return Err(IdxError::Usage(format!(
             "pages must be 1 to {STOCKBIT_MOVEMENT_MAX_PAGES}, not {pages}"
@@ -171,6 +174,8 @@ pub async fn stockbit_actions(
             "{symbol} is an index; corporate actions belong to stocks"
         )));
     }
+    // Before the first of the requests below, one per kind.
+    stockbit::idx_only(symbol)?;
     if let (Some(f), Some(t)) = (from, to) {
         if f > t {
             return Err(IdxError::Usage(format!(
@@ -330,6 +335,37 @@ mod tests {
     fn sb(be: FixtureBackend) -> (Stockbit, std::sync::Arc<FixtureBackend>, tempfile::TempDir) {
         let (sb, be, dir) = with_backend(be);
         (sb.with_pace(Duration::ZERO), be, dir)
+    }
+
+    /// Stockbit lists IDX only: another market's ticker (a Symbol from
+    /// `parse_on`) is unsupported before any request is made.
+    #[tokio::test]
+    async fn other_markets_are_refused_before_any_request() {
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        let unsupported = |e: IdxError| matches!(e, IdxError::Unsupported { .. });
+        let (sb, be, _d) = sb(FixtureBackend::new());
+        let e = stockbit_actions(&sb, &[], &d05, &K::STOCK_DEFAULT, None, None)
+            .await
+            .unwrap_err();
+        assert!(unsupported(e));
+        assert!(unsupported(
+            sb.corporate_actions(K::Dividend, Some(&d05))
+                .await
+                .unwrap_err()
+        ));
+        let q = MovementQuery {
+            symbol: Some(d05.clone()),
+            from: None,
+            to: None,
+            holder_id: None,
+            action: None,
+            source: None,
+        };
+        assert!(unsupported(
+            stockbit_movements(&sb, &q, 2).await.unwrap_err()
+        ));
+        assert!(unsupported(sb.movements_page(&q, 1).await.unwrap_err()));
+        assert_eq!(be.call_count(), 0, "no request may leave");
     }
 
     #[tokio::test]

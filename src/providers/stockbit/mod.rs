@@ -91,7 +91,7 @@ fn foreign_not_current(flag: &str) -> String {
 
 /// Stockbit lists IDX only: a ticker from another market (`D05.SI`) is
 /// unsupported, before any request (and before the session is touched).
-fn idx_only(symbol: &Symbol) -> Result<()> {
+pub(crate) fn idx_only(symbol: &Symbol) -> Result<()> {
     match symbol.exchange() {
         Some(_) => Err(IdxError::unsupported(NAME, "tickers outside IDX")),
         None => Ok(()),
@@ -308,6 +308,9 @@ impl Stockbit {
         kind: CorporateEventKind,
         symbol: Option<&Symbol>,
     ) -> Result<Sourced<Vec<CorporateEvent>>> {
+        if let Some(s) = symbol {
+            idx_only(s)?;
+        }
         let code = symbol.map(stockbit_code);
         let url = corpaction::url(kind, code.as_deref());
         let f = self
@@ -362,6 +365,9 @@ impl Stockbit {
         ttl: Duration,
     ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
         q.validate()?;
+        if let Some(s) = &q.symbol {
+            idx_only(s)?;
+        }
         let url = movement::url(q, page);
         let f = self.get_paced(&url, ttl, "shareholder movements").await?;
         if f.status == 404 || parse::is_not_found(&f.body) {
