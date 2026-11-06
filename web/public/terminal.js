@@ -1,11 +1,14 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
+// The shell (help, states, loading lines, errors) speaks the page's language;
+// the results keep the CLI's English column names and words on both pages.
 import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse } from "/app.js";
 import { priceChart } from "/chart.js";
 import { TOOLS, cliOnlyReason, byName } from "/tools.js";
-import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
+import { SHOW_MS, SLOW_MS, WAITS, FEED_TIMEOUT_S, IPOT_TRIES, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
-import { session, hhmm, wib, stateName, boardState } from "/clock.js";
+import { session, hhmm, wib, boardState } from "/clock.js";
+import { ID, t, here, otherPath, PHASES, DAYS_SHORT, TIME_SEP } from "/i18n.js";
 
 const out = document.getElementById("out");
 const form = document.getElementById("prompt");
@@ -50,6 +53,49 @@ const COMMANDS = [
 ];
 const ALIASES = { q: "quote", h: "history", f: "fundamental", t: "technical", n: "news", s: "screen", c: "compare", d: "dividends", r: "returns", b: "brief", "?": "help", cls: "clear", own: "ownership" };
 
+// What each command does, in Bahasa Indonesia, for help, the rail and the gate; the usage lines stay as typed.
+const HELP_ID = {
+  quote: "harga tertunda, misalnya quote BBCA,BBRI; satu kode menambah grafik harga (1D sampai 5Y)",
+  history: "candle OHLCV; periode 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, interval 1m 2m 5m 15m 30m 1h 1d 1wk 1mo (1m sampai 5d, 2m sampai 1mo)",
+  intraday: "sesi terakhir per menit: bar OHLCV, VWAP, perubahan terhadap penutupan sebelumnya (Yahoo, tertinggal sekitar 10 menit); interval 1m 2m 5m 15m 30m 1h",
+  profile: "sektor, industri, deskripsi, ukuran perusahaan",
+  financials: "laba rugi, neraca, arus kas; --statement hanya menampilkan yang disebut",
+  earnings: "EPS per kuartal dibanding perkiraan, pendapatan dan laba, konsensus analis, tanggal laporan berikutnya; flag menyaring barisnya (--history dan --forecast juga bisa)",
+  fundamental: "rasio dengan kesimpulan dalam bahasa sederhana; --lens memberi salah satu bacaan di bawah",
+  growth: "lensa pertumbuhan: kuartal terakhir, EPS ke depan, pendapatan dan laba bersih per tahun buku, tiap aturan dengan poinnya",
+  valuation: "lensa valuasi: P/E, PEG, P/B, P/S, EV/EBITDA, imbal hasil dividen dan target analis, masing-masing dinilai",
+  risk: "lensa risiko: ekuitas negatif, utang, likuiditas, kerugian, serta beta, volatilitas dan penurunan terdalam dibanding IHSG",
+  technical: "RSI, MACD, rata-rata bergerak, level, sinyal",
+  compare: "fundamental beberapa saham berdampingan",
+  screen: "misalnya screen pe<10,div>5,mcap>5T --sort div; --returns menambah kolom imbal hasil bila tidak ada filter atau urutan yang memerlukannya; preset: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; kuncinya antara lain range (posisi dalam rentang 52 minggu, 0 sampai 100) dan ret1w ret1m ret3m ret6m retytd ret1y (imbal hasil harga %, menurut MSN)",
+  news: "judul berita; dengan kode saham, berita perusahaan lebih dulu, lalu konteks pasar",
+  dividends: "pembayaran, total per tahun, imbal hasil TTM, tahun berturut-turut, pemecahan saham",
+  returns: "imbal hasil 1w..5y, CAGR, volatilitas, penurunan terdalam, selisih terhadap IHSG",
+  brief: "satu halaman: harga, kesimpulan, sinyal, imbal hasil, dividen, pemegang saham, berita",
+  sentiment: "sentimen kamus kata atas judul berita yang cocok",
+  insights: "pernyataan bernilai dari MSN Money tentang valuasi, laba, pertumbuhan, kinerja dan kesehatan, dibanding emiten sejenis, industrinya dan riwayat perusahaan sendiri; --all menambah yang tidak bisa dinilai MSN",
+  broker: "broker mana yang membeli dan menjual: 10 teratas tiap sisi menurut lot (IPOT), sesi terakhir bila tanpa tanggal",
+  foreign: "beli dan jual asing per sesi dalam rupiah di semua papan (IPOT): nilai, porsi asing, total dan rentetan beli bersih atau jual bersih; 10 sesi bila tanpa pilihan, paling banyak 20",
+  bandar: "bandarmologi: apakah broker teratas sedang akumulasi atau distribusi? preset screen: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: di saham mana satu broker (YP, CC, ...) masuk 10 pembeli atau penjual teratas dari 100 saham teramai sesi itu",
+  actions: "aksi korporasi (dividen, pemecahan saham, bonus, rights dengan rasio dan tanggal cum/ex/pembayaran), RUPS, waran dan rights; termasuk yang akan datang (IPOT)",
+  market: "IHSG, jumlah saham naik dan turun, saham naik, saham turun, saham teramai",
+  holidays: "hari libur bursa, jumlah hari perdagangan setahun, apakah hari ini hari perdagangan dan kapan yang berikutnya",
+  astro: "astrologi IHSG: planet, fase Bulan, Merkurius retrograde, weton dan shio untuk satu tanggal (16.00 WIB), fase dan ingres mendatang, transit ke peta IHSG; --backtest mengujinya pada imbal hasil harian IHSG (5y bila tanpa pilihan). Astrologi tradisional, bukan ramalan",
+  list: "saham tercatat: kode dan nama (bawaan; CLI menambah papan, tanggal pencatatan dan jumlah saham dari idx.co.id)",
+  members: "anggota bursa: kode broker yang dipakai broker dan bandar, dengan namanya",
+  tools: "alat MCP dengan perintah CLI dan web-nya; tools idx_quote menjalankan satu alat",
+  ownership: "pemegang saham di atas 1 % dari KSEI, disinkronkan bulanan dari IDX: pemegang, entitas, cari pemegang, pemegang di banyak emiten, konsentrasi (HHI), jaringan kepemilikan, perubahan bulanan dengan ringkasan, asing dan lokal",
+  json: "cetak amplop JSON mentah dari perintah apa pun",
+  help: "daftar ini",
+  clear: "bersihkan lembar hasil",
+};
+const helpOf = (c) => (ID && HELP_ID[c.name]) || c.help;
+
+/** Errors the terminal raises itself: a usage slip, worded for the page. */
+const usageError = (message) => Object.assign(new Error(message), { code: "usage" });
+const usageLine = (usage) => usageError(t(`cara pakai: ${usage}`, `usage: ${usage}`));
+const CLI_ONLY = t("hanya CLI dan MCP", "CLI and MCP only");
+
 function tokenize(line) {
   const toks = [];
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -91,6 +137,9 @@ function scopeLabel(s) {
   return `showing ${period}${kind}`;
 }
 const x = (v) => (v == null ? NA : `${fmt.num(v, 2)}x`);
+// Yahoo's marketState in words, as the CLI prints it (market_state in src/output/format.rs).
+const STATES = { REGULAR: "open", PRE: "pre-market", POST: "after hours", PREPRE: "closed", POSTPOST: "closed", CLOSED: "closed" };
+const marketState = (code) => STATES[code.toUpperCase()] || code.toLowerCase();
 
 const newsTable = (items) => wrapScroll(table([
   { h: "WIB", f: (i) => (i.published ? fmt.wib(i.published).slice(5, 16) : NA), l: true }, { h: "Source", k: "source", l: true },
@@ -180,7 +229,7 @@ const R = {
   intraday(d) {
     const frag = document.createDocumentFragment();
     const q = d.quote, s = d.summary;
-    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${q.market_state.toLowerCase()}`].filter(Boolean);
+    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${marketState(q.market_state)}`].filter(Boolean);
     frag.append(el("p", { class: "prose", text: head.join(" · ") }));
     if (q) {
       frag.append(el("p", { class: "prose" }, [
@@ -845,13 +894,13 @@ function statements(v) {
   const keys = new Set();
   for (const name of String(v).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
     if (name === "all") return null;
-    if (!STATEMENTS[name]) throw Object.assign(new Error(`invalid statement "${name}"; use income, balance, cash or all`), { code: "usage" });
+    if (!STATEMENTS[name]) throw usageError(t(`laporan "${name}" tidak dikenal; pakai income, balance, cash atau all`, `invalid statement "${name}"; use income, balance, cash or all`));
     keys.add(STATEMENTS[name]);
   }
   return keys.size ? keys : null;
 }
 
-function need(pos, n, usage) { if (pos.length < n) throw Object.assign(new Error(`usage: ${usage}`), { code: "usage" }); }
+function need(pos, n, usage) { if (pos.length < n) throw usageLine(usage); }
 
 async function run(line) {
   const toks = tokenize(line);
@@ -869,7 +918,9 @@ async function run(line) {
     const tickerish = toks.every((t) => /^[A-Za-z]{4}(\.JK)?$/i.test(t));
     const listed = known.size > 0 && toks.every((t) => known.has(t.toUpperCase().replace(/\.JK$/, "")));
     if (tickerish && (listed || (!known.size && !near))) return run(`${rawJson ? "json " : ""}quote ${toks.join(",")}`);
-    throw Object.assign(new Error(`unknown command "${toks[0]}"${near ? `; did you mean ${near.name}?` : ""}; type help`), { code: "usage" });
+    throw usageError(t(
+      `perintah "${toks[0]}" tidak dikenal${near ? `; mungkin maksudnya ${near.name}?` : ""}; ketik help`,
+      `unknown command "${toks[0]}"${near ? `; did you mean ${near.name}?` : ""}; type help`));
   }
   const sym = (i = 0) => pos[i];
   let env, render;
@@ -937,11 +988,11 @@ async function run(line) {
     case "list": env = await api(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
     case "members": env = await api(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
     case "tools": {
-      if (!pos[0]) return { local: `${TOOLS.length} MCP tools`, node: R.tools() };
-      const t = byName(pos[0]);
-      if (!t) throw Object.assign(new Error(`no tool "${pos[0]}"; type tools for the list`), { code: "usage" });
-      if (t.web) return run(rawJson ? `json ${t.web}` : t.web);
-      return { local: "CLI and MCP only", node: R.cliOnly(t) };
+      if (!pos[0]) return { local: t(`${TOOLS.length} alat MCP`, `${TOOLS.length} MCP tools`), node: R.tools() };
+      const tool = byName(pos[0]);
+      if (!tool) throw usageError(t(`tidak ada alat "${pos[0]}"; ketik tools untuk daftarnya`, `no tool "${pos[0]}"; type tools for the list`));
+      if (tool.web) return run(rawJson ? `json ${tool.web}` : tool.web);
+      return { local: CLI_ONLY, node: R.cliOnly(tool) };
     }
     case "actions": need(pos, 1, cmd.usage); env = await api(`actions?${qs({ symbol: sym(), since: opt.since })}`); render = R.actions; break;
     case "holidays": {
@@ -977,8 +1028,8 @@ async function run(line) {
         env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
         render = R.graph;
       }
-      else if (sub === "institutions") return { local: "CLI and MCP only", node: R.cliOnly(byName("idx_ownership_institutions")) };
-      else throw Object.assign(new Error(`usage: ${cmd.usage}`), { code: "usage" });
+      else if (sub === "institutions") return { local: CLI_ONLY, node: R.cliOnly(byName("idx_ownership_institutions")) };
+      else throw usageLine(cmd.usage);
       break;
     }
   }
@@ -995,7 +1046,7 @@ const coarse = matchMedia("(pointer: coarse)").matches;
 function entry(cmdLine) {
   const n = ++seq;
   const sec = el("section", { class: "panel result", id: `r${n}`, tabindex: "-1", "aria-labelledby": `r${n}-h` });
-  const meta = el("p", { class: "meta", text: "running" });
+  const meta = el("p", { class: "meta", text: t("berjalan", "running") });
   const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), `idx ${cmdLine}`]), meta]);
   const body = el("div", { class: "body" });
   const mline = el("p", { class: "mline" });
@@ -1014,12 +1065,44 @@ function focusResult(p) {
   p.focus({ preventScroll: true });
 }
 
-/** What a typed line waits on (public/waits.js). */
+// What each command waits on, in Bahasa Indonesia: the same entries as
+// public/waits.js (which keeps the English and the API's limits), by command.
+const FEEDS_SLOW_ID = `umpan Kontan kadang macet; umpan yang diam ${FEED_TIMEOUT_S} detik dilewati dan disebut dalam peringatan`;
+const IPOT_SLOW_ID = `IPOT kadang menjawab 404 sebelum datanya siap; setiap jawaban itu diulang, paling banyak ${IPOT_TRIES} kali`;
+const FEEDS_ID = "umpan berita Kontan dan CNBC Indonesia";
+const IPOT_ID = "ringkasan broker IPOT";
+const WAITS_ID = {
+  quote: { on: "Yahoo Finance" },
+  growth: { on: "Yahoo Finance: fundamental dan laporan tahunan" },
+  risk: { on: "Yahoo Finance: fundamental dan harga harian setahun untuk saham ini dan IHSG" },
+  compare: { on: "Yahoo Finance, satu permintaan per kode" },
+  returns: { on: "Yahoo Finance, satu riwayat per kode dan pembandingnya" },
+  screen: { on: "papan harga, fundamental Yahoo dan daftar pasar MSN", slow: "filter fundamental mengambil setiap saham yang cocok, sampai --max-fundamentals (20); kunci imbal hasil membaca daftar seluruh pasar dari MSN sekali (disimpan 15 menit)" },
+  news: { on: FEEDS_ID, slow: FEEDS_SLOW_ID },
+  sentiment: { on: FEEDS_ID, slow: FEEDS_SLOW_ID },
+  insights: { on: "insight MSN Money dan daftar emiten sejenisnya" },
+  brief: { on: "harga, fundamental, riwayat, dividen, pemegang saham dan berita sekaligus", slow: `${FEEDS_SLOW_ID}; bagian lain ringkasan tetap tampil` },
+  broker: { on: IPOT_ID, slow: IPOT_SLOW_ID },
+  foreign: { on: `${IPOT_ID}, dua per sesi`, slow: IPOT_SLOW_ID },
+  bandar: { on: `${IPOT_ID}, satu per sesi`, slow: IPOT_SLOW_ID },
+  "bandar screen": { on: "pindaian bandar tiap malam" },
+  "bandar broker": { on: "pindaian bandar tiap malam" },
+  actions: { on: "aksi korporasi dari IPOT", slow: IPOT_SLOW_ID },
+  market: { on: "papan harga per menit" },
+  ownership: { on: "daftar pemegang saham KSEI" },
+  astro: { on: "posisi langit yang dihitung API; --backtest juga membaca riwayat ^JKSE dari Yahoo Finance (disimpan 6 jam)" },
+};
+
+/** What a typed line waits on (public/waits.js), in the page's language. */
 function waitsOf(line) {
   const toks = tokenize(line);
   if (toks[0]?.toLowerCase() === "json") toks.shift();
   const name = (toks[0] || "").toLowerCase();
-  return waitFor(ALIASES[name] || name, toks[1]);
+  const w = waitFor(ALIASES[name] || name, toks[1]);
+  if (!ID) return w;
+  const key = Object.keys(WAITS).find((k) => WAITS[k] === w);
+  const id = WAITS_ID[key] || {};
+  return { on: id.on || w.on, slow: id.slow || w.slow };
 }
 
 /**
@@ -1031,14 +1114,16 @@ function pending(e, line) {
   const w = waitsOf(line);
   const t0 = performance.now();
   const clock = el("span", { class: "clock", "aria-hidden": "true" });
-  const status = el("p", { class: "loading", role: "status" }, [el("span", { text: `waiting on ${w.on || "the source"}` }), clock]);
+  const on = w.on || t("sumbernya", "the source");
+  const status = el("p", { class: "loading", role: "status" }, [el("span", { text: t(`menunggu ${on}`, `waiting on ${on}`) }), clock]);
   let slow = false, every = 0;
   const tick = () => {
     const ms = performance.now() - t0;
-    clock.textContent = ` · ${Math.floor(ms / 1000)}s`;
+    const s = Math.floor(ms / 1000);
+    clock.textContent = t(` · ${s} detik`, ` · ${s}s`);
     if (!slow && ms >= SLOW_MS) {
       slow = true;
-      status.append(el("span", { class: "slow", text: ` · ${w.slow || "slower than usual; the source may be busy"}` }));
+      status.append(el("span", { class: "slow", text: ` · ${w.slow || t("lebih lambat dari biasanya; sumbernya mungkin sedang sibuk", "slower than usual; the source may be busy")}` }));
       reveal(e.sec);
     }
   };
@@ -1058,10 +1143,10 @@ function runLine(s) { execute(s); }
 /** One button per MCP tool: a web tool runs its example, an idx.co.id tool shows its CLI command. */
 function toolButtons() {
   const box = el("div", { class: "hints tools" });
-  box.append(...TOOLS.map((t) => el("button", {
-    type: "button", text: t.tool, class: t.web ? "" : "cli-only",
-    title: `${t.what} · ${t.web ? `runs: ${t.web}` : "CLI and MCP only"}`,
-    onclick: () => runLine(t.web || `tools ${t.tool}`),
+  box.append(...TOOLS.map((tool) => el("button", {
+    type: "button", text: tool.tool, class: tool.web ? "" : "cli-only",
+    title: `${tool.what} · ${tool.web ? t(`menjalankan: ${tool.web}`, `runs: ${tool.web}`) : CLI_ONLY}`,
+    onclick: () => runLine(tool.web || `tools ${tool.tool}`),
   })));
   return box;
 }
@@ -1069,51 +1154,68 @@ function toolButtons() {
 function renderHelp(which) {
   const frag = document.createDocumentFragment();
   const list = which ? COMMANDS.filter((c) => c.name === (ALIASES[which] || which)) : COMMANDS;
-  if (!list.length) frag.append(el("p", { class: "err", text: `no command "${which}"` }));
-  frag.append(wrapScroll(table([{ h: "Command", k: "usage", l: true, cls: "sym" }, { h: "What it does", k: "help", l: true }], list.map((c) => ({ usage: c.usage, help: c.help })))));
-  frag.append(el("p", { class: "warn", text: "Aliases: q h f t n s c d r b own. Prefix any command with json for the raw envelope. Symbols accept BBCA or BBCA.JK; several symbols are comma or space separated. A bare ticker runs quote." }));
+  if (!list.length) frag.append(el("p", { class: "err", text: t(`tidak ada perintah "${which}"`, `no command "${which}"`) }));
+  const usage = table([{ h: t("Perintah", "Command"), k: "usage", l: true, cls: "use" }, { h: t("Kegunaan", "What it does"), k: "help", l: true, cls: "help" }], list.map((c) => ({ usage: c.usage, help: helpOf(c) })));
+  usage.classList.add("tbl-help");
+  frag.append(wrapScroll(usage));
+  frag.append(el("p", { class: "warn", text: t(
+    "Alias: q h f t n s c d r b own. Awali perintah apa pun dengan json untuk melihat amplop JSON mentahnya. Kode saham boleh BBCA atau BBCA.JK; beberapa kode dipisah koma atau spasi. Kode saham saja menjalankan quote. Nama kolom hasil memakai istilah bahasa Inggris CLI.",
+    "Aliases: q h f t n s c d r b own. Prefix any command with json for the raw envelope. Symbols accept BBCA or BBCA.JK; several symbols are comma or space separated. A bare ticker runs quote.") }));
   if (!which) {
-    frag.append(el("h3", { class: "stmt-title", text: `MCP tools · ${TOOLS.length} · click to run (dashed: CLI and MCP only)` }));
+    frag.append(el("h3", { class: "stmt-title", text: t(`Alat MCP · ${TOOLS.length} · klik untuk menjalankan (garis putus-putus: hanya CLI dan MCP)`, `MCP tools · ${TOOLS.length} · click to run (dashed: CLI and MCP only)`) }));
     frag.append(toolButtons());
   }
   return frag;
 }
 
-const local = (e, what) => machineLine(e.mline, ["local", what], "Answered in the browser, no request.");
+const local = (e, what) => machineLine(e.mline, ["local", what], t("Dijawab di peramban, tanpa permintaan.", "Answered in the browser, no request."));
+
+/** The language switch follows the newest command, so the other language opens on the same line. */
+function syncLang() {
+  const a = document.querySelector(".lang a[hreflang]");
+  if (a) a.setAttribute("href", `${otherPath()}${location.search}`);
+}
 
 async function execute(line, { push = "push" } = {}) {
   const e = entry(line);
   input.value = "";
   remember(line);
-  const url = `/terminal?cmd=${encodeURIComponent(line)}#r${e.n}`;
+  const url = `${here("/terminal")}?cmd=${encodeURIComponent(line)}#r${e.n}`;
   if (push === "push") history.pushState({ n: e.n }, "", url);
   else if (push === "replace") history.replaceState({ n: e.n }, "", url);
+  syncLang();
   const stop = pending(e, line);
-  const took = (ms) => (ms >= 1000 ? ` · took ${(ms / 1000).toFixed(1)}s` : "");
+  const took = (ms) => (ms < 1000 ? "" : t(` · butuh ${fmt.num(ms / 1000, 1)} detik`, ` · took ${(ms / 1000).toFixed(1)}s`));
   try {
     const r = await run(line);
     const ms = stop();
     if (!r) { e.sec.remove(); return; }
     if (r.clear) { out.replaceChildren(); return; }
-    if ("help" in r) { e.meta.textContent = "local · no request"; e.body.append(renderHelp(r.help)); local(e, "help"); }
+    if ("help" in r) { e.meta.textContent = t("lokal · tanpa permintaan", "local · no request"); e.body.append(renderHelp(r.help)); local(e, "help"); }
     else if (r.local) { e.meta.textContent = r.local; e.body.append(r.node); local(e, r.local); }
     else {
       const env = r.env;
-      e.meta.textContent = `${env.provider} · ${env.cached ? "cached" : "live"}${env.stale ? " · stale" : ""} · fetched ${fmt.wib(env.fetched_at.replace("Z", "+00:00")).replace(" WIB", " UTC")}${took(ms)}`;
+      const how = env.cached ? t("dari cache", "cached") : t("langsung", "live");
+      const fetched = fmt.when(env.fetched_at);
+      e.meta.textContent = `${env.provider} · ${how}${env.stale ? t(" · kedaluwarsa", " · stale") : ""} · ${t("diambil", "fetched")} ${fetched}${took(ms)}`;
       e.meta.classList.toggle("stale", !!env.stale);
       for (const w of env.warnings || []) e.body.append(el("p", { class: "warn", text: w }));
       e.body.append(r.render(env.data, env));
-      machineLine(e.mline, [env.schema, env.provider, env.cached ? "cached" : "live", env.stale ? "stale" : null, env.fetched_at],
-        `Schema ${env.schema}, provider ${env.provider}, ${env.cached ? "cached" : "live"}${env.stale ? ", stale" : ""}, fetched ${env.fetched_at}.`);
+      machineLine(e.mline, [env.schema, env.provider, env.cached ? "cached" : "live", env.stale ? "stale" : null, env.fetched_at], t(
+        `Skema ${env.schema}, penyedia ${env.provider}, ${how}${env.stale ? ", kedaluwarsa" : ""}, diambil ${env.fetched_at}.`,
+        `Schema ${env.schema}, provider ${env.provider}, ${how}${env.stale ? ", stale" : ""}, fetched ${env.fetched_at}.`));
     }
   } catch (err) {
     const ms = stop();
     const exit = err.exit ?? (err.code === "usage" ? 2 : 3);
-    e.meta.textContent = `${err.code ? `error · ${err.code}` : "error"}${took(ms)}`;
+    const failed = t("gagal", "error");
+    e.meta.textContent = `${err.code ? `${failed} · ${err.code}` : failed}${took(ms)}`;
     e.meta.classList.add("err");
     e.body.append(el("p", { class: "err", text: err.message }));
-    if (err.code === "usage") e.body.append(el("p", { class: "warn", text: "Type help for the command list." }));
-    machineLine(e.mline, ["error", err.code || "provider", `exit ${exit}`], `Error ${err.code || "provider"}, exit code ${exit}.`);
+    if (err.code === "usage") e.body.append(el("p", { class: "warn", text: t("Ketik help untuk daftar perintah.", "Type help for the command list.") }));
+    machineLine(e.mline, ["error", err.code || "provider", `exit ${exit}`], t(
+      `Gagal: ${err.code || "provider"}, kode keluar ${exit}.`,
+      `Error ${err.code || "provider"}, exit code ${exit}.`));
   }
   reveal(e.sec);
   if (!coarse) input.focus();
@@ -1137,7 +1239,7 @@ function remember(line) {
 function paintHistory() {
   const recent = [...hist].reverse().slice(0, 20);
   document.getElementById("rail-hist").replaceChildren(...recent.map((l, i) => el("li", {}, [
-    el("button", { type: "button", title: `Run again: ${l}`, onclick: () => runLine(l) }, [el("span", { class: "d", text: String(i + 1).padStart(2, "0") }), el("span", { class: "c", text: l })]),
+    el("button", { type: "button", title: t(`Jalankan lagi: ${l}`, `Run again: ${l}`), onclick: () => runLine(l) }, [el("span", { class: "d", text: String(i + 1).padStart(2, "0") }), el("span", { class: "c", text: l })]),
   ])));
   document.getElementById("rail-empty").hidden = recent.length > 0;
 }
@@ -1171,12 +1273,24 @@ const RAIL = {
   members: "broker codes", tools: "MCP tools", ownership: "KSEI holders", json: "raw JSON envelope",
   help: "every command", clear: "clear the sheet",
 };
+const RAIL_ID = {
+  quote: "harga dan grafik", history: "candle OHLCV", intraday: "bar per menit", profile: "profil perusahaan", financials: "laporan keuangan",
+  earnings: "EPS vs perkiraan", fundamental: "rasio, kesimpulan", growth: "lensa pertumbuhan", valuation: "lensa valuasi",
+  risk: "risiko vs IHSG", technical: "indikator, sinyal", compare: "berdampingan", insights: "insight MSN",
+  foreign: "aliran asing", astro: "astrologi IHSG",
+  screen: "saring pasar", news: "berita", dividends: "dividen, imbal hasil", returns: "imbal hasil vs IHSG",
+  brief: "ringkasan saham", sentiment: "suasana berita", broker: "broker teratas", bandar: "bandarmologi",
+  actions: "aksi korporasi", market: "IHSG dan penggerak", holidays: "libur bursa", list: "saham tercatat",
+  members: "kode broker", tools: "alat MCP", ownership: "pemegang KSEI", json: "amplop JSON mentah",
+  help: "semua perintah", clear: "bersihkan lembar",
+};
+const railOf = (c) => (ID ? RAIL_ID : RAIL)[c.name] || helpOf(c);
 document.getElementById("rail-cmds").append(...COMMANDS.map((c) => el("li", {}, [
-  el("button", { type: "button", title: `${c.usage}: ${c.help}`, onclick: () => pick(c) }, [el("span", { class: "c", text: c.name }), el("span", { class: "d", text: RAIL[c.name] || c.help })]),
+  el("button", { type: "button", title: `${c.usage}: ${helpOf(c)}`, onclick: () => pick(c) }, [el("span", { class: "c", text: c.name }), el("span", { class: "d", text: railOf(c) })]),
 ])));
 paintHistory();
 
-const GATE = COMMANDS.map((c) => ({ name: c.name, help: c.help, value: takesArgs(c.usage) ? `${c.name} ` : c.name, run: !takesArgs(c.usage), symbols: /SYMBOL/.test(c.usage) }));
+const GATE = COMMANDS.map((c) => ({ name: c.name, help: helpOf(c), value: takesArgs(c.usage) ? `${c.name} ` : c.name, run: !takesArgs(c.usage), symbols: /SYMBOL/.test(c.usage) }));
 let tickers = [];
 mountGate({
   form, input, list: document.getElementById("gate-list"), status: document.getElementById("gate-status"),
@@ -1204,15 +1318,16 @@ hotkeys({
   digit: (n) => focusResult(document.getElementById(`r${n}`)),
 });
 
-// Links to /terminal?cmd= inside results (tickers, tool commands) run here, in place.
+// Links to /terminal?cmd= (or /en/terminal?cmd=) inside results (tickers, tool commands) run here, in place.
 out.addEventListener("click", (ev) => {
-  const a = ev.target.closest?.('a[href^="/terminal?cmd="]');
+  const a = ev.target.closest?.(`a[href^="${here("/terminal")}?cmd="]`);
   if (!a || ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
   ev.preventDefault();
   runLine(new URL(a.href).searchParams.get("cmd"));
 });
 
 addEventListener("popstate", (ev) => {
+  syncLang();
   const p = ev.state?.n ? document.getElementById(`r${ev.state.n}`) : null;
   if (p) return focusResult(p);
   const cmd = new URLSearchParams(location.search).get("cmd");
@@ -1224,14 +1339,35 @@ addEventListener("popstate", (ev) => {
 
 let holidays = new Map();
 // The IDX holiday calendar, read once; the market panel waits for it so a holiday never reads as a session.
+// Each holiday carries the name the exchange gives it in the page's language.
 const calendar = api("holidays?all=1&upcoming=1")
-  .then((h) => { holidays = new Map(h.data.holidays.map((x) => [x.date, x.name_en || x.name])); })
+  .then((h) => { holidays = new Map(h.data.holidays.map((x) => [x.date, ID ? x.name || x.name_en : x.name_en || x.name])); })
   .catch(() => {});
+
+/** Where the session stands, in the page's words (clock.js names the phases in English; i18n.js in both). */
+function phaseWords(s) {
+  if (s.phase) return PHASES[s.phase.id] || s.phase.name;
+  if (s.holiday) return t(`Tutup, ${s.holiday}`, `Closed, ${s.holiday}`);
+  return s.tradingDay ? t("Tutup", "Closed") : t("Tutup, akhir pekan", "Closed, weekend");
+}
 
 /** The market panel's state words, from the session classification the monitor's band uses. */
 function boardWords(m) {
-  const b = boardState(new Date(m.refreshed_at), m.as_of ? new Date(m.as_of) : null, holidays);
-  return b.lastTrade ? `${b.state} · ${b.lastTrade}` : b.state;
+  const last = m.as_of ? new Date(m.as_of) : null;
+  const b = boardState(new Date(m.refreshed_at), last, holidays);
+  if (!b.lastTrade) return phaseWords(b.session);
+  const w = wib(last);
+  return `${phaseWords(b.session)} · ${t(`transaksi terakhir ${DAYS_SHORT[w.dow]} ${w.iso}`, b.lastTrade)}`;
+}
+
+const LAMP = { live: t("Langsung", "Live"), closed: t("Bursa tutup", "Closed"), stale: t("Tertunda", "Stale"), offline: t("Terputus", "Offline") };
+
+/** What follows the count: the phase while a session runs, otherwise only why the exchange is shut,
+ *  since the lamp already says it is (nothing after hours on a trading day). */
+function trailWords(s) {
+  if (s.open) return phaseWords(s);
+  if (s.holiday) return s.holiday;
+  return s.tradingDay ? "" : t("akhir pekan", "weekend");
 }
 
 /** The status bar: the lamp and the snapshot's age, read with the board once a minute; a phone keeps just those. */
@@ -1241,13 +1377,13 @@ async function board() {
     const at = new Date(m.data.refreshed_at);
     const s = session(new Date(), holidays);
     const age = Math.max(0, (Date.now() - at) / 1000);
-    if (!s.open) lamp("closed", "Closed");
-    else if (age > 180) lamp("stale", "Stale");
-    else lamp("live", "Live");
-    document.getElementById("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(at).secs)} WIB` }), ` · ${Math.floor(age / 60)} min ago`,
-      el("span", { class: "st-next", text: ` · ${fmt.int(m.data.quoted)} quoted · ${stateName(s)}` }));
+    const kind = !s.open ? "closed" : age > 180 ? "stale" : "live";
+    lamp(kind, LAMP[kind]);
+    const trail = trailWords(s);
+    document.getElementById("st-age").replaceChildren(t("Papan ", "Snapshot "), el("b", { text: `${hhmm(wib(at).secs).replace(":", TIME_SEP)} WIB` }), t(` · ${fmt.ago(age)} lalu`, ` · ${fmt.ago(age)} ago`),
+      el("span", { class: "st-next", text: t(` · ${fmt.int(m.data.quoted)} saham`, ` · ${fmt.int(m.data.quoted)} quoted`) + (trail ? ` · ${trail}` : "") }));
   } catch {
-    lamp("offline", "Offline");
+    lamp("offline", LAMP.offline);
   }
   setTimeout(board, 60_000);
 }

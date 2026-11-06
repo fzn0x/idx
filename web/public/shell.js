@@ -2,6 +2,7 @@
 // hotkeys, the keys dialog, the pause switch for everything that moves, and
 // the status bar's state lamp.
 import { api } from "/app.js";
+import { t } from "/i18n.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -16,8 +17,9 @@ export async function starCount() {
     if (!Number.isInteger(data?.stars)) return;
     n.textContent = compactCount(data.stars);
     n.hidden = false;
-    link.setAttribute("aria-label", `Star fzn0x/idx on GitHub, ${data.stars} stars`);
-    link.title = `${data.stars} stars${Number.isInteger(data.forks) ? `, ${data.forks} forks` : ""} on GitHub`;
+    link.setAttribute("aria-label", t(`Beri bintang fzn0x/idx di GitHub, ${data.stars} bintang`, `Star fzn0x/idx on GitHub, ${data.stars} stars`));
+    const forks = Number.isInteger(data.forks) ? t(`, ${data.forks} fork`, `, ${data.forks} forks`) : "";
+    link.title = t(`${data.stars} bintang${forks} di GitHub`, `${data.stars} stars${forks} on GitHub`);
   } catch {
     // The count is a courtesy; the link works without it.
   }
@@ -53,11 +55,18 @@ const pauseFns = new Set();
 export const isPaused = () => paused;
 export const onPause = (fn) => pauseFns.add(fn);
 
-/** Stops (or restarts) the minute refresh, the clocks and the flips; the switch is the status bar's Pause button and P. */
+/**
+ * Stops (or restarts) the minute refresh, the clocks and the highlights; the switch is the
+ * page's pause button and P. The button keeps its own words in data-pause and data-resume.
+ */
 export function togglePause(force) {
   paused = force ?? !paused;
   const b = $("pause");
-  if (b) { b.setAttribute("aria-pressed", String(paused)); b.textContent = paused ? "Resume" : "Pause"; }
+  if (b) {
+    b.dataset.pause ??= b.textContent;
+    b.setAttribute("aria-pressed", String(paused));
+    b.textContent = paused ? (b.dataset.resume || t("Lanjutkan", "Resume")) : b.dataset.pause;
+  }
   for (const fn of pauseFns) fn(paused);
 }
 

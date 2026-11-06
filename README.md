@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
-    <img src="assets/logo.svg" alt="IHSG: Indonesian market data for people and agents" width="480">
+    <img src="assets/logo.svg" alt="IDX: Indonesian market data for people and agents" width="480">
   </picture>
 </p>
 
@@ -14,13 +14,13 @@
 <p align="center">
   <a href="https://github.com/fzn0x/idx/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fzn0x/idx/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-16a34a.svg"></a>
-  <a href="https://ihsg.midoriresearch.com"><img alt="Web terminal" src="https://img.shields.io/badge/web-ihsg.midoriresearch.com-0b0f14.svg"></a>
+  <a href="https://ihsg.midoriresearch.com"><img alt="Web terminal" src="https://img.shields.io/badge/web-ihsg.midoriresearch.com-123a64.svg"></a>
 </p>
 
 ---
 
 <p align="center">
-  <a href="https://ihsg.midoriresearch.com"><img src="docs/screenshots/landing.png" alt="ihsg.midoriresearch.com: the live board, published every minute" width="100%"></a>
+  <a href="https://ihsg.midoriresearch.com"><img src="docs/screenshots/landing.png" alt="ihsg.midoriresearch.com: IHSG with the day's chart, stocks up and down, and a stock search, in Bahasa Indonesia and English" width="100%"></a>
 </p>
 
 ```sh
@@ -382,7 +382,12 @@ advice and not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.
 
 ## Web terminal
 
-**https://ihsg.midoriresearch.com/terminal** runs the same commands in a
+**https://ihsg.midoriresearch.com** is the market page: IHSG and its session,
+breadth, the heavyweights and the most active stocks, refreshed every minute, with
+a stock search. It speaks Bahasa Indonesia at `/` and English at `/en/`, with the
+numbers in each language's style, and follows the device's light or dark setting.
+
+**https://ihsg.midoriresearch.com/terminal** (English: `/en/terminal`) runs the same commands in a
 browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `intraday BBCA`, `returns BBCA BBRI`,
 `screen pe<10,div>5,mcap>5T --sort div`, `screen --preset top-performers`,
 `insights BBCA`, `news ASII`, `ownership ticker BBCA`,

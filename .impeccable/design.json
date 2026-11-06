@@ -1,458 +1,992 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-06T00:00:00Z",
+  "generatedAt": "2026-11-06T13:36:40Z",
   "title": "Design System: idx web surface",
   "extensions": {
     "colorMeta": {
-      "ground": {
+      "paper": {
         "role": "neutral",
-        "displayName": "Black Glass",
-        "canonical": "#0b0f14",
+        "displayName": "Newsprint",
+        "canonical": "#f3f4f1",
         "tonalRamp": [
-          "oklch(15% 0.012 250)",
-          "oklch(25% 0.012 250)",
-          "oklch(36% 0.012 250)",
-          "oklch(47% 0.012 250)",
-          "oklch(58% 0.012 250)",
-          "oklch(69% 0.012 250)",
-          "oklch(82% 0.012 250)",
-          "oklch(95% 0.012 250)"
+          "oklch(15% 0.004 122)",
+          "oklch(25% 0.004 122)",
+          "oklch(36% 0.004 122)",
+          "oklch(47% 0.004 122)",
+          "oklch(58% 0.004 122)",
+          "oklch(69% 0.004 122)",
+          "oklch(82% 0.004 122)",
+          "oklch(95% 0.004 122)"
+        ]
+      },
+      "sheet": {
+        "role": "neutral",
+        "displayName": "Sheet",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(25% 0 0)",
+          "oklch(36% 0 0)",
+          "oklch(47% 0 0)",
+          "oklch(58% 0 0)",
+          "oklch(69% 0 0)",
+          "oklch(82% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "band": {
+        "role": "neutral",
+        "displayName": "Band",
+        "canonical": "#e8ebe6",
+        "tonalRamp": [
+          "oklch(15% 0.007 132)",
+          "oklch(25% 0.007 132)",
+          "oklch(36% 0.007 132)",
+          "oklch(47% 0.007 132)",
+          "oklch(58% 0.007 132)",
+          "oklch(69% 0.007 132)",
+          "oklch(82% 0.007 132)",
+          "oklch(95% 0.007 132)"
         ]
       },
       "rule": {
         "role": "neutral",
         "displayName": "Hairline",
-        "canonical": "#1b242d",
+        "canonical": "#cfd4cd",
         "tonalRamp": [
-          "oklch(15% 0.017 245)",
-          "oklch(25% 0.017 245)",
-          "oklch(36% 0.017 245)",
-          "oklch(47% 0.017 245)",
-          "oklch(58% 0.017 245)",
-          "oklch(69% 0.017 245)",
-          "oklch(82% 0.017 245)",
-          "oklch(95% 0.017 245)"
-        ]
-      },
-      "ghost": {
-        "role": "neutral",
-        "displayName": "Ghost Dot",
-        "canonical": "#17202a",
-        "tonalRamp": [
-          "oklch(15% 0.02 250)",
-          "oklch(25% 0.02 250)",
-          "oklch(36% 0.02 250)",
-          "oklch(47% 0.02 250)",
-          "oklch(58% 0.02 250)",
-          "oklch(69% 0.02 250)",
-          "oklch(82% 0.02 250)",
-          "oklch(95% 0.02 250)"
-        ]
-      },
-      "raise": {
-        "role": "neutral",
-        "displayName": "Raised Row",
-        "canonical": "#121a22",
-        "tonalRamp": [
-          "oklch(15% 0.018 250)",
-          "oklch(25% 0.018 250)",
-          "oklch(36% 0.018 250)",
-          "oklch(47% 0.018 250)",
-          "oklch(58% 0.018 250)",
-          "oklch(69% 0.018 250)",
-          "oklch(82% 0.018 250)",
-          "oklch(95% 0.018 250)"
-        ]
-      },
-      "fill": {
-        "role": "neutral",
-        "displayName": "Filler",
-        "canonical": "#34404c",
-        "tonalRamp": [
-          "oklch(15% 0.025 245)",
-          "oklch(25% 0.025 245)",
-          "oklch(36% 0.025 245)",
-          "oklch(47% 0.025 245)",
-          "oklch(58% 0.025 245)",
-          "oklch(69% 0.025 245)",
-          "oklch(82% 0.025 245)",
-          "oklch(95% 0.025 245)"
+          "oklch(15% 0.011 137)",
+          "oklch(25% 0.011 137)",
+          "oklch(36% 0.011 137)",
+          "oklch(47% 0.011 137)",
+          "oklch(58% 0.011 137)",
+          "oklch(69% 0.011 137)",
+          "oklch(82% 0.011 137)",
+          "oklch(95% 0.011 137)"
         ]
       },
       "edge": {
         "role": "neutral",
         "displayName": "Control Edge",
-        "canonical": "#56636f",
+        "canonical": "#7b847c",
         "tonalRamp": [
-          "oklch(15% 0.024 240)",
-          "oklch(25% 0.024 240)",
-          "oklch(36% 0.024 240)",
-          "oklch(47% 0.024 240)",
-          "oklch(58% 0.024 240)",
-          "oklch(69% 0.024 240)",
-          "oklch(82% 0.024 240)",
-          "oklch(95% 0.024 240)"
+          "oklch(15% 0.016 149)",
+          "oklch(25% 0.016 149)",
+          "oklch(36% 0.016 149)",
+          "oklch(47% 0.016 149)",
+          "oklch(58% 0.016 149)",
+          "oklch(69% 0.016 149)",
+          "oklch(82% 0.016 149)",
+          "oklch(95% 0.016 149)"
         ]
       },
-      "dim": {
+      "ink": {
         "role": "neutral",
-        "displayName": "Dim",
-        "canonical": "#8b98a5",
+        "displayName": "Ink",
+        "canonical": "#15191e",
         "tonalRamp": [
-          "oklch(15% 0.022 245)",
-          "oklch(25% 0.022 245)",
-          "oklch(36% 0.022 245)",
-          "oklch(47% 0.022 245)",
-          "oklch(58% 0.022 245)",
-          "oklch(69% 0.022 245)",
-          "oklch(82% 0.022 245)",
-          "oklch(95% 0.022 245)"
+          "oklch(15% 0.012 254)",
+          "oklch(25% 0.012 254)",
+          "oklch(36% 0.012 254)",
+          "oklch(47% 0.012 254)",
+          "oklch(58% 0.012 254)",
+          "oklch(69% 0.012 254)",
+          "oklch(82% 0.012 254)",
+          "oklch(95% 0.012 254)"
         ]
       },
-      "lit": {
+      "ink-2": {
         "role": "neutral",
-        "displayName": "Lit",
-        "canonical": "#e6edf3",
+        "displayName": "Ink Secondary",
+        "canonical": "#454e58",
         "tonalRamp": [
-          "oklch(15% 0.008 240)",
-          "oklch(25% 0.008 240)",
-          "oklch(36% 0.008 240)",
-          "oklch(47% 0.008 240)",
-          "oklch(58% 0.008 240)",
-          "oklch(69% 0.008 240)",
-          "oklch(82% 0.008 240)",
-          "oklch(95% 0.008 240)"
+          "oklch(15% 0.02 251)",
+          "oklch(25% 0.02 251)",
+          "oklch(36% 0.02 251)",
+          "oklch(47% 0.02 251)",
+          "oklch(58% 0.02 251)",
+          "oklch(69% 0.02 251)",
+          "oklch(82% 0.02 251)",
+          "oklch(95% 0.02 251)"
         ]
       },
-      "mint": {
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink Tertiary",
+        "canonical": "#5a636e",
+        "tonalRamp": [
+          "oklch(15% 0.021 253)",
+          "oklch(25% 0.021 253)",
+          "oklch(36% 0.021 253)",
+          "oklch(47% 0.021 253)",
+          "oklch(58% 0.021 253)",
+          "oklch(69% 0.021 253)",
+          "oklch(82% 0.021 253)",
+          "oklch(95% 0.021 253)"
+        ]
+      },
+      "navy": {
         "role": "primary",
-        "displayName": "idx Mint",
-        "canonical": "#4ade80",
+        "displayName": "Masthead Navy",
+        "canonical": "#123a64",
         "tonalRamp": [
-          "oklch(15% 0.18 151)",
-          "oklch(25% 0.18 151)",
-          "oklch(36% 0.18 151)",
-          "oklch(47% 0.18 151)",
-          "oklch(58% 0.18 151)",
-          "oklch(69% 0.18 151)",
-          "oklch(82% 0.18 151)",
-          "oklch(95% 0.18 151)"
+          "oklch(15% 0.086 253)",
+          "oklch(25% 0.086 253)",
+          "oklch(36% 0.086 253)",
+          "oklch(47% 0.086 253)",
+          "oklch(58% 0.086 253)",
+          "oklch(69% 0.086 253)",
+          "oklch(82% 0.086 253)",
+          "oklch(95% 0.086 253)"
         ]
       },
-      "rose": {
+      "navy-2": {
+        "role": "primary",
+        "displayName": "Deep Navy",
+        "canonical": "#0b2a4b",
+        "tonalRamp": [
+          "oklch(15% 0.071 253)",
+          "oklch(25% 0.071 253)",
+          "oklch(36% 0.071 253)",
+          "oklch(47% 0.071 253)",
+          "oklch(58% 0.071 253)",
+          "oklch(69% 0.071 253)",
+          "oklch(82% 0.071 253)",
+          "oklch(95% 0.071 253)"
+        ]
+      },
+      "navy-soft": {
+        "role": "primary",
+        "displayName": "Selection Navy",
+        "canonical": "#e1e8f1",
+        "tonalRamp": [
+          "oklch(15% 0.014 255)",
+          "oklch(25% 0.014 255)",
+          "oklch(36% 0.014 255)",
+          "oklch(47% 0.014 255)",
+          "oklch(58% 0.014 255)",
+          "oklch(69% 0.014 255)",
+          "oklch(82% 0.014 255)",
+          "oklch(95% 0.014 255)"
+        ]
+      },
+      "on-navy": {
+        "role": "neutral",
+        "displayName": "On Navy",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(25% 0 0)",
+          "oklch(36% 0 0)",
+          "oklch(47% 0 0)",
+          "oklch(58% 0 0)",
+          "oklch(69% 0 0)",
+          "oklch(82% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "on-navy-2": {
+        "role": "neutral",
+        "displayName": "On Navy Secondary",
+        "canonical": "#c9d6e6",
+        "tonalRamp": [
+          "oklch(15% 0.026 254)",
+          "oklch(25% 0.026 254)",
+          "oklch(36% 0.026 254)",
+          "oklch(47% 0.026 254)",
+          "oklch(58% 0.026 254)",
+          "oklch(69% 0.026 254)",
+          "oklch(82% 0.026 254)",
+          "oklch(95% 0.026 254)"
+        ]
+      },
+      "on-navy-late": {
+        "role": "tertiary",
+        "displayName": "Late on Navy",
+        "canonical": "#ffd48a",
+        "tonalRamp": [
+          "oklch(15% 0.104 80)",
+          "oklch(25% 0.104 80)",
+          "oklch(36% 0.104 80)",
+          "oklch(47% 0.104 80)",
+          "oklch(58% 0.104 80)",
+          "oklch(69% 0.104 80)",
+          "oklch(82% 0.104 80)",
+          "oklch(95% 0.104 80)"
+        ]
+      },
+      "on-navy-down": {
         "role": "secondary",
-        "displayName": "Signal Rose",
-        "canonical": "#f43f5e",
+        "displayName": "Error on Navy",
+        "canonical": "#ffb4ab",
         "tonalRamp": [
-          "oklch(15% 0.2 16)",
-          "oklch(25% 0.2 16)",
-          "oklch(36% 0.2 16)",
-          "oklch(47% 0.2 16)",
-          "oklch(58% 0.2 16)",
-          "oklch(69% 0.2 16)",
-          "oklch(82% 0.2 16)",
-          "oklch(95% 0.2 16)"
+          "oklch(15% 0.089 27)",
+          "oklch(25% 0.089 27)",
+          "oklch(36% 0.089 27)",
+          "oklch(47% 0.089 27)",
+          "oklch(58% 0.089 27)",
+          "oklch(69% 0.089 27)",
+          "oklch(82% 0.089 27)",
+          "oklch(95% 0.089 27)"
         ]
       },
-      "amber": {
+      "on-navy-focus": {
+        "role": "neutral",
+        "displayName": "Focus on Navy",
+        "canonical": "#ffc94d",
+        "tonalRamp": [
+          "oklch(15% 0.149 85)",
+          "oklch(25% 0.149 85)",
+          "oklch(36% 0.149 85)",
+          "oklch(47% 0.149 85)",
+          "oklch(58% 0.149 85)",
+          "oklch(69% 0.149 85)",
+          "oklch(82% 0.149 85)",
+          "oklch(95% 0.149 85)"
+        ]
+      },
+      "link": {
+        "role": "neutral",
+        "displayName": "Link Blue",
+        "canonical": "#0d4c8c",
+        "tonalRamp": [
+          "oklch(15% 0.122 254)",
+          "oklch(25% 0.122 254)",
+          "oklch(36% 0.122 254)",
+          "oklch(47% 0.122 254)",
+          "oklch(58% 0.122 254)",
+          "oklch(69% 0.122 254)",
+          "oklch(82% 0.122 254)",
+          "oklch(95% 0.122 254)"
+        ]
+      },
+      "up": {
+        "role": "secondary",
+        "displayName": "Gain Green",
+        "canonical": "#11743a",
+        "tonalRamp": [
+          "oklch(15% 0.125 151)",
+          "oklch(25% 0.125 151)",
+          "oklch(36% 0.125 151)",
+          "oklch(47% 0.125 151)",
+          "oklch(58% 0.125 151)",
+          "oklch(69% 0.125 151)",
+          "oklch(82% 0.125 151)",
+          "oklch(95% 0.125 151)"
+        ]
+      },
+      "up-bg": {
+        "role": "secondary",
+        "displayName": "Gain Tint",
+        "canonical": "#e2f1e7",
+        "tonalRamp": [
+          "oklch(15% 0.021 157)",
+          "oklch(25% 0.021 157)",
+          "oklch(36% 0.021 157)",
+          "oklch(47% 0.021 157)",
+          "oklch(58% 0.021 157)",
+          "oklch(69% 0.021 157)",
+          "oklch(82% 0.021 157)",
+          "oklch(95% 0.021 157)"
+        ]
+      },
+      "down": {
+        "role": "secondary",
+        "displayName": "Loss Red",
+        "canonical": "#b42318",
+        "tonalRamp": [
+          "oklch(15% 0.182 30)",
+          "oklch(25% 0.182 30)",
+          "oklch(36% 0.182 30)",
+          "oklch(47% 0.182 30)",
+          "oklch(58% 0.182 30)",
+          "oklch(69% 0.182 30)",
+          "oklch(82% 0.182 30)",
+          "oklch(95% 0.182 30)"
+        ]
+      },
+      "down-bg": {
+        "role": "secondary",
+        "displayName": "Loss Tint",
+        "canonical": "#fbe6e3",
+        "tonalRamp": [
+          "oklch(15% 0.023 27)",
+          "oklch(25% 0.023 27)",
+          "oklch(36% 0.023 27)",
+          "oklch(47% 0.023 27)",
+          "oklch(58% 0.023 27)",
+          "oklch(69% 0.023 27)",
+          "oklch(82% 0.023 27)",
+          "oklch(95% 0.023 27)"
+        ]
+      },
+      "flat": {
+        "role": "secondary",
+        "displayName": "Flat",
+        "canonical": "#454e58",
+        "tonalRamp": [
+          "oklch(15% 0.02 251)",
+          "oklch(25% 0.02 251)",
+          "oklch(36% 0.02 251)",
+          "oklch(47% 0.02 251)",
+          "oklch(58% 0.02 251)",
+          "oklch(69% 0.02 251)",
+          "oklch(82% 0.02 251)",
+          "oklch(95% 0.02 251)"
+        ]
+      },
+      "late": {
         "role": "tertiary",
         "displayName": "Late Amber",
-        "canonical": "#e3b341",
+        "canonical": "#8a5300",
         "tonalRamp": [
-          "oklch(15% 0.14 85)",
-          "oklch(25% 0.14 85)",
-          "oklch(36% 0.14 85)",
-          "oklch(47% 0.14 85)",
-          "oklch(58% 0.14 85)",
-          "oklch(69% 0.14 85)",
-          "oklch(82% 0.14 85)",
-          "oklch(95% 0.14 85)"
+          "oklch(15% 0.109 67)",
+          "oklch(25% 0.109 67)",
+          "oklch(36% 0.109 67)",
+          "oklch(47% 0.109 67)",
+          "oklch(58% 0.109 67)",
+          "oklch(69% 0.109 67)",
+          "oklch(82% 0.109 67)",
+          "oklch(95% 0.109 67)"
+        ]
+      },
+      "late-bg": {
+        "role": "tertiary",
+        "displayName": "Late Tint",
+        "canonical": "#fbefd6",
+        "tonalRamp": [
+          "oklch(15% 0.035 85)",
+          "oklch(25% 0.035 85)",
+          "oklch(36% 0.035 85)",
+          "oklch(47% 0.035 85)",
+          "oklch(58% 0.035 85)",
+          "oklch(69% 0.035 85)",
+          "oklch(82% 0.035 85)",
+          "oklch(95% 0.035 85)"
+        ]
+      },
+      "hl": {
+        "role": "tertiary",
+        "displayName": "Fresh Ink",
+        "canonical": "#ffe680",
+        "tonalRamp": [
+          "oklch(15% 0.125 96)",
+          "oklch(25% 0.125 96)",
+          "oklch(36% 0.125 96)",
+          "oklch(47% 0.125 96)",
+          "oklch(58% 0.125 96)",
+          "oklch(69% 0.125 96)",
+          "oklch(82% 0.125 96)",
+          "oklch(95% 0.125 96)"
+        ]
+      },
+      "focus": {
+        "role": "neutral",
+        "displayName": "Focus Blue",
+        "canonical": "#1b5fd1",
+        "tonalRamp": [
+          "oklch(15% 0.189 260)",
+          "oklch(25% 0.189 260)",
+          "oklch(36% 0.189 260)",
+          "oklch(47% 0.189 260)",
+          "oklch(58% 0.189 260)",
+          "oklch(69% 0.189 260)",
+          "oklch(82% 0.189 260)",
+          "oklch(95% 0.189 260)"
+        ]
+      },
+      "paper-night": {
+        "role": "neutral",
+        "displayName": "Newsprint (night)",
+        "canonical": "#0f151c",
+        "tonalRamp": [
+          "oklch(15% 0.017 253)",
+          "oklch(25% 0.017 253)",
+          "oklch(36% 0.017 253)",
+          "oklch(47% 0.017 253)",
+          "oklch(58% 0.017 253)",
+          "oklch(69% 0.017 253)",
+          "oklch(82% 0.017 253)",
+          "oklch(95% 0.017 253)"
+        ]
+      },
+      "sheet-night": {
+        "role": "neutral",
+        "displayName": "Sheet (night)",
+        "canonical": "#151d26",
+        "tonalRamp": [
+          "oklch(15% 0.021 252)",
+          "oklch(25% 0.021 252)",
+          "oklch(36% 0.021 252)",
+          "oklch(47% 0.021 252)",
+          "oklch(58% 0.021 252)",
+          "oklch(69% 0.021 252)",
+          "oklch(82% 0.021 252)",
+          "oklch(95% 0.021 252)"
+        ]
+      },
+      "band-night": {
+        "role": "neutral",
+        "displayName": "Band (night)",
+        "canonical": "#1c2631",
+        "tonalRamp": [
+          "oklch(15% 0.025 251)",
+          "oklch(25% 0.025 251)",
+          "oklch(36% 0.025 251)",
+          "oklch(47% 0.025 251)",
+          "oklch(58% 0.025 251)",
+          "oklch(69% 0.025 251)",
+          "oklch(82% 0.025 251)",
+          "oklch(95% 0.025 251)"
+        ]
+      },
+      "rule-night": {
+        "role": "neutral",
+        "displayName": "Hairline (night)",
+        "canonical": "#2b3643",
+        "tonalRamp": [
+          "oklch(15% 0.028 253)",
+          "oklch(25% 0.028 253)",
+          "oklch(36% 0.028 253)",
+          "oklch(47% 0.028 253)",
+          "oklch(58% 0.028 253)",
+          "oklch(69% 0.028 253)",
+          "oklch(82% 0.028 253)",
+          "oklch(95% 0.028 253)"
+        ]
+      },
+      "edge-night": {
+        "role": "neutral",
+        "displayName": "Control Edge (night)",
+        "canonical": "#6c7a8a",
+        "tonalRamp": [
+          "oklch(15% 0.03 252)",
+          "oklch(25% 0.03 252)",
+          "oklch(36% 0.03 252)",
+          "oklch(47% 0.03 252)",
+          "oklch(58% 0.03 252)",
+          "oklch(69% 0.03 252)",
+          "oklch(82% 0.03 252)",
+          "oklch(95% 0.03 252)"
+        ]
+      },
+      "ink-night": {
+        "role": "neutral",
+        "displayName": "Ink (night)",
+        "canonical": "#e9edf2",
+        "tonalRamp": [
+          "oklch(15% 0.008 254)",
+          "oklch(25% 0.008 254)",
+          "oklch(36% 0.008 254)",
+          "oklch(47% 0.008 254)",
+          "oklch(58% 0.008 254)",
+          "oklch(69% 0.008 254)",
+          "oklch(82% 0.008 254)",
+          "oklch(95% 0.008 254)"
+        ]
+      },
+      "ink-2-night": {
+        "role": "neutral",
+        "displayName": "Ink Secondary (night)",
+        "canonical": "#b4bec9",
+        "tonalRamp": [
+          "oklch(15% 0.019 251)",
+          "oklch(25% 0.019 251)",
+          "oklch(36% 0.019 251)",
+          "oklch(47% 0.019 251)",
+          "oklch(58% 0.019 251)",
+          "oklch(69% 0.019 251)",
+          "oklch(82% 0.019 251)",
+          "oklch(95% 0.019 251)"
+        ]
+      },
+      "ink-3-night": {
+        "role": "neutral",
+        "displayName": "Ink Tertiary (night)",
+        "canonical": "#98a4b1",
+        "tonalRamp": [
+          "oklch(15% 0.023 250)",
+          "oklch(25% 0.023 250)",
+          "oklch(36% 0.023 250)",
+          "oklch(47% 0.023 250)",
+          "oklch(58% 0.023 250)",
+          "oklch(69% 0.023 250)",
+          "oklch(82% 0.023 250)",
+          "oklch(95% 0.023 250)"
+        ]
+      },
+      "navy-night": {
+        "role": "primary",
+        "displayName": "Masthead Navy (night)",
+        "canonical": "#173d66",
+        "tonalRamp": [
+          "oklch(15% 0.083 253)",
+          "oklch(25% 0.083 253)",
+          "oklch(36% 0.083 253)",
+          "oklch(47% 0.083 253)",
+          "oklch(58% 0.083 253)",
+          "oklch(69% 0.083 253)",
+          "oklch(82% 0.083 253)",
+          "oklch(95% 0.083 253)"
+        ]
+      },
+      "navy-2-night": {
+        "role": "primary",
+        "displayName": "Deep Navy (night)",
+        "canonical": "#0f2d4f",
+        "tonalRamp": [
+          "oklch(15% 0.072 254)",
+          "oklch(25% 0.072 254)",
+          "oklch(36% 0.072 254)",
+          "oklch(47% 0.072 254)",
+          "oklch(58% 0.072 254)",
+          "oklch(69% 0.072 254)",
+          "oklch(82% 0.072 254)",
+          "oklch(95% 0.072 254)"
+        ]
+      },
+      "navy-soft-night": {
+        "role": "primary",
+        "displayName": "Selection Navy (night)",
+        "canonical": "#1d3554",
+        "tonalRamp": [
+          "oklch(15% 0.063 255)",
+          "oklch(25% 0.063 255)",
+          "oklch(36% 0.063 255)",
+          "oklch(47% 0.063 255)",
+          "oklch(58% 0.063 255)",
+          "oklch(69% 0.063 255)",
+          "oklch(82% 0.063 255)",
+          "oklch(95% 0.063 255)"
+        ]
+      },
+      "link-night": {
+        "role": "neutral",
+        "displayName": "Link Blue (night)",
+        "canonical": "#8ec2ff",
+        "tonalRamp": [
+          "oklch(15% 0.103 253)",
+          "oklch(25% 0.103 253)",
+          "oklch(36% 0.103 253)",
+          "oklch(47% 0.103 253)",
+          "oklch(58% 0.103 253)",
+          "oklch(69% 0.103 253)",
+          "oklch(82% 0.103 253)",
+          "oklch(95% 0.103 253)"
+        ]
+      },
+      "up-night": {
+        "role": "secondary",
+        "displayName": "idx Mint (Gain Green, night)",
+        "canonical": "#4ade80",
+        "tonalRamp": [
+          "oklch(15% 0.182 152)",
+          "oklch(25% 0.182 152)",
+          "oklch(36% 0.182 152)",
+          "oklch(47% 0.182 152)",
+          "oklch(58% 0.182 152)",
+          "oklch(69% 0.182 152)",
+          "oklch(82% 0.182 152)",
+          "oklch(95% 0.182 152)"
+        ]
+      },
+      "up-bg-night": {
+        "role": "secondary",
+        "displayName": "Gain Tint (night)",
+        "canonical": "#12301f",
+        "tonalRamp": [
+          "oklch(15% 0.048 156)",
+          "oklch(25% 0.048 156)",
+          "oklch(36% 0.048 156)",
+          "oklch(47% 0.048 156)",
+          "oklch(58% 0.048 156)",
+          "oklch(69% 0.048 156)",
+          "oklch(82% 0.048 156)",
+          "oklch(95% 0.048 156)"
+        ]
+      },
+      "down-night": {
+        "role": "secondary",
+        "displayName": "Loss Red (night)",
+        "canonical": "#ff8f85",
+        "tonalRamp": [
+          "oklch(15% 0.137 26)",
+          "oklch(25% 0.137 26)",
+          "oklch(36% 0.137 26)",
+          "oklch(47% 0.137 26)",
+          "oklch(58% 0.137 26)",
+          "oklch(69% 0.137 26)",
+          "oklch(82% 0.137 26)",
+          "oklch(95% 0.137 26)"
+        ]
+      },
+      "down-bg-night": {
+        "role": "secondary",
+        "displayName": "Loss Tint (night)",
+        "canonical": "#3b1b1a",
+        "tonalRamp": [
+          "oklch(15% 0.051 23)",
+          "oklch(25% 0.051 23)",
+          "oklch(36% 0.051 23)",
+          "oklch(47% 0.051 23)",
+          "oklch(58% 0.051 23)",
+          "oklch(69% 0.051 23)",
+          "oklch(82% 0.051 23)",
+          "oklch(95% 0.051 23)"
+        ]
+      },
+      "flat-night": {
+        "role": "secondary",
+        "displayName": "Flat (night)",
+        "canonical": "#b4bec9",
+        "tonalRamp": [
+          "oklch(15% 0.019 251)",
+          "oklch(25% 0.019 251)",
+          "oklch(36% 0.019 251)",
+          "oklch(47% 0.019 251)",
+          "oklch(58% 0.019 251)",
+          "oklch(69% 0.019 251)",
+          "oklch(82% 0.019 251)",
+          "oklch(95% 0.019 251)"
+        ]
+      },
+      "late-night": {
+        "role": "tertiary",
+        "displayName": "Late Amber (night)",
+        "canonical": "#f2bd52",
+        "tonalRamp": [
+          "oklch(15% 0.137 82)",
+          "oklch(25% 0.137 82)",
+          "oklch(36% 0.137 82)",
+          "oklch(47% 0.137 82)",
+          "oklch(58% 0.137 82)",
+          "oklch(69% 0.137 82)",
+          "oklch(82% 0.137 82)",
+          "oklch(95% 0.137 82)"
+        ]
+      },
+      "late-bg-night": {
+        "role": "tertiary",
+        "displayName": "Late Tint (night)",
+        "canonical": "#3a2c0f",
+        "tonalRamp": [
+          "oklch(15% 0.048 83)",
+          "oklch(25% 0.048 83)",
+          "oklch(36% 0.048 83)",
+          "oklch(47% 0.048 83)",
+          "oklch(58% 0.048 83)",
+          "oklch(69% 0.048 83)",
+          "oklch(82% 0.048 83)",
+          "oklch(95% 0.048 83)"
+        ]
+      },
+      "hl-night": {
+        "role": "tertiary",
+        "displayName": "Fresh Ink (night)",
+        "canonical": "#5c4c0e",
+        "tonalRamp": [
+          "oklch(15% 0.079 94)",
+          "oklch(25% 0.079 94)",
+          "oklch(36% 0.079 94)",
+          "oklch(47% 0.079 94)",
+          "oklch(58% 0.079 94)",
+          "oklch(69% 0.079 94)",
+          "oklch(82% 0.079 94)",
+          "oklch(95% 0.079 94)"
+        ]
+      },
+      "focus-night": {
+        "role": "neutral",
+        "displayName": "Focus Amber (night)",
+        "canonical": "#ffc94d",
+        "tonalRamp": [
+          "oklch(15% 0.149 85)",
+          "oklch(25% 0.149 85)",
+          "oklch(36% 0.149 85)",
+          "oklch(47% 0.149 85)",
+          "oklch(58% 0.149 85)",
+          "oklch(69% 0.149 85)",
+          "oklch(82% 0.149 85)",
+          "oklch(95% 0.149 85)"
         ]
       }
     },
     "typographyMeta": {
-      "led-index": {
-        "displayName": "LED index",
-        "purpose": "The IHSG level in the band; 48px under 80rem, 44px under 46rem."
-      },
-      "led-clock": {
-        "displayName": "LED clock",
-        "purpose": "The WIB clock and the session countdown; 26px then 24px on smaller screens."
-      },
-      "led-change": {
-        "displayName": "LED change",
-        "purpose": "The index change beside the level; 20px on phones."
-      },
       "wordmark": {
         "displayName": "Wordmark",
-        "purpose": "The idx beside the mark in the top bar, nowhere else."
+        "purpose": "The idx beside the mark in the masthead and on the share card, nowhere else."
       },
-      "command": {
-        "displayName": "Command",
-        "purpose": "The gate input; 16px on phones."
+      "page-title": {
+        "displayName": "Page title",
+        "purpose": "Pasar Saham Indonesia, the docs page title; 1.7rem on phones. The 404 code uses the same face at 4.5rem."
       },
-      "body": {
-        "displayName": "Body",
-        "purpose": "Running text, notes, terminal prose and result titles."
+      "section-title": {
+        "displayName": "Section title",
+        "purpose": "The name in a navy section band; docs ## bands at 1.35rem."
       },
       "panel-title": {
         "displayName": "Panel title",
-        "purpose": "The Indonesian panel names, uppercase."
+        "purpose": "Terminal rail and dialog heads."
+      },
+      "lead-figure": {
+        "displayName": "Lead figure",
+        "purpose": "The IHSG close in the lead box; 3rem on phones."
+      },
+      "lead-change": {
+        "displayName": "Lead change",
+        "purpose": "The IHSG change with sign and triangle in its tinted chip."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Running text at an 18px root, 62ch measure (docs 31em)."
+      },
+      "table": {
+        "displayName": "Table",
+        "purpose": "Every table; heads take the label style over a 2px ink rule."
+      },
+      "plate-code": {
+        "displayName": "Plate code",
+        "purpose": "The ticker code over the company name in a name plate."
       },
       "label": {
         "displayName": "Label",
-        "purpose": "Nav, tabs, buttons, column heads, band labels, status words; uppercase, 0.1em to 0.12em."
+        "purpose": "Small labels, strip buttons, meta and age stamps; sentence case."
       },
-      "data": {
-        "displayName": "Data",
-        "purpose": "Every table, tabular and condensed to 75% width."
-      },
-      "machine-line": {
-        "displayName": "Machine line",
-        "purpose": "The uppercase passport string closing each panel, aria-hidden beside a screen-reader sentence."
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Install lines, CLI and JSON output, command cells, the terminal gate and result titles."
       }
     },
-    "shadows": [],
-    "textures": [
+    "shadows": [
       {
-        "name": "ghost-dot",
-        "value": "radial-gradient(circle at 2px 2px, #17202a 1.25px, transparent 1.5px) at 4px 4px",
-        "purpose": "Unlit LED dots: the band, the stacked panel strips, the breadth bar track."
+        "name": "suggestion-float",
+        "value": "0 10px 28px rgb(0 0 0 / 0.16)",
+        "purpose": "The search suggestion list floating over the page; the only cast shadow."
       },
       {
-        "name": "lit-dot",
-        "value": "radial-gradient(circle at 2px 2px, signal colour 1.25px, transparent 1.5px) at 4px 4px",
-        "purpose": "Lit LED dots in mint, rose or dim for breadth and tape swatches."
+        "name": "scroll-edge",
+        "value": "radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--ink) 26%, transparent), transparent) 14px wide, fixed under sheet-coloured covers that scroll",
+        "purpose": "A docs table wider than its sheet says it scrolls."
       },
       {
-        "name": "machine-line-filler",
-        "value": "a run of '<' in #34404c after the passport string",
-        "purpose": "Pads every machine line to the panel edge."
-      },
-      {
-        "name": "dialog-scrim",
-        "value": "rgba(11, 15, 20, 0.78)",
-        "purpose": "Backdrop under the keys dialog; flat, not a shadow."
+        "name": "dialog-backdrop",
+        "value": "rgb(15 21 28 / 0.55)",
+        "purpose": "Flat backdrop under the keys dialog; not a shadow."
       }
     ],
     "motion": [
       {
-        "name": "board-flip",
-        "value": "140ms steps(1, end); keyframe 0%: ground text on a lit fill under a 3px ground dot grid",
-        "purpose": "A changed live cell shows one frame of inverted dots, then its new value. Skipped entirely under prefers-reduced-motion: reduce."
-      },
-      {
-        "name": "busy-runner",
-        "value": "1.1s steps(18, end) infinite; a 3px mint dot strip masked to a moving window",
-        "purpose": "Top edge of a pending terminal result; static under reduced motion."
-      },
-      {
-        "name": "clock-tick",
-        "value": "1s, aligned to the second",
-        "purpose": "The WIB station clock and session countdown; stops with Pause."
+        "name": "fresh-ink",
+        "value": "reink 2.2s cubic-bezier(0.2, 0.7, 0.2, 1); 0% background-color var(--hl), 100% transparent",
+        "purpose": "A figure that changed in the minute refresh takes the highlighter and fades back to paper. Only under prefers-reduced-motion: no-preference; otherwise the value only changes."
       },
       {
         "name": "minute-refresh",
         "value": "60s",
-        "purpose": "Board, movers, band and tape refresh; stops with Pause or P."
+        "purpose": "Board, movers, lead and chart refresh on trading hours; the pause button stops it."
       },
       {
-        "name": "copy-confirm",
-        "value": "1400ms",
-        "purpose": "Copy reads Copied, then returns to its label."
+        "name": "clock-tick",
+        "value": "1s",
+        "purpose": "The WIB clock in the session cell."
       },
       {
         "name": "scroll",
         "value": "scroll-behavior: smooth only under prefers-reduced-motion: no-preference",
-        "purpose": "Panel and result jumps; instant under reduced motion."
+        "purpose": "In-page jumps; instant under reduced motion."
       },
       {
         "name": "state-change",
         "value": "none",
-        "purpose": "Hover and selection invert instantly; no transitions anywhere."
+        "purpose": "Hover, pressed and selected change instantly; no transitions."
       }
     ],
     "breakpoints": [
       {
-        "name": "wide",
-        "value": "80rem",
-        "purpose": "Below: index cell 1.3fr, LED figures 48px and 26px."
+        "name": "stack",
+        "value": "72rem",
+        "purpose": "Below: columns, lead, three faces and terminal stack to one column; the lead figure splits two columns over the chart; status line drops its source."
       },
       {
-        "name": "stack",
+        "name": "docs-stack",
         "value": "64rem",
-        "purpose": "Below: monitor and terminal one column, band index cell spans, source note hidden."
+        "purpose": "Docs only: the page list becomes a wrapped row over the article."
       },
       {
         "name": "phone",
-        "value": "46rem",
-        "purpose": "Below: gutter 12px, gate label hidden, band two columns, board drops rank, name, volume, value."
+        "value": "48rem",
+        "purpose": "Below: gutter 16px, nav wraps to a scrolling row of 48px links, search button full width, board keeps plate, price and percent, command tables stack."
+      },
+      {
+        "name": "docs-narrow",
+        "value": "30rem",
+        "purpose": "Docs only: the Markdown link leaves the masthead."
       },
       {
         "name": "tiny",
-        "value": "26rem",
-        "purpose": "Below: the Docs nav link hides."
-      },
-      {
-        "name": "short-desktop",
-        "value": "(min-width: 64.01rem) and (max-height: 1080px)",
-        "purpose": "Movers show their top five beside the board."
+        "value": "24rem",
+        "purpose": "Below: the brand drops its subline."
       },
       {
         "name": "coarse-pointer",
         "value": "(pointer: coarse)",
-        "purpose": "Hides the Keys button."
+        "purpose": "Hides key hints and the Pintasan button."
       }
     ]
   },
   "components": [
     {
-      "name": "Outline Button",
+      "name": "Primary Button",
       "kind": "button",
-      "refersTo": "button-outline",
-      "description": "Run, Copy, Pause, Keys: square, 1px control edge, inverts to lit on hover.",
-      "html": "<button class=\"ds-btn\" type=\"button\">Run</button>",
-      "css": ".ds-btn { height: 28px; padding: 0 14px; border: 1px solid var(--edge, #56636f); border-radius: 0; background: transparent; color: var(--lit, #e6edf3); cursor: pointer; font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-stretch: 87.5%; } .ds-btn:hover { background: var(--lit, #e6edf3); color: var(--ground, #0b0f14); border-color: var(--lit, #e6edf3); } .ds-btn:focus-visible { outline: 2px solid var(--mint, #4ade80); outline-offset: 2px; }"
+      "refersTo": "button-primary",
+      "description": "Cari, Jalankan, Kembali ke halaman pasar: navy fill, white label, 58px tall, optional stroked arrow.",
+      "html": "<a class=\"ds-btn\" href=\"#\">Buka terminal<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 10h13M11 5l5 5-5 5\"/></svg></a>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 58px; padding: 8px 26px; border: 0; border-radius: var(--radius, 4px); background: var(--navy, #123a64); color: var(--on-navy, #ffffff); cursor: pointer; text-decoration: none; font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 19.8px; font-weight: 700; } .ds-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; } .ds-btn:hover { background: var(--navy-2, #0b2a4b); } .ds-btn:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: 2px; }"
     },
     {
-      "name": "Go Link",
+      "name": "Ghost Button",
       "kind": "button",
-      "refersTo": "button-go",
-      "description": "The one filled call to action (Open the terminal): lit fill, ground text, stroked arrow.",
-      "html": "<a class=\"ds-go\" href=\"#\">Open the terminal<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M2 8h11M9 4l4 4-4 4\"/></svg></a>",
-      "css": ".ds-go { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid var(--lit, #e6edf3); background: var(--lit, #e6edf3); color: var(--ground, #0b0f14); text-decoration: none; font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; } .ds-go svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; } .ds-go:hover { background: var(--ground, #0b0f14); color: var(--lit, #e6edf3); } .ds-go:focus-visible { outline: 2px solid var(--mint, #4ade80); outline-offset: 3px; }"
+      "refersTo": "button-ghost",
+      "description": "Secondary actions beside a primary: transparent, 2px control edge, ink label, band on hover.",
+      "html": "<a class=\"ds-ghost\" href=\"#\">Panduan (bahasa Inggris)</a>",
+      "css": ".ds-ghost { display: inline-flex; align-items: center; justify-content: center; min-height: 58px; padding: 8px 26px; border: 2px solid var(--edge, #7b847c); border-radius: var(--radius, 4px); background: transparent; color: var(--ink, #15191e); text-decoration: none; font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 19.8px; font-weight: 700; } .ds-ghost:hover { background: var(--band, #e8ebe6); } .ds-ghost:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: 2px; }"
     },
     {
-      "name": "Gate",
+      "name": "Search Field",
       "kind": "input",
-      "refersTo": "gate-input",
-      "description": "The command line: borderless input, mint caret, the row's rule and label turn mint on focus.",
-      "html": "<form class=\"ds-gate\"><label class=\"ds-gate-l\" for=\"ds-cmd\">Perintah</label><input id=\"ds-cmd\" placeholder=\"Command or ticker: quote BBCA\"><button class=\"ds-gate-go\" type=\"button\">Run</button></form>",
-      "css": ".ds-gate { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; background: var(--ground, #0b0f14); border-bottom: 1px solid var(--rule, #1b242d); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; } .ds-gate:focus-within { border-bottom-color: var(--mint, #4ade80); } .ds-gate-l { padding: 0 14px 0 16px; color: var(--dim, #8b98a5); font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; font-stretch: 87.5%; } .ds-gate:focus-within .ds-gate-l { color: var(--mint, #4ade80); } .ds-gate input { height: 44px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--lit, #e6edf3); caret-color: var(--mint, #4ade80); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 15px; } .ds-gate input::placeholder { color: var(--dim, #8b98a5); opacity: 1; } .ds-gate-go { height: 28px; margin: 0 10px; padding: 0 14px; border: 1px solid var(--edge, #56636f); background: transparent; color: var(--lit, #e6edf3); cursor: pointer; font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; } .ds-gate-go:hover { background: var(--lit, #e6edf3); color: var(--ground, #0b0f14); border-color: var(--lit, #e6edf3); } .ds-gate-go:focus-visible { outline: 2px solid var(--mint, #4ade80); outline-offset: 2px; }"
+      "refersTo": "search-input",
+      "description": "The labelled stock search: 58px field on the sheet, 2px edge, focus-blue edge and ring on focus, Cari beside it.",
+      "html": "<form class=\"ds-search\" role=\"search\"><label for=\"ds-q\">Cari saham</label><div class=\"ds-row\"><input id=\"ds-q\" type=\"text\" placeholder=\"Kode atau nama perusahaan, misalnya BBCA\"><button type=\"button\">Cari</button></div></form>",
+      "css": ".ds-search { font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; color: var(--ink, #15191e); } .ds-search label { display: block; margin-bottom: 8px; font-weight: 700; font-size: 18.9px; } .ds-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; } .ds-search input { width: 100%; height: 58px; padding: 0 18px; border: 2px solid var(--edge, #7b847c); border-radius: var(--radius, 4px); background: var(--sheet, #ffffff); color: var(--ink, #15191e); font: inherit; font-size: 20.7px; } .ds-search input::placeholder { color: var(--ink-3, #5a636e); opacity: 1; } .ds-search input:focus { border-color: var(--focus, #1b5fd1); outline: 3px solid color-mix(in srgb, var(--focus, #1b5fd1) 30%, transparent); outline-offset: 0; } .ds-search button { min-height: 58px; padding: 8px 26px; border: 0; border-radius: var(--radius, 4px); background: var(--navy, #123a64); color: var(--on-navy, #ffffff); cursor: pointer; font: inherit; font-size: 19.8px; font-weight: 700; } .ds-search button:hover { background: var(--navy-2, #0b2a4b); } .ds-search button:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: 2px; }"
     },
     {
-      "name": "Top Bar Nav",
+      "name": "Masthead",
       "kind": "nav",
-      "refersTo": "nav-link",
-      "description": "Dim caps links at full bar height; the current page is lit with a 2px lit bottom rule.",
-      "html": "<nav class=\"ds-nav\"><a href=\"#\" aria-current=\"page\">Monitor</a><a href=\"#\">Terminal</a><a href=\"#\">Docs</a></nav>",
-      "css": ".ds-nav { display: flex; height: 40px; background: var(--ground, #0b0f14); border-bottom: 1px solid var(--rule, #1b242d); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; } .ds-nav a { display: flex; align-items: center; padding: 0 12px; color: var(--dim, #8b98a5); text-decoration: none; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-stretch: 87.5%; letter-spacing: 0.12em; border-bottom: 2px solid transparent; margin-bottom: -1px; } .ds-nav a:hover { color: var(--lit, #e6edf3); } .ds-nav a[aria-current=\"page\"] { color: var(--lit, #e6edf3); border-bottom-color: var(--lit, #e6edf3); } .ds-nav a:focus-visible { outline: 2px solid var(--mint, #4ade80); outline-offset: 2px; }"
+      "refersTo": "masthead",
+      "description": "Navy bar: wordmark, nav with a 4px white underline on the current page, the ID / EN switch.",
+      "html": "<header class=\"ds-mast\"><a class=\"ds-brand\" href=\"#\"><b>idx</b><small>oleh Midori Research</small></a><nav class=\"ds-nav\"><a href=\"#\" aria-current=\"page\">Pasar</a><a href=\"#\">Terminal</a><a href=\"#\">Panduan</a></nav><p class=\"ds-lang\"><span aria-current=\"true\">ID</span><a href=\"#\">EN</a></p></header>",
+      "css": ".ds-mast { display: flex; align-items: center; gap: 8px 24px; min-height: 68px; padding: 0 24px; background: var(--navy, #123a64); color: var(--on-navy, #ffffff); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; } .ds-brand { display: grid; line-height: 1.1; color: inherit; text-decoration: none; } .ds-brand b { font-family: 'Libre Franklin', sans-serif; font-size: 27px; font-weight: 800; letter-spacing: -0.02em; } .ds-brand small { font-size: 13.5px; font-weight: 600; color: var(--on-navy-2, #c9d6e6); } .ds-nav { display: flex; align-self: stretch; gap: 4px; } .ds-nav a { display: flex; align-items: center; padding: 0 14px; color: var(--on-navy, #ffffff); text-decoration: none; font-weight: 700; font-size: 18px; border-top: 4px solid transparent; border-bottom: 4px solid transparent; } .ds-nav a:hover { background: var(--navy-2, #0b2a4b); } .ds-nav a[aria-current=\"page\"] { border-bottom-color: var(--on-navy, #ffffff); } .ds-lang { display: inline-flex; margin: 0 0 0 auto; border: 1px solid var(--on-navy-2, #c9d6e6); border-radius: 4px; overflow: hidden; } .ds-lang a, .ds-lang span { padding: 5px 11px; font-size: 15.3px; font-weight: 700; color: var(--on-navy, #ffffff); text-decoration: none; } .ds-lang [aria-current=\"true\"] { background: var(--on-navy, #ffffff); color: var(--navy, #123a64); } .ds-lang a:hover { background: var(--navy-2, #0b2a4b); } .ds-mast :focus-visible { outline: 3px solid #ffc94d; outline-offset: 2px; }"
     },
     {
       "name": "Tabs",
       "kind": "chip",
       "refersTo": "tab",
-      "description": "Equal-width caps tabs split by rules; the selected one lit with a 2px lit bottom rule.",
-      "html": "<div class=\"ds-tabs\" role=\"tablist\"><button role=\"tab\" aria-selected=\"true\">Gainers</button><button role=\"tab\" aria-selected=\"false\">Losers</button><button role=\"tab\" aria-selected=\"false\">Most traded</button></div>",
-      "css": ".ds-tabs { display: flex; border-bottom: 1px solid var(--rule, #1b242d); background: var(--ground, #0b0f14); } .ds-tabs button { flex: 1; padding: 6px 6px 5px; border: 0; border-right: 1px solid var(--rule, #1b242d); border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--dim, #8b98a5); cursor: pointer; font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-stretch: 87.5%; } .ds-tabs button:last-child { border-right: 0; } .ds-tabs button:hover { color: var(--lit, #e6edf3); } .ds-tabs button[aria-selected=\"true\"] { color: var(--lit, #e6edf3); border-bottom-color: var(--lit, #e6edf3); } .ds-tabs button:focus-visible { outline: 2px solid var(--mint, #4ade80); outline-offset: -2px; }"
+      "description": "Naik, Turun, Teramai: equal-width labels; the selected tab on navy-soft with a 4px navy underline.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\"><button role=\"tab\" aria-selected=\"true\">Naik</button><button role=\"tab\" aria-selected=\"false\">Turun</button><button role=\"tab\" aria-selected=\"false\">Teramai</button></div>",
+      "css": ".ds-tabs { display: flex; border-bottom: 1px solid var(--rule, #cfd4cd); background: var(--sheet, #ffffff); } .ds-tabs button { flex: 1; padding: 12px 10px; border: 0; border-bottom: 4px solid transparent; background: transparent; color: var(--ink-2, #454e58); cursor: pointer; font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 18px; font-weight: 700; } .ds-tabs button:hover { color: var(--ink, #15191e); background: var(--band, #e8ebe6); } .ds-tabs button[aria-selected=\"true\"] { color: var(--navy, #123a64); border-bottom-color: var(--navy, #123a64); background: var(--navy-soft, #e1e8f1); } .ds-tabs button:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: -3px; }"
     },
     {
-      "name": "Panel",
+      "name": "Module with Section Band",
       "kind": "card",
-      "refersTo": "panel-header",
-      "description": "The addressable unit: numbered Indonesian title, English subtitle, age stamp, body, and the closing machine line (aria-hidden string plus a screen-reader sentence).",
-      "html": "<section class=\"ds-panel\"><header class=\"ds-ph\"><span class=\"no\">01</span><h2>Papan Harga</h2><p class=\"sub\">Heavyweights by market cap</p><p class=\"age\">Age <b>00:35</b></p></header><div class=\"ds-pbody\">Board rows sit here, flush to the rules.</div><p class=\"ds-mline\"><span class=\"ds-sr\">Source: Yahoo Finance through the idx minute snapshot.</span><span aria-hidden=\"true\">IDX.MARKET.V1&lt;&lt;YAHOO&lt;&lt;MINUTE&lt;SNAPSHOT</span></p></section>",
-      "css": ".ds-panel { display: flex; flex-direction: column; background: var(--ground, #0b0f14); color: var(--lit, #e6edf3); border: 1px solid var(--rule, #1b242d); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; } .ds-ph { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px 11px; border-bottom: 1px solid var(--rule, #1b242d); background-image: radial-gradient(circle at 2px 2px, var(--ghost, #17202a) 1.25px, transparent 1.5px); background-size: 4px 4px; } .ds-ph .no { color: var(--dim, #8b98a5); font-size: 12px; font-weight: 600; } .ds-ph h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; } .ds-ph .sub { margin: 0; color: var(--dim, #8b98a5); font-size: 12px; font-stretch: 87.5%; } .ds-ph .age { margin: 0 0 0 auto; color: var(--dim, #8b98a5); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; } .ds-ph .age b { color: var(--lit, #e6edf3); font-weight: 600; } .ds-pbody { padding: 12px 16px 14px; color: var(--dim, #8b98a5); } .ds-mline { display: flex; margin: 0; padding: 7px 16px 8px; border-top: 1px solid var(--rule, #1b242d); color: var(--dim, #8b98a5); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-stretch: 75%; white-space: nowrap; overflow: hidden; } .ds-mline::after { content: \"<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\"; padding-left: 0.16em; color: var(--fill, #34404c); } .ds-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; text-transform: none; letter-spacing: normal; }"
+      "refersTo": "section-band",
+      "description": "The ruled module: a white sheet with a hairline outline, opened by a navy band with title, subline and age stamp. On the home page only the two live tables wear the band; the reference sections below open under a 4px ink rule with an ink head.",
+      "html": "<section class=\"ds-mod\"><header class=\"ds-band\"><h2>Saham Unggulan</h2><p class=\"sub\">16 saham terbesar menurut kapitalisasi pasar</p><p class=\"age\">Diperbarui <b>2 menit lalu</b></p></header><p class=\"ds-body\">Baris tabel tercetak di sini, dipisahkan garis tipis.</p><p class=\"ds-foot\">Sumber: Yahoo Finance lewat idx</p></section>",
+      "css": ".ds-mod { display: flex; flex-direction: column; background: var(--sheet, #ffffff); border: 1px solid var(--rule, #cfd4cd); border-radius: 4px; color: var(--ink, #15191e); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 18px; line-height: 1.55; } .ds-band { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 11px 18px; background: var(--navy, #123a64); color: var(--on-navy, #ffffff); border-radius: 4px 4px 0 0; } .ds-band h2 { margin: 0; font-family: 'Libre Franklin', sans-serif; font-weight: 800; font-size: 21.6px; line-height: 1.2; letter-spacing: -0.01em; } .ds-band p { margin: 0; } .ds-band .sub { color: var(--on-navy-2, #c9d6e6); font-size: 16.2px; } .ds-band .age { margin-left: auto; color: var(--on-navy-2, #c9d6e6); font-size: 15.3px; } .ds-band .age b { color: var(--on-navy, #ffffff); } .ds-body { margin: 0; padding: 16px 18px 18px; } .ds-foot { margin: 0; padding: 10px 18px; border-top: 1px solid var(--rule, #cfd4cd); color: var(--ink-3, #5a636e); font-size: 15.3px; }"
     },
     {
-      "name": "Board Table with Flip",
+      "name": "IHSG Lead Figure",
+      "kind": "custom",
+      "refersTo": "change-chip-up",
+      "description": "The headline figure under a 4px ink rule: the close at 3.6rem, the change in a tinted chip with sign and triangle, the as-of line.",
+      "html": "<div class=\"ds-lead\"><p class=\"ds-l\">IHSG <small>Indeks Harga Saham Gabungan</small></p><p class=\"ds-px\">5.050,43</p><p class=\"ds-chg up\"><span aria-hidden=\"true\">&#9650;</span> +29,17 (+0,46%)</p><p class=\"ds-asof\">Penutupan Jumat, 6 Nov 2026 16.14 WIB</p></div>",
+      "css": ".ds-lead { display: flex; flex-direction: column; gap: 14px; padding: 20px 24px 22px; background: var(--sheet, #ffffff); border: 1px solid var(--rule, #cfd4cd); border-top: 4px solid var(--ink, #15191e); border-radius: 4px; color: var(--ink, #15191e); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-variant-numeric: tabular-nums; } .ds-lead p { margin: 0; } .ds-l { font-size: 18px; font-weight: 700; color: var(--ink-2, #454e58); } .ds-l small { display: block; font-weight: 400; font-size: 15.3px; color: var(--ink-3, #5a636e); } .ds-px { font-size: 64.8px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; } .ds-chg { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 6px 12px; border-radius: 4px; font-size: 23.4px; font-weight: 700; } .ds-chg span { font-size: 0.7em; } .ds-chg.up { background: var(--up-bg, #e2f1e7); color: var(--up, #11743a); } .ds-chg.dn { background: var(--down-bg, #fbe6e3); color: var(--down, #b42318); } .ds-asof { color: var(--ink-2, #454e58); font-size: 17.1px; }"
+    },
+    {
+      "name": "Board Table with Name Plates and Fresh Ink",
       "kind": "custom",
       "refersTo": "table-row-hover",
-      "description": "Condensed tabular rows split by rules; a changed cell flips through one frame of inverted dots, never a tween, and swaps plainly under reduced motion. The demo repeats the flip every 2s.",
-      "html": "<table class=\"ds-tbl\"><thead><tr><th>Symbol</th><th>Last</th><th>Chg %</th></tr></thead><tbody><tr><td class=\"sym\">BBCA</td><td class=\"ds-flip\">5,125</td><td class=\"up\">+3.96%</td></tr><tr><td class=\"sym\">DCII</td><td>169,250</td><td class=\"dn\">-2.17%</td></tr></tbody></table>",
-      "css": ".ds-tbl { width: 100%; border-collapse: collapse; background: var(--ground, #0b0f14); color: var(--lit, #e6edf3); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; font-stretch: 75%; font-variant-numeric: tabular-nums; } .ds-tbl th { padding: 7px 10px 6px; border-bottom: 1px solid var(--rule, #1b242d); text-align: right; color: var(--dim, #8b98a5); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; } .ds-tbl td { padding: 7px 10px; border-bottom: 1px solid var(--rule, #1b242d); text-align: right; } .ds-tbl th:first-child, .ds-tbl td:first-child { text-align: left; padding-left: 16px; } .ds-tbl .sym { font-weight: 700; letter-spacing: 0.04em; } .ds-tbl .up { color: var(--mint, #4ade80); } .ds-tbl .dn { color: var(--rose, #f43f5e); } .ds-tbl tbody tr:hover td { background: var(--raise, #121a22); } @media (prefers-reduced-motion: no-preference) { .ds-flip { animation: ds-flip 2s steps(1, end) infinite; } } @keyframes ds-flip { 0% { color: var(--ground, #0b0f14); background-color: var(--lit, #e6edf3); background-image: radial-gradient(circle at 1.5px 1.5px, var(--ground, #0b0f14) 0.7px, transparent 0.95px); background-size: 3px 3px; } 7% { color: inherit; background-color: transparent; background-image: none; } }"
+      "description": "2px ink rule under the head, hairline rows, name plates, sign plus triangle plus colour; a changed cell takes the highlighter and fades over 2.2s (repeated every 3s in this demo), none under reduced motion.",
+      "html": "<table class=\"ds-tbl\"><thead><tr><th>Saham</th><th>Harga</th><th>Perubahan</th></tr></thead><tbody><tr><td><span class=\"ds-plate\"><a href=\"#\">BBCA</a><span>Bank Central Asia</span></span></td><td class=\"ds-fresh\">5.200</td><td class=\"up\"><span aria-hidden=\"true\">&#9650;</span> +1,46%</td></tr><tr><td><span class=\"ds-plate\"><a href=\"#\">DCII</a><span>DCI Indonesia</span></span></td><td>157.425</td><td class=\"dn\"><span aria-hidden=\"true\">&#9660;</span> -11,82%</td></tr></tbody></table>",
+      "css": ".ds-tbl { width: 100%; border-collapse: collapse; background: var(--sheet, #ffffff); color: var(--ink, #15191e); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 17.1px; line-height: 1.35; font-variant-numeric: tabular-nums; } .ds-tbl th { padding: 10px 14px; border-bottom: 2px solid var(--ink, #15191e); text-align: right; color: var(--ink-2, #454e58); font-size: 15.3px; font-weight: 700; } .ds-tbl td { padding: 11px 14px; border-bottom: 1px solid var(--rule, #cfd4cd); text-align: right; white-space: nowrap; } .ds-tbl tbody tr:last-child td { border-bottom: 0; } .ds-tbl th:first-child, .ds-tbl td:first-child { text-align: left; padding-left: 18px; } .ds-tbl tbody tr:hover td { background: var(--band, #e8ebe6); } .ds-plate { display: grid; gap: 1px; } .ds-plate a { color: var(--link, #0d4c8c); font-weight: 800; font-size: 18.9px; letter-spacing: 0.02em; text-decoration: none; } .ds-plate a:hover { text-decoration: underline; } .ds-plate a:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: 2px; } .ds-plate span { color: var(--ink-2, #454e58); font-size: 15.3px; } .ds-tbl .up { color: var(--up, #11743a); font-weight: 700; } .ds-tbl .dn { color: var(--down, #b42318); font-weight: 700; } .ds-tbl td span[aria-hidden] { font-size: 0.7em; } @media (prefers-reduced-motion: no-preference) { .ds-fresh { animation: ds-reink 3s cubic-bezier(0.2, 0.7, 0.2, 1) infinite; } } @keyframes ds-reink { 0% { background-color: var(--hl, #ffe680); } 73% { background-color: transparent; } 100% { background-color: transparent; } }"
     },
     {
-      "name": "Status Bar",
-      "kind": "custom",
-      "refersTo": "status-bar",
-      "description": "Fixed 28px strip: square lamp and caps state (mint live, amber stale, rose offline or error), snapshot age, source, key caps.",
-      "html": "<div class=\"ds-status\"><span class=\"ds-st\" data-state=\"live\">Live</span><span>Snapshot <b>08:47 WIB</b> · 00:35 ago</span><span class=\"ds-st\" data-state=\"stale\">Stale</span><span class=\"ds-keys\"><kbd>/</kbd> command <kbd>?</kbd> keys</span></div>",
-      "css": ".ds-status { height: 28px; display: flex; align-items: center; gap: 18px; padding: 0 16px; border-top: 1px solid var(--rule, #1b242d); background: var(--ground, #0b0f14); color: var(--dim, #8b98a5); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-stretch: 87.5%; white-space: nowrap; } .ds-status b { color: var(--lit, #e6edf3); font-weight: 600; } .ds-st { display: inline-flex; align-items: center; gap: 7px; color: var(--lit, #e6edf3); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; } .ds-st::before { content: \"\"; width: 7px; height: 7px; background: var(--dim, #8b98a5); } .ds-st[data-state=\"live\"]::before { background: var(--mint, #4ade80); } .ds-st[data-state=\"stale\"] { color: var(--amber, #e3b341); } .ds-st[data-state=\"stale\"]::before { background: var(--amber, #e3b341); } .ds-keys { margin-left: auto; } .ds-keys kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 1px solid var(--edge, #56636f); color: var(--lit, #e6edf3); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; line-height: 16px; text-align: center; }"
+      "name": "State Pill",
+      "kind": "chip",
+      "refersTo": "state-pill-open",
+      "description": "The session state beside the page title: a band pill with a dot, gain green while the exchange is open.",
+      "html": "<p class=\"ds-state\" data-open=\"true\">Bursa buka <small>Sesi II sampai 16.15 WIB</small></p> <p class=\"ds-state\" data-open=\"false\">Bursa tutup</p>",
+      "css": ".ds-state { display: inline-flex; align-items: center; gap: 10px; margin: 0 8px 8px 0; padding: 8px 14px; border-radius: 999px; background: var(--band, #e8ebe6); color: var(--ink, #15191e); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 18px; font-weight: 700; } .ds-state::before { content: \"\"; width: 11px; height: 11px; border-radius: 50%; background: var(--ink-3, #5a636e); } .ds-state[data-open=\"true\"] { background: var(--up-bg, #e2f1e7); color: var(--up, #11743a); } .ds-state[data-open=\"true\"]::before { background: var(--up, #11743a); } .ds-state small { font-weight: 400; color: var(--ink-2, #454e58); }"
     },
     {
-      "name": "LED Band Figure",
+      "name": "Status Line",
       "kind": "custom",
-      "refersTo": "led-index",
-      "description": "Doto figures on the ghost-dot ground: the index level and its change.",
-      "html": "<div class=\"ds-band\"><p class=\"ds-lbl\">IHSG <span>Composite · ^JKSE</span></p><p><span class=\"ds-led px\">5,030.26</span> <span class=\"ds-led chg\">+110.49 +2.25%</span></p></div>",
-      "css": ".ds-band { padding: 10px 16px; background-color: var(--ground, #0b0f14); background-image: radial-gradient(circle at 2px 2px, var(--ghost, #17202a) 1.25px, transparent 1.5px); background-size: 4px 4px; border-bottom: 1px solid var(--rule, #1b242d); color: var(--lit, #e6edf3); font-family: 'Martian Mono', ui-monospace, Menlo, Consolas, monospace; } .ds-band p { margin: 0; } .ds-lbl { color: var(--dim, #8b98a5); font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-stretch: 87.5%; } .ds-lbl span { font-weight: 400; letter-spacing: 0.06em; } .ds-led { font-family: Doto, 'Martian Mono', ui-monospace, monospace; font-weight: 800; line-height: 1; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; white-space: nowrap; } .ds-led.px { font-size: 56px; } .ds-led.chg { font-size: 22px; color: var(--mint, #4ade80); }"
+      "refersTo": "status-line",
+      "description": "The terminal's fixed 44px foot: state lamp and word (green live, amber stale, red offline, ring paused), snapshot age, a small button and key caps.",
+      "html": "<div class=\"ds-status\"><span class=\"ds-st\" data-state=\"live\">Bursa buka</span><span>Papan <b>16.14 WIB</b> · 2 menit lalu</span><span class=\"ds-st\" data-state=\"stale\">Tertunda</span><button type=\"button\">Pintasan</button><span><kbd>/</kbd> perintah <kbd>?</kbd> pintasan</span></div>",
+      "css": ".ds-status { display: flex; align-items: center; gap: 18px; height: 44px; padding: 0 24px; border-top: 1px solid var(--rule, #cfd4cd); background: var(--sheet, #ffffff); color: var(--ink-2, #454e58); font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif; font-size: 15.3px; white-space: nowrap; } .ds-status b { color: var(--ink, #15191e); } .ds-st { display: inline-flex; align-items: center; gap: 8px; color: var(--ink, #15191e); font-weight: 800; } .ds-st::before { content: \"\"; width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3, #5a636e); } .ds-st[data-state=\"live\"]::before { background: var(--up, #11743a); } .ds-st[data-state=\"stale\"] { color: var(--late, #8a5300); } .ds-st[data-state=\"stale\"]::before { background: var(--late, #8a5300); } .ds-status button { margin-left: auto; min-height: 32px; padding: 0 12px; border: 2px solid var(--edge, #7b847c); border-radius: 4px; background: var(--sheet, #ffffff); color: var(--ink, #15191e); cursor: pointer; font: inherit; font-weight: 700; } .ds-status button:hover { background: var(--band, #e8ebe6); } .ds-status button:focus-visible { outline: 3px solid var(--focus, #1b5fd1); outline-offset: 2px; } .ds-status kbd { display: inline-block; min-width: 1.6em; padding: 0.15em 0.45em; border: 1px solid var(--edge, #7b847c); border-radius: 3px; background: var(--sheet, #ffffff); color: var(--ink, #15191e); font-family: ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace; font-size: 0.8em; font-weight: 600; line-height: 1.3; text-align: center; }"
     }
   ],
   "narrative": {
-    "northStar": "Papan Stasiun",
-    "overview": "The site is a Jakarta KRL departure board run as an institutional market terminal. One black glass ground, flush panels split by hairline rules, rows that hold still and flip in place when a value changes, a station clock and session timetable in a dot-matrix LED band, and a command line at the gate. The product proves itself live on a working market screen before it explains anything; explanation sits in the same panels, under the same rules, as the data.\n\nDensity is high and even. One working text size carries almost everything, and hierarchy comes from weight, caps tracking, the width axis, the numbered panel strips laid on a ghost-dot ground and the single step up into Doto in the band. Colour is near absent: the ground, five greys for structure and text, and three signal colours whose meanings never overlap. Mint is the live circuit and gains, rose is losses and errors, amber is lateness. Nothing glows, lifts, rounds or tweens.\n\nThe monitor (home), the web terminal and the 404 page share one shell: top bar, gate, content panels, fixed status bar. The terminal is the same board with the gate on top and each result printed as a numbered panel with its own machine line, newest first. The world rejects the dark developer-tool landing (headline and install line beside a terminal screenshot, feature cards) and the neon-on-black terminal costume.",
+    "northStar": "Halaman Bursa",
+    "overview": "The site is the stock market page of an Indonesian morning newspaper, made live, large and calm. IHSG leads like the paper's headline figure, the closing table and the movers follow, and every move is printed with its sign, its triangle and its colour together. It is written first for retail investors over fifty who have read that page for decades, and second for developers who arrive from GitHub and scroll on to the install line, the three faces and the command table.\n\nThe ground is cool newsprint grey; tables, the IHSG box and the article sheets print on a whiter sheet; a navy masthead and navy section bands with white type carry the structure, exactly as a printed market page carries its column heads. Type is large (an 18px root) and figures are tabular everywhere. Density comes from ruled modules, not from small text: hairlines between rows, a 2px ink rule under every table head, a 4px ink rule over the lead and over the signed footer. Day is the default; night follows the device and keeps the same structure on a blue charcoal ground, with gains in idx mint.\n\nThe home page, the web terminal, the 404 page, the docs and the share card all share one shell: masthead, page content in navy-banded modules on white sheets, and the signed footer. The world refuses the dark trading dashboard and the white fintech card grid.",
     "keyCharacteristics": [
-      "Black glass ground with flush panels and 1px rules; no cards, shadows, radius or glow.",
-      "One live circuit in idx mint; rose and amber each carry exactly one meaning.",
-      "Doto dot-matrix for the LED band figures only; Martian Mono for everything else, condensed in tables, tabular figures throughout.",
-      "Every panel is addressable: numbered Indonesian title, English subtitle, age stamp, closing machine line.",
-      "Signature interaction: the board flip, a one-frame dot invert with no tween, and none at all under reduced motion.",
-      "Keyboard first (`/`, number keys, `?`), with every control fully working by mouse and touch."
+      "Cool newsprint paper, white sheets, navy masthead and navy section bands with white type.",
+      "Libre Franklin 800 for heads; Atkinson Hyperlegible Next for text and every figure, tabular.",
+      "An 18px root, 58px primary controls, AA contrast on every pairing, a 3px focus ring.",
+      "Every move carries sign, triangle and colour; colour is never the only carrier.",
+      "Every stock carries its name plate: the code over the company's name.",
+      "Signature: fresh ink, a changed figure takes the highlighter and fades back to paper over 2.2s; nothing moves under reduced motion.",
+      "Bahasa Indonesia at the plain paths, English under /en/, Indonesian number and time style (5.050,43; 16.14 WIB)."
     ],
     "rules": [
       {
-        "name": "The One Live Circuit Rule",
-        "body": "Mint means live, focused, connected or up. It is never decoration, never a background fill, never a brand wash across a panel.",
+        "name": "The Sign Triangle Colour Rule",
+        "body": "A move is printed with its sign (+ or -), its triangle (▲ up, ▼ down, ◆ level) and its colour together. Colour alone never carries a move.",
         "section": "colors"
       },
       {
         "name": "The Amber Means Late Rule",
-        "body": "Amber appears only when something is delayed or stale. It is not a warning colour, a highlight or a second accent.",
+        "body": "Amber appears only when something is delayed or stale. It is not a warning, a highlight or a second accent.",
         "section": "colors"
       },
       {
-        "name": "The Lit Inversion Rule",
-        "body": "Hover, pressed, selected and the primary call to action are shown by inverting to a lit fill with ground text. No tints, no coloured hover states.",
+        "name": "The Highlighter Is Fresh Ink Rule",
+        "body": "The yellow highlighter marks what just changed or what matched; it fades back to paper and is never a permanent fill or a brand colour.",
         "section": "colors"
       },
       {
-        "name": "The Single Size Rule",
-        "body": "12px is the working size for labels, data, titles and machine lines. Hierarchy comes from weight, caps tracking, the width axis, the numbered panel strips and the Doto step, never from a ladder of Martian Mono sizes. Only running text (13px), the command input (15px) and the wordmark (16px) sit outside it.",
+        "name": "The Reading Size Rule",
+        "body": "One reading size (18px) at a fixed measure. Hierarchy steps up through Libre Franklin heads and the lead figure, never down into small grey text.",
         "section": "typography"
       },
       {
-        "name": "The Dot Matrix Is For Figures Rule",
-        "body": "Doto sets the band's big figures (index, change, clock, countdown) and the 404 status code. Never body text, labels, headings or buttons.",
+        "name": "The Figures Are Text Rule",
+        "body": "Every figure, from the IHSG close to a table cell, is set in Atkinson Hyperlegible Next with tabular numerals. No display face and no mono face for market numbers.",
         "section": "typography"
       },
       {
-        "name": "The Tabular Rule",
-        "body": "Figures are tabular everywhere (`font-variant-numeric: tabular-nums` on the body), so a flipping value never shifts its column.",
-        "section": "typography"
-      },
-      {
-        "name": "The Flush Panel Rule",
-        "body": "Panels are flush rectangles divided by 1px hairline rules. Wrappers that hold panels and tabs carry no padding of their own; only the text inside them keeps the gutter.",
+        "name": "The Ruled Module Rule",
+        "body": "Content lives in modules: a white sheet with a 1px hairline outline, opened by a navy band. Rows inside are split by hairlines, never by gaps or alternating fills.",
         "section": "layout"
       },
       {
-        "name": "The One Region Rule",
-        "body": "One region owns the screen: the board on the monitor, the newest result under the gate on the terminal. Everything else is a column or a stack beside or below it.",
+        "name": "The One Plot Rule",
+        "body": "One chart owns the home page, the IHSG minute chart in the lead. Everything else is a table or a line of text.",
         "section": "layout"
       },
       {
-        "name": "The No Lift Rule",
-        "body": "Nothing rises off the glass. State is shown by inversion, colour of the circuit or a rule turning mint, never by a shadow or a raised surface.",
+        "name": "The Print Rule",
+        "body": "Nothing lifts off the page. A module is a sheet with a rule, not a card with a shadow; only a floating list may cast one.",
         "section": "elevation"
       }
     ],
     "dos": [
-      "Do split every region with a 1px rule in the hairline colour and let panels meet it flush.",
-      "Do open every content panel with number, Indonesian title, English subtitle and age stamp, and close it with an aria-hidden machine line plus a screen-reader sentence.",
-      "Do keep mint for live state, focus, the caret and gains; rose for losses and errors; amber for delayed or stale only.",
-      "Do show hover, pressed and selected by inverting to a lit fill with ground text.",
-      "Do set figures tabular and tables at the 75% width; set labels at 87.5%.",
-      "Do change live values with the one-frame flip (140ms, `steps(1, end)`) and swap them with no flash under reduced motion.",
-      "Do keep 12px as the working Martian Mono size and build hierarchy from weight, caps tracking and the Doto step."
+      "Do print every move with its sign, its triangle (▲ ▼ ◆) and its colour together.",
+      "Do open every module with a navy band and keep rows on the white sheet split by 1px hairlines; put the 4px ink rule over the lead and the footer and a 2px ink rule under table heads.",
+      "Do set every figure in Atkinson Hyperlegible Next with tabular numerals, and every head in Libre Franklin 800.",
+      "Do keep the 18px root, body text at 0.85rem or more, and primary controls at 58px.",
+      "Do print numbers and times in the page's language: 5.050,43, T, M, jt, rb and 16.14 WIB in Indonesian; 5,050.43, T, B, M, K and 16:14 WIB in English; \"t/a\" or \"n/a\" where the source has no value.",
+      "Do carry every stock as a name plate, the code over the company's name.",
+      "Do mark a changed figure with fresh ink fading over 2.2s, and only change the value under reduced motion.",
+      "Do keep amber for delayed or stale, the highlighter for what just changed or matched, and the 3px focus ring on everything focusable.",
+      "Do keep controls standard: real buttons, links that look like links, labelled fields."
     ],
     "donts": [
-      "Don't use cards, shadows, glows, colour gradients on surfaces (the ghost-dot texture is the only pattern) or any border radius on interface elements.",
-      "Don't set Doto anywhere but the LED band figures and the 404 status code.",
-      "Don't tween, fade or slide a changing value; the board flips or it swaps.",
-      "Don't use mint as a background wash or decoration, or amber as a general highlight.",
-      "Don't add a ladder of Martian Mono sizes to create hierarchy.",
-      "Don't build a headline-and-screenshot developer landing, feature cards, or neon-on-black terminal styling.",
+      "Don't use side stripes (a coloured bar on one edge of a row, card or note) to mark state.",
+      "Don't add decorative numerals, kickers, eyebrows or tracked uppercase labels.",
+      "Don't use glass, blur, glows, gradients on surfaces or shadows beyond the suggestion list and the docs scroll edge.",
+      "Don't build the dark trading dashboard or the white fintech card grid.",
+      "Don't let colour alone carry a move, a state or an error.",
+      "Don't write em dashes in copy.",
       "Don't load fonts from anywhere but Google Fonts."
     ]
   }

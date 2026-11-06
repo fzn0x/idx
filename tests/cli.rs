@@ -4143,7 +4143,12 @@ fn auto_output_is_json_when_piped() {
         .args(["market", "holidays", "--year", "2026"])
         .output()
         .unwrap();
-    assert_eq!(env.stdout, out.stdout);
+    // Two runs can straddle a second, so compare the envelopes without the clock.
+    let mut a: serde_json::Value = serde_json::from_slice(&env.stdout).unwrap();
+    let mut b = v.clone();
+    a.as_object_mut().unwrap().remove("fetched_at");
+    b.as_object_mut().unwrap().remove("fetched_at");
+    assert_eq!(a, b);
 
     // The config file accepts it; `config get` reports setting and result.
     idx(&sb.cache, &sb.config)

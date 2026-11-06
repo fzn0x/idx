@@ -58,9 +58,20 @@ test("the landing page lists every tool with its commands", () => {
     const t = byName(tool);
     assert.equal(unescape(cli), t.cli, tool);
     if (t.web) assert.ok(web.includes(`href="/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
+    else assert.match(web, /hanya CLI dan MCP/, tool);
+  }
+  assert.match(html, /idx mcp · 47 alat/);
+  // The English page carries the same rows, linking to the English terminal.
+  const en = read("web", "public", "en", "index.html");
+  const enStart = en.indexOf('aria-labelledby="cmd-h"');
+  const enRows = [...en.slice(enStart, en.indexOf("</section>", enStart)).matchAll(/<tr><td>(idx_[a-z_]+)<\/td><td><code>([^<]+)<\/code><\/td><td>(.*?)<\/td>/g)];
+  assert.deepEqual(enRows.map((r) => r[1]), TOOLS.map((t) => t.tool));
+  for (const [, tool, , web] of enRows) {
+    const t = byName(tool);
+    if (t.web) assert.ok(web.includes(`href="/en/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /CLI and MCP only/, tool);
   }
-  assert.match(html, /idx mcp · 47 tools/);
+  assert.match(en, /idx mcp · 47 tools/);
 });
 
 test("/api/instruments and /api/members serve the bundled lists", () => {

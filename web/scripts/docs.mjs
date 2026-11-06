@@ -14,8 +14,10 @@
 // renders every page from the current sources and checks tags, links and
 // anchors, so a docs edit that breaks the site fails CI rather than the deploy.
 //
-// The pages take the site's station-board look from public/docs.css alone
-// (they load no other stylesheet and no script).
+// The pages take the site's Halaman Bursa look (navy masthead, white sheets
+// on the newsprint ground) from public/docs.css alone (they load no other
+// stylesheet and no script). They stay in English; the masthead links to the
+// Indonesian site at /.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
@@ -76,7 +78,6 @@ export const htmlPath = (slug) => (slug === "index" ? "/docs/" : `/docs/${slug}`
 export const mdPath = (slug) => `/docs/${slug}.md`;
 
 const read = (root, p) => readFileSync(join(root, p), "utf8").replace(/\r\n?/g, "\n");
-const two = (n) => String(n).padStart(2, "0");
 
 /** Cargo.toml's package version: the docs follow main, this says which. */
 export function version(root = ROOT) {
@@ -162,9 +163,9 @@ function railHtml(current, headings) {
     const here = p === current;
     const sections = headings.filter((h) => h.level === 2);
     const toc = here && sections.length
-      ? `<ul class="toc">${sections.map((h, j) => `<li><a href="#${h.id}"><span class="no">${two(j + 1)}</span><span class="t">${escapeHtml(h.text)}</span></a></li>`).join("")}</ul>`
+      ? `<ul class="toc">${sections.map((h, j) => `<li><a href="#${h.id}"><span class="t">${escapeHtml(h.text)}</span></a></li>`).join("")}</ul>`
       : "";
-    return `<li><a href="${htmlPath(p.slug)}"${here ? ' aria-current="page"' : ""}><span class="no">${two(k + 1)}</span><span class="t">${escapeHtml(p.nav)}</span></a>${toc}</li>`;
+    return `<li><a href="${htmlPath(p.slug)}"${here ? ' aria-current="page"' : ""}><span class="t">${escapeHtml(p.nav)}</span></a>${toc}</li>`;
   }).join("");
   const machine = [
     [mdPath(current.slug), "This page as Markdown"],
@@ -180,19 +181,26 @@ function railHtml(current, headings) {
 </nav>`;
 }
 
-/** One page as HTML: the site's top bar, a page rail, the article. */
+/** Code in a table cell wraps (docs.css), so a long command or endpoint never
+ *  pushes the next column off the sheet; a flag or another hyphenated word up
+ *  to 40 characters stays on one line, never broken after its hyphens. The
+ *  spans leave the copied text unchanged. */
+export function keepFlagsWhole(html) {
+  return html.replace(/<td\b[^>]*>[\s\S]*?<\/td>/g, (cell) =>
+    cell.replace(/<code>([^<]*)<\/code>/g, (_, code) =>
+      `<code>${code.replace(/[^\s-]*-[^\s]*/g, (w) => (w.length <= 40 ? `<span class="nobr">${w}</span>` : w))}</code>`));
+}
+
+/** One page as HTML: the site's masthead, a page rail, the article. */
 export function pageHtml(page, root = ROOT) {
   const { title, clean } = pageMarkdown(page, root);
   const ver = version(root);
   const headings = [];
   // The HTML links to site pages; the Markdown carries absolute .md URLs.
-  const body = render(clean, { href: (u) => resolveHref(u, page, "html"), slug: slugger(), headings });
+  const body = keepFlagsWhole(render(clean, { href: (u) => resolveHref(u, page, "html"), slug: slugger(), headings }));
   const canonical = `${ORIGIN}${htmlPath(page.slug)}`;
   const full = page.slug === "index" ? "idx documentation" : `${title} · idx docs`;
   const desc = escapeHtml(page.desc);
-  const no = two(PAGES.indexOf(page) + 1);
-  // The closing passport string, as every panel on the site ends.
-  const mline = `IDX<<DOCS<<${page.slug.toUpperCase().replace(/-/g, "<")}<<V${ver}`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -203,9 +211,10 @@ export function pageHtml(page, root = ROOT) {
 <link rel="canonical" href="${canonical}">
 <link rel="alternate" type="text/markdown" href="${mdPath(page.slug)}" title="${escapeHtml(title)} as Markdown">
 <meta name="robots" content="index,follow,max-image-preview:large">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#123a64" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#173d66" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="article">
-<meta property="og:site_name" content="idx · Midori Research">
+<meta property="og:site_name" content="idx by Midori Research">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="${escapeHtml(full)}">
 <meta property="og:description" content="${desc}">
@@ -214,49 +223,48 @@ export function pageHtml(page, root = ROOT) {
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="idx: IDX stocks for people, scripts and AI agents. idx stocks quote BBCA prints a table, idx -o json a stable JSON envelope, idx mcp an MCP server.">
+<meta property="og:image:alt" content="idx by Midori Research: IHSG and Indonesian stock prices today, free and without an account.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/mark.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..100,300..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&family=Libre+Franklin:wght@800&display=swap">
 <link rel="stylesheet" href="/docs.css">
 </head>
 <body class="docs-page">
 <a class="skip" href="#doc">Skip to the page</a>
-<header class="topbar">
-  <a class="brand" href="/" aria-label="idx home"><img src="/mark.svg" alt="" width="22" height="22"><span>idx</span></a>
-  <nav class="nav" aria-label="Site">
-    <a href="/">Monitor</a>
-    <a href="/terminal">Terminal</a>
-    <a href="/docs/" aria-current="page">Docs</a>
-  </nav>
-  <a class="md" href="${mdPath(page.slug)}" aria-label="This page as Markdown">Markdown</a>
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="/en/" aria-label="idx home"><img src="/mark.svg" alt="" width="36" height="36"><span class="brand-name"><b>idx</b><small>by Midori Research</small></span></a>
+    <nav class="nav" aria-label="Site">
+      <a href="/en/">Market</a>
+      <a href="/en/terminal">Terminal</a>
+      <a href="/docs/" aria-current="page">Docs</a>
+    </nav>
+    <div class="mast-end">
+      <a class="lang-l" href="/" hreflang="id" lang="id">Halaman pasar (Bahasa Indonesia)</a>
+      <a class="md" href="${mdPath(page.slug)}" aria-label="This page as Markdown">Markdown</a>
+    </div>
+  </div>
 </header>
 <div class="docs">
 ${railHtml(page, headings)}
 <main class="doc" id="doc">
-<header class="ph"><span class="no">${no}</span><span class="ttl" lang="id">${escapeHtml(page.panel)}</span><span class="sub">${escapeHtml(page.src)}</span><span class="age">Version <b>${escapeHtml(ver)}</b></span></header>
+<header class="ph"><span class="ttl" lang="id">${escapeHtml(page.panel)}</span><span class="sub">${escapeHtml(page.src)}</span><span class="age">Version <b>${escapeHtml(ver)}</b></span></header>
 <article class="doc-body">
 ${body}
 </article>
-<p class="mline"><span class="sr-only">End of ${escapeHtml(title)}, idx documentation for version ${escapeHtml(ver)}.</span><span aria-hidden="true">${escapeHtml(mline)}</span></p>
+<p class="doc-foot"><span>From <a href="${REPO}/blob/main/${page.src}">${escapeHtml(page.src)}</a> on the main branch, version ${escapeHtml(ver)}.</span> <a href="#doc">Back to the top</a></p>
 </main>
 </div>
 <footer class="sign">
-  <div>
-    <p class="place">Jakarta. <b>Midori Research</b> · MIT licence · <a href="mailto:desk@midoriresearch.com">desk@midoriresearch.com</a></p>
-    <p class="links"><a href="/">Monitor</a> <a href="/terminal">Web terminal</a> <a href="${REPO}">Source on GitHub</a> <a href="${REPO}/blob/main/CHANGELOG.md">Changelog</a></p>
+  <div class="wrap">
+    <p class="place">Jakarta. Midori Research · MIT licence · <a href="mailto:desk@midoriresearch.com">desk@midoriresearch.com</a></p>
+    <p class="links"><a href="/en/">Market page</a> <a href="/en/terminal">Web terminal</a> <a href="/" hreflang="id" lang="id">Halaman pasar (Bahasa Indonesia)</a> <a href="${REPO}">Source on GitHub</a> <a href="${REPO}/blob/main/CHANGELOG.md">Changelog</a></p>
+    <p class="disc">These pages are generated from the repository's README.md and docs/ and follow its main branch. idx is research tooling, not investment advice, and is not affiliated with PT Bursa Efek Indonesia (IDX), KSEI, Yahoo, Microsoft or Stockbit.</p>
   </div>
-  <p class="disc">These pages are generated from the repository's README.md and docs/ and follow its main branch. idx is research tooling, not investment advice, and is not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.</p>
 </footer>
-<div class="statusbar">
-  <span class="st-state" data-state="idle">Docs</span>
-  <span class="st-age">Version <b>${escapeHtml(ver)}</b><span class="st-more"> · follows main</span></span>
-  <span class="st-src">${escapeHtml(page.src)}</span>
-  <span class="st-right"><a href="${mdPath(page.slug)}">Markdown</a> <a href="/llms.txt">llms.txt</a></span>
-</div>
 </body>
 </html>
 `;

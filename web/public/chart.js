@@ -5,6 +5,7 @@
 // no gaps. Times arrive in WIB (+07:00) and are read off the string as is.
 // The layout functions are pure and tested in web/test/chart.test.mjs.
 import { api, fmt, el, signClass } from "./app.js";
+import { TIME_SEP } from "./i18n.js";
 
 export const RANGES = [
   { id: "1D", period: "1d", interval: "5m", unit: "hour", note: "5-minute candles" },
@@ -21,10 +22,10 @@ export const PAD = { top: 10, right: 60, bottom: 20, vol: 36, gap: 8 };
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const day = (t) => `${Number(t.slice(8, 10))} ${MON[Number(t.slice(5, 7)) - 1]}`;
-const hhmm = (t) => t.slice(11, 16);
+const hhmm = (t) => `${t.slice(11, 13)}${TIME_SEP}${t.slice(14, 16)}`;
 const KEY = { hour: (t) => t.slice(0, 13), day: (t) => t.slice(0, 10), month: (t) => t.slice(0, 7), year: (t) => t.slice(0, 4) };
 const LABEL = {
-  hour: (t) => `${t.slice(11, 13)}:00`,
+  hour: (t) => `${t.slice(11, 13)}${TIME_SEP}00`,
   day,
   month: (t) => (t.slice(5, 7) === "01" ? t.slice(0, 4) : MON[Number(t.slice(5, 7)) - 1]),
   year: (t) => t.slice(0, 4),

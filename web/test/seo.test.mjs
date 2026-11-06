@@ -11,7 +11,12 @@ import { PAGES as DOCS, htmlPath } from "../scripts/docs.mjs";
 const pub = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const read = (p) => readFileSync(join(pub, p), "utf8");
 const ORIGIN = "https://ihsg.midoriresearch.com";
-const PAGES = { "index.html": `${ORIGIN}/`, "terminal.html": `${ORIGIN}/terminal` };
+// Each page in Bahasa Indonesia at its plain path and in English under /en/.
+const PAGES = {
+  "index.html": `${ORIGIN}/`, "en/index.html": `${ORIGIN}/en/`,
+  "terminal.html": `${ORIGIN}/terminal`, "en/terminal.html": `${ORIGIN}/en/terminal`,
+};
+const PAIRS = [["index.html", "en/index.html"], ["terminal.html", "en/terminal.html"]];
 // The docs pages are generated at deploy time; docs.test.mjs checks their tags.
 const DOC_URLS = DOCS.map((p) => `${ORIGIN}${htmlPath(p.slug)}`);
 
@@ -44,6 +49,35 @@ test("every indexable page carries a canonical URL and a large share card", () =
   }
 });
 
+const alternates = (html) => Object.fromEntries([...html.matchAll(/<link rel="alternate" hreflang="([a-z-]+)" href="([^"]+)">/g)].map((m) => [m[1], m[2]]));
+
+test("every page names its language, and each language pair links both ways", () => {
+  for (const [id, en] of PAIRS) {
+    const [hi, he] = [read(id), read(en)];
+    assert.match(hi, /^<!doctype html>\r?\n<html lang="id">/, id);
+    assert.match(he, /^<!doctype html>\r?\n<html lang="en">/, en);
+    assert.equal(meta(hi, "og:locale"), "id_ID", id);
+    assert.equal(meta(he, "og:locale"), "en_US", en);
+    const want = { id: PAGES[id], en: PAGES[en], "x-default": PAGES[id] };
+    assert.deepEqual(alternates(hi), want, `${id} hreflang`);
+    assert.deepEqual(alternates(he), want, `${en} hreflang`);
+    // The language switch on each page points at the other one.
+    assert.ok(hi.includes(`href="${new URL(PAGES[en]).pathname}" hreflang="en"`), `${id} links to ${en}`);
+    assert.ok(he.includes(`href="${new URL(PAGES[id]).pathname}" hreflang="id"`), `${en} links to ${id}`);
+  }
+});
+
+test("titles name the publisher and stay within what search results show", () => {
+  for (const page of Object.keys(PAGES)) {
+    const title = read(page).match(/<title>([^<]+)<\/title>/)?.[1];
+    assert.ok(title, `${page} title`);
+    assert.match(title, /Midori Research$/, `${page} title ends with the publisher`);
+    assert.ok(title.length <= 70, `${page} title is ${title.length} characters`);
+    const d = meta(read(page), "description");
+    assert.ok(d.length >= 70 && d.length <= 170, `${page} description is ${d.length} characters`);
+  }
+});
+
 test("sitemap lists exactly the canonical pages and robots.txt points at it", () => {
   const locs = [...read("sitemap.xml").matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
   assert.deepEqual(locs.sort(), [...Object.values(PAGES), ...DOC_URLS].sort(), "a docs page added to PAGES in web/scripts/docs.mjs goes into public/sitemap.xml too");
@@ -63,6 +97,17 @@ test("landing page JSON-LD parses and describes the app", () => {
   }
 });
 
-test("the 404 page stays out of the index", () => {
+test("the 404 pages stay out of the index", () => {
   assert.equal(meta(read("404.html"), "robots"), "noindex");
+  assert.equal(meta(read("en/404.html"), "robots"), "noindex");
+});
+
+test("the sitemap pairs each page with its other language", () => {
+  const xml = read("sitemap.xml");
+  for (const [id, en] of PAIRS) for (const page of [id, en]) {
+    const at = xml.indexOf(`<loc>${PAGES[page]}</loc>`);
+    assert.ok(at > 0, `${page} in the sitemap`);
+    const block = xml.slice(at, xml.indexOf("</url>", at));
+    assert.ok(block.includes(`hreflang="id" href="${PAGES[id]}"`) && block.includes(`hreflang="en" href="${PAGES[en]}"`), `${page} alternates`);
+  }
 });

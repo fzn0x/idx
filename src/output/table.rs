@@ -74,7 +74,7 @@ pub fn quotes(rows: &[Quote], color: bool) -> String {
         let state = rows
             .iter()
             .find_map(|q| q.market_state.clone())
-            .map(|s| format!(" · market {}", s.to_lowercase()))
+            .map(|s| format!(" · market {}", f::market_state(&s)))
             .unwrap_or_default();
         out.push_str(&format!(
             "Last trade {} WIB{state} · delayed data\n",
