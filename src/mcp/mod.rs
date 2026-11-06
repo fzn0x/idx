@@ -44,8 +44,9 @@ use crate::output::json::{
     SCHEMA_STOCKBIT_MOVEMENTS,
 };
 use crate::ownership::OwnershipDb;
+use crate::providers::stockbit::auth::{SignInProgress, Status};
 use crate::providers::stockbit::movement::MovementQuery;
-use crate::providers::stockbit::{login, SessionStore, Stockbit};
+use crate::providers::stockbit::{login, page, SessionStore, Stockbit};
 use crate::providers::{Provider, Sourced, StockbitOptions, Ttls};
 use crate::service;
 use crate::universe;
@@ -67,6 +68,8 @@ idx_bandar reads it as bandarmology (are the top brokers accumulating or distrib
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
+Stockbit tools (idx_orderbook, idx_stockbit_*) use the user's own Stockbit login: check
+idx_stockbit_status first, and never ask for passwords, cookies or tokens in the chat.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -86,6 +89,15 @@ pub struct StockbitLoginArgs {
     /// Seconds to wait for the sign-in (default 300, clamped to 30..900).
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// "page": return at once with a URL on 127.0.0.1 (and an ssh -L command when this server is reached over SSH) for the user's own browser. "browser": open a browser on this server's machine and wait. Default "auto": browser where this machine has a display and a Chromium-family browser and is not reached over SSH, else page.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Port for the page (default 7878, or a free one when it is taken; 0 for any).
+    #[serde(default)]
+    pub port: Option<u32>,
+    /// Sign in even when the stored session still works.
+    #[serde(default)]
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1526,12 +1538,13 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_status",
-        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook or before using the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal."
+        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask). While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
     )]
     async fn stockbit_status(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let status = self.stockbit_store().status(chrono::Utc::now().timestamp());
+                let mut status = self.stockbit_store().status(chrono::Utc::now().timestamp());
+                status.sign_in = page::progress();
                 Ok(CallToolResult::success(vec![ContentBlock::text(
                     json::to_pretty(&status)?,
                 )]))
@@ -1542,7 +1555,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_login",
-        description = "Opens a browser ON THE MACHINE RUNNING THIS SERVER on Stockbit's own sign-in page for the user to sign in, then checks the session with Stockbit and stores it. A session that already works is reported without opening anything. Only useful for a local (stdio) server the user is sitting at; it cannot work for a remote HTTP server. Blocks until the user signs in or it times out. Prefer telling the user to run `idx stockbit login` themselves; use this only when they ask you to start it. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
+        description = "Starts a Stockbit sign-in for the machine running this server; use it only when the user asks (otherwise tell them to run `idx stockbit login` in a terminal). method 'page' returns at once with sign_in.url, a page on 127.0.0.1 (plus sign_in.ssh_forward, an ssh -L command, when this server is reached over SSH): give the user the URL; they sign in to stockbit.com in their own browser, ideally a private window, and send the session with the page's bookmark or by pasting the cookie there; then poll idx_stockbit_status until sign_in.state is signed_in or failed. method 'browser' opens Chrome, Edge or Brave on Stockbit's sign-in page on this machine and waits until the user signs in or the timeout; it suits a local stdio server the user sits at. Default 'auto' picks page over SSH, without a display or without a browser. Either way idx checks the session with Stockbit before storing it, and a session that already works is reported (sign_in.state already_signed_in) without opening anything unless force is true. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
     )]
     async fn stockbit_login(
         &self,
@@ -1559,18 +1572,71 @@ impl IdxServer {
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join("stockbit-chrome-profile");
                 let secs = a.timeout.unwrap_or(300).clamp(30, 900);
+                let timeout = std::time::Duration::from_secs(secs);
                 let sb = Arc::new(self.stockbit_provider());
                 let now = chrono::Utc::now().timestamp();
+                let env = |k: &str| std::env::var(k).ok();
+                let method = a
+                    .method
+                    .as_deref()
+                    .map(|m| m.trim().to_ascii_lowercase())
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| "auto".into());
+                let use_page = match method.as_str() {
+                    "page" => true,
+                    "browser" => false,
+                    "auto" => {
+                        let set = |k: &str| env(k).is_some_and(|v| !v.trim().is_empty());
+                        page::over_ssh(&env)
+                            || (cfg!(all(unix, not(target_os = "macos")))
+                                && !set("DISPLAY")
+                                && !set("WAYLAND_DISPLAY"))
+                            || login::find_browser().is_none()
+                    }
+                    other => {
+                        return Err(IdxError::Usage(format!(
+                            "unknown method {other:?}; use page, browser or auto"
+                        )))
+                    }
+                };
+                let port = a
+                    .port
+                    .map(u16::try_from)
+                    .transpose()
+                    .map_err(|_| IdxError::Usage("port must be 0 to 65535".into()))?;
+                let reply = |status: &Status| -> Result<CallToolResult> {
+                    Ok(CallToolResult::success(vec![ContentBlock::text(
+                        json::to_pretty(status)?,
+                    )]))
+                };
                 // A session that already works is reported, not replaced.
-                if sb.store().status(now).logged_in && sb.verify().await.is_ok() {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        json::to_pretty(&sb.store().status(now))?,
-                    )]));
+                if !a.force.unwrap_or(false)
+                    && sb.store().status(now).logged_in
+                    && sb.verify().await.is_ok()
+                {
+                    let mut status = sb.store().status(now);
+                    status.sign_in = Some(SignInProgress {
+                        state: "already_signed_in".into(),
+                        method: "none".into(),
+                        ..Default::default()
+                    });
+                    return reply(&status);
+                }
+                if use_page {
+                    let progress = page::start_in_background(
+                        sb.clone(),
+                        page::PageOptions { port, timeout },
+                        &env,
+                    )
+                    .await?;
+                    let mut status = sb.store().status(now);
+                    status.sign_in = Some(progress);
+                    return reply(&status);
                 }
                 let opts = login::LoginOptions {
                     browser: None,
                     profile_dir,
-                    timeout: std::time::Duration::from_secs(secs),
+                    timeout,
                 };
                 // Progress goes to the server's log (stderr), never stdout.
                 let say = |s: &str| tracing::info!("{s}");
@@ -1583,9 +1649,14 @@ impl IdxServer {
                     &say,
                 )
                 .await?;
-                Ok(CallToolResult::success(vec![ContentBlock::text(
-                    json::to_pretty(&acc.status)?,
-                )]))
+                let mut status = acc.status;
+                status.sign_in = Some(SignInProgress {
+                    state: "signed_in".into(),
+                    method: "browser".into(),
+                    warning: acc.warning,
+                    ..Default::default()
+                });
+                reply(&status)
             }
             .await,
         )

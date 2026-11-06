@@ -230,6 +230,37 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         );
     }
 
+    // The sign-in tool refuses an unknown method before opening anything;
+    // status carries no sign_in while none was started.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+        "params": {"name": "idx_stockbit_login", "arguments": {"method": "carrier-pigeon"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unknown method"));
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+        "params": {"name": "idx_stockbit_status", "arguments": {}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["logged_in"], false);
+    assert!(body.get("sign_in").is_none(), "{body}");
+    let login = tools
+        .iter()
+        .find(|t| t["name"] == "idx_stockbit_login")
+        .unwrap();
+    for arg in ["method", "port", "force", "timeout"] {
+        assert!(login["inputSchema"]["properties"][arg].is_object(), "{arg}");
+    }
+
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");
     assert!(status.success(), "exit {status:?}");

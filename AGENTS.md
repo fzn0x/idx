@@ -47,7 +47,9 @@ src/
                      store per session file per process, refreshes under a lock file), signin.rs the one
                      accept step every sign-in ends in (store, check with one GET, restore when refused),
                      login.rs the browser sign-in: polls only the credentialStorage cookie over the Chrome
-                     DevTools Protocol (ws, no TLS; no request interception), then deletes it from its profile
+                     DevTools Protocol (ws, no TLS; no request interception), then deletes it from its profile;
+                     page.rs the local sign-in page (axum on 127.0.0.1, secret path, Host/Origin checks, a
+                     bookmarklet or paste for the cookie) and the background page sign-in behind MCP
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL),
                      sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,

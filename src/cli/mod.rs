@@ -150,9 +150,9 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
     #[command(subcommand)]
     Bandar(bandar::BandarCmd),
 
-    /// Your own Stockbit session: `login` in the browser, `status`, `logout`; live `orderbook`; corporate `actions` and `calendar`; holder `movements`.
+    /// Your own Stockbit session: `login` (a browser, or a local page for your own), `status`, `logout`; live `orderbook`; corporate `actions` and `calendar`; holder `movements`.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx stockbit actions BBCA          # a stock's corporate actions since listing\n  idx stockbit calendar --kind dividend --days 30\n  idx stockbit movements BBCA        # insider and 5 % holder movements\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
+        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit login --page          # over SSH or with Google sign-in: a page on 127.0.0.1\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx stockbit actions BBCA          # a stock's corporate actions since listing\n  idx stockbit calendar --kind dividend --days 30\n  idx stockbit movements BBCA        # insider and 5 % holder movements\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
     )]
     #[command(subcommand)]
     Stockbit(stockbit::StockbitCmd),

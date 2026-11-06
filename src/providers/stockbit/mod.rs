@@ -52,6 +52,7 @@ pub mod auth;
 pub mod corpaction;
 pub mod login;
 pub mod movement;
+pub mod page;
 mod parse;
 pub mod signin;
 

@@ -481,6 +481,8 @@ fn stockbit_login_takes_a_paste_and_checks_it_first() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains("--page"))
+        .stdout(predicate::str::contains("ssh -N -L 7878:127.0.0.1:7878"))
         .stdout(predicate::str::contains(
             "never asks for your Stockbit password",
         ));
@@ -517,13 +519,30 @@ fn stockbit_login_takes_a_paste_and_checks_it_first() {
         .code(5)
         .stderr(predicate::str::contains("eyJ").not());
     assert!(!session.exists(), "nothing stored");
-    // Offline, the browser sign-in stops before opening anything.
-    idx(&sb.cache, &sb.config)
-        .args(["stockbit", "login", "--browser", "/no/such/chrome"])
-        .write_stdin("")
-        .assert()
-        .code(5)
-        .stderr(predicate::str::contains("needs the network"));
+    // Offline, the browser and page sign-ins stop before opening anything.
+    for args in [
+        &["stockbit", "login", "--browser", "/no/such/chrome"][..],
+        &["stockbit", "login", "--page"][..],
+        &["stockbit", "login", "--port", "0"][..],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .write_stdin("")
+            .assert()
+            .code(5)
+            .stderr(predicate::str::contains("needs the network"));
+    }
+    for args in [
+        &["stockbit", "login", "--manual", "--page"][..],
+        &["stockbit", "login", "--page", "--browser", "/x"][..],
+        &["stockbit", "login", "--port", "70000"][..],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .write_stdin("")
+            .assert()
+            .code(2);
+    }
 }
 
 #[test]

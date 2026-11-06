@@ -41,7 +41,7 @@ export const TOOLS = [
   { tool: "idx_ownership_releases", cli: "idx ownership releases", web: "ownership releases", what: "imported monthly registers" },
   { tool: "idx_orderbook", cli: "idx stockbit orderbook BBCA", web: null, what: "realtime order book: full depth ladder and foreign flow (your Stockbit session)" },
   { tool: "idx_stockbit_status", cli: "idx stockbit status", web: null, what: "is a Stockbit session stored, and when its tokens expire" },
-  { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in your browser, once" },
+  { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in a browser or through a local page, once" },
   { tool: "idx_stockbit_actions", cli: "idx stockbit actions BBCA", web: null, what: "a stock's corporate actions since listing, or the market's calendar, by kind (your Stockbit session)" },
   { tool: "idx_stockbit_movements", cli: "idx stockbit movements BBCA", web: null, what: "insider and 5 % holder movements: who bought or sold, how many shares, at what price (your Stockbit session)" },
 ];

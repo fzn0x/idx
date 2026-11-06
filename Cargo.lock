@@ -1344,6 +1344,7 @@ dependencies = [
  "comfy-table",
  "dirs",
  "futures",
+ "getrandom 0.3.4",
  "hex",
  "http-body-util",
  "pdf-extract",

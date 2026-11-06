@@ -19,7 +19,7 @@ use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS, SCHEMA_STOC
 use crate::output::{self, table, table_corporate, table_movements};
 use crate::providers::stockbit::movement::MovementQuery;
 use crate::providers::stockbit::signin::Accepted;
-use crate::providers::stockbit::{login, SessionStore, Stockbit};
+use crate::providers::stockbit::{login, page, SessionStore, Stockbit};
 use crate::providers::{StockbitOptions, Ttls};
 use crate::service;
 use crate::universe;
@@ -28,14 +28,20 @@ use super::{emit, Context};
 
 #[derive(Debug, Subcommand)]
 pub enum StockbitCmd {
-    /// Sign in to Stockbit and store the session: in a browser idx opens, or by pasting the session cookie.
+    /// Sign in to Stockbit and store the session: in a browser idx opens, through a local page for your own browser, or by pasting the session cookie.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                       # opens Chrome/Edge/Brave on Stockbit's sign-in page\n  idx stockbit login --browser /path/to/chrome\n  pbpaste | ssh you@host idx stockbit login   # or pipe the credentialStorage cookie\n  idx stockbit login --manual              # paste it into this terminal\n\nidx never asks for your Stockbit password: you sign in on stockbit.com and idx takes only the\nsession (the credentialStorage cookie), checks it with one request and stores it (0600); a\nsession Stockbit refuses leaves the previous one in place. When the stored session still works,\nlogin says so and stops (--force signs in anyway). Stockbit rotates the refresh token on every\nrefresh, so never share one session with another tool or browser (they would log each other out)."
+        after_help = "Examples:\n  idx stockbit login                       # opens Chrome/Edge/Brave on Stockbit's sign-in page\n  idx stockbit login --page                # a page on 127.0.0.1 takes the session from your own browser\n  idx stockbit login --page --port 7878    # over SSH, then: ssh -N -L 7878:127.0.0.1:7878 you@host\n  pbpaste | ssh you@host idx stockbit login   # or pipe the credentialStorage cookie\n  idx stockbit login --manual              # paste it into this terminal\n\nWithout --page, idx uses the page anyway over SSH, without a display, or without a Chromium-family\nbrowser. On the page, sign in to Stockbit in a private window, then send the session with the\npage's bookmark or paste the cookie; close that window afterwards without signing out. Google\nsign-in refuses browsers idx drives: use --page.\n\nidx never asks for your Stockbit password: you sign in on stockbit.com and idx takes only the\nsession (the credentialStorage cookie), checks it with one request and stores it (0600); a\nsession Stockbit refuses leaves the previous one in place. When the stored session still works,\nlogin says so and stops (--force signs in anyway). Stockbit rotates the refresh token on every\nrefresh, so never share one session with another tool or browser (they would log each other out)."
     )]
     Login {
         /// Paste the session cookie into this terminal (also what happens when stdin is a pipe).
-        #[arg(long, conflicts_with = "browser")]
+        #[arg(long, conflicts_with_all = ["browser", "page", "port"])]
         manual: bool,
+        /// Serve a sign-in page on 127.0.0.1 for your own browser instead of opening one (SSH, no display, Google sign-in).
+        #[arg(long, alias = "no-browser", conflicts_with = "browser")]
+        page: bool,
+        /// Port for the page (default 7878, or a free one when it is taken; 0 for any); implies --page.
+        #[arg(long, value_name = "PORT", conflicts_with = "browser")]
+        port: Option<u16>,
         /// Browser executable (default: the first Chrome/Edge/Brave found; env IDX_BROWSER).
         #[arg(long, value_name = "PATH")]
         browser: Option<PathBuf>,
@@ -168,11 +174,21 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
     match cmd {
         StockbitCmd::Login {
             manual,
+            page,
+            port,
             browser,
             profile,
             timeout,
             force,
-        } => login_cmd(ctx, manual, browser, profile, timeout, force).await,
+        } => {
+            let flags = LoginFlags {
+                manual,
+                page,
+                port,
+                browser,
+            };
+            login_cmd(ctx, flags, profile, timeout, force).await
+        }
         StockbitCmd::Status => status_cmd(ctx),
         StockbitCmd::Logout => {
             let removed = store(ctx).clear()?;
@@ -298,17 +314,80 @@ fn status_cmd(ctx: &Context) -> Result<()> {
 pub enum Method {
     /// From stdin: `--manual`, or stdin is not a terminal (a pipe).
     Paste,
+    /// The local page; `why` says why it was chosen when not asked for.
+    Page { why: Option<&'static str> },
     /// A browser idx launches on this machine (`None`: the first one found).
     Browser(Option<PathBuf>),
 }
 
-/// The sign-in method for the flags given; pure, so it is tested.
-pub fn choose_method(manual: bool, browser: Option<PathBuf>, stdin_is_tty: bool) -> Method {
-    if manual || (!stdin_is_tty && browser.is_none()) {
-        Method::Paste
-    } else {
-        Method::Browser(browser)
+/// The sign-in flags.
+#[derive(Debug, Clone, Default)]
+pub struct LoginFlags {
+    pub manual: bool,
+    pub page: bool,
+    pub port: Option<u16>,
+    pub browser: Option<PathBuf>,
+}
+
+/// The sign-in method for the flags and the machine; pure, so it is tested.
+/// `needs_display` is true where a browser needs `DISPLAY` or
+/// `WAYLAND_DISPLAY` (Linux, BSD); `browser_found` whether a Chromium-family
+/// browser is installed.
+pub fn choose_method(
+    f: &LoginFlags,
+    env: &dyn Fn(&str) -> Option<String>,
+    stdin_is_tty: bool,
+    needs_display: bool,
+    browser_found: bool,
+) -> Method {
+    if f.manual || (!stdin_is_tty && !f.page && f.port.is_none() && f.browser.is_none()) {
+        return Method::Paste;
     }
+    if f.page || f.port.is_some() {
+        return Method::Page { why: None };
+    }
+    if let Some(b) = &f.browser {
+        return Method::Browser(Some(b.clone()));
+    }
+    let set = |k: &str| env(k).is_some_and(|v| !v.trim().is_empty());
+    if page::over_ssh(env) {
+        Method::Page {
+            why: Some("this machine is reached over SSH"),
+        }
+    } else if needs_display && !set("DISPLAY") && !set("WAYLAND_DISPLAY") {
+        Method::Page {
+            why: Some("there is no display"),
+        }
+    } else if !browser_found {
+        Method::Page {
+            why: Some("no Chrome, Edge or Brave was found"),
+        }
+    } else {
+        Method::Browser(None)
+    }
+}
+
+/// Opens `url` in the default browser; best effort, nothing is printed.
+fn open_in_browser(url: &str) {
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        // The URL is ours: hex secret and digits, no shell metacharacters.
+        c.args(["/C", "start", "", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 const PASTE_HELP: &str = "Paste stockbit.com's credentialStorage cookie and press Enter.
@@ -330,7 +409,7 @@ fn read_paste(stdin_is_tty: bool) -> Result<String> {
     .map_err(|e| IdxError::Usage(format!("could not read the session from stdin: {e}")))?;
     if raw.trim().is_empty() {
         return Err(IdxError::Usage(
-            "nothing on stdin: run `idx stockbit login` in a terminal, or pipe the credentialStorage cookie (pbpaste | ssh host idx stockbit login)".into(),
+            "nothing on stdin: run `idx stockbit login` in a terminal, pipe the credentialStorage cookie (pbpaste | ssh host idx stockbit login), or use --page".into(),
         ));
     }
     Ok(raw)
@@ -375,8 +454,7 @@ fn default_profile(session: &std::path::Path) -> PathBuf {
 
 async fn login_cmd(
     ctx: &Context,
-    manual: bool,
-    browser: Option<PathBuf>,
+    flags: LoginFlags,
     profile: Option<PathBuf>,
     timeout: u64,
     force: bool,
@@ -384,27 +462,73 @@ async fn login_cmd(
     use std::io::IsTerminal;
     let sb = Arc::new(provider(ctx, store(ctx)));
     let stdin_is_tty = std::io::stdin().is_terminal();
-    match choose_method(manual, browser, stdin_is_tty) {
-        Method::Paste => {
-            let raw = read_paste(stdin_is_tty)?;
-            let acc = sb.accept_session(&raw).await?;
+    let env = |k: &str| std::env::var(k).ok();
+    let needs_display = cfg!(all(unix, not(target_os = "macos")));
+    let browser_found = flags.browser.is_some() || login::find_browser().is_some();
+    let method = choose_method(&flags, &env, stdin_is_tty, needs_display, browser_found);
+    if method == Method::Paste {
+        let raw = read_paste(stdin_is_tty)?;
+        let acc = sb.accept_session(&raw).await?;
+        return report(ctx, &acc);
+    }
+    if ctx.fetcher.is_offline() {
+        return Err(IdxError::OfflineMiss(
+            "`idx stockbit login` checks the session with Stockbit, so it needs the network".into(),
+        ));
+    }
+    if !force && already_signed_in(ctx, &sb).await? {
+        return Ok(());
+    }
+    let timeout = Duration::from_secs(timeout);
+    match method {
+        Method::Paste => unreachable!("handled above"),
+        Method::Page { why } => {
+            if let Some(why) = why {
+                output::print_stderr(&format!(
+                    "Using the sign-in page: {why} (--browser opens one anyway)."
+                ));
+            }
+            let server = page::bind(page::PageOptions {
+                port: flags.port,
+                timeout,
+            })
+            .await?;
+            output::print_stderr(&format!(
+                "Open this page in the browser where you will sign in to Stockbit:\n  {}",
+                server.url
+            ));
+            if page::over_ssh(&env) {
+                output::print_stderr(&format!(
+                    "From the machine with your browser, run (and keep it open):\n  {}\nthen open the URL there.",
+                    page::ssh_forward(server.port, &env)
+                ));
+            } else if std::io::stderr().is_terminal() && browser_found {
+                open_in_browser(&server.url);
+            }
+            output::print_stderr(&format!(
+                "Waiting up to {}; Ctrl-C stops.",
+                page::span(timeout)
+            ));
+            let acc = server
+                .wait(move |v: String| {
+                    let sb = sb.clone();
+                    async move {
+                        let r = sb.accept_session(&v).await;
+                        if let Err(e) = &r {
+                            output::print_stderr(&page::describe(e));
+                        }
+                        r
+                    }
+                })
+                .await?;
             report(ctx, &acc)
         }
         Method::Browser(browser) => {
-            if ctx.fetcher.is_offline() {
-                return Err(IdxError::OfflineMiss(
-                    "`idx stockbit login` checks the session with Stockbit, so it needs the network"
-                        .into(),
-                ));
-            }
-            if !force && already_signed_in(ctx, &sb).await? {
-                return Ok(());
-            }
             let opts = login::LoginOptions {
                 browser,
                 profile_dir: profile
                     .unwrap_or_else(|| default_profile(&ctx.settings.stockbit_session)),
-                timeout: Duration::from_secs(timeout),
+                timeout,
             };
             output::print_stderr(
                 "Opening a browser on Stockbit's sign-in page. Sign in there; idx takes the session once Stockbit accepts it.",
@@ -429,18 +553,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_sign_in_method_follows_the_flags_and_stdin() {
-        let chrome = Some(PathBuf::from("/opt/chrome"));
-        assert_eq!(choose_method(true, None, true), Method::Paste);
-        assert_eq!(choose_method(false, None, false), Method::Paste);
-        assert_eq!(choose_method(false, None, true), Method::Browser(None));
+    fn the_sign_in_method_follows_the_flags_and_the_machine() {
+        let chrome = PathBuf::from("/opt/chrome");
+        let none = |_: &str| None;
+        let desktop = |k: &str| (k == "DISPLAY").then(|| ":0".to_string());
+        let ssh = |k: &str| (k == "SSH_CONNECTION").then(|| "1.2.3.4 5 6.7.8.9 22".to_string());
+        let tty = |k: &str| (k == "SSH_TTY").then(|| "/dev/pts/0".to_string());
+        let f = |manual, page, port, browser: Option<&PathBuf>| LoginFlags {
+            manual,
+            page,
+            port,
+            browser: browser.cloned(),
+        };
+        let plain = f(false, false, None, None);
+        // --manual, or a pipe on stdin with nothing else asked: paste.
         assert_eq!(
-            choose_method(false, chrome.clone(), false),
-            Method::Browser(chrome.clone())
+            choose_method(&f(true, false, None, None), &none, true, false, true),
+            Method::Paste
         );
         assert_eq!(
-            choose_method(false, chrome.clone(), true),
-            Method::Browser(chrome)
+            choose_method(&plain, &none, false, false, true),
+            Method::Paste
         );
+        // --page or --port: the page, piped stdin or not.
+        assert_eq!(
+            choose_method(&f(false, true, None, None), &none, false, false, true),
+            Method::Page { why: None }
+        );
+        assert_eq!(
+            choose_method(
+                &f(false, false, Some(7878), None),
+                &desktop,
+                true,
+                true,
+                true
+            ),
+            Method::Page { why: None }
+        );
+        // --browser: that browser, even over SSH.
+        assert_eq!(
+            choose_method(
+                &f(false, false, None, Some(&chrome)),
+                &ssh,
+                true,
+                true,
+                true
+            ),
+            Method::Browser(Some(chrome.clone()))
+        );
+        // Otherwise the machine decides.
+        assert_eq!(
+            choose_method(&plain, &desktop, true, true, true),
+            Method::Browser(None)
+        );
+        assert_eq!(
+            choose_method(&plain, &none, true, false, true),
+            Method::Browser(None)
+        );
+        for (env, needs_display, found, why) in [
+            (&ssh as &dyn Fn(&str) -> Option<String>, false, true, "SSH"),
+            (&tty, false, true, "SSH"),
+            (&none, true, true, "no display"),
+            (&desktop, true, false, "no Chrome"),
+        ] {
+            match choose_method(&plain, env, true, needs_display, found) {
+                Method::Page { why: Some(w) } => assert!(w.contains(why), "{w}"),
+                other => panic!("{why}: {other:?}"),
+            }
+        }
     }
 }

@@ -40,7 +40,41 @@ idx closes Stockbit's tab, deletes the cookie from its profile (so a later run
 cannot pick up a pair idx has since rotated) and closes the browser. The
 profile keeps Stockbit's other cookies, so the next sign-in may skip a step.
 Google sign-in refuses browsers driven this way ("This browser or app may not
-be secure"); paste the cookie instead.
+be secure"); use the local page instead.
+
+**Through a local page** (`--page`; also chosen by itself over SSH, without a
+display, or without a Chromium-family browser):
+
+```sh
+idx stockbit login --page                 # prints http://127.0.0.1:7878/login/<secret>
+idx stockbit login --page --port 7878     # pin the port, e.g. for an SSH forward
+```
+
+idx serves a page on 127.0.0.1 only, at a path with a random secret, for the
+browser you already use (any browser, Firefox included). Over SSH it also prints
+the forward to run on the machine with the browser, for example
+`ssh -N -L 7878:127.0.0.1:7878 you@server`; then open the URL there. On the
+page:
+
+1. Open a **private window** and sign in at stockbit.com (Google sign-in works
+   here). idx then holds a session of its own while your everyday browser keeps
+   its own.
+2. Drag **Send to idx** to the bookmarks bar, then click that bookmark on the
+   stockbit.com tab. It runs only on stockbit.com, reads `credentialStorage`
+   there and opens the page with the value in the address fragment, which the
+   browser never sends to any server. A bookmark from an earlier run carries an
+   old secret: drag it again.
+3. Or paste the cookie into the page (DevTools > Application > Cookies, or the
+   clipboard button).
+
+The page posts only that value to idx, which checks it with Stockbit and
+answers on the page. Close the private window afterwards **without signing
+out**. The page answers only on its secret path, only to a loopback `Host`, and
+takes a POST only from a loopback origin; it keeps no copy, sets `no-store`,
+`no-referrer` and a CSP that allows nothing outside the page, accepts one
+session and stops (or after `--timeout`, 300 seconds by default). Port 7878 is
+the default; when it is taken idx picks a free one, `--port` pins it and
+`--port 0` takes any.
 
 **By pasting the cookie**, from any browser:
 
@@ -195,11 +229,16 @@ The MCP server exposes five Stockbit tools alongside the rest:
   market calendar without one; `kind`, `from`, `to`, `days` as on the CLI.
 - `idx_stockbit_movements`: insider and 5 % holder movements; `symbol`,
   `from`, `to`, `holder`, `action`, `source`, `pages` as on the CLI.
-- `idx_stockbit_login`: opens a browser **on the machine running the server**
-  for the user to sign in, and checks the session before storing it; a session
-  that already works is reported without opening anything. Only meaningful for
-  a local stdio server the user is sitting at, never a remote HTTP one. Prefer
-  telling the user to run `idx stockbit login` in a terminal themselves.
+- `idx_stockbit_login`: starts a sign-in. `method: page` returns at once with
+  a URL on 127.0.0.1 (and the `ssh -N -L` forward when the server is reached
+  over SSH) for the user to open in their own browser, as with `--page`; the
+  agent then polls `idx_stockbit_status`, whose `sign_in` shows `waiting`,
+  `signed_in` or `failed`. `method: browser` opens a browser **on the machine
+  running the server** and waits, which only suits a local stdio server the user
+  sits at. A session that already works is reported without opening anything
+  (`force` signs in anyway). The tool never asks for, and agents should never
+  ask the user for, a password, a cookie or a token in the chat. Prefer telling
+  the user to run `idx stockbit login` in a terminal themselves.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
 provider: `idx --provider stockbit mcp`.
