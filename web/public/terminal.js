@@ -15,7 +15,7 @@ const COMMANDS = [
   { name: "quote", usage: "quote <SYMBOLS>", help: "delayed quotes, e.g. quote BBCA,BBRI; one symbol adds a price chart (1D to 5Y)" },
   { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 5m 15m 30m 1h 1d 1wk 1mo" },
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
-  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm]", help: "income statement, balance sheet, cash flow" },
+  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm] [--statement income,balance,cash]", help: "income statement, balance sheet, cash flow; --statement shows only those" },
   { name: "earnings", usage: "earnings <SYMBOL>", help: "quarterly EPS vs estimates, next date" },
   { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
@@ -162,14 +162,14 @@ const R = {
     frag.append(el("p", { class: "warn", text: "Rule-based read of daily candles, not investment advice." }));
     return frag;
   },
-  financials(f) {
+  financials(f, only = null) {
     const cols = [{ h: "", k: "label", l: true }, ...f.periods.map((p, i) => ({ h: f.period === "annual" ? `FY${p.end_date.slice(0, 4)}` : p.end_date, f: (r) => r.vals[i], cls: "num" }))];
     const lines = [
       ["Total revenue", "income", "total_revenue"], ["Gross profit", "income", "gross_profit"], ["Operating income", "income", "operating_income"], ["EBITDA", "income", "ebitda"],
       ["Net interest income", "income", "net_interest_income"], ["Pretax income", "income", "pretax_income"], ["Net income", "income", "net_income"], ["EPS (diluted)", "income", "eps_diluted", "price"],
       ["Total assets", "balance", "total_assets"], ["Total liabilities", "balance", "total_liabilities"], ["Shareholders' equity", "balance", "stockholders_equity"], ["Cash & equivalents", "balance", "cash_and_equivalents"], ["Total debt", "balance", "total_debt"],
       ["Operating cash flow", "cash_flow", "operating"], ["Capital expenditure", "cash_flow", "capital_expenditure"], ["Free cash flow", "cash_flow", "free_cash_flow"], ["Dividends paid", "cash_flow", "dividends_paid"],
-    ];
+    ].filter(([, s]) => !only || only.has(s));
     const rows = lines.map(([label, s, k, kind]) => ({ label, vals: f.periods.map((p) => (kind === "price" ? fmt.price(p[s][k]) : fmt.compact(p[s][k]))) })).filter((r) => r.vals.some((v) => v !== "—"));
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", text: `${f.symbol} · ${f.period} statements · ${f.periods.length} periods · ${f.currency || ""} · T = trillion, B = billion` }));
@@ -532,6 +532,20 @@ const R = {
 
 // ---- command execution -----------------------------------------------------
 
+// `--statement income,balance,cash` (aliases cashflow, cash-flow; all = every
+// statement) as the set of statement keys to show, or null for all of them.
+const STATEMENTS = { income: "income", balance: "balance", cash: "cash_flow", cashflow: "cash_flow", "cash-flow": "cash_flow" };
+function statements(v) {
+  if (v == null || v === true) return null;
+  const keys = new Set();
+  for (const name of String(v).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
+    if (name === "all") return null;
+    if (!STATEMENTS[name]) throw Object.assign(new Error(`invalid statement "${name}"; use income, balance, cash or all`), { code: "usage" });
+    keys.add(STATEMENTS[name]);
+  }
+  return keys.size ? keys : null;
+}
+
 function need(pos, n, usage) { if (pos.length < n) throw Object.assign(new Error(`usage: ${usage}`), { code: "usage" }); }
 
 async function run(line) {
@@ -552,7 +566,13 @@ async function run(line) {
     case "quote": need(pos, 1, cmd.usage); env = await api(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
     case "history": need(pos, 1, cmd.usage); env = await api(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
     case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
-    case "financials": need(pos, 1, cmd.usage); env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`); render = R.financials; break;
+    case "financials": {
+      need(pos, 1, cmd.usage);
+      const only = statements(opt.statement);
+      env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`);
+      render = (d) => R.financials(d, only);
+      break;
+    }
     case "earnings": need(pos, 1, cmd.usage); env = await api(`earnings?symbol=${encodeURIComponent(sym())}`); render = R.earnings; break;
     case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;

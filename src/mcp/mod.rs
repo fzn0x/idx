@@ -607,7 +607,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_financials",
-        description = "Income statement, balance sheet and cash flow for one IDX ticker, oldest period first, amounts in reporting currency (IDR). Returns the idx.financials.v1 envelope. Banks have no EBITDA/gross profit series (null)."
+        description = "Income statement, balance sheet and cash flow for one IDX ticker, oldest period first, amounts in reporting currency (IDR). Returns the idx.financials.v1 envelope. Every period carries all three statements (the CLI's --statement only narrows its table). Banks have no EBITDA/gross profit series (null)."
     )]
     async fn financials(
         &self,

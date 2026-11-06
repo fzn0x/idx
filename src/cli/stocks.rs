@@ -26,7 +26,20 @@ pub enum Statement {
     All,
     Income,
     Balance,
+    #[value(alias = "cashflow", alias = "cash-flow")]
     Cash,
+}
+
+impl Statement {
+    /// The table sections a `--statement` list asks for (`all` anywhere means all three).
+    pub fn flags(list: &[Statement]) -> StatementFlags {
+        let all = list.is_empty() || list.contains(&Statement::All);
+        StatementFlags {
+            income: all || list.contains(&Statement::Income),
+            balance: all || list.contains(&Statement::Balance),
+            cash_flow: all || list.contains(&Statement::Cash),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -71,7 +84,7 @@ pub enum StocksCmd {
 
     /// Income statement, balance sheet and cash flow (annual, quarterly or TTM).
     #[command(
-        after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx -o json stocks financials ASII --period ttm"
+        after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx stocks financials TLKM -s income,cash\n  idx -o json stocks financials ASII --period ttm\n\n--statement (income, balance, cash or all; comma-separated or repeated) narrows the table.\nJSON and CSV always carry all three statements, which are columns of each period."
     )]
     Financials {
         #[arg(value_name = "SYMBOL")]
@@ -79,9 +92,16 @@ pub enum StocksCmd {
         /// Reporting series.
         #[arg(long, short = 'p', value_enum, default_value = "annual")]
         period: StatementPeriod,
-        /// Which statement to show in table mode (JSON always carries all three).
-        #[arg(long, short = 's', value_enum, default_value = "all")]
-        statement: Statement,
+        /// Statements shown in table mode, comma-separated or repeated (JSON and CSV always carry all three).
+        #[arg(
+            long,
+            short = 's',
+            value_enum,
+            value_delimiter = ',',
+            default_value = "all",
+            value_name = "STATEMENT"
+        )]
+        statement: Vec<Statement>,
     },
 
     /// Reported quarterly EPS vs estimates, yearly revenue and earnings, next earnings date.
@@ -272,7 +292,7 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             symbol,
             period,
             statement,
-        } => financials(ctx, &symbol, period, statement).await,
+        } => financials(ctx, &symbol, period, &statement).await,
         StocksCmd::Earnings { symbol } => earnings(ctx, &symbol).await,
         StocksCmd::Dividends { symbol, limit } => dividends(ctx, &symbol, limit).await,
         StocksCmd::Brief { symbol } => brief(ctx, &symbol).await,
@@ -407,15 +427,11 @@ async fn financials(
     ctx: &Context,
     raw: &str,
     period: StatementPeriod,
-    statement: Statement,
+    statement: &[Statement],
 ) -> Result<()> {
     let symbol = Symbol::parse(raw)?;
     let result = ctx.provider.financials(&symbol, period).await?;
-    let flags = StatementFlags {
-        income: matches!(statement, Statement::All | Statement::Income),
-        balance: matches!(statement, Statement::All | Statement::Balance),
-        cash_flow: matches!(statement, Statement::All | Statement::Cash),
-    };
+    let flags = Statement::flags(statement);
     emit(ctx, SCHEMA_FINANCIALS, result, |d| {
         reports::financials(d, &flags, ctx.color)
     })

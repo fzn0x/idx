@@ -404,6 +404,9 @@ Symbols that failed are listed in `warnings`.
   outflows are negative.
 - Banks have no EBITDA, gross profit or operating income series at the source,
   so those are `null`.
+- Every period carries all three statements. `--statement income,cash` narrows
+  the table only: JSON and CSV keep the three, since a blanked statement would
+  read as data the source does not have.
 
 ## `idx.earnings.v1` (`stocks earnings`)
 

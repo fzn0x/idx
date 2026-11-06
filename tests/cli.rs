@@ -862,6 +862,67 @@ fn msn_provider_is_selectable() {
 }
 
 #[test]
+fn financials_show_several_statements() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        &format!(
+            "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/TLKM.JK?type={}",
+            idx::providers::yahoo::timeseries::types_param(idx::model::StatementPeriod::Annual)
+        ),
+        "yahoo/timeseries_tlkm.json",
+    );
+    let table = |args: &[&str]| -> String {
+        let out = idx(&sb.cache, &sb.config)
+            .args(["stocks", "financials", "TLKM"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let all = table(&[]);
+    for s in ["INCOME STATEMENT", "BALANCE SHEET", "CASH FLOW"] {
+        assert!(all.contains(s), "{s}");
+    }
+    for args in [
+        &["-s", "income,cash"][..],
+        &["--statement", "income", "--statement", "cashflow"],
+        &["-s", "cash-flow,income"],
+    ] {
+        let t = table(args);
+        assert!(t.contains("INCOME STATEMENT"), "{args:?}");
+        assert!(t.contains("CASH FLOW"), "{args:?}");
+        assert!(!t.contains("BALANCE SHEET"), "{args:?}");
+    }
+    let t = table(&["-s", "balance"]);
+    assert!(t.contains("BALANCE SHEET") && !t.contains("INCOME STATEMENT"));
+    // `all` anywhere in the list means every statement.
+    let t = table(&["-s", "balance,all"]);
+    assert!(t.contains("INCOME STATEMENT") && t.contains("CASH FLOW"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "financials", "TLKM", "-s", "bogus"])
+        .assert()
+        .code(2);
+    // JSON keeps all three statements: they are columns of each period.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "financials", "TLKM", "-s", "income"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let p = &v["data"]["periods"][0];
+    assert!(
+        p["balance"].is_object() && p["cash_flow"].is_object(),
+        "{p}"
+    );
+}
+
+#[test]
 fn history_provider_routes_candles() {
     let sb = sandbox();
     seed(
