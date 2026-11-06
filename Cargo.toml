@@ -2,7 +2,7 @@
 name = "ihsg-cli"
 version = "0.8.1"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Indonesian stock market (IDX / IHSG) analysis: the `idx` CLI and MCP server for people and AI agents, free public data"
 license = "MIT"
 authors = ["Midori Research <desk@midoriresearch.com>"]

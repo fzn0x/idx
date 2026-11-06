@@ -127,6 +127,10 @@ npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
                      register to the `ownership-data` prerelease (raw files, index.json, JSON parts) and
                      publishes the prebuilt snapshot (`snapshot-v{V}.json` + `ownership-v{V}-*.sqlite.gz`)
+flake.nix            Nix flake (crane + rust-overlay, built from Cargo.lock): packages idx and idx-mcp,
+                     apps (default, mcp), dev shell (rust-toolchain.toml + rust-analyzer + node 22),
+                     checks (fmt, clippy, test, msrv, smoke), overlays.default; flake.lock pins the
+                     inputs and .github/workflows/nix.yml builds it (uploads a fresh lock as an artifact)
 ```
 
 CLI groups: `stocks` (quote, history, intraday, profile, financials, earnings, dividends, returns,
@@ -214,7 +218,21 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ./scripts/smoke.sh               # live providers, needs network
 ./target/debug/idx -vv stocks quote BBCA   # -vv prints every request to stderr
+nix flake check                  # optional: the same gates in a Nix sandbox, plus an MSRV cargo check
 ```
+
+The flake builds only from `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `src/`,
+`data/` and `tests/`. If the crate starts embedding a file from anywhere else,
+add the path to `src` in `flake.nix`.
+
+To update the flake inputs (nixpkgs, crane, rust-overlay, and with them the
+stable Rust behind the flake's fmt and clippy checks) without a local Nix, run
+the nix workflow by hand on a branch with `update` set
+(`gh workflow run nix.yml --ref <branch> -f update=true`). Its checks run on the
+new inputs, and its last step fails until the new lock is committed: delete
+`flake.lock`, fetch the run's copy with `gh run download <run-id> -n flake-lock`
+(gh does not overwrite files) and commit it as `chore(nix): update flake inputs`,
+together with fixes for any new clippy or rustfmt findings.
 
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`,
 `chore:`, `ci:`). Keep each commit buildable.
