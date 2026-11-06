@@ -38,7 +38,7 @@ export const PAGES = [
   { slug: "json-output", src: "docs/json-output.md", nav: "JSON output", panel: "Keluaran JSON", desc: "The envelope, every payload schema field by field, errors, exit codes and the compatibility promise." },
   { slug: "configuration", src: "docs/configuration.md", nav: "Configuration", panel: "Konfigurasi", desc: "Config file, IDX_* environment variables, cache location and lifetimes." },
   { slug: "ownership", src: "docs/ownership.md", nav: "Ownership data", panel: "Kepemilikan", desc: "The KSEI register of holders above 1 %: source files, the GitHub mirror, the local database and its queries." },
-  { slug: "stockbit", src: "docs/stockbit.md", nav: "Stockbit realtime", panel: "Stockbit", desc: "The opt-in realtime provider: logging in, the order book, the MCP tools and where the session lives." },
+  { slug: "stockbit", src: "docs/stockbit.md", nav: "Stockbit realtime", panel: "Stockbit", desc: "The opt-in Stockbit provider: logging in, the order book, corporate actions, the calendar and holder movements, the MCP tools and where the session lives." },
 ];
 
 export const SUMMARY =

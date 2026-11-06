@@ -33,9 +33,10 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `data/brokers.csv`).
 - `src/holidays.js` the trading holidays (port of `src/holidays.rs`;
   `src/holidays.json` is `data/holidays.csv`, kept equal by a test).
-  The idx.co.id commands (foreign flow, market brokers, calendar, indices,
-  stock list, members) stay CLI and MCP only: idx.co.id refuses requests from
-  Cloudflare Workers.
+  The idx.co.id commands (market-wide foreign flow, market brokers, calendar,
+  indices, stock list, members) stay CLI and MCP only: idx.co.id refuses
+  requests from Cloudflare Workers. The web `foreign` reads a stock's foreign
+  flow from IPOT instead (`src/ipot.js`).
 - `src/bandar.js` the bandarmology rules (port of `src/analysis/bandar.rs`,
   the same reasons text pinned in both test suites); `src/bandar-scan.js` the
   nightly scan behind `bandar screen`: from 16:45 WIB on a session day the
