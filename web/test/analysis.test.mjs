@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 
 import * as an from "../src/analysis.js";
 import * as y from "../src/yahoo.js";
-import { parseRss, matchName, parseSymbols, marketIsOpen } from "../src/api.js";
+import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
@@ -139,6 +139,19 @@ test("currency is the price's, never the statements'", () => {
   f = y.parseFundamentals(r, "ITMG");
   assert.equal(f.currency, null, "unknown, not USD");
   assert.equal(f.financial_currency, "USD");
+});
+
+test("brief key point leaves out a mixed-currency P/B (service::valuation_key_point)", () => {
+  const withVerdict = (name, s) => {
+    const f = y.parseFundamentals(JSON.parse(fixture(`yahoo/${name}`)).quoteSummary.result[0], s);
+    f.verdict = an.verdict(f);
+    return f;
+  };
+  const itmg = withVerdict("quote_summary_fundamentals_itmg.json", "ITMG");
+  assert.equal(valuationKeyPoint(itmg), "Valuation verdict: undervalued (score +7, 8 inputs); P/E 7.5");
+  const bbca = withVerdict("quote_summary_fundamentals_bbca.json", "BBCA");
+  assert.ok(valuationKeyPoint(bbca).includes(", P/B "), valuationKeyPoint(bbca));
+  assert.equal(valuationKeyPoint({ ...itmg, verdict: null }), null);
 });
 
 test("earnings parse: padded zero quarters become null", () => {

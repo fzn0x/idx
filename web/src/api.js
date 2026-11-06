@@ -847,6 +847,15 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
 
 // ---- brief ---------------------------------------------------------------------
 
+// The brief's "Valuation verdict" key point, null without a verdict. A P/B
+// over statements in another currency is not a ratio, so it is left out (as
+// service::valuation_key_point does in the CLI).
+export function valuationKeyPoint(f) {
+  if (!f?.verdict) return null;
+  const v = f.verdict, pe = f.valuation.pe_trailing, pb = an.mixedCurrency(f) ? null : f.valuation.price_to_book;
+  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} inputs)${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
+}
+
 export async function brief(env, symbolRaw) {
   const symbol = parseSymbol(symbolRaw);
   const sections = {
@@ -873,7 +882,8 @@ export async function brief(env, symbolRaw) {
   const pct = (v, dp = 1) => `${v >= 0 ? "+" : ""}${v.toFixed(dp)}%`;
   const key_points = [];
   if (q && q.price != null && q.change_pct != null) key_points.push(`Price ${q.price.toLocaleString("en-US")} (${pct(q.change_pct, 2)} today)${q.market_cap ? `, market cap ${(q.market_cap / 1e12).toFixed(1)}T` : ""}`);
-  if (f?.verdict) key_points.push(`Valuation verdict: ${f.verdict.label} (score ${f.verdict.score >= 0 ? "+" : ""}${f.verdict.score}, ${f.verdict.inputs_available} inputs)${f.valuation.pe_trailing != null ? `; P/E ${f.valuation.pe_trailing.toFixed(1)}` : ""}${f.valuation.price_to_book != null && !an.mixedCurrency(f) ? `, P/B ${f.valuation.price_to_book.toFixed(2)}` : ""}`);
+  const valuation = valuationKeyPoint(f);
+  if (valuation) key_points.push(valuation);
   if (t) key_points.push(`Technical signal: ${t.signal.label} (score ${t.signal.score >= 0 ? "+" : ""}${t.signal.score}), trend ${t.trend}${t.rsi14 != null ? `, RSI ${t.rsi14.toFixed(0)}` : ""}`);
   if (r?.returns?.["1y"] != null) key_points.push(`1y return ${pct(r.returns["1y"])}${r.benchmark?.excess?.["1y"] != null ? ` (${r.benchmark.excess["1y"] >= 0 ? "+" : ""}${r.benchmark.excess["1y"].toFixed(1)} pp vs ${r.benchmark.symbol})` : ""}; YTD ${r.returns.ytd != null ? pct(r.returns.ytd) : "n/a"}`);
   if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");

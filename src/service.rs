@@ -453,6 +453,26 @@ impl Sections {
     }
 }
 
+/// The brief's "Valuation verdict" key point, `None` without a verdict. A P/B
+/// over statements in another currency is not a ratio, so it is left out.
+fn valuation_key_point(f: &Fundamentals) -> Option<String> {
+    let v = f.verdict.as_ref()?;
+    Some(format!(
+        "Valuation verdict: {} (score {:+}, {} inputs){}",
+        v.label.as_str(),
+        v.score,
+        v.inputs_available,
+        match (
+            f.valuation.pe_trailing,
+            f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
+        ) {
+            (Some(pe), Some(pb)) => format!("; P/E {pe:.1}, P/B {pb:.2}"),
+            (Some(pe), None) => format!("; P/E {pe:.1}"),
+            _ => String::new(),
+        }
+    ))
+}
+
 /// One call, every section: quote, fundamentals with verdict, technicals,
 /// returns against IHSG, dividend facts, the local ownership register and
 /// company headlines with sentiment. Sections fetch concurrently; a failed
@@ -569,24 +589,8 @@ pub async fn brief(
             ));
         }
     }
-    if let Some(f) = &fundamentals {
-        if let Some(v) = &f.verdict {
-            key_points.push(format!(
-                "Valuation verdict: {} (score {:+}, {} inputs){}",
-                v.label.as_str(),
-                v.score,
-                v.inputs_available,
-                // A P/B over statements in another currency is not a ratio.
-                match (
-                    f.valuation.pe_trailing,
-                    f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
-                ) {
-                    (Some(pe), Some(pb)) => format!("; P/E {pe:.1}, P/B {pb:.2}"),
-                    (Some(pe), None) => format!("; P/E {pe:.1}"),
-                    _ => String::new(),
-                }
-            ));
-        }
+    if let Some(k) = fundamentals.as_ref().and_then(valuation_key_point) {
+        key_points.push(k);
     }
     if let Some(t) = &technical {
         key_points.push(format!(
@@ -1668,6 +1672,36 @@ pub async fn bandar_broker(
 mod tests {
     use super::*;
     use crate::model::{History, Quote};
+
+    #[test]
+    fn valuation_key_point_leaves_out_a_mixed_currency_pb() {
+        let parse = |body: &str, s: &str| {
+            let mut f = crate::providers::yahoo::summary::parse_fundamentals(
+                body,
+                &Symbol::parse(s).unwrap(),
+            )
+            .unwrap();
+            f.verdict = Some(analysis::fundamental::verdict(&f));
+            f
+        };
+        // ITMG on 2026-11-06: USD statements, IDR price, P/B 14103.31.
+        let mut itmg = parse(
+            include_str!("../tests/fixtures/yahoo/quote_summary_fundamentals_itmg.json"),
+            "ITMG",
+        );
+        assert_eq!(
+            valuation_key_point(&itmg).as_deref(),
+            Some("Valuation verdict: undervalued (score +7, 8 inputs); P/E 7.5")
+        );
+        let bbca = parse(
+            include_str!("../tests/fixtures/yahoo/quote_summary_fundamentals_bbca.json"),
+            "BBCA",
+        );
+        let k = valuation_key_point(&bbca).unwrap();
+        assert!(k.contains(", P/B "), "same currency keeps P/B: {k}");
+        itmg.verdict = None;
+        assert_eq!(valuation_key_point(&itmg), None);
+    }
 
     #[test]
     fn match_names_and_items() {
