@@ -16,7 +16,17 @@ routes = [
 directory = "public"
 binding = "ASSETS"
 not_found_handling = "404-page"
-run_worker_first = ["/api/*", "/healthz"]
+# The docs (/docs, /llms*.txt) pass through the Worker for the charset and
+# CORS of the Markdown files; every other asset gets its headers from
+# public/_headers.
+run_worker_first = ["/api/*", "/healthz", "/docs", "/docs/*", "/llms.txt", "/llms-full.txt"]
+
+# The docs pages, llms.txt and llms-full.txt are generated from README.md and
+# docs/*.md into public/ (gitignored) before every `wrangler dev` and
+# `wrangler deploy`.
+[build]
+command = "node scripts/docs.mjs"
+watch_dir = ["scripts", "../docs"]
 
 [vars]
 PUBLIC_HOST = "ihsg.midoriresearch.com"

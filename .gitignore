@@ -26,3 +26,8 @@ npm/bin/*.tmp
 npm-mcp/bin/idx
 npm-mcp/bin/idx.exe
 npm-mcp/bin/*.tmp
+
+# Generated from README.md and docs/*.md by web/scripts/docs.mjs (wrangler [build])
+/web/public/docs/
+/web/public/llms.txt
+/web/public/llms-full.txt
