@@ -118,6 +118,19 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     for t in tools {
         walk(t["name"].as_str().unwrap(), &t["inputSchema"]);
     }
+    // The growth, valuation and risk lenses are an argument, not more tools.
+    let fundamental = tools
+        .iter()
+        .find(|t| t["name"] == "idx_fundamental")
+        .unwrap();
+    assert_eq!(
+        fundamental["inputSchema"]["properties"]["lens"]["type"],
+        "string"
+    );
+    assert!(fundamental["description"]
+        .as_str()
+        .unwrap()
+        .contains("idx.risk.v1"));
     let news = tools.iter().find(|t| t["name"] == "idx_news").unwrap();
     assert_eq!(
         news["inputSchema"]["properties"]["limit"]["type"],
@@ -141,6 +154,19 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["error"]["code"], "offline_miss");
     assert_eq!(body["exit_code"], 5);
+
+    // A lens with nothing cached is the same structured cache miss.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "idx_fundamental", "arguments": {"symbol": "TLKM", "lens": "risk"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 5);
+    assert_eq!(r["result"]["isError"], true);
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "offline_miss", "{body}");
 
     // A bad symbol is a usage error, still structured.
     let call = serde_json::json!({

@@ -24,14 +24,14 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Lens, Period, StatementPeriod, Symbol,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
-    SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
+    SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_GROWTH, SCHEMA_HISTORY, SCHEMA_MARKET,
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN,
     SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
+    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
@@ -76,6 +76,16 @@ pub struct SymbolsArg {
 pub struct SymbolArg {
     /// One IDX ticker, e.g. "BBCA".
     pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FundamentalArgs {
+    /// One IDX ticker, e.g. "BBCA".
+    pub symbol: String,
+    /// Optional focused reading instead of the full report: "growth" (idx.growth.v1), "valuation"
+    /// (idx.valuation.v1) or "risk" (idx.risk.v1; adds a year of daily candles for the stock and IHSG).
+    #[serde(default)]
+    pub lens: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -984,19 +994,30 @@ impl IdxServer {
 
     #[tool(
         name = "idx_fundamental",
-        description = "Fundamentals report for one IDX ticker: valuation (P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA), profitability (ROE, ROA, margins), balance sheet (debt/equity, current ratio, cash, debt), growth, dividend, per-share figures, analyst targets, and a plain-language verdict (undervalued | fair | overvalued | insufficient_data) with every rule that fired listed in reasons. Returns the idx.fundamentals.v1 envelope."
+        description = "Fundamentals report for one IDX ticker: valuation (P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA), profitability (ROE, ROA, margins), balance sheet (debt/equity, current ratio, cash, debt), growth, dividend, per-share figures, analyst targets, and a plain-language verdict (undervalued | fair | overvalued | insufficient_data) with every rule that fired listed in reasons. Returns the idx.fundamentals.v1 envelope. With lens, a focused reading instead: growth (latest quarter, forward EPS, fiscal-year revenue and net income; growing | stable | mixed | shrinking; idx.growth.v1), valuation (multiples, yield, analyst target; cheap | fair | expensive; idx.valuation.v1) or risk (negative equity, leverage, liquidity, losses, and beta, volatility and largest fall against IHSG over a year of daily closes; low | moderate | high; idx.risk.v1). A lens lists every rule that ran with its points and notes every rule it skipped."
     )]
     async fn fundamental(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<FundamentalArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
                 let symbol = Symbol::parse(&a.symbol)?;
-                ok(
-                    SCHEMA_FUNDAMENTALS,
-                    service::fundamentals(self.provider.as_ref(), &symbol).await?,
-                )
+                let lens = match a.lens.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(l) => Some(l.parse::<Lens>()?),
+                    None => None,
+                };
+                let Some(lens) = lens else {
+                    return ok(
+                        SCHEMA_FUNDAMENTALS,
+                        service::fundamentals(self.provider.as_ref(), &symbol).await?,
+                    );
+                };
+                match service::lens(self.provider.as_ref(), &symbol, lens).await? {
+                    service::LensResult::Growth(r) => ok(SCHEMA_GROWTH, r),
+                    service::LensResult::Valuation(r) => ok(SCHEMA_VALUATION, r),
+                    service::LensResult::Risk(r) => ok(SCHEMA_RISK, r),
+                }
             }
             .await,
         )
@@ -1855,17 +1876,65 @@ mod tests {
         }
     }
 
+    fn fundamental_args(lens: Option<&str>) -> FundamentalArgs {
+        FundamentalArgs {
+            symbol: "BBCA".into(),
+            lens: lens.map(Into::into),
+        }
+    }
+
     #[tokio::test]
     async fn fundamental_tool_adds_a_verdict() {
         let s = server();
+        for lens in [None, Some(""), Some("  ")] {
+            let r = s
+                .fundamental(Parameters(fundamental_args(lens)))
+                .await
+                .unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["schema"], "idx.fundamentals.v1");
+            assert_eq!(v["data"]["verdict"]["label"], "insufficient_data");
+        }
+    }
+
+    #[tokio::test]
+    async fn fundamental_tool_returns_a_lens() {
+        let s = server();
+        for (lens, schema) in [
+            ("growth", "idx.growth.v1"),
+            ("Valuation", "idx.valuation.v1"),
+            (" risk ", "idx.risk.v1"),
+        ] {
+            let r = s
+                .fundamental(Parameters(fundamental_args(Some(lens))))
+                .await
+                .unwrap();
+            assert_ne!(r.is_error, Some(true), "{lens}: {}", text(&r));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["schema"], schema);
+            assert_eq!(v["data"]["reading"]["label"], "insufficient_data");
+            assert_eq!(v["data"]["symbol"], "BBCA");
+        }
+        // The fake has no statements and no candles: the lens still answers,
+        // with warnings that say why.
         let r = s
-            .fundamental(Parameters(SymbolArg {
-                symbol: "BBCA".into(),
-            }))
+            .fundamental(Parameters(fundamental_args(Some("risk"))))
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
-        assert_eq!(v["schema"], "idx.fundamentals.v1");
-        assert_eq!(v["data"]["verdict"]["label"], "insufficient_data");
+        assert!(v["data"]["price"].is_null());
+        assert!(v["warnings"].to_string().contains("price history: "), "{v}");
+
+        let r = s
+            .fundamental(Parameters(fundamental_args(Some("bogus"))))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "usage");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("growth, valuation or risk"));
     }
 }
