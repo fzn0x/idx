@@ -161,8 +161,9 @@ pub struct BetaStats {
     pub observations: usize,
 }
 
+/// Three decimals; `+ 0.0` turns a rounded -0.0 into 0.0.
 fn round3(v: f64) -> f64 {
-    (v * 1000.0).round() / 1000.0
+    (v * 1000.0).round() / 1000.0 + 0.0
 }
 
 /// Beta from simple daily returns between consecutive dates of two aligned

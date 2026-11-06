@@ -34,8 +34,9 @@ const MIN_RULES: usize = 3;
 /// (`returns::volatility` needs 20).
 const MIN_PRICE_RETURNS: usize = 20;
 
+/// Two decimals; `+ 0.0` turns a rounded -0.0 into 0.0 (the web port does the same).
 fn round2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    (v * 100.0).round() / 100.0 + 0.0
 }
 
 #[derive(Default)]
