@@ -11,6 +11,7 @@
 //! - [`ownership`] KSEI monthly holder register: download, parse, SQLite, queries
 //! - [`brokers`]   IDX exchange-member directory (broker code to name)
 //! - [`holidays`]  IDX trading holidays (bundled) and trading-day arithmetic
+//! - [`astro`]     offline ephemeris, weton and shio for `market astro`
 //! - [`model`]     provider-agnostic domain types (the JSON contract)
 //! - [`output`]    table and JSON renderers
 //! - [`http`]      fetcher that puts the cache in front of the network
@@ -19,6 +20,7 @@
 //! - [`config`]    flags > env > file > defaults
 
 pub mod analysis;
+pub mod astro;
 pub mod brokers;
 pub mod cache;
 pub mod cli;
