@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 37 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -328,6 +328,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_changes` | `from`, `to`, `symbol?`, `min_pct_change?`, `limit?`, `offset?` | `idx.ownership.changes.v1`: `summary` over every match, one page of rows |
 | `idx_ownership_foreign` | `symbol?`, `from?`, `to?`, `limit?` | `idx.ownership.foreign.v1` (one issuer over time) or `idx.ownership.foreign-flow.v1` (every issuer between two months) |
 | `idx_ownership_releases` | none | `idx.ownership.releases.v1` |
+| `idx_ownership_snapshot` | `action` (`status` \| `sync`), `force?` (sync only) | `status`: `idx.ownership.status.v1`, the local database, the snapshot it came from, the mirror and what sync would do (writes nothing). `sync`: `idx.ownership.snapshot-sync.v1`, installs the prebuilt snapshot or imports the missing months; months only the local database has are kept unless `force` (a `.bak` copy is kept) |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net. Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
@@ -345,6 +346,14 @@ accounts) are summed, with `accounts` saying how many, and from the 30 Oct
 2026 register each row carries `controller_or_affiliate`
 (`controller_reported` on the report says whether the release has it).
 `idx_ownership_entity` needs at least 3 letters or digits in `name`.
+
+An empty ownership database is filled by `idx_ownership_snapshot` with
+`action: "sync"`: one download of the SQLite file CI builds from the mirrored
+IDX files (SHA-256 checked, swapped in as one SQLite transaction, so other
+calls reading the file are not disturbed), then any newer monthly file. It
+needs the network (an `offline_miss` error with `--offline`); `action:
+"status"` works offline and reports the local part. See
+[ownership.md](ownership.md#snapshot-and-sync).
 
 ## Harness compatibility
 

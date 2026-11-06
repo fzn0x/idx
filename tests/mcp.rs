@@ -77,11 +77,12 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 36, "{names:?}");
+    assert_eq!(names.len(), 37, "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
     assert!(names.contains(&"idx_ownership_ticker"), "{names:?}");
+    assert!(names.contains(&"idx_ownership_snapshot"), "{names:?}");
     assert!(names.contains(&"idx_holidays"), "{names:?}");
     assert!(names.contains(&"idx_orderbook"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
@@ -169,6 +170,32 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["exit_code"], 2, "{body}");
     assert!(body.to_string().contains("3 letters or digits"), "{body}");
+
+    // The snapshot tool: status works offline (local part only), sync does not.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "idx_ownership_snapshot", "arguments": {"action": "status"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 6);
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["schema"], "idx.ownership.status.v1");
+    assert!(body["data"]["remote"].is_null(), "{body}");
+    assert!(body["data"]["supported_schema_version"].is_i64(), "{body}");
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "idx_ownership_snapshot", "arguments": {"action": "sync"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "offline_miss", "{body}");
+    assert_eq!(body["exit_code"], 5);
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

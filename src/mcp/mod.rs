@@ -31,7 +31,8 @@ use crate::output::json::{
     SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN,
     SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
+    SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, SCHEMA_OWNERSHIP_STATUS, SCHEMA_PROFILE, SCHEMA_QUOTES,
+    SCHEMA_RETURNS, SCHEMA_TECHNICAL,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
@@ -41,7 +42,7 @@ use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
     SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
 };
-use crate::ownership::{self, OwnershipDb};
+use crate::ownership::{self, snapshot, OwnershipDb};
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{Provider, Sourced, StockbitOptions, Ttls};
 use crate::service;
@@ -63,7 +64,8 @@ idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
-monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
+monthly); if it is empty they say so: call idx_ownership_snapshot with action \"sync\"
+(or the user runs `idx ownership sync`).
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -135,6 +137,18 @@ pub struct OwnershipEntityArgs {
     #[serde(default)]
     pub as_of: Option<String>,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OwnershipSnapshotArgs {
+    /// "status" (read-only: the local database, the mirror and what sync would do) or "sync" (install the prebuilt snapshot, or import the missing months).
+    pub action: String,
+    /// With action "sync": replace a local database that holds months or data the snapshot lacks (a .bak copy is kept). Default false.
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+/// Network timeout of idx_ownership_snapshot (the server has no settings).
+const SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OwnershipChangesArgs {
@@ -1330,7 +1344,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_ticker",
-        description = "Shareholders above 1% of one IDX ticker from KSEI's monthly register (local SQLite): holder name, investor type, local/foreign, shares, percent, sorted by percent. A holder listed on several register lines (scrip and scripless accounts) is summed into one row with `accounts`; from the 30 Oct 2026 register each row carries `controller_or_affiliate` (`controller_reported` says whether the release has it). Returns the idx.ownership.holders.v1 envelope. Needs a prior `idx ownership import`."
+        description = "Shareholders above 1% of one IDX ticker from KSEI's monthly register (local SQLite): holder name, investor type, local/foreign, shares, percent, sorted by percent. A holder listed on several register lines (scrip and scripless accounts) is summed into one row with `accounts`; from the 30 Oct 2026 register each row carries `controller_or_affiliate` (`controller_reported` says whether the release has it). Returns the idx.ownership.holders.v1 envelope. Needs ownership data: idx_ownership_snapshot with action \"sync\" fills an empty database."
     )]
     async fn ownership_ticker(
         &self,
@@ -1403,7 +1417,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_foreign",
-        description = "Disclosed foreign (KSEI flag A) versus local (L) stake in the >1% register. With symbol: one issuer's foreign percent, holder counts and month-over-month change for every imported release (idx.ownership.foreign.v1). Without symbol: every issuer's change in foreign percent between two releases, largest moves first, with inflow/outflow counts (idx.ownership.foreign-flow.v1). Sums cover holders above 1% only. Needs a prior `idx ownership import`."
+        description = "Disclosed foreign (KSEI flag A) versus local (L) stake in the >1% register. With symbol: one issuer's foreign percent, holder counts and month-over-month change for every imported release (idx.ownership.foreign.v1). Without symbol: every issuer's change in foreign percent between two releases, largest moves first, with inflow/outflow counts (idx.ownership.foreign-flow.v1). Sums cover holders above 1% only. Needs ownership data: idx_ownership_snapshot with action \"sync\" fills an empty database."
     )]
     async fn ownership_foreign(
         &self,
@@ -1444,6 +1458,51 @@ impl IdxServer {
     )]
     async fn ownership_releases(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(async { ok(SCHEMA_OWNERSHIP_RELEASES, ownership::releases(&self.db()?)?) }.await)
+    }
+
+    #[tool(
+        name = "idx_ownership_snapshot",
+        description = "The local KSEI ownership database (holders above 1%) and the prebuilt copy on the project's GitHub mirror. action \"status\": the local SQLite file (path, schema version, imported months, the snapshot it was installed from) and, unless offline, what the mirror and its snapshot hold, the missing months and what sync would do (idx.ownership.status.v1); it writes nothing. action \"sync\": brings the database up to date by installing the prebuilt snapshot (a few MB, SHA-256 checked) when the database is empty, older or a subset of it, otherwise by importing only the missing monthly files; months only the local database has are never dropped unless force=true, and a .bak copy is kept (idx.ownership.snapshot-sync.v1). Call status first; call sync when the ownership tools report an empty database."
+    )]
+    async fn ownership_snapshot(
+        &self,
+        Parameters(a): Parameters<OwnershipSnapshotArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let offline = self.fetcher.is_offline();
+                match a.action.trim().to_ascii_lowercase().as_str() {
+                    "sync" => {
+                        let base = snapshot::mirror_base(offline)?;
+                        let s = snapshot::sync(
+                            &self.ownership_db,
+                            &base,
+                            a.force.unwrap_or(false),
+                            SNAPSHOT_TIMEOUT,
+                        )
+                        .await?;
+                        ok(SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, s)
+                    }
+                    "status" => {
+                        if a.force == Some(true) {
+                            return Err(IdxError::Usage(
+                                "force applies to action \"sync\" only".into(),
+                            ));
+                        }
+                        let (base, note) = snapshot::status_mirror(offline);
+                        let mut s =
+                            snapshot::status(&self.ownership_db, base.as_deref(), SNAPSHOT_TIMEOUT)
+                                .await?;
+                        s.warnings.splice(0..0, note);
+                        ok(SCHEMA_OWNERSHIP_STATUS, s)
+                    }
+                    other => Err(IdxError::Usage(format!(
+                        "action must be \"sync\" or \"status\", not {other:?}"
+                    ))),
+                }
+            }
+            .await,
+        )
     }
 
     #[tool(
@@ -1655,6 +1714,7 @@ mod tests {
                 "idx_ownership_entity",
                 "idx_ownership_foreign",
                 "idx_ownership_releases",
+                "idx_ownership_snapshot",
                 "idx_ownership_ticker",
                 "idx_profile",
                 "idx_quote",
@@ -1838,6 +1898,46 @@ mod tests {
             screen(None, None, Some("signal")),
         ] {
             let r = s.bandar_screen(Parameters(bad)).await.unwrap();
+            assert_eq!(r.is_error, Some(true));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ownership_snapshot_tool_reports_offline_and_checks_its_action() {
+        let s = server();
+        let call = |action: &str, force: Option<bool>| OwnershipSnapshotArgs {
+            action: action.into(),
+            force,
+        };
+        let r = s
+            .ownership_snapshot(Parameters(call("status", None)))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.status.v1");
+        assert_eq!(v["provider"], "local-db");
+        assert!(v["data"]["remote"].is_null());
+        assert!(v["data"]["sync"].is_null());
+        assert_eq!(
+            v["data"]["supported_schema_version"],
+            ownership::SCHEMA_VERSION
+        );
+        assert!(v["warnings"][0].as_str().unwrap().contains("offline"));
+
+        let r = s
+            .ownership_snapshot(Parameters(call("SYNC", Some(true))))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "offline_miss", "{v}");
+        assert_eq!(v["exit_code"], 5);
+
+        for bad in [call("install", None), call("status", Some(true))] {
+            let r = s.ownership_snapshot(Parameters(bad)).await.unwrap();
             assert_eq!(r.is_error, Some(true));
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
