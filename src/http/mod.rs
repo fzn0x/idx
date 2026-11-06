@@ -382,7 +382,7 @@ impl Fetcher {
             if let Some(m) = self.cache.get(mark, *retry).filter(|m| m.fresh) {
                 let why = format!(
                     "{}; next try in {}s",
-                    m.stored.body,
+                    redact_urls(&m.stored.body),
                     retry.saturating_sub(m.age).as_secs()
                 );
                 return match hit {
@@ -419,11 +419,12 @@ impl Fetcher {
                 })
             }
             Err(e) => {
-                // The bare message: it is wrapped again when replayed.
-                let why = match &e {
+                // The bare message: it is wrapped again when replayed. Query
+                // strings are cut so a crumb or key never reaches a warning.
+                let why = redact_urls(&match &e {
                     IdxError::Network(m) => m.clone(),
                     other => other.to_string(),
-                };
+                });
                 if let Some((mark, _)) = &mark {
                     if let Err(w) = self.cache.put(mark, 0, &why) {
                         tracing::warn!(error = %w, "could not write cache");
@@ -431,7 +432,7 @@ impl Fetcher {
                 }
                 match hit {
                     Some(h) => {
-                        tracing::warn!(error = %e, key, "network failed: serving stale cache");
+                        tracing::warn!(error = %why, key, "network failed: serving stale cache");
                         let mut f = from_hit(&h, true);
                         f.failure = Some(why);
                         Ok(f)
@@ -453,6 +454,33 @@ fn from_hit(h: &crate::cache::Hit, stale: bool) -> Fetched {
         fetched_at: h.stored.fetched_at,
         failure: None,
     }
+}
+
+/// Cuts the query string and fragment from every `http://` or `https://` URL
+/// inside `text`, so error messages, warnings and logs never carry a session
+/// token (Yahoo's `crumb`) or a key (MSN's `apikey`). A URL ends at
+/// whitespace, a quote, `)`, `<`, `>` or the end of the text. Only `-vv`
+/// debug logging still shows full request URLs.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let start = match (rest.find("http://"), rest.find("https://")) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => break,
+        };
+        out.push_str(&rest[..start]);
+        let url = &rest[start..];
+        let end = url
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>'))
+            .unwrap_or(url.len());
+        let cut = url[..end].find(['?', '#']).unwrap_or(end);
+        out.push_str(&url[..cut]);
+        rest = &url[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Helper for building `Cookie:` headers from `set-cookie` responses.
@@ -611,6 +639,38 @@ mod tests {
             assert!(got.failure.unwrap().contains("no route"));
         }
         assert_eq!(backend.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failure_text_drops_query_strings() {
+        let url = "https://x.test/q?symbols=A.JK,B.JK&crumb=SECRET";
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache.put(url, 200, "old").unwrap();
+        let f = Fetcher::new(Arc::new(FixtureBackend::new()), cache, CacheMode::Normal);
+        let got = f.get(url, &[], Duration::ZERO, None).await.unwrap();
+        let why = got.failure.unwrap();
+        assert!(why.contains("no route for https://x.test/q"), "{why}");
+        assert!(!why.contains("SECRET") && !why.contains("crumb"), "{why}");
+    }
+
+    #[test]
+    fn redact_urls_cuts_queries_and_fragments() {
+        assert_eq!(
+            redact_urls("error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,^JKSE&crumb=abc): connection refused"),
+            "error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote): connection refused"
+        );
+        assert_eq!(
+            redact_urls("timed out waiting for https://assets.msn.com/service/Finance/Quotes?ids=x&apikey=K"),
+            "timed out waiting for https://assets.msn.com/service/Finance/Quotes"
+        );
+        assert_eq!(
+            redact_urls("a http://a.test/p#frag and \"https://b.test/?k=v\" end"),
+            "a http://a.test/p and \"https://b.test/\" end"
+        );
+        let plain = "https alone, no URL: connection refused (os error 10061)";
+        assert_eq!(redact_urls(plain), plain);
+        assert_eq!(redact_urls(""), "");
     }
 
     #[tokio::test]
