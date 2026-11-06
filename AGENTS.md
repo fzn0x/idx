@@ -162,7 +162,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ./scripts/smoke.sh               # live providers, needs network
 ./target/debug/idx -vv stocks quote BBCA   # -vv prints every request to stderr
-nix flake check                  # optional: the same gates in a Nix sandbox, plus the MSRV build
+nix flake check                  # optional: the same gates in a Nix sandbox, plus an MSRV cargo check
 ```
 
 The flake builds only from `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `src/`,

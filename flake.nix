@@ -134,13 +134,17 @@
                 cargoArtifacts = devArtifacts;
                 cargoTestExtraArgs = "--all-targets";
                 doInstallCargoArtifacts = false;
-                # The tests point config and cache at temp dirs; nothing may
-                # fall back to the sandbox's unwritable /homeless-shelter.
+                # The tests point config and cache at temp dirs themselves;
+                # code that still falls back to ~ gets a writable temp home, as
+                # on a developer machine, instead of the sandbox's unwritable
+                # /homeless-shelter.
                 preBuild = ''export HOME="$TMPDIR"'';
               }
             );
-            # The declared minimum Rust (Cargo.toml rust-version) still builds
-            # the locked dependency tree, tests included.
+            # A `cargo check` of every target, tests included, on the locked
+            # dependency tree with the declared minimum Rust (Cargo.toml
+            # rust-version). It type-checks the targets; it does not build
+            # the crate's binaries or run the tests.
             msrv = msrvCraneLib.mkCargoDerivation (
               commonArgs
               // {
