@@ -65,6 +65,20 @@ window — `1mo`/`3mo`/`1y` are daily, `5d`/intraday is hourly, `5y` is weekly �
 and a warning says so when it is not the daily bars the interval nominally asks
 for.
 
+Foreign flow in the order book (`foreign_buy`, `foreign_sell`, `foreign_net`)
+comes with a flag, `has_foreign_bs`. While it is `false` the figures are not the
+current session's: a BBCA book recorded in session 2 on 2026-11-03 carried a
+foreign net of -116.1B, which is IPOT's figure for 2026-11-02 (2026-11-03 itself
+closed at -28.8B). So idx keeps the three figures only while Stockbit marks them
+current (`true`, as in idx's own books recorded after the close) and otherwise
+leaves them empty, with a warning that says why (on stderr in a table, in
+`warnings` in JSON). A missing or non-boolean flag counts as not current. The
+`false` book came from another account (recorded by 0xrsydn/idx-cli), and its
+`orderbook_active_feature_mobile` differs too (`ORDER_BOOK_FEATURE_UNSPECIFIED`,
+where idx's books say `ORDER_BOOK_FEATURE_FOREIGN_BS`), so it is still open
+whether the flag follows the session clock or an account feature. idx reads only
+the flag, so either way the figures show only when Stockbit marks them current.
+
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run
 them without `--provider stockbit`.
@@ -118,7 +132,7 @@ and browser-shaped `origin`/`referer` headers:
 
 | endpoint | used for |
 | --- | --- |
-| `GET /company-price-feed/v2/orderbook/companies/{SYM}` | quote (OHLC, volume, value, foreign flow) and the full depth ladder |
+| `GET /company-price-feed/v2/orderbook/companies/{SYM}` | quote (OHLC, volume, value, foreign flow only while `has_foreign_bs` is true) and the full depth ladder |
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 

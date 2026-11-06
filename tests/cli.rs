@@ -308,6 +308,63 @@ fn stockbit_surface_and_session_commands() {
 }
 
 #[test]
+fn orderbook_leaves_out_foreign_flow_stockbit_marks_stale() {
+    let sb = sandbox();
+    // BBCA during trading: has_foreign_bs false, so fbuy/fsell/fnet are the
+    // previous session's (534.5B / 650.7B / -116.1B) and must not show.
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/company-price-feed/v2/orderbook/companies/BBCA",
+        "stockbit/orderbook_bbca_in_session.json",
+    );
+    // A dummy access token fresh until 2100 ({"alg":"none"}.{"exp":4102444800}),
+    // so no refresh is attempted; the harness is offline, nothing is sent.
+    let session = sb.config.parent().unwrap().join("stockbit-session.json");
+    std::fs::write(
+        &session,
+        r#"{"access":"eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig","refresh":"d.e.f"}"#,
+    )
+    .unwrap();
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stockbit", "orderbook", "BBCA"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "idx.orderbook.v1");
+    for k in ["foreign_buy", "foreign_sell", "foreign_net"] {
+        assert!(v["data"][k].is_null(), "{k}: {}", v["data"][k]);
+    }
+    assert_eq!(v["data"]["volume"], 134_744_100);
+    assert_eq!(v["data"]["bids"].as_array().unwrap().len(), 22);
+    assert_eq!(v["data"]["asks"].as_array().unwrap().len(), 64);
+    let warnings = v["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("Stockbit flags it as not current (has_foreign_bs false)")),
+        "{warnings:?}"
+    );
+
+    let dash = idx::output::format::DASH;
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "orderbook", "BBCA", "--depth", "3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "foreign buy {dash} / sell {dash} / net {dash}"
+        )))
+        .stdout(predicate::str::contains("116.1B").not())
+        .stderr(predicate::str::contains(
+            "warning: foreign flow left empty: Stockbit flags it as not current (has_foreign_bs false)",
+        ));
+}
+
+#[test]
 fn screen_news_sentiment_surface() {
     let sb = sandbox();
     for (args, needle) in [

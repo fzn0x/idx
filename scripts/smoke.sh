@@ -193,7 +193,15 @@ if [ "$code" = 0 ]; then
   expect "$TMP/sbh.json" '"schema": "idx.history.v1"' "stockbit history schema"
   "$IDX" --no-cache -o json stockbit orderbook BBCA >"$TMP/sbo.json" || fail "stockbit orderbook"
   expect "$TMP/sbo.json" '"schema": "idx.orderbook.v1"' "stockbit orderbook schema"
-  expect "$TMP/sbo.json" '"foreign_net":' "stockbit orderbook has foreign flow"
+  expect "$TMP/sbo.json" '"foreign_net":' "stockbit orderbook has the foreign_net field"
+  # While Stockbit marks the foreign flow as not current (seen during trading)
+  # it is null and a warning names the flag. When the flag is true the figures
+  # are kept.
+  if grep -q '"foreign_net": null' "$TMP/sbo.json"; then
+    expect "$TMP/sbo.json" 'has_foreign_bs' "stockbit orderbook says why foreign flow is empty"
+  else
+    pass "stockbit orderbook foreign flow marked current"
+  fi
 else
   echo "  skip stockbit checks (no session; set IDX_STOCKBIT_ACCESS_TOKEN or run \`idx stockbit login\`)"
 fi

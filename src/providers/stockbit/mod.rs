@@ -14,6 +14,11 @@
 //!   — OHLCV candles; Stockbit picks the granularity from the window.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
+//! The order book's foreign flow is kept only while Stockbit marks it current
+//! (`has_foreign_bs: true`); otherwise it is left empty and the envelope says
+//! why (a book recorded during trading with the flag `false` still held the
+//! previous session's figures).
+//!
 //! Symbols are IDX codes (`BBCA`); indices use Stockbit's own code (`IHSG`,
 //! `LQ45`), not idx's caret form.
 //!
@@ -55,6 +60,16 @@ pub fn request_headers(bearer: &str) -> Vec<(String, String)> {
         ("origin".into(), "https://stockbit.com".into()),
         ("referer".into(), "https://stockbit.com/".into()),
     ]
+}
+
+/// The envelope warning when the order book's foreign figures were left out;
+/// `flag` is the `has_foreign_bs` value Stockbit sent (`false` in the recorded
+/// in-session book).
+fn foreign_not_current(flag: &str) -> String {
+    format!(
+        "foreign flow left empty: Stockbit flags it as not current (has_foreign_bs {flag}); \
+         in session it still holds the previous session's figures"
+    )
 }
 
 /// Stockbit's code for a symbol: indices drop idx's caret and use Stockbit's
@@ -162,7 +177,11 @@ impl Stockbit {
             ));
         }
         let ob = parse::parse_orderbook(symbol, &f.body)?;
-        Ok(Self::sourced(ob, &f))
+        let mut out = Self::sourced(ob, &f);
+        if let Some(flag) = parse::foreign_withheld(&f.body) {
+            out.warnings.push(foreign_not_current(&flag));
+        }
+        Ok(out)
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {
@@ -264,5 +283,59 @@ impl Provider for Stockbit {
             ));
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::Cache;
+    use crate::http::{CacheMode, FixtureBackend};
+
+    const IN_SESSION: &str =
+        include_str!("../../../tests/fixtures/stockbit/orderbook_bbca_in_session.json");
+    const CLOSED: &str = include_str!("../../../tests/fixtures/stockbit/orderbook_bbca.json");
+    /// `{"alg":"none"}.{"exp":4102444800}.sig`: fresh until 2100, so no refresh
+    /// is attempted. Signed by nobody and only ever sent to the fixture backend.
+    const DUMMY_ACCESS: &str = "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig";
+
+    fn stockbit(body: &str) -> (Stockbit, Arc<FixtureBackend>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let be = Arc::new(FixtureBackend::new().route("orderbook/companies/BBCA", 200, body));
+        let fetcher = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let store = Arc::new(SessionStore::new(
+            dir.path().join("session.json"),
+            Some(DUMMY_ACCESS.into()),
+            None,
+        ));
+        (Stockbit::new(fetcher, Ttls::default(), store), be, dir)
+    }
+
+    #[tokio::test]
+    async fn orderbook_warns_when_foreign_flow_is_not_current() {
+        let bbca = Symbol::parse("BBCA").unwrap();
+
+        let (sb, be, _d) = stockbit(IN_SESSION);
+        let got = sb.orderbook(&bbca).await.unwrap();
+        assert_eq!(got.provider, "stockbit");
+        assert_eq!(got.data.foreign_net, None);
+        assert_eq!(got.data.volume, Some(134_744_100));
+        assert_eq!(got.warnings.len(), 1, "{:?}", got.warnings);
+        assert!(
+            got.warnings[0].contains("(has_foreign_bs false)"),
+            "{:?}",
+            got.warnings
+        );
+        assert_eq!(be.calls_matching("orderbook/companies/BBCA"), 1);
+        assert_eq!(be.calls_matching("login/refresh"), 0);
+
+        let (sb, _be, _d) = stockbit(CLOSED);
+        let got = sb.orderbook(&bbca).await.unwrap();
+        assert_eq!(got.data.foreign_net, Some(-2_329_493_087_500.0));
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
     }
 }
