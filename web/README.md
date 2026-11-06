@@ -3,7 +3,23 @@
 Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 
 - `public/` landing page (`index.html`) and the browser terminal (`terminal.html`),
-  plain HTML/CSS/ES modules, no build step.
+  plain HTML/CSS/ES modules, no bundler.
+- Docs: `scripts/docs.mjs` builds `/docs/` (README.md), `/docs/<page>` (one
+  per `docs/*.md`), the same pages as Markdown at `/docs/<page>.md` with
+  absolute links, `/llms.txt` (llmstxt.org index) and `/llms-full.txt` (every
+  page in one file) into `public/docs/`, `public/llms.txt` and
+  `public/llms-full.txt`. Those are generated and gitignored: wrangler's
+  `[build]` step runs the script before every `wrangler dev` and
+  `wrangler deploy`, and `node web/scripts/docs.mjs` (or `npm run docs` here)
+  writes them for a local look. `scripts/md.mjs` is the small Markdown
+  renderer behind it (no dependencies). The pages load only `public/docs.css`
+  (the site's station-board tokens, no script). The Worker serves `/docs*` and
+  `/llms*.txt` (`run_worker_first`) to give the `.md` and `.txt` files
+  `charset=utf-8` and `access-control-allow-origin: *`. A new `docs/*.md`
+  file goes into `PAGES` in `scripts/docs.mjs` and `public/sitemap.xml`;
+  `test/docs.test.mjs` fails until it does, and checks every page's tags,
+  links and anchors, the llms.txt shape and that the exit codes agree with
+  docs/json-output.md.
 - `src/worker.js` entry: host check, security headers, `/api/*`, cron.
   `src/headers.js` holds the security headers (CSP, nosniff, frame and
   referrer policy); `public/_headers` gives the same set to the static assets,
@@ -53,7 +69,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `bandar/broker` reads the nightly scan; `instruments` and `members` serve the
   bundled lists.
 - `migrations/` D1 schema. `test/` runs with `node --test web/test/*.mjs`.
-- Search and sharing: canonical, Open Graph and Twitter tags on both pages,
+- Search and sharing: canonical, Open Graph and Twitter tags on every page,
   JSON-LD on the landing page, `public/robots.txt` and `public/sitemap.xml`;
   API responses carry `x-robots-tag: noindex`. The share card
   `public/og.png` (1200x630) and `public/apple-touch-icon.png` are rendered
@@ -74,11 +90,22 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `/api/refresh?token=…&what=ownership`.
 
 Access is domain-only: `workers_dev = false`, `preview_urls = false`, and the
-Worker returns 404 for any Host other than `PUBLIC_HOST`.
+Worker returns 404 for any Host other than `PUBLIC_HOST` (in `wrangler dev`,
+send `Host: ihsg.midoriresearch.com` to reach `/api`, `/healthz` and the docs).
 
 ```sh
 cd web
-npx wrangler dev      # local
+npx wrangler dev      # local; builds the docs first
 npx wrangler d1 migrations apply idx --remote   # new tables first (0003 adds bandar_scan)
-npx wrangler deploy   # needs `wrangler login` on the Midori Research account
+npx wrangler deploy   # needs `wrangler login` on the Midori Research account; builds the docs first
+```
+
+After a deploy, the docs answer like this:
+
+```sh
+curl -sI https://ihsg.midoriresearch.com/llms.txt      # 200, text/plain; charset=utf-8
+curl -sI https://ihsg.midoriresearch.com/docs/mcp.md   # 200, text/markdown; charset=utf-8, access-control-allow-origin: *
+curl -sI https://ihsg.midoriresearch.com/docs/mcp      # 200, text/html with the CSP
+curl -sI https://ihsg.midoriresearch.com/docs          # 307 to /docs/
+curl -sI https://ihsg.midoriresearch.com/              # 200 with the CSP (public/_headers)
 ```

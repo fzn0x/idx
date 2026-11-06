@@ -6,10 +6,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { PAGES as DOCS, htmlPath } from "../scripts/docs.mjs";
+
 const pub = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const read = (p) => readFileSync(join(pub, p), "utf8");
 const ORIGIN = "https://ihsg.midoriresearch.com";
 const PAGES = { "index.html": `${ORIGIN}/`, "terminal.html": `${ORIGIN}/terminal` };
+// The docs pages are generated at deploy time; docs.test.mjs checks their tags.
+const DOC_URLS = DOCS.map((p) => `${ORIGIN}${htmlPath(p.slug)}`);
 
 function meta(html, key) {
   const m = html.match(new RegExp(`<meta (?:property|name)="${key}" content="([^"]*)">`));
@@ -42,7 +46,7 @@ test("every indexable page carries a canonical URL and a large share card", () =
 
 test("sitemap lists exactly the canonical pages and robots.txt points at it", () => {
   const locs = [...read("sitemap.xml").matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
-  assert.deepEqual(locs.sort(), Object.values(PAGES).sort());
+  assert.deepEqual(locs.sort(), [...Object.values(PAGES), ...DOC_URLS].sort(), "a docs page added to PAGES in web/scripts/docs.mjs goes into public/sitemap.xml too");
   const robots = read("robots.txt");
   assert.match(robots, new RegExp(`^Sitemap: ${ORIGIN}/sitemap\\.xml$`, "m"));
   assert.match(robots, /^Disallow: \/api\/$/m);

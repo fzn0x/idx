@@ -18,3 +18,8 @@
 npm/bin/idx
 npm/bin/idx.exe
 npm/bin/*.tmp
+
+# Generated from README.md and docs/*.md by web/scripts/docs.mjs (wrangler [build])
+/web/public/docs/
+/web/public/llms.txt
+/web/public/llms-full.txt
