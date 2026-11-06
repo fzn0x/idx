@@ -33,7 +33,7 @@ const COMMANDS = [
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
-  { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
+  { name: "tools", usage: "tools [idx_TOOL]", help: "the MCP tools with their CLI and web commands; tools idx_quote runs one" },
   { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | search <NAME> | cross-holders [--type T] [--origin foreign|local] [--min-issuers N] | concentration [SYMBOLS] [--by hhi|top1|top3] [--asc] | graph <ROOT> [--depth N] [--min-pct P] [--holder] | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, holder search, holders across issuers, concentration (HHI), the ownership network, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
