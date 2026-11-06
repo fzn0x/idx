@@ -84,9 +84,6 @@ https://ihsg.midoriresearch.com/docs/agent-guide.md".
      https://github.com/fzn0x/idx/releases and put `idx.exe` on `PATH`.
    - With Node.js: `npm install -g github:fzn0x/idx`.
    - With a Rust toolchain: `cargo install ihsg-cli --locked`.
-   - With Nix: `nix profile install github:fzn0x/idx`.
-   - With only Node.js, for the MCP server alone: nothing to install; the
-     server command is `npx -y ihsg-mcp`.
 3. Check it: `idx version`, then `idx -o json stocks quote BBCA`. Exit 0 is
    success; exit 3 means the network or a source failed.
 4. Register the MCP server: `idx mcp setup --list` names the supported
