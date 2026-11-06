@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
@@ -186,6 +186,9 @@ pub struct FeedBatch {
     /// Why a feed used was a stale cached copy (the first one met); `None`
     /// when none was.
     pub stale_reason: Option<StaleReason>,
+    /// When the oldest feed used was fetched: its original fetch time when
+    /// it came from the cache.
+    pub fetched_at: DateTime<Utc>,
 }
 
 /// Fetches the given feeds concurrently. Feeds that fail become warnings;
@@ -210,6 +213,7 @@ pub async fn fetch(fetcher: &Arc<Fetcher>, feeds: &[Feed]) -> Result<FeedBatch> 
     let mut warnings = Vec::new();
     let mut cached = true;
     let mut stale_reason = None;
+    let mut fetched_at = Utc::now();
     let mut ok = 0;
     for (feed, r) in join_all(futs).await {
         match r {
@@ -221,6 +225,7 @@ pub async fn fetch(fetcher: &Arc<Fetcher>, feeds: &[Feed]) -> Result<FeedBatch> 
                     ok += 1;
                     cached &= f.cached;
                     stale_reason = stale_reason.or(f.stale_reason);
+                    fetched_at = fetched_at.min(f.fetched_at);
                     items.extend(list);
                 }
                 Err(e) => warnings.push(e.to_string()),
@@ -245,6 +250,7 @@ pub async fn fetch(fetcher: &Arc<Fetcher>, feeds: &[Feed]) -> Result<FeedBatch> 
         warnings,
         cached,
         stale_reason,
+        fetched_at,
     })
 }
 
@@ -281,27 +287,42 @@ mod tests {
         assert!(again.iter().all(|w| w.contains("next try in")), "{again:?}");
     }
 
-    /// A cache holding every default feed, fetched an hour ago (older than
-    /// the 15-minute TTL).
-    fn hour_old_feeds(dir: &std::path::Path) -> (Cache, Vec<Feed>) {
+    /// A cache holding every default feed, the first fetched `age_min`
+    /// minutes ago and each next one a minute later.
+    fn seeded_feeds(dir: &std::path::Path, age_min: i64) -> (Cache, Vec<Feed>, DateTime<Utc>) {
         let cache = Cache::new(dir);
         let feeds = select(&[]).unwrap();
-        let at = chrono::Utc::now() - chrono::Duration::hours(1);
-        for f in &feeds {
+        let oldest = Utc::now() - chrono::Duration::minutes(age_min);
+        for (i, f) in feeds.iter().enumerate() {
             let body = if f.url.contains("kontan") {
                 KONTAN
             } else {
                 CNBC
             };
+            let at = oldest + chrono::Duration::minutes(i as i64);
             cache.put_at(f.url, 200, body, at).unwrap();
         }
-        (cache, feeds)
+        (cache, feeds, oldest)
+    }
+
+    #[tokio::test]
+    async fn cached_feeds_keep_their_fetch_time() {
+        let dir = tempfile::tempdir().unwrap();
+        // Within the 15-minute TTL: served from the cache, no request.
+        let (cache, feeds, oldest) = seeded_feeds(dir.path(), 10);
+        let backend = Arc::new(FixtureBackend::new());
+        let fetcher = Arc::new(Fetcher::new(backend.clone(), cache, CacheMode::Normal));
+        let b = fetch(&fetcher, &feeds).await.unwrap();
+        assert_eq!(backend.call_count(), 0);
+        assert!(b.cached && b.stale_reason.is_none());
+        assert_eq!(b.fetched_at, oldest);
     }
 
     #[tokio::test]
     async fn stale_feeds_say_why() {
         let dir = tempfile::tempdir().unwrap();
-        let (cache, feeds) = hour_old_feeds(dir.path());
+        // Older than the 15-minute TTL.
+        let (cache, feeds, oldest) = seeded_feeds(dir.path(), 60);
         let offline = Arc::new(Fetcher::new(
             Arc::new(FixtureBackend::new()),
             cache.clone(),
@@ -310,6 +331,7 @@ mod tests {
         let b = fetch(&offline, &feeds).await.unwrap();
         assert!(b.cached && !b.items.is_empty());
         assert_eq!(b.stale_reason, Some(StaleReason::Offline));
+        assert_eq!(b.fetched_at, oldest);
         assert!(b.warnings.is_empty(), "{:?}", b.warnings);
 
         // Every feed down: the same copies, each with its cause.

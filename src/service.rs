@@ -760,6 +760,7 @@ pub async fn news(
     s.cached = batch.cached;
     s.stale = batch.stale_reason.is_some();
     s.stale_reason = batch.stale_reason;
+    s.fetched_at = batch.fetched_at;
     s.warnings = batch.warnings;
     Ok(s)
 }
@@ -1790,6 +1791,33 @@ mod tests {
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
+    #[tokio::test]
+    async fn cached_news_keeps_the_original_fetch_time() {
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let at = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let kontan = include_str!("../tests/fixtures/news/kontan_investasi.xml");
+        let cnbc = include_str!("../tests/fixtures/news/cnbc_market_excerpt.xml");
+        for f in newsfeed::select(&[]).unwrap() {
+            let body = if f.url.contains("kontan") {
+                kontan
+            } else {
+                cnbc
+            };
+            cache.put_at(f.url, 200, body, at).unwrap();
+        }
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache,
+            CacheMode::Normal,
+        ));
+        let n = news(&fetcher, &[], None, &[], 0, false).await.unwrap();
+        assert!(n.cached && !n.stale && n.stale_reason.is_none());
+        assert_eq!(n.fetched_at, at, "not the time of this call");
+    }
+
     mod broker {
         use super::super::*;
         use crate::cache::Cache;
