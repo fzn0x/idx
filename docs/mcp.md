@@ -352,9 +352,10 @@ accounts) are summed, with `accounts` saying how many, and from the 30 Oct
 To look a holder up, call `idx_ownership_search` first and pass the
 `entity_key` it returns to `idx_ownership_entity` with `exact: true`, or to
 `idx_ownership_graph` as `root`. `idx_ownership_rankings` passes view-specific
-arguments to one view only: `symbols`, `by` or `ascending` with
-`view: "holders"` (or `min_issuers`, `investor_type`, `origin` with
-`view: "issuers"`) is a usage error. The spelling rules of
+arguments to one view only. An argument of the other view is a usage error
+unless it holds its default: `symbols`, `by` other than `hhi` or
+`ascending: true` with `view: "holders"`, and `min_issuers` other than 2,
+`investor_type` or `origin` with `view: "issuers"`. The spelling rules of
 `idx ownership resolve` (merging holders KSEI printed two ways) change the
 user's database, so they stay in the CLI; the MCP tools read the result.
 

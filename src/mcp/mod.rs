@@ -1567,8 +1567,14 @@ impl IdxServer {
                 };
                 let given = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
                 match view.as_str() {
+                    // The other view's arguments are refused unless they hold
+                    // their default, which changes nothing.
                     "holders" => {
-                        if given(&a.symbols) || given(&a.by) || a.ascending == Some(true) {
+                        let by = parse_opt(&a.by, ConcentrationSort::Hhi)?;
+                        if given(&a.symbols)
+                            || by != ConcentrationSort::Hhi
+                            || a.ascending == Some(true)
+                        {
                             return Err(IdxError::Usage(
                                 "symbols, by and ascending apply to view \"issuers\"".into(),
                             ));
@@ -1587,7 +1593,10 @@ impl IdxServer {
                         ok(SCHEMA_OWNERSHIP_CROSS_HOLDERS, report)
                     }
                     "issuers" => {
-                        if a.min_issuers.is_some() || given(&a.investor_type) || given(&a.origin) {
+                        if a.min_issuers.is_some_and(|n| n != 2)
+                            || given(&a.investor_type)
+                            || given(&a.origin)
+                        {
                             return Err(IdxError::Usage(
                                 "min_issuers, investor_type and origin apply to view \"holders\""
                                     .into(),
@@ -2139,7 +2148,8 @@ mod tests {
             rankings(Some("nope"), None, None, None),
             rankings(Some("issuers"), Some("nope"), None, None),
             rankings(Some("holders"), None, Some("mars"), None),
-            rankings(Some("holders"), Some("hhi"), None, None),
+            rankings(Some("holders"), Some("top1"), None, None),
+            rankings(Some("holders"), None, None, Some("BBCA")),
             rankings(Some("issuers"), None, Some("foreign"), None),
         ] {
             let r = s.ownership_rankings(Parameters(bad)).await.unwrap();
@@ -2197,8 +2207,8 @@ mod tests {
         assert_eq!(v["schema"], "idx.ownership.cross-holders.v1");
         assert_eq!(v["data"]["holders"][0]["entity_key"], "DRS SURONO SUBEKTI");
         assert_eq!(v["data"]["total_matches"], 8);
-        // A harmless default of the other view is fine; one that would change the answer is not.
-        let mut holders = rankings(None, None, None, None);
+        // The other view's arguments at their defaults are fine; other values are not.
+        let mut holders = rankings(None, Some(" HHI "), None, None);
         holders.ascending = Some(false);
         let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
         assert_ne!(r.is_error, Some(true), "{}", text(&r));
@@ -2206,6 +2216,17 @@ mod tests {
         holders.ascending = Some(true);
         let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
         assert_eq!(code(&r), "usage");
+        for (min_issuers, ok) in [(Some(2), true), (Some(3), false), (Some(1), false)] {
+            let mut issuers = rankings(Some("issuers"), None, None, None);
+            issuers.min_issuers = min_issuers;
+            let r = s.ownership_rankings(Parameters(issuers)).await.unwrap();
+            assert_eq!(
+                r.is_error != Some(true),
+                ok,
+                "{min_issuers:?}: {}",
+                text(&r)
+            );
+        }
         let v = json_of(
             &s.ownership_rankings(Parameters(rankings(None, None, Some("foreign"), None)))
                 .await
