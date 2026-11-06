@@ -257,7 +257,20 @@ export const LENS_BENCHMARK = "^JKSE";
 const LENS_MIN_RULES = 3;
 const LENS_MIN_PRICE_RETURNS = 20;
 const lr2 = (v) => Math.round(v * 100) / 100 + 0;
-const signed = (v, d) => `${v >= 0 ? "+" : ""}${v.toFixed(d)}`;
+/**
+ * `v.toFixed(d)` as Rust's `{:.d}` prints it: an exact tie (a double exactly
+ * halfway at `d` decimals, such as 12.5, 4.25 or 0.125) rounds to even, where
+ * toFixed rounds it away from zero. A double is such a tie exactly when
+ * |v| * 2^(d+1) is an odd integer; |v| * 10^d is then exact.
+ */
+export function fixed(v, d) {
+  const m = Math.abs(v) * 2 ** (d + 1);
+  if (!Number.isInteger(m) || m % 2 === 0) return v.toFixed(d);
+  const n = Math.floor(Math.abs(v) * 10 ** d);
+  const even = n % 2 === 0 ? n : n + 1;
+  return `${v < 0 ? "-" : ""}${(even / 10 ** d).toFixed(d)}`;
+}
+const signed = (v, d) => `${v >= 0 ? "+" : ""}${fixed(v, d)}`;
 const nz = (v) => (v === undefined ? null : v);
 
 function lensRules() {
@@ -280,53 +293,53 @@ export function valuationLens(f) {
   const pe = nz(v.pe_trailing), pf = nz(v.pe_forward);
   if (pe != null) {
     const [p, why] = pe <= 0 ? [0, "is not positive: it says nothing about value"] : pe < 10 ? [2, "is low (under 10)"] : pe < 15 ? [1, "is moderate (10 to 15)"] : pe > 35 ? [-2, "is high (over 35)"] : pe > 25 ? [-1, "is elevated (over 25)"] : [0, "is in a normal range (15 to 25)"];
-    r.add("pe_trailing", p, `trailing P/E ${pe.toFixed(1)} ${why}`);
+    r.add("pe_trailing", p, `trailing P/E ${fixed(pe, 1)} ${why}`);
   } else if (pf != null && pf > 0) {
     const [p, why] = pf < 10 ? [1, "is low (under 10)"] : pf > 25 ? [-1, "is high (over 25)"] : [0, "is in a normal range (10 to 25)"];
-    r.add("pe_forward", p, `forward P/E ${pf.toFixed(1)} ${why}; no trailing P/E`);
-  } else if (pf != null) r.note(`P/E: no trailing P/E, and the forward P/E ${pf.toFixed(1)} is not positive`);
+    r.add("pe_forward", p, `forward P/E ${fixed(pf, 1)} ${why}; no trailing P/E`);
+  } else if (pf != null) r.note(`P/E: no trailing P/E, and the forward P/E ${fixed(pf, 1)} is not positive`);
   else r.note("P/E: no trailing or forward P/E reported");
 
   const peg = nz(v.peg);
   if (peg != null && peg > 0) {
     const [p, why] = peg < 1 ? [1, "is under 1: growth is cheap"] : peg > 2 ? [-1, "is over 2: paying up for growth"] : [0, "is between 1 and 2"];
-    r.add("peg", p, `PEG ${peg.toFixed(2)} ${why}`);
-  } else if (peg != null) r.note(`PEG ${peg.toFixed(2)} is not meaningful (shrinking or negative earnings)`);
+    r.add("peg", p, `PEG ${fixed(peg, 2)} ${why}`);
+  } else if (peg != null) r.note(`PEG ${fixed(peg, 2)} is not meaningful (shrinking or negative earnings)`);
   else r.note("PEG: not reported");
 
   const pb = nz(v.price_to_book);
   if (neg === true) r.note("P/B: shareholders' equity is negative, so price-to-book says nothing");
   else if (pb == null) r.note("P/B: not reported");
-  else if (mixed) r.note(`P/B ${pb.toFixed(2)} not scored: ${mixed}`);
+  else if (mixed) r.note(`P/B ${fixed(pb, 2)} not scored: ${mixed}`);
   else {
     const [p, why] = pb < 1 ? [1, "is below book value (under 1)"] : pb > 4 ? [-1, "is rich (over 4)"] : [0, "is between 1 and 4"];
-    r.add("price_to_book", p, `P/B ${pb.toFixed(2)} ${why}`);
+    r.add("price_to_book", p, `P/B ${fixed(pb, 2)} ${why}`);
   }
 
   if (financial) r.note("P/S and EV/EBITDA: not scored for a financial company");
   else {
     const ps = nz(v.price_to_sales);
     if (ps == null) r.note("P/S: not reported");
-    else if (mixed) r.note(`P/S ${ps.toFixed(2)} not scored: ${mixed}`);
+    else if (mixed) r.note(`P/S ${fixed(ps, 2)} not scored: ${mixed}`);
     else {
       const [p, why] = ps < 1 ? [1, "is low (under 1)"] : ps > 5 ? [-1, "is high (over 5)"] : [0, "is between 1 and 5"];
-      r.add("price_to_sales", p, `P/S ${ps.toFixed(2)} ${why}`);
+      r.add("price_to_sales", p, `P/S ${fixed(ps, 2)} ${why}`);
     }
     const ev = nz(v.ev_to_ebitda);
     if (ev == null) r.note("EV/EBITDA: not reported");
-    else if (mixed) r.note(`EV/EBITDA ${ev.toFixed(1)} not scored: ${mixed}`);
-    else if (ev <= 0) r.note(`EV/EBITDA ${ev.toFixed(1)} is not meaningful (negative EBITDA or enterprise value)`);
+    else if (mixed) r.note(`EV/EBITDA ${fixed(ev, 1)} not scored: ${mixed}`);
+    else if (ev <= 0) r.note(`EV/EBITDA ${fixed(ev, 1)} is not meaningful (negative EBITDA or enterprise value)`);
     else {
       const [p, why] = ev < 6 ? [1, "is low (under 6)"] : ev > 15 ? [-1, "is high (over 15)"] : [0, "is between 6 and 15"];
-      r.add("ev_to_ebitda", p, `EV/EBITDA ${ev.toFixed(1)} ${why}`);
+      r.add("ev_to_ebitda", p, `EV/EBITDA ${fixed(ev, 1)} ${why}`);
     }
   }
 
   const y = nz(d.yield_pct), po = nz(d.payout_ratio_pct);
   if (y != null && y >= 4) {
-    if (po != null && po > 100) r.add("dividend_yield", 0, `dividend yield ${y.toFixed(1)}% is high, but the payout (${po.toFixed(0)}%) exceeds earnings`);
-    else r.add("dividend_yield", 1, `dividend yield ${y.toFixed(1)}% is generous (4% or more)`);
-  } else if (y != null) r.add("dividend_yield", 0, `dividend yield ${y.toFixed(1)}% is under 4%`);
+    if (po != null && po > 100) r.add("dividend_yield", 0, `dividend yield ${fixed(y, 1)}% is high, but the payout (${fixed(po, 0)}%) exceeds earnings`);
+    else r.add("dividend_yield", 1, `dividend yield ${fixed(y, 1)}% is generous (4% or more)`);
+  } else if (y != null) r.add("dividend_yield", 0, `dividend yield ${fixed(y, 1)}% is under 4%`);
   else r.note("dividend yield: not reported");
 
   const price = nz(f.price), target = nz(a.target_mean), n = nz(a.analysts);
@@ -370,8 +383,8 @@ export function growthLens(symbol, f, fin) {
   const fg = et != null && ef != null && et > 0 && ef > 0 ? lr2((ef / et - 1) * 100) : null;
   if (fg != null) {
     const [p, band] = growthBand(fg, 10, -10);
-    r.add("eps_forward_growth", p, `forward EPS ${ef.toFixed(2)} is ${signed(fg, 1)}% against trailing ${et.toFixed(2)} (${band})`);
-  } else if (et != null && ef != null) r.note(`forward vs trailing EPS: needs both above zero (trailing ${et.toFixed(2)}, forward ${ef.toFixed(2)})`);
+    r.add("eps_forward_growth", p, `forward EPS ${fixed(ef, 2)} is ${signed(fg, 1)}% against trailing ${fixed(et, 2)} (${band})`);
+  } else if (et != null && ef != null) r.note(`forward vs trailing EPS: needs both above zero (trailing ${fixed(et, 2)}, forward ${fixed(ef, 2)})`);
   else r.note("forward vs trailing EPS: not reported");
 
   const periods = fin?.periods || [];
@@ -445,13 +458,13 @@ export function riskLens(symbol, f, h, b) {
     else {
       const de = nz(f.health?.debt_to_equity), cr = nz(f.health?.current_ratio);
       if (neg === true) r.note("leverage: debt/equity says nothing with negative equity");
-      else if (de != null) { const [p, why] = de > 2 ? [1, "over 2x"] : de < 0.5 ? [-1, "under 0.5x"] : [0, "0.5x to 2x"]; r.add("leverage", p, `debt is ${de.toFixed(2)}x equity (${why})`); }
+      else if (de != null) { const [p, why] = de > 2 ? [1, "over 2x"] : de < 0.5 ? [-1, "under 0.5x"] : [0, "0.5x to 2x"]; r.add("leverage", p, `debt is ${fixed(de, 2)}x equity (${why})`); }
       else r.note("leverage: debt/equity not reported");
-      if (cr != null) { const [p, why] = cr < 1 ? [1, "is under 1"] : cr >= 1.5 ? [-1, "is 1.5 or more"] : [0, "is between 1 and 1.5"]; r.add("liquidity", p, `current ratio ${cr.toFixed(2)} ${why}`); }
+      if (cr != null) { const [p, why] = cr < 1 ? [1, "is under 1"] : cr >= 1.5 ? [-1, "is 1.5 or more"] : [0, "is between 1 and 1.5"]; r.add("liquidity", p, `current ratio ${fixed(cr, 2)} ${why}`); }
       else r.note("liquidity: current ratio not reported");
     }
     const nm = nz(f.profitability?.net_margin_pct), eps = nz(f.per_share?.eps_ttm);
-    const detail = [nm != null ? `net margin ${nm.toFixed(1)}%` : null, eps != null ? `EPS ${eps.toFixed(2)}` : null].filter(Boolean);
+    const detail = [nm != null ? `net margin ${fixed(nm, 1)}%` : null, eps != null ? `EPS ${fixed(eps, 2)}` : null].filter(Boolean);
     if (!detail.length) r.note("losses: no net margin or EPS reported");
     else if ((nm != null && nm < 0) || (eps != null && eps < 0)) r.add("losses", 1, `loss-making over the trailing twelve months (${detail.join(", ")})`);
     else r.add("losses", 0, `profitable over the trailing twelve months (${detail.join(", ")})`);
@@ -468,20 +481,20 @@ export function riskLens(symbol, f, h, b) {
       price = { benchmark, from: own[0][0], to: own[own.length - 1][0], observations: 0, beta: null, correlation: null, volatility_pct: ex.volatility(own), benchmark_volatility_pct: null, max_drawdown: ex.maxDrawdown(own), benchmark_max_drawdown_pct: null };
     } else {
       const st = ex.beta(cs, cb), n = st.observations;
-      if (st.beta != null) { const bt = st.beta; const [p, why] = bt > 1.3 ? [1, "over 1.3"] : bt < 0.7 ? [-1, "under 0.7"] : [0, "0.7 to 1.3"]; r.add("beta", p, `beta ${bt.toFixed(2)} against IHSG over ${n} sessions (${why})`); }
+      if (st.beta != null) { const bt = st.beta; const [p, why] = bt > 1.3 ? [1, "over 1.3"] : bt < 0.7 ? [-1, "under 0.7"] : [0, "0.7 to 1.3"]; r.add("beta", p, `beta ${fixed(bt, 2)} against IHSG over ${n} sessions (${why})`); }
       else if (n < ex.MIN_BETA_OBSERVATIONS) r.note(`beta: ${n} matched sessions with IHSG, needs ${ex.MIN_BETA_OBSERVATIONS}`);
       else r.note("beta: IHSG did not move over the window");
       const vs = ex.volatility(cs), vb = ex.volatility(cb);
       if (vs != null && vb != null && vb > 0) {
         const rel = vs / vb;
         const [p, why] = rel > 1.5 ? [1, "over 1.5x"] : rel < 0.8 ? [-1, "under 0.8x"] : [0, "0.8x to 1.5x"];
-        r.add("volatility", p, `volatility ${vs.toFixed(1)}% a year is ${rel.toFixed(2)}x IHSG's ${vb.toFixed(1)}% (${why})`);
+        r.add("volatility", p, `volatility ${fixed(vs, 1)}% a year is ${fixed(rel, 2)}x IHSG's ${fixed(vb, 1)}% (${why})`);
       } else r.note(`volatility against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched sessions`);
       const ds = ex.maxDrawdown(cs), db = ex.maxDrawdown(cb)?.pct ?? null;
       if (cs.length > LENS_MIN_PRICE_RETURNS) {
         const s = ds ? ds.pct : 0, bb = db ?? 0, gap = s - bb;
         const [p, why] = gap <= -15 ? [1, "15 points or more deeper"] : gap >= 15 ? [-1, "15 points or more shallower"] : [0, "within 15 points"];
-        r.add("drawdown", p, `largest fall ${s.toFixed(1)}% against IHSG's ${bb.toFixed(1)}% over the same sessions (${why})`);
+        r.add("drawdown", p, `largest fall ${fixed(s, 1)}% against IHSG's ${fixed(bb, 1)}% over the same sessions (${why})`);
       } else r.note(`drawdown against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched sessions`);
       price = { benchmark, from: cs[0][0], to: cs[cs.length - 1][0], observations: n, beta: st.beta, correlation: st.correlation, volatility_pct: vs, benchmark_volatility_pct: vb, max_drawdown: ds, benchmark_max_drawdown_pct: db };
     }

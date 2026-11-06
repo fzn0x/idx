@@ -271,6 +271,51 @@ test("lens rules on synthetic inputs match the Rust unit tests", () => {
   assert.ok(noted(turn(-5, -1), "losses in both FY2022 and FY2025"));
 });
 
+test("lens reasons round exact ties as Rust does (half to even)", () => {
+  // rustc 1.9x: format!("{:.0}", 12.5) = "12", format!("{:.1}", 4.25) = "4.2",
+  // format!("{:.1}", 4.75) = "4.8", format!("{:.2}", 0.125) = "0.12", format!("{:.1}", -0.25) = "-0.2".
+  for (const [v, d, want] of [[12.5, 0, "12"], [13.5, 0, "14"], [4.25, 1, "4.2"], [4.75, 1, "4.8"], [0.125, 2, "0.12"], [0.375, 2, "0.38"], [-0.25, 1, "-0.2"], [-2.5, 0, "-2"], [1.005, 2, "1.00"], [49.16, 1, "49.2"], [-0.04, 1, "-0.0"], [0, 1, "0.0"]]) {
+    assert.equal(an.fixed(v, d), want, `${v} to ${d}`);
+  }
+  // Price 8000, mean target 9000: an upside of exactly +12.5 %.
+  const t = blank();
+  t.price = 8000; t.analyst.target_mean = 9000; t.analyst.analysts = 3; t.dividend.yield_pct = 4.25;
+  const v = an.valuationLens(t);
+  assert.equal(v.target_upside_pct, 12.5);
+  assert.deepEqual(v.reading.rules.map((x) => x.reason), [
+    "dividend yield 4.2% is generous (4% or more)",
+    "mean target of 3 analysts is +12% from the price (-10% to +20%)",
+  ]);
+});
+
+test("lens rules on synthetic inputs match the Rust unit tests", () => {
+  // negative_equity_skips_pb_and_leverage_and_adds_risk
+  let f = blank();
+  f.health.debt_to_equity = -2.89; f.valuation.price_to_book = -0.55; f.health.current_ratio = 1.2; f.profitability.net_margin_pct = -9.4;
+  assert.ok(noted(an.valuationLens(f), "P/B: shareholders' equity is negative"));
+  let r = an.riskLens("TEST", f, null, null);
+  assert.deepEqual(ruleIds(r), [["negative_equity", 2], ["liquidity", 0], ["losses", 1]]);
+  assert.equal(r.reading.label, "high");
+  // analyst_target_needs_three_analysts
+  const target = (t, n) => { const g = blank(); g.price = 100; g.analyst.target_mean = t; g.analyst.analysts = n; return an.valuationLens(g); };
+  assert.deepEqual(ruleIds(target(120.01, 3)), [["analyst_target", 1]]);
+  assert.deepEqual(ruleIds(target(120, 3)), [["analyst_target", 0]]);
+  assert.deepEqual(ruleIds(target(89.9, 3)), [["analyst_target", -1]]);
+  assert.ok(noted(target(150, 2), "from 2 analysts: fewer than 3, not scored"));
+  // fiscal_years_give_cagr_consistency_and_turns
+  const fin = (rows) => ({ symbol: "TEST", currency: "IDR", period: "annual", source: "t:annual", periods: rows.map(([yr, rev, ni]) => ({ end_date: `${yr}-12-31`, period: "annual", income: { total_revenue: rev, net_income: ni }, balance: {}, cash_flow: {} })) });
+  const g = an.growthLens("TEST", blank(), fin([[2022, 100, 10], [2023, 110, 12], [2024, 121, 9], [2025, 133.1, 20]]));
+  assert.equal(g.revenue_cagr_pct, 10);
+  assert.equal(g.net_income_cagr_pct, 25.99);
+  assert.deepEqual(ruleIds(g), [["revenue_cagr", 0], ["revenue_consistency", 1], ["net_income_cagr", 1]]);
+  assert.equal(g.reading.label, "growing");
+  assert.deepEqual([g.annual[0].revenue_change_pct, g.annual[1].revenue_change_pct, g.annual[2].net_income_change_pct], [null, 10, -25]);
+  const turn = (a, b) => an.growthLens("TEST", blank(), fin([[2022, null, a], [2023, null, 1], [2025, null, b]]));
+  assert.deepEqual(ruleIds(turn(5, -1)), [["net_income_cagr", -1]]);
+  assert.deepEqual(ruleIds(turn(-5, 1)), [["net_income_cagr", 1]]);
+  assert.ok(noted(turn(-5, -1), "losses in both FY2022 and FY2025"));
+});
+
 test("earnings parse: padded zero quarters become null", () => {
   const r = JSON.parse(fixture("yahoo/quote_summary_statements_bbca.json")).quoteSummary.result[0];
   const e = y.parseEarnings(r, "BBCA");

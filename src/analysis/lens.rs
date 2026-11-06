@@ -1019,6 +1019,27 @@ mod tests {
         ));
     }
 
+    /// Exact ties round half to even; `web/test/analysis.test.mjs` pins the
+    /// JS port to the same strings.
+    #[test]
+    fn reasons_round_exact_ties_to_even() {
+        let mut f = base();
+        f.price = Some(8000.0);
+        f.analyst.target_mean = Some(9000.0);
+        f.analyst.analysts = Some(3);
+        f.dividend.yield_pct = Some(4.25);
+        let v = valuation(&f);
+        assert_eq!(v.target_upside_pct, Some(12.5));
+        let reasons: Vec<&str> = v.reading.rules.iter().map(|x| x.reason.as_str()).collect();
+        assert_eq!(
+            reasons,
+            [
+                "dividend yield 4.2% is generous (4% or more)",
+                "mean target of 3 analysts is +12% from the price (-10% to +20%)"
+            ]
+        );
+    }
+
     #[test]
     fn negative_equity_skips_pb_and_leverage_and_adds_risk() {
         // MSN-style negative ratios (the placeholder is dropped at parse time,
