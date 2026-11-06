@@ -20,7 +20,10 @@ cached locally. `--offline` serves stale cache instead of failing.
 
 The crate and the npm package are published as `ihsg-cli`; the binary and the
 library keep the short name `idx` (`[lib] name = "idx"` in Cargo.toml), so
-code says `use idx::...` and users type `idx`.
+code says `use idx::...` and users type `idx`. A second npm package,
+`ihsg-mcp` (`npm-mcp/`), only runs `idx mcp`, so agents can register
+`npx -y ihsg-mcp`; its version moves with the others (CI checks all four
+manifests).
 
 ## Layout
 
@@ -82,7 +85,9 @@ web/                 Cloudflare Worker for ihsg.midoriresearch.com: landing page
                      src/analysis.js, src/extras.js and src/bandar.js are JS ports of src/analysis/* tested on
                      the same fixtures; src/bandar-scan.js is the nightly scan behind the web bandar screen
 npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies the release
-                     (postinstall when allowed, otherwise on first run)
+                     (postinstall when allowed, otherwise on first run); test/ holds the launcher tests
+npm-mcp/             ihsg-mcp on npm: bin/ihsg-mcp.js runs `idx mcp` (`npx -y ihsg-mcp`, no postinstall);
+                     lib/binary.js is a byte-identical copy of npm/lib/binary.js (the tests compare them)
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
                      register to the `ownership-data` prerelease (raw files, index.json, JSON parts)
 ```
@@ -156,6 +161,7 @@ cargo build
 cargo test                       # fixtures only
 cargo clippy --all-targets -- -D warnings
 cargo fmt
+node --test npm/test/*.mjs       # npm launchers (ihsg-cli, ihsg-mcp), no network
 ./scripts/smoke.sh               # live providers, needs network
 ./target/debug/idx -vv stocks quote BBCA   # -vv prints every request to stderr
 ```

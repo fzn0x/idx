@@ -9,12 +9,45 @@ and returns the envelope documented in [json-output.md](json-output.md).
 Run `idx mcp setup <client>` and paste what it prints: it fills in the
 absolute path of the binary (GUI apps rarely inherit your shell `PATH`), and
 `-o json` gives the same steps as data. `idx mcp setup --list` names every
-client; `--npx` swaps the path for `npx -y ihsg-cli mcp`;
+client; `--npx` swaps the path for `npx -y ihsg-mcp` (see
+[Without installing idx](#without-installing-idx-npx));
 `--http URL [--token T]` produces the remote form of the same entry.
 
 The snippets below use a bare `idx` for brevity. Formats were checked against
 each vendor's documentation in October 2026; where a vendor offers both a CLI
 command and a file, both are shown.
+
+### Without installing idx (npx)
+
+With Node 18 or newer, the npm package `ihsg-mcp` runs `idx mcp` with no
+install step. Its first start downloads the idx binary for the platform from
+the matching GitHub release (about 7 MB) and checks it against the release's
+`SHA256SUMS`; later starts reuse it. Download messages go to stderr, so stdout
+carries only the protocol, and a failed download exits 1 with the reason.
+
+```sh
+claude mcp add --scope user idx -- npx -y ihsg-mcp
+```
+
+```json
+{ "mcpServers": { "idx": { "command": "npx", "args": ["-y", "ihsg-mcp"] } } }
+```
+
+On Windows, clients start commands without a shell and `npx` is a `.cmd`
+script, so the command is `cmd /c npx -y ihsg-mcp`
+(`"command": "cmd", "args": ["/c", "npx", "-y", "ihsg-mcp"]`).
+`idx mcp setup <client> --npx` prints any client's entry in this form for the
+machine it runs on, and so does `npx -y ihsg-mcp setup <client>` (the package
+adds `--npx` to a `setup` that names no other form).
+
+Everything after the package name goes to `idx mcp`, and `IDX_*` variables
+from the client's `env` block apply as usual: `npx -y ihsg-mcp --http
+127.0.0.1:8765 --token T` serves HTTP, `npx -y ihsg-mcp --provider yahoo
+--offline` sets the global flags. Recent npx versions (npm 10.9 was checked)
+ask the registry at each start and follow new releases, and the package then
+fetches the matching binary; if npx keeps an outdated copy, run
+`npx -y ihsg-mcp@latest`. Straight from this repository,
+`npx -y github:fzn0x/idx mcp` runs the ihsg-cli launcher instead.
 
 ### Claude Code
 

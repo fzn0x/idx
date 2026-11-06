@@ -215,10 +215,17 @@ idx mcp setup muse            # prints the settings.json block Meta's Muse Code 
 | ChatGPT · Claude.ai · Perplexity · Devin · Manus | remote only: `idx mcp --http 127.0.0.1:8765 --token T --allowed-host '*'` behind an HTTPS tunnel, then add `https://<host>/mcp` as a connector with header `Authorization: Bearer T` |
 
 A bare `idx` in the table assumes the binary is on `PATH`; `idx mcp setup`
-substitutes the absolute path, and `--npx` swaps in
-`npx -y ihsg-cli mcp` (npm registry; from this repository use
-`npx -y github:fzn0x/idx mcp`). Each entry's remote (HTTP) form and the
-config file locations are in [docs/mcp.md](docs/mcp.md).
+substitutes the absolute path, and `--npx` swaps in `npx -y ihsg-mcp`: the
+npm package [`ihsg-mcp`](npm-mcp/README.md) runs `idx mcp` without installing
+idx, fetching the release binary on first start and checking it against the
+release's `SHA256SUMS` (`cmd /c npx -y ihsg-mcp` on Windows; from this
+repository `npx -y github:fzn0x/idx mcp` still works). Each entry's remote
+(HTTP) form and the config file locations are in [docs/mcp.md](docs/mcp.md).
+
+```sh
+claude mcp add --scope user idx -- npx -y ihsg-mcp   # no idx install needed (Node 18+)
+npx -y ihsg-mcp setup cursor                         # any client's recipe, in the npx form
+```
 
 The server lists 36 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
