@@ -25,6 +25,7 @@ use crate::model::{
     StatementPeriod, Symbol,
 };
 
+pub mod history;
 pub mod idx;
 pub mod ipot;
 pub mod msn;
@@ -114,6 +115,8 @@ pub struct ProviderOptions {
     /// Stockbit session file and env-seed tokens. The path is empty only in
     /// tests that never select the Stockbit provider.
     pub stockbit: StockbitOptions,
+    /// Where candles come from (`history_provider`); see [`history`].
+    pub history: HistoryProviderKind,
 }
 
 /// Where the Stockbit session lives and what seeds it. The file is authoritative;
@@ -246,6 +249,50 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+/// Where price history (candles) comes from, apart from `--provider`
+/// (`--history-provider`, `IDX_HISTORY_PROVIDER`, config `history_provider`).
+/// The routing itself lives in [`history`].
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryProviderKind {
+    /// Follow --provider: Yahoo, or under --provider stockbit Stockbit where its bars match the request and Yahoo otherwise or when Stockbit fails.
+    #[default]
+    Auto,
+    /// Yahoo Finance charts, whatever --provider says.
+    Yahoo,
+    /// Stockbit charts from your own session, whatever --provider says; no fallback.
+    Stockbit,
+}
+
+impl HistoryProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HistoryProviderKind::Auto => "auto",
+            HistoryProviderKind::Yahoo => "yahoo",
+            HistoryProviderKind::Stockbit => "stockbit",
+        }
+    }
+}
+
+impl std::str::FromStr for HistoryProviderKind {
+    type Err = IdxError;
+    fn from_str(s: &str) -> Result<Self> {
+        <HistoryProviderKind as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            IdxError::Config(format!(
+                "unknown history provider {s:?}; use auto, yahoo or stockbit"
+            ))
+        })
+    }
+}
+
+impl std::fmt::Display for HistoryProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Tries providers in order. Returns the first success. If every provider
 /// fails, surfaces a `NotFound` if any provider said so (the symbol is probably
 /// wrong), otherwise the first real error, otherwise `Unsupported`.
@@ -258,7 +305,7 @@ impl Chain {
         Chain { providers }
     }
 
-    fn pick(errors: Vec<IdxError>) -> IdxError {
+    pub(crate) fn pick(errors: Vec<IdxError>) -> IdxError {
         let mut errors = errors;
         if let Some(pos) = errors
             .iter()
@@ -398,18 +445,29 @@ impl Provider for Chain {
 /// Names of the providers `auto` tries, in order.
 pub const AUTO_ORDER: &[&str] = &[yahoo::NAME, msn::NAME];
 
-/// Builds the provider for `kind`.
+/// Builds the provider for `kind`, with candles routed by `opts.history`
+/// (see [`history::route`]; the default routing leaves it untouched).
 pub fn build(
     kind: ProviderKind,
     fetcher: Arc<Fetcher>,
     opts: ProviderOptions,
+) -> Result<Box<dyn Provider>> {
+    let selected = build_selected(kind, fetcher.clone(), &opts)?;
+    Ok(history::route(kind, selected, fetcher, &opts))
+}
+
+/// The provider `--provider` names, before any history routing.
+fn build_selected(
+    kind: ProviderKind,
+    fetcher: Arc<Fetcher>,
+    opts: &ProviderOptions,
 ) -> Result<Box<dyn Provider>> {
     match kind {
         ProviderKind::Yahoo => Ok(Box::new(yahoo::Yahoo::new(fetcher, opts.ttls))),
         ProviderKind::Msn => Ok(Box::new(msn::Msn::new(
             fetcher,
             opts.ttls,
-            opts.msn_api_key,
+            opts.msn_api_key.clone(),
         ))),
         // Stockbit stands alone: it needs a credential and is never folded into
         // the keyless `auto` chain.
@@ -420,7 +478,7 @@ pub fn build(
         ))),
         ProviderKind::Auto => Ok(Box::new(Chain::new(vec![
             Box::new(yahoo::Yahoo::new(fetcher.clone(), opts.ttls)),
-            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key)),
+            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key.clone())),
         ]))),
     }
 }

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{IdxError, Result};
 use crate::http::CacheMode;
 use crate::output::{ColorMode, OutputFormat};
-use crate::providers::ProviderKind;
+use crate::providers::{HistoryProviderKind, ProviderKind};
 
 pub const ENV_PREFIX: &str = "IDX_";
 
@@ -24,8 +24,10 @@ pub const ENV_PREFIX: &str = "IDX_";
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
-    /// `auto` | `yahoo` | `msn`
+    /// `auto` | `yahoo` | `msn` | `stockbit`
     pub provider: Option<String>,
+    /// Where candles come from: `auto` | `yahoo` | `stockbit`
+    pub history_provider: Option<String>,
     /// `table` | `json`
     pub output: Option<String>,
     /// `auto` | `always` | `never`
@@ -97,6 +99,10 @@ impl FileConfig {
                 value.parse::<ProviderKind>()?;
                 self.provider = Some(value.to_string());
             }
+            "history_provider" => {
+                value.parse::<HistoryProviderKind>()?;
+                self.history_provider = Some(value.to_string());
+            }
             "output" => {
                 value.parse::<OutputFormat>()?;
                 self.output = Some(value.to_string());
@@ -136,6 +142,7 @@ impl FileConfig {
     pub fn get(&self, key: &str) -> Result<Option<String>> {
         Ok(match key {
             "provider" => self.provider.clone(),
+            "history_provider" => self.history_provider.clone(),
             "output" => self.output.clone(),
             "color" => self.color.clone(),
             "timeout_secs" => self.timeout_secs.map(|v| v.to_string()),
@@ -165,6 +172,7 @@ impl FileConfig {
 
 pub const KEYS: &[&str] = &[
     "provider",
+    "history_provider",
     "output",
     "color",
     "timeout_secs",
@@ -184,6 +192,11 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 
 # Data source: "auto" tries providers in order and falls back when one fails.
 # provider = "auto"          # auto | yahoo | msn      (env: IDX_PROVIDER)
+
+# Where price history (candles) comes from. "auto" follows `provider`: Yahoo, or
+# under provider = "stockbit" Stockbit where its bars match the request and Yahoo
+# otherwise or when it fails. "yahoo" or "stockbit" pin it.
+# history_provider = "auto"  # auto | yahoo | stockbit (env: IDX_HISTORY_PROVIDER)
 
 # Default output format.
 # output = "table"           # table | json | csv      (env: IDX_OUTPUT)
@@ -222,6 +235,7 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 #[derive(Debug, Default, Clone)]
 pub struct CliOverrides {
     pub provider: Option<ProviderKind>,
+    pub history_provider: Option<HistoryProviderKind>,
     pub output: Option<OutputFormat>,
     pub no_color: bool,
     pub offline: bool,
@@ -234,6 +248,8 @@ pub struct CliOverrides {
 #[derive(Debug, Clone, Serialize)]
 pub struct Settings {
     pub provider: ProviderKind,
+    /// Where candles come from (`history_provider`).
+    pub history_provider: HistoryProviderKind,
     pub output: OutputFormat,
     pub color: ColorMode,
     pub timeout_secs: u64,
@@ -355,6 +371,17 @@ pub fn resolve(
         _ => ProviderKind::Auto,
     };
 
+    let history_provider = match (
+        &cli.history_provider,
+        env_s("HISTORY_PROVIDER"),
+        &file.history_provider,
+    ) {
+        (Some(h), _, _) => *h,
+        (None, Some(e), _) => e.parse()?,
+        (None, None, Some(f)) => f.parse()?,
+        _ => HistoryProviderKind::Auto,
+    };
+
     let output = match (&cli.output, env_s("OUTPUT"), &file.output) {
         (Some(o), _, _) => *o,
         (None, Some(e), _) => e.parse()?,
@@ -449,6 +476,7 @@ pub fn resolve(
 
     Ok(Settings {
         provider,
+        history_provider,
         output,
         color,
         timeout_secs,
@@ -490,6 +518,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.provider, ProviderKind::Auto);
+        assert_eq!(s.history_provider, HistoryProviderKind::Auto);
         assert_eq!(s.output, OutputFormat::Table);
         assert_eq!(s.color, ColorMode::Auto);
         assert_eq!(s.timeout_secs, DEFAULT_TIMEOUT_SECS);
@@ -527,6 +556,39 @@ mod tests {
         assert_eq!(s.provider, ProviderKind::Yahoo);
         assert_eq!(s.output, OutputFormat::Table);
         assert_eq!(s.timeout_secs, 1);
+    }
+
+    #[test]
+    fn history_provider_precedence() {
+        let file = FileConfig {
+            history_provider: Some("stockbit".into()),
+            ..Default::default()
+        };
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.history_provider, HistoryProviderKind::Stockbit);
+        let env = env_from(&[("IDX_HISTORY_PROVIDER", "Yahoo")]);
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap();
+        assert_eq!(s.history_provider, HistoryProviderKind::Yahoo);
+        let cli = CliOverrides {
+            history_provider: Some(HistoryProviderKind::Auto),
+            ..Default::default()
+        };
+        let s = resolve(&cli, &file, "x".into(), &env).unwrap();
+        assert_eq!(s.history_provider, HistoryProviderKind::Auto);
+        // MSN has no history, so it is not a history provider.
+        let env = env_from(&[("IDX_HISTORY_PROVIDER", "msn")]);
+        let e = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap_err();
+        assert_eq!(e.exit_code(), 6);
+        assert!(e.to_string().contains("auto, yahoo or stockbit"), "{e}");
+        let bad_file = FileConfig {
+            history_provider: Some("bloomberg".into()),
+            ..Default::default()
+        };
+        let e = resolve(&CliOverrides::default(), &bad_file, "x".into(), &|_| None).unwrap_err();
+        assert_eq!(e.exit_code(), 6);
+        // Settings serialise it for `config get -o json`.
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["history_provider"], "auto");
     }
 
     #[test]
@@ -578,6 +640,8 @@ mod tests {
         let mut cfg = FileConfig::default();
         cfg.set("provider", "yahoo").unwrap();
         cfg.set("cache.quote_ttl_secs", "120").unwrap();
+        cfg.set("history_provider", "stockbit").unwrap();
+        assert!(cfg.set("history_provider", "msn").is_err());
         assert!(cfg.set("provider", "nope").is_err());
         assert!(cfg.set("nope", "1").is_err());
         cfg.save(&path).unwrap();
@@ -586,6 +650,10 @@ mod tests {
         assert_eq!(
             back.get("cache.quote_ttl_secs").unwrap().as_deref(),
             Some("120")
+        );
+        assert_eq!(
+            back.get("history_provider").unwrap().as_deref(),
+            Some("stockbit")
         );
         assert_eq!(back.get("output").unwrap(), None);
         std::fs::write(&path, "provider = 3").unwrap();

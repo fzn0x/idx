@@ -87,6 +87,8 @@ expect "$TMP/mq.json" '"source": "msn:quotes"' "msn quote source"
 "$IDX" --provider msn -o json stocks fundamental BBCA >"$TMP/mf.json" || fail "msn fundamental"
 expect "$TMP/mf.json" '"msn:equities"' "msn fundamental source"
 expect "$TMP/mf.json" '"recommendation":' "msn fundamental has analyst block"
+"$IDX" --provider msn -o json stocks history BBCA --period 1mo >"$TMP/mh.json" || fail "msn history (routed)"
+expect "$TMP/mh.json" '"provider": "yahoo"' "msn history comes from yahoo"
 
 echo "screen / news / sentiment"
 "$IDX" stocks screen -f "mcap>100T,pe<20" --limit 10 >"$TMP/sc.txt" || fail "screen"

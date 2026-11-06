@@ -562,7 +562,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_history",
-        description = "OHLCV candles for one IDX ticker, oldest first, with a summary (first/last close, change %, high, low, average volume). Returns the idx.history.v1 envelope. Use limit to bound the payload; the summary always covers the whole period."
+        description = "OHLCV candles for one IDX ticker, oldest first, with a summary (first/last close, change %, high, low, average volume). Returns the idx.history.v1 envelope. Use limit to bound the payload; the summary always covers the whole period. The envelope's provider names the source the candles came from (the server's history_provider setting)."
     )]
     async fn history(
         &self,

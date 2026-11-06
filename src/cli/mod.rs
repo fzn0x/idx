@@ -13,7 +13,8 @@ use crate::http::{Fetcher, ReqwestBackend};
 use crate::output::{self, ColorMode, OutputFormat};
 use crate::progress;
 use crate::providers::{
-    self, Provider, ProviderKind, ProviderOptions, Sourced, StockbitOptions, Ttls,
+    self, HistoryProviderKind, Provider, ProviderKind, ProviderOptions, Sourced, StockbitOptions,
+    Ttls,
 };
 
 pub mod bandar;
@@ -57,7 +58,7 @@ Examples:
 
 const AFTER_HELP: &str = "\
 Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider · 4 not found · 5 offline cache miss · 6 config
-Env: IDX_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
+Env: IDX_PROVIDER, IDX_HISTORY_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
 Docs: https://github.com/fzn0x/idx";
 
 #[derive(Debug, Parser)]
@@ -86,6 +87,10 @@ pub struct GlobalOpts {
     /// Data provider. `auto` tries each one in turn.
     #[arg(long, global = true, value_enum, value_name = "NAME")]
     pub provider: Option<ProviderKind>,
+
+    /// Where candles come from (history, technical, returns, brief, bandar price moves): auto follows --provider; yahoo or stockbit pin it.
+    #[arg(long, global = true, value_enum, value_name = "NAME")]
+    pub history_provider: Option<HistoryProviderKind>,
 
     /// Never touch the network; serve from the local cache even if stale.
     #[arg(long, global = true, conflicts_with = "no_cache")]
@@ -254,6 +259,7 @@ pub fn resolve_settings(global: &GlobalOpts) -> Result<Settings> {
     let file = FileConfig::load(&config_path)?;
     let overrides = CliOverrides {
         provider: global.provider,
+        history_provider: global.history_provider,
         output: global.output,
         no_color: global.no_color,
         offline: global.offline,
@@ -286,6 +292,7 @@ pub fn build_context(global: &GlobalOpts) -> Result<Context> {
             access_seed: settings.stockbit_access_seed.clone(),
             refresh_seed: settings.stockbit_refresh_seed.clone(),
         },
+        history: settings.history_provider,
     };
     let provider: Arc<dyn Provider> =
         Arc::from(providers::build(settings.provider, fetcher.clone(), opts)?);
@@ -464,6 +471,23 @@ mod tests {
         ]);
         assert_eq!(cli.global.output, Some(OutputFormat::Table));
         assert!(matches!(cli.command, Command::Stocks(_)));
+    }
+
+    #[test]
+    fn history_provider_is_a_global_flag() {
+        let cli = Cli::parse_from([
+            "idx",
+            "stocks",
+            "history",
+            "BBCA",
+            "--history-provider",
+            "stockbit",
+        ]);
+        assert_eq!(
+            cli.global.history_provider,
+            Some(HistoryProviderKind::Stockbit)
+        );
+        assert!(Cli::try_parse_from(["idx", "--history-provider", "msn", "version"]).is_err());
     }
 
     #[test]

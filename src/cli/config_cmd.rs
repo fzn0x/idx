@@ -76,6 +76,7 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 }
             ));
             s.push_str(&format!("provider    : {}\n", settings.provider));
+            s.push_str(&format!("history     : {}\n", settings.history_provider));
             s.push_str(&format!("output      : {}\n", settings.output));
             s.push_str(&format!("color       : {}\n", settings.color));
             s.push_str(&format!("timeout     : {}s\n", settings.timeout_secs));

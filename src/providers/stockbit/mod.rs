@@ -282,6 +282,35 @@ pub fn bar_word(bars: &str) -> &'static str {
     }
 }
 
+/// The span Stockbit charts for a request, in words (`--period 2y` is charted
+/// over three years, `10y` and `max` over five).
+pub fn window_for(period: Period, interval: Interval) -> &'static str {
+    match parse::timeframe_for(period, interval).0 {
+        "1d" => "the current session",
+        "1w" => "one week",
+        "1m" => "one month",
+        "3m" => "three months",
+        "ytd" => "its year-to-date window",
+        "1y" => "one year",
+        "3y" => "three years",
+        _ => "five years",
+    }
+}
+
+/// `true` when Stockbit answers a request as asked: the window it charts is
+/// the period and its bars are the interval (daily over `1mo` to `1y`, hourly
+/// over `5d`, weekly over `5y`), or a same-day intraday request, where its
+/// one-minute bars are finer than asked and realtime. `history_provider =
+/// auto` keeps those on Stockbit and sends the rest to Yahoo.
+pub fn serves_as_asked(period: Period, interval: Interval) -> bool {
+    match (period, interval) {
+        (Period::D1, i) => i.is_intraday(),
+        (Period::D5, Interval::Hour1) | (Period::Y5, Interval::Week1) => true,
+        (Period::M1 | Period::M3 | Period::M6 | Period::Ytd | Period::Y1, Interval::Day1) => true,
+        _ => false,
+    }
+}
+
 /// The warning a Stockbit history carries when its bars are not the interval
 /// asked for (Stockbit picks the bar size from the window, not the interval).
 pub fn granularity_warning(period: Period, interval: Interval) -> Option<String> {
@@ -310,6 +339,39 @@ mod tests {
         assert_eq!(bars_for(Period::Ytd, Interval::Day1), "1d");
         assert_eq!(bars_for(Period::Y2, Interval::Day1), "1wk");
         assert_eq!(bars_for(Period::Max, Interval::Month1), "1wk");
+    }
+
+    #[test]
+    fn served_as_asked_means_window_and_bars_match() {
+        for (period, interval) in [
+            (Period::D1, Interval::Min5),
+            (Period::D1, Interval::Hour1),
+            (Period::D5, Interval::Hour1),
+            (Period::M1, Interval::Day1),
+            (Period::M3, Interval::Day1),
+            (Period::M6, Interval::Day1),
+            (Period::Ytd, Interval::Day1),
+            (Period::Y1, Interval::Day1),
+            (Period::Y5, Interval::Week1),
+        ] {
+            assert!(serves_as_asked(period, interval), "{period} {interval}");
+        }
+        for (period, interval) in [
+            (Period::D1, Interval::Day1),
+            (Period::D5, Interval::Day1),
+            (Period::D5, Interval::Min30),
+            (Period::M1, Interval::Hour1),
+            (Period::Y1, Interval::Week1),
+            (Period::Y2, Interval::Day1),
+            (Period::Y2, Interval::Week1),
+            (Period::Y5, Interval::Day1),
+            (Period::Y10, Interval::Week1),
+            (Period::Max, Interval::Month1),
+        ] {
+            assert!(!serves_as_asked(period, interval), "{period} {interval}");
+        }
+        assert_eq!(window_for(Period::Y2, Interval::Week1), "three years");
+        assert_eq!(window_for(Period::M1, Interval::Min15), "one week");
     }
 
     #[test]

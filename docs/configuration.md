@@ -15,6 +15,7 @@ Override the location with `--config PATH` or `IDX_CONFIG=PATH`.
 ```sh
 idx config init                       # write a commented template
 idx config set provider yahoo
+idx config set history_provider stockbit   # candles from your Stockbit session
 idx config set cache.quote_ttl_secs 120
 idx config get                        # effective settings after all layers
 idx config get provider               # one key, as stored in the file
@@ -23,6 +24,7 @@ idx config path
 
 ```toml
 provider = "auto"      # auto | yahoo | msn | stockbit
+history_provider = "auto"  # auto | yahoo | stockbit: where candles come from
 output = "table"       # table | json | csv
 color = "auto"         # auto | always | never
 timeout_secs = 15
@@ -41,6 +43,7 @@ history_ttl_secs = 3600
 | variable | flag | meaning |
 | --- | --- | --- |
 | `IDX_PROVIDER` | `--provider` | `auto`, `yahoo`, `msn`, `stockbit` |
+| `IDX_HISTORY_PROVIDER` | `--history-provider` | `auto` (default), `yahoo`, `stockbit`: where candles come from, see below |
 | `IDX_OUTPUT` | `-o, --output` | `table`, `json` |
 | `IDX_COLOR` | | `auto`, `always`, `never` |
 | `NO_COLOR` | `--no-color` | any non-empty value disables colour |
@@ -58,6 +61,30 @@ history_ttl_secs = 3600
 | `IDX_STOCKBIT_REFRESH_TOKEN` | | Seeds an unattended Stockbit session (the refresh token); the session file wins once it exists |
 | `IDX_STOCKBIT_ACCESS_TOKEN` | | Optional access token to seed alongside the refresh token |
 | `IDX_BROWSER` | | Browser executable `idx stockbit login` launches (default: the first Chrome/Edge/Brave found) |
+
+## History provider
+
+`history_provider` decides where candles come from, separately from
+`provider`. Every command that reads candles follows it: `stocks history`,
+`technical`, `returns`, `brief`, `bandar` price moves, `watch returns` and the
+MCP tools behind them.
+
+| `provider` | `history_provider` | candles from |
+| --- | --- | --- |
+| `auto`, `yahoo` | `auto`, `yahoo` | Yahoo (unchanged) |
+| `msn` | `auto`, `yahoo` | Yahoo: MSN has no price history |
+| `stockbit` | `auto` | Stockbit where its bars are the ones asked for (daily over `1mo` to `1y`, hourly over `5d`, weekly over `5y`, and same-day intraday), Yahoo otherwise; Yahoo also when Stockbit fails (no session, expired token, network) |
+| `stockbit` | `yahoo` | Yahoo |
+| any | `stockbit` | Stockbit, no fallback (needs `idx stockbit login`, exit 2 without it) |
+
+Stockbit picks the bar size from the window, so under `provider = "stockbit"`
+a `2y` or `5y` daily request would come back weekly and feed weekly returns
+into daily analytics; `auto` sends those to Yahoo and says so in a warning.
+A fallback after a Stockbit failure is a warning too
+(`stockbit history failed (...); candles from yahoo`), and the JSON envelope's
+`provider` names the source the candles came from. `history_provider =
+"stockbit"` with the default `provider = "auto"` keeps the free providers for
+quotes and fundamentals and takes only candles from Stockbit.
 
 ## Cache
 

@@ -275,6 +275,10 @@ filled-in version.
 All `IDX_*` environment variables and the config file apply to every client,
 so `--offline` behaviour, cache location, TTLs and provider choice can be set
 per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
+`-e IDX_HISTORY_PROVIDER=stockbit` takes candles (`idx_history`,
+`idx_technical`, `idx_returns`, `idx_brief`) from your Stockbit session while
+every other tool stays on the free providers; the envelope's `provider` names
+the source the candles came from.
 
 ## HTTP transport
 

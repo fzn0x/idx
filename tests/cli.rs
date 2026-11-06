@@ -852,12 +852,177 @@ fn msn_provider_is_selectable() {
         .assert()
         .code(5)
         .stderr(predicate::str::contains("BBCA"));
-    // MSN does not serve history: explicit provider gets exit 6 with a hint.
+    // MSN does not serve dividends: explicit provider gets exit 6 with a hint.
+    // (History is routed to Yahoo; see history_provider_routes_candles.)
     idx(&sb.cache, &sb.config)
-        .args(["--provider", "msn", "stocks", "history", "BBCA"])
+        .args(["--provider", "msn", "stocks", "dividends", "BBCA"])
         .assert()
         .code(6)
         .stderr(predicate::str::contains("--provider auto"));
+}
+
+#[test]
+fn history_provider_routes_candles() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1mo&interval=1d&includePrePost=false",
+        "yahoo/chart_bbca_1mo_1d.json",
+    );
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v8/finance/chart/TLKM.JK?range=1y&interval=1wk&includePrePost=false",
+        "yahoo/chart_tlkm_1y_1wk.json",
+    );
+    let json = |args: &[&str]| -> serde_json::Value {
+        let out = idx(&sb.cache, &sb.config).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    // MSN has no history: candles come from Yahoo (this used to exit 6).
+    let v = json(&[
+        "--provider",
+        "msn",
+        "-o",
+        "json",
+        "stocks",
+        "history",
+        "BBCA",
+        "--period",
+        "1mo",
+    ]);
+    assert_eq!(v["provider"], "yahoo");
+    assert_eq!(v["data"]["symbol"], "BBCA");
+    assert!(v.get("warnings").is_none(), "{v}");
+
+    // Stockbit without a session: falls back to Yahoo and says why.
+    let v = json(&[
+        "--provider",
+        "stockbit",
+        "-o",
+        "json",
+        "stocks",
+        "history",
+        "BBCA",
+        "--period",
+        "1mo",
+    ]);
+    assert_eq!(v["provider"], "yahoo");
+    let w = v["warnings"][0].as_str().unwrap();
+    assert!(w.starts_with("stockbit history failed"), "{w}");
+    assert!(w.contains("idx stockbit login"), "{w}");
+    // Table mode prints the same warning on stderr.
+    idx(&sb.cache, &sb.config)
+        .args([
+            "--provider",
+            "stockbit",
+            "stocks",
+            "history",
+            "BBCA",
+            "--period",
+            "1mo",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: stockbit history failed"));
+
+    // Pinned to Stockbit: no fallback, the usage error stands.
+    idx(&sb.cache, &sb.config)
+        .args([
+            "--provider",
+            "stockbit",
+            "--history-provider",
+            "stockbit",
+            "stocks",
+            "history",
+            "BBCA",
+            "--period",
+            "1mo",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("stockbit login"));
+    idx(&sb.cache, &sb.config)
+        .env("IDX_HISTORY_PROVIDER", "stockbit")
+        .args(["stocks", "history", "BBCA", "--period", "1mo"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("stockbit login"));
+    // ...and the flag beats the environment.
+    let v = json(&[
+        "--history-provider",
+        "yahoo",
+        "-o",
+        "json",
+        "stocks",
+        "history",
+        "BBCA",
+        "--period",
+        "1mo",
+    ]);
+    assert_eq!(v["provider"], "yahoo");
+
+    // Stockbit charts a year in daily bars: a weekly request goes to Yahoo with a note.
+    let v = json(&[
+        "--provider",
+        "stockbit",
+        "-o",
+        "json",
+        "stocks",
+        "history",
+        "TLKM",
+        "--period",
+        "1y",
+        "--interval",
+        "1wk",
+    ]);
+    assert_eq!(v["provider"], "yahoo");
+    assert_eq!(v["data"]["interval"], "1wk");
+    let w = v["warnings"][0].as_str().unwrap();
+    assert!(w.contains("daily bars"), "{w}");
+    assert!(w.contains("candles from yahoo"), "{w}");
+
+    // Bad values: the flag is a usage error, the env and file are config errors.
+    idx(&sb.cache, &sb.config)
+        .args(["--history-provider", "nope", "stocks", "history", "BBCA"])
+        .assert()
+        .code(2);
+    idx(&sb.cache, &sb.config)
+        .env("IDX_HISTORY_PROVIDER", "msn")
+        .args(["stocks", "history", "BBCA"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("auto, yahoo or stockbit"));
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "history_provider", "msn"])
+        .assert()
+        .code(6);
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "history_provider", "stockbit"])
+        .assert()
+        .success();
+    idx(&sb.cache, &sb.config)
+        .args(["config", "get", "history_provider"])
+        .assert()
+        .success()
+        .stdout(
+            "stockbit
+",
+        );
+    idx(&sb.cache, &sb.config)
+        .args(["config", "get"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("history     : stockbit"));
+    let v = json(&["-o", "json", "config", "get"]);
+    assert_eq!(v["history_provider"], "stockbit");
+    let v = json(&["--history-provider", "auto", "-o", "json", "config", "get"]);
+    assert_eq!(v["history_provider"], "auto");
 }
 
 #[test]

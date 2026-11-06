@@ -29,7 +29,8 @@ src/
   main.rs            thin binary: parse args, init tracing, map errors to exit codes
   lib.rs             module map
   cli/               clap definitions + handlers (mod.rs builds Context; one file per group)
-  providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source
+  providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source; history.rs
+                     routes candles by history_provider (auto | yahoo | stockbit) over the selected provider
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
     msn/             autosuggest lookup -> Quotes / Equities (public web key)
     ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried) and

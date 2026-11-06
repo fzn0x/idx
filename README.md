@@ -155,6 +155,7 @@ Global flags work anywhere on the line:
 | --- | --- | --- |
 | `-o, --output table\|json\|csv` | `IDX_OUTPUT` | Output format: tables for people, the JSON envelope for programs, CSV rows of the payload's main list for spreadsheets |
 | `--provider auto\|yahoo\|msn\|stockbit` | `IDX_PROVIDER` | Data source (`auto` tries Yahoo, then MSN, and merges fundamentals; `stockbit` is opt-in realtime from your own session, see [docs/stockbit.md](docs/stockbit.md)) |
+| `--history-provider auto\|yahoo\|stockbit` | `IDX_HISTORY_PROVIDER` | Where candles come from; `auto` follows `--provider` (Yahoo for `msn`; under `stockbit`, Stockbit where its bars match the request and Yahoo otherwise or when Stockbit fails). See [docs/configuration.md](docs/configuration.md#history-provider) |
 | `--offline` | `IDX_OFFLINE=1` | Never touch the network |
 | `--no-cache` | `IDX_NO_CACHE=1` | Ignore cached responses |
 | `--timeout SECS` | `IDX_TIMEOUT_SECS` | Per-request timeout (default 15) |
@@ -275,7 +276,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 | idx.co.id trading-holiday calendar (published as an image per year) | trading holidays | none | Transcribed into `data/holidays.csv` (2026, 2027) and checked against IDX's monthly trading-day counts; `IDX_HOLIDAYS` overrides it |
 | Kontan RSS (`investasi`, `keuangan`, `industri`, `insight`) and CNBC Indonesia RSS (`market`, `research`, `news`) | news, sentiment | none | Bisnis.com refuses non-browser clients; listed as an opt-in source |
 | MSN Money `Finance/Quotes`, `Finance/Equities` | quotes, profile, fundamentals, analyst targets | MSN's own public web key (shipped; override with `IDX_MSN_API_KEY`) | Tickers resolve to MSN ids through its autosuggest service, filtered to exchange `XIDX` |
-| Stockbit `exodus.stockbit.com` (`--provider stockbit`, opt-in) | realtime quote, history, live order book + foreign flow | **your own Stockbit session**, captured by `idx stockbit login` and stored locally | The one source that needs a credential and the one not in the `auto` chain. Volume is realtime; the order book carries the full depth ladder. See [docs/stockbit.md](docs/stockbit.md) |
+| Stockbit `exodus.stockbit.com` (`--provider stockbit`, opt-in) | realtime quote, history, live order book + foreign flow | **your own Stockbit session**, captured by `idx stockbit login` and stored locally | The one source that needs a credential and the one not in the `auto` chain. Volume is realtime; the order book carries the full depth ladder. Candles alone with `--history-provider stockbit`. See [docs/stockbit.md](docs/stockbit.md) |
 
 Prices from the free sources are delayed as published; Stockbit is realtime for
 your own account. This tool is for research and tooling; it is not investment
