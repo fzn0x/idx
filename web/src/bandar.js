@@ -14,7 +14,8 @@ export const ACCUMULATION_PCT = 5;
 export const BIG_PCT = 15;
 export const FLAT_PCT = 2;
 export const PERIODS = ["1d", "1w", "1m", "3m"];
-const DASH = "—";
+// The web prints a missing figure as n/a, like the rest of the site.
+const DASH = "n/a";
 
 export class UsageError extends Error { constructor(m) { super(m); this.code = "usage"; } }
 

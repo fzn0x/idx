@@ -1,13 +1,15 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
-import { api, fmt, table, wrapScroll, el, sparkline, signClass } from "/app.js";
+import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse } from "/app.js";
 import { priceChart } from "/chart.js";
 import { TOOLS, CLI_ONLY_REASON, byName } from "/tools.js";
 import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
+import { mountGate, suggestions } from "/gate.js";
+import { initShell, hotkeys, lamp } from "/shell.js";
+import { session, hhmm, wib, stateName, boardState } from "/clock.js";
 
 const out = document.getElementById("out");
 const form = document.getElementById("prompt");
 const input = document.getElementById("cmd");
-const dateline = document.getElementById("dateline");
 
 // ---- command table ---------------------------------------------------------
 
@@ -33,7 +35,7 @@ const COMMANDS = [
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
-  { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
+  { name: "tools", usage: "tools [idx_TOOL]", help: "the MCP tools with their CLI and web commands; tools idx_quote runs one" },
   { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
@@ -67,14 +69,14 @@ const qs = (o) => Object.entries(o).filter(([, v]) => v != null && v !== "").map
 
 function kv(pairs) {
   const dl = el("dl", { class: "kv" });
-  for (const [k, v] of pairs) if (v !== undefined) dl.append(el("dt", { text: k }), el("dd", { text: v == null ? "—" : String(v) }));
+  for (const [k, v] of pairs) if (v !== undefined) dl.append(el("dt", { text: k }), el("dd", { text: v == null ? NA : String(v) }));
   return dl;
 }
 const pct = (v) => fmt.pctPlain(v);
-const x = (v) => (v == null ? "—" : `${fmt.num(v, 2)}x`);
+const x = (v) => (v == null ? NA : `${fmt.num(v, 2)}x`);
 
 const newsTable = (items) => wrapScroll(table([
-  { h: "WIB", f: (i) => (i.published ? fmt.wib(i.published).slice(5, 16) : "—"), l: true }, { h: "Source", k: "source", l: true },
+  { h: "WIB", f: (i) => (i.published ? fmt.wib(i.published).slice(5, 16) : NA), l: true }, { h: "Source", k: "source", l: true },
   { h: "±", f: (i) => (i.sentiment > 0 ? "+" : i.sentiment < 0 ? "−" : "·"), cls: (i) => signClass(i.sentiment) },
   { h: "Headline", f: (i) => el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.title }), l: true },
 ], items));
@@ -101,7 +103,7 @@ const R = {
     const frag = document.createDocumentFragment();
     if (d.summary) {
       const s = d.summary;
-      frag.append(el("p", { class: "prose", text: `${d.symbol} · ${d.name || ""} · ${d.period} / ${d.interval} · ${s.candles} candles · close ${fmt.price(s.first_close)} → ${fmt.price(s.last_close)} (${fmt.pct(s.change_pct)}) · high ${fmt.price(s.high)} · low ${fmt.price(s.low)}` }));
+      frag.append(el("p", { class: "prose", text: `${d.symbol} · ${d.name || ""} · ${d.period} / ${d.interval} · ${s.candles} candles · close ${fmt.price(s.first_close)} to ${fmt.price(s.last_close)} (${fmt.pct(s.change_pct)}) · high ${fmt.price(s.high)} · low ${fmt.price(s.low)}` }));
       frag.append(sparkline(d.candles.map((c, i) => [i, c.close]), { cls: "spark" }));
     }
     let prev = d.candles.length > 40 ? d.candles[d.candles.length - 41].close : null;
@@ -125,7 +127,7 @@ const R = {
   fundamentals(f) {
     const frag = document.createDocumentFragment();
     const v = f.valuation, p = f.profitability, h = f.health, g = f.growth, d = f.dividend, a = f.analyst;
-    frag.append(el("p", { class: "prose", html: `<b>${f.name || f.symbol}</b> · ${f.sector || "—"}${f.industry ? " / " + f.industry : ""} · price ${fmt.price(f.price)} · 52w ${fmt.price(f.week52_low)} – ${fmt.price(f.week52_high)} · beta ${fmt.ratio(f.beta)}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${f.name || f.symbol}</b> · ${f.sector || NA}${f.industry ? " / " + f.industry : ""} · price ${fmt.price(f.price)} · 52w ${fmt.price(f.week52_low)} to ${fmt.price(f.week52_high)} · beta ${fmt.ratio(f.beta)}` }));
     const grid = el("div", { class: "three" });
     const stmt = (title, pairs) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]);
     grid.append(
@@ -146,9 +148,9 @@ const R = {
   technical(t) {
     const frag = document.createDocumentFragment();
     const ma = t.moving_averages;
-    const vs = (v) => (v == null ? "—" : `${fmt.price(v)} (${fmt.pct(v ? ((t.price - v) / v) * 100 : null)})`);
+    const vs = (v) => (v == null ? NA : `${fmt.price(v)} (${fmt.pct(v ? ((t.price - v) / v) * 100 : null)})`);
     const cls = t.signal.label === "buy" ? "up" : t.signal.label === "sell" ? "dn" : "";
-    frag.append(el("p", { class: "prose", html: `<b>${t.name || t.symbol}</b> · ${t.candles_used} candles (${t.period}) · as of ${fmt.date(t.as_of)} · price ${fmt.price(t.price)} · 1d ${fmt.pct(t.change_pct_1d)} · 1m ${fmt.pct(t.change_pct_1m)} · 3m ${fmt.pct(t.change_pct_3m)} · 52w ${fmt.price(t.low_52w)} – ${fmt.price(t.high_52w)}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${t.name || t.symbol}</b> · ${t.candles_used} candles (${t.period}) · as of ${fmt.date(t.as_of)} · price ${fmt.price(t.price)} · 1d ${fmt.pct(t.change_pct_1d)} · 1m ${fmt.pct(t.change_pct_1m)} · 3m ${fmt.pct(t.change_pct_3m)} · 52w ${fmt.price(t.low_52w)} to ${fmt.price(t.high_52w)}` }));
     frag.append(el("p", { class: "prose" }, [el("span", { class: `pill ${cls}`, text: `${t.signal.label} ${t.signal.score > 0 ? "+" : ""}${t.signal.score}` }), ` · trend ${t.trend}`]));
     const grid = el("div", { class: "three" });
     const stmt = (title, pairs) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]);
@@ -170,7 +172,7 @@ const R = {
       ["Total assets", "balance", "total_assets"], ["Total liabilities", "balance", "total_liabilities"], ["Shareholders' equity", "balance", "stockholders_equity"], ["Cash & equivalents", "balance", "cash_and_equivalents"], ["Total debt", "balance", "total_debt"],
       ["Operating cash flow", "cash_flow", "operating"], ["Capital expenditure", "cash_flow", "capital_expenditure"], ["Free cash flow", "cash_flow", "free_cash_flow"], ["Dividends paid", "cash_flow", "dividends_paid"],
     ];
-    const rows = lines.map(([label, s, k, kind]) => ({ label, vals: f.periods.map((p) => (kind === "price" ? fmt.price(p[s][k]) : fmt.compact(p[s][k]))) })).filter((r) => r.vals.some((v) => v !== "—"));
+    const rows = lines.map(([label, s, k, kind]) => ({ label, vals: f.periods.map((p) => (kind === "price" ? fmt.price(p[s][k]) : fmt.compact(p[s][k]))) })).filter((r) => r.vals.some((v) => v !== NA));
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", text: `${f.symbol} · ${f.period} statements · ${f.periods.length} periods · ${f.currency || ""} · T = trillion, B = billion` }));
     frag.append(wrapScroll(table(cols, rows)));
@@ -182,8 +184,8 @@ const R = {
     if (e.quarters.length) frag.append(wrapScroll(table([{ h: "Quarter", k: "period", l: true, cls: "sym" }, { h: "Period end", f: (q) => fmt.date(q.end_date), l: true }, { h: "Reported", f: (q) => fmt.date(q.reported_date), l: true }, { h: "EPS actual", f: (q) => fmt.price(q.eps_actual) }, { h: "EPS est.", f: (q) => fmt.price(q.eps_estimate) }, { h: "Surprise", f: (q) => fmt.pct(q.surprise_pct), cls: (q) => `num ${signClass(q.surprise_pct)}` }], e.quarters)));
     const re = [...e.yearly, ...e.quarterly];
     if (re.length) frag.append(wrapScroll(table([{ h: "Period", k: "period", l: true, cls: "sym" }, { h: "Revenue", f: (r) => fmt.compact(r.revenue) }, { h: "Earnings", f: (r) => fmt.compact(r.earnings) }, { h: "Margin", f: (r) => pct(r.profit_margin_pct) }], re)));
-    if (e.next) frag.append(el("p", { class: "prose", text: `Next earnings ${e.next.date || "—"}${e.next.date_is_estimate ? " (estimated)" : ""} · EPS consensus ${fmt.price(e.next.eps_avg)} (${fmt.price(e.next.eps_low)} – ${fmt.price(e.next.eps_high)}, ${e.next.analysts ?? "—"} analysts) · revenue consensus ${fmt.compact(e.next.revenue_avg)}` }));
-    if (e.ex_dividend_date) frag.append(el("p", { class: "prose", text: `Ex-dividend ${e.ex_dividend_date} · payment ${e.dividend_date || "—"}` }));
+    if (e.next) frag.append(el("p", { class: "prose", text: `Next earnings ${e.next.date || NA}${e.next.date_is_estimate ? " (estimated)" : ""} · EPS consensus ${fmt.price(e.next.eps_avg)} (${fmt.price(e.next.eps_low)} to ${fmt.price(e.next.eps_high)}, ${e.next.analysts ?? NA} analysts) · revenue consensus ${fmt.compact(e.next.revenue_avg)}` }));
+    if (e.ex_dividend_date) frag.append(el("p", { class: "prose", text: `Ex-dividend ${e.ex_dividend_date} · payment ${e.dividend_date || NA}` }));
     return frag;
   },
   compare(list) {
@@ -192,7 +194,7 @@ const R = {
       ["Price", (f) => fmt.price(f.price)], ["Market cap", (f) => fmt.compact(f.valuation.market_cap)], ["P/E (ttm)", (f) => fmt.ratio(f.valuation.pe_trailing)], ["P/E (fwd)", (f) => fmt.ratio(f.valuation.pe_forward)],
       ["P/B", (f) => fmt.ratio(f.valuation.price_to_book)], ["EV/EBITDA", (f) => fmt.ratio(f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
       ["Debt/equity", (f) => x(f.health.debt_to_equity)], ["Rev growth", (f) => fmt.pct(f.growth.revenue_growth_pct)], ["Div yield", (f) => pct(f.dividend.yield_pct)], ["Target (mean)", (f) => fmt.price(f.analyst.target_mean)],
-      ["Verdict", (f) => f.verdict?.label.replace("_", " ") || "—"],
+      ["Verdict", (f) => f.verdict?.label.replace("_", " ") || NA],
     ];
     return wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
   },
@@ -226,7 +228,7 @@ const R = {
   },
   dividends(h) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>${h.name || h.symbol}</b> · ${h.currency || "IDR"} · price ${fmt.price(h.price)} · TTM dividends ${h.ttm_total == null ? "—" : fmt.num(h.ttm_total, 2)} (${h.ttm_payments} payment${h.ttm_payments === 1 ? "" : "s"}) · TTM yield ${pct(h.ttm_yield_pct)} · ${h.consecutive_years} consecutive year${h.consecutive_years === 1 ? "" : "s"}${h.last ? ` · last ${h.last.date} ${fmt.num(h.last.amount, 2)}` : ""}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${h.name || h.symbol}</b> · ${h.currency || "IDR"} · price ${fmt.price(h.price)} · TTM dividends ${h.ttm_total == null ? NA : fmt.num(h.ttm_total, 2)} (${h.ttm_payments} payment${h.ttm_payments === 1 ? "" : "s"}) · TTM yield ${pct(h.ttm_yield_pct)} · ${h.consecutive_years} consecutive year${h.consecutive_years === 1 ? "" : "s"}${h.last ? ` · last ${h.last.date} ${fmt.num(h.last.amount, 2)}` : ""}` }));
     if (!h.dividends.length) { frag.append(el("p", { class: "warn", text: "No dividend events reported by the source." })); return frag; }
     const grid = el("div", { class: "three" });
     grid.append(
@@ -251,8 +253,8 @@ const R = {
       frag.append(el("h3", { class: "stmt-title", text: `Excess over ${bench.symbol} · percentage points` }));
       frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, ...wc("e")], list.filter((p) => p.benchmark).map((p) => ({ symbol: p.symbol, e: p.benchmark.excess })))));
     }
-    for (const p of list) frag.append(el("p", { class: "prose", text: `${p.symbol} · 52w ${fmt.price(p.low_52w)} – ${fmt.price(p.high_52w)} (${fmt.pct(p.pct_from_52w_high)} from high${p.days_since_52w_high != null ? `, ${p.days_since_52w_high} days ago` : ""}) · CAGR 5y ${fmt.pct(p.cagr_5y_pct)} · best day ${p.best_day_1y ? `${fmt.pct(p.best_day_1y.pct)} on ${p.best_day_1y.date}` : "—"} · worst day ${p.worst_day_1y ? `${fmt.pct(p.worst_day_1y.pct)} on ${p.worst_day_1y.date}` : "—"} · max drawdown since ${p.start}: ${p.max_drawdown_all ? `${fmt.pct(p.max_drawdown_all.pct)} (${p.max_drawdown_all.peak_date} → ${p.max_drawdown_all.trough_date}${p.max_drawdown_all.recovered ? ", recovered" : ""})` : "—"}` }));
-    frag.append(el("p", { class: "warn", text: "Computed from provider closes; a window is — when the history does not reach back that far." }));
+    for (const p of list) frag.append(el("p", { class: "prose", text: `${p.symbol} · 52w ${fmt.price(p.low_52w)} to ${fmt.price(p.high_52w)} (${fmt.pct(p.pct_from_52w_high)} from high${p.days_since_52w_high != null ? `, ${p.days_since_52w_high} days ago` : ""}) · CAGR 5y ${fmt.pct(p.cagr_5y_pct)} · best day ${p.best_day_1y ? `${fmt.pct(p.best_day_1y.pct)} on ${p.best_day_1y.date}` : NA} · worst day ${p.worst_day_1y ? `${fmt.pct(p.worst_day_1y.pct)} on ${p.worst_day_1y.date}` : NA} · max drawdown since ${p.start}: ${p.max_drawdown_all ? `${fmt.pct(p.max_drawdown_all.pct)} (${p.max_drawdown_all.peak_date} to ${p.max_drawdown_all.trough_date}${p.max_drawdown_all.recovered ? ", recovered" : ""})` : NA}` }));
+    frag.append(el("p", { class: "warn", text: "Computed from provider closes; a window is n/a when the history does not reach back that far." }));
     return frag;
   },
   brief(b) {
@@ -275,7 +277,7 @@ const R = {
       frag.append(el("p", { class: "prose", html: `<b>${r.symbol}</b> · ${r.issuer_name || ""} · disclosed foreign stake ${pct(last.foreign_pct)} of the ${pct(last.listed_pct)} listed above 1 % as of ${last.as_of} · ${r.points.length} release${r.points.length === 1 ? "" : "s"}` }));
       frag.append(wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Foreign %", f: (p) => pct(p.foreign_pct) }, { h: "Δ pp", f: (p) => fmt.change(p.foreign_change_pp), cls: (p) => `num ${signClass(p.foreign_change_pp)}` }, { h: "Local %", f: (p) => pct(p.local_pct) }, { h: "Foreign holders", k: "foreign_holders" }, { h: "Local holders", k: "local_holders" }, { h: "Listed %", f: (p) => pct(p.listed_pct) }], r.points)));
     } else {
-      frag.append(el("p", { class: "prose", text: `Disclosed foreign stake ${r.from} → ${r.to} · ${r.issuers} issuers · ${r.inflows} inflows · ${r.outflows} outflows · net ${fmt.change(r.net_pp)} pp` }));
+      frag.append(el("p", { class: "prose", text: `Disclosed foreign stake ${r.from} to ${r.to} · ${r.issuers} issuers · ${r.inflows} inflows · ${r.outflows} outflows · net ${fmt.change(r.net_pp)} pp` }));
       frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true, cls: "name" }, { h: "Foreign % from", f: (x) => pct(x.foreign_pct_from) }, { h: "Foreign % to", f: (x) => pct(x.foreign_pct_to) }, { h: "Δ pp", f: (x) => fmt.change(x.change_pp), cls: (x) => `num ${signClass(x.change_pp)}` }, { h: "Foreign holders", k: "foreign_holders_to" }], r.rows)));
     }
     frag.append(el("p", { class: "warn", text: "Sums over holders above 1 % only (KSEI L/A flag); holders below 1 % are not published." }));
@@ -285,11 +287,11 @@ const R = {
     const frag = document.createDocumentFragment();
     const SIG = { big_accumulation: "big acc", accumulation: "acc", neutral: "neutral", distribution: "dist", big_distribution: "big dist" };
     const sigCls = (g) => (g.endsWith("accumulation") ? "up" : g.endsWith("distribution") ? "dn" : "");
-    const p1 = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+    const p1 = (v) => (v == null ? NA : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
     const net = (v) => `${v > 0 ? "+" : ""}${fmt.compact(v)}`;
     const KIND = { local: "local", foreign: "foreign", state_owned: "BUMN" };
     const side = (title, rows) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), wrapScroll(table([
-      { h: "Code", k: "code", l: true, cls: "sym" }, { h: "Broker", f: (r) => r.name, l: true, cls: "name" }, { h: "Class", f: (r) => KIND[r.kind] || "—", l: true },
+      { h: "Code", k: "code", l: true, cls: "sym" }, { h: "Broker", f: (r) => r.name, l: true, cls: "name" }, { h: "Class", f: (r) => KIND[r.kind] || NA, l: true },
       { h: "Lots", f: (r) => fmt.compact(r.lots) }, { h: "Value", f: (r) => fmt.compact(r.value) }, { h: "Avg", f: (r) => fmt.price(r.average_price) },
     ], rows))]);
     for (const r of list) {
@@ -298,7 +300,7 @@ const R = {
       if (!(r.total_value > 0)) { frag.append(el("p", { class: "warn", text: `No trades from ${r.from} to ${r.to}.` })); continue; }
       frag.append(el("p", { class: "prose" }, [
         el("span", { class: `pill ${sigCls(r.signal)}`, text: r.signal.replace("_", " ") }),
-        ` top ${r.top} net `, el("span", { class: signClass(r.net_value), text: net(r.net_value) }), ` (${p1(r.net_pct)} of ${fmt.compact(r.total_value)} traded) · phase ${r.phase ? r.phase.replace("_", " ") : "—"} · price ${fmt.price(r.price)} (`,
+        ` top ${r.top} net `, el("span", { class: signClass(r.net_value), text: net(r.net_value) }), ` (${p1(r.net_pct)} of ${fmt.compact(r.total_value)} traded) · phase ${r.phase ? r.phase.replace("_", " ") : NA} · price ${fmt.price(r.price)} (`,
         el("span", { class: signClass(r.price_change_pct), text: fmt.pct(r.price_change_pct) }), ")",
       ]));
       frag.append(el("p", { class: "prose" }, [
@@ -309,7 +311,7 @@ const R = {
         { h: "Top", f: (t) => (t.top === r.top ? el("b", { text: String(t.top) }) : String(t.top)), l: true },
         { h: "Buy value", f: (t) => fmt.compact(t.buy_value) }, { h: "Sell value", f: (t) => fmt.compact(t.sell_value) },
         { h: "Net value", f: (t) => net(t.net_value), cls: (t) => `num ${signClass(t.net_value)}` }, { h: "Net lots", f: (t) => net(t.net_lots), cls: (t) => `num ${signClass(t.net_lots)}` },
-        { h: "Net %", f: (t) => p1(t.net_pct), cls: (t) => `num ${signClass(t.net_pct)}` }, { h: "Buy share", f: (t) => (t.buy_share_pct == null ? "—" : `${t.buy_share_pct.toFixed(1)}%`) },
+        { h: "Net %", f: (t) => p1(t.net_pct), cls: (t) => `num ${signClass(t.net_pct)}` }, { h: "Buy share", f: (t) => (t.buy_share_pct == null ? NA : `${t.buy_share_pct.toFixed(1)}%`) },
         { h: "Buy avg", f: (t) => fmt.price(t.buy_average == null ? null : Math.round(t.buy_average)) }, { h: "Sell avg", f: (t) => fmt.price(t.sell_average == null ? null : Math.round(t.sell_average)) },
         { h: "Signal", f: (t) => SIG[t.signal], cls: (t) => sigCls(t.signal) },
       ], r.tiers)));
@@ -338,14 +340,14 @@ const R = {
     const frag = document.createDocumentFragment();
     const SIG = { big_accumulation: "big acc", accumulation: "acc", neutral: "neutral", distribution: "dist", big_distribution: "big dist" };
     const sigCls = (g) => (g.endsWith("accumulation") ? "up" : g.endsWith("distribution") ? "dn" : "");
-    const p1 = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+    const p1 = (v) => (v == null ? NA : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
     frag.append(el("p", { class: "prose" }, [el("b", { text: `Bandar screen${s.preset ? ` · ${s.preset}` : ""}` }), ` · ${s.period} ${s.from} to ${s.to} · top ${s.top} · scanned ${s.scanned} · ${s.checked} with trades · ${s.total_matches} match${s.total_matches === 1 ? "" : "es"}`]));
     frag.append(el("p", { class: "prose", text: `Filters: ${s.filters.length ? s.filters.join(", ") : "none"} · sorted by ${s.sort} ${s.descending ? "descending" : "ascending"}` }));
     if (!s.rows.length) frag.append(el("p", { class: "warn", text: "No stock matched." }));
     else frag.append(wrapScroll(table([
       { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Signal", f: (r) => SIG[r.signal], cls: (r) => sigCls(r.signal) },
       { h: "Net %", f: (r) => p1(r.net_pct), cls: (r) => `num ${signClass(r.net_pct)}` }, { h: "Net value", f: (r) => `${r.net_value > 0 ? "+" : ""}${fmt.compact(r.net_value)}`, cls: (r) => `num ${signClass(r.net_value)}` },
-      { h: "Chg %", f: (r) => fmt.pct(r.price_change_pct), cls: (r) => `num ${signClass(r.price_change_pct)}` }, { h: "Phase", f: (r) => (r.phase ? r.phase.replace("_", " ") : "—"), l: true },
+      { h: "Chg %", f: (r) => fmt.pct(r.price_change_pct), cls: (r) => `num ${signClass(r.price_change_pct)}` }, { h: "Phase", f: (r) => (r.phase ? r.phase.replace("_", " ") : NA), l: true },
       { h: "Foreign %", f: (r) => p1(r.foreign_net_pct), cls: (r) => `num ${signClass(r.foreign_net_pct)}` },
       { h: "Bandar avg", f: (r) => fmt.price(r.bandar_average == null ? null : Math.round(r.bandar_average)) }, { h: "Gain", f: (r) => p1(r.bandar_gain_pct), cls: (r) => `num ${signClass(r.bandar_gain_pct)}` },
       { h: "Price", f: (r) => fmt.price(r.price) }, { h: "Top buyers", f: (r) => r.top_buyers.join(" "), l: true },
@@ -361,7 +363,7 @@ const R = {
       { h: "#", k: "rank" },
       { h: "Code", k: "code", l: true, cls: "sym" },
       { h: "Broker", f: (r) => r.name, l: true, cls: "name" },
-      { h: "Class", f: (r) => KIND[r.kind] || "—", l: true },
+      { h: "Class", f: (r) => KIND[r.kind] || NA, l: true },
       { h: "Lots", f: (r) => fmt.compact(r.lots) },
       { h: "Value", f: (r) => fmt.compact(r.value) },
       { h: "Avg", f: (r) => fmt.price(r.average_price) },
@@ -390,24 +392,24 @@ const R = {
     else frag.append(wrapScroll(table([
       { h: "Action", f: (a) => KIND[a.kind] || a.label, l: true, cls: "sym" },
       { h: "Amount", f: (a) => fmt.price(a.amount) },
-      { h: "Ratio", f: (a) => (a.ratio_old != null && a.ratio_new != null ? `${fmt.price(a.ratio_old)}:${fmt.price(a.ratio_new)}` : "—") },
-      { h: "Cum", f: (a) => a.cum_date || "—", l: true }, { h: "Ex", f: (a) => a.ex_date || "—", l: true },
-      { h: "Recording", f: (a) => a.recording_date || "—", l: true }, { h: "Payment", f: (a) => a.distribution_date || "—", l: true },
-      { h: "Status", f: (a) => a.status || "—", l: true },
+      { h: "Ratio", f: (a) => (a.ratio_old != null && a.ratio_new != null ? `${fmt.price(a.ratio_old)}:${fmt.price(a.ratio_new)}` : NA) },
+      { h: "Cum", f: (a) => a.cum_date || NA, l: true }, { h: "Ex", f: (a) => a.ex_date || NA, l: true },
+      { h: "Recording", f: (a) => a.recording_date || NA, l: true }, { h: "Payment", f: (a) => a.distribution_date || NA, l: true },
+      { h: "Status", f: (a) => a.status || NA, l: true },
     ], c.actions)));
     frag.append(el("h3", { class: "stmt-title", text: "Shareholders' meetings (RUPS)" }));
     if (!c.meetings.length) frag.append(el("p", { class: "warn", text: "None in this period." }));
     else frag.append(wrapScroll(table([
-      { h: "Date", f: (m) => m.date || "—", l: true, cls: "sym" }, { h: "Time", f: (m) => m.time || "—", l: true },
-      { h: "Status", f: (m) => m.status || "—", l: true }, { h: "Venue", f: (m) => m.venue || "—", l: true, cls: "name" },
+      { h: "Date", f: (m) => m.date || NA, l: true, cls: "sym" }, { h: "Time", f: (m) => m.time || NA, l: true },
+      { h: "Status", f: (m) => m.status || NA, l: true }, { h: "Venue", f: (m) => m.venue || NA, l: true, cls: "name" },
     ], c.meetings)));
     if (c.warrants_rights.length) {
       frag.append(el("h3", { class: "stmt-title", text: "Warrants and rights" }));
       frag.append(wrapScroll(table([
         { h: "Code", k: "code", l: true, cls: "sym" }, { h: "Type", k: "kind", l: true },
         { h: "Exercise", f: (w) => fmt.price(w.exercise_price) }, { h: "Issued", f: (w) => fmt.compact(w.shares) },
-        { h: "Listing", f: (w) => w.listing_date || "—", l: true }, { h: "Maturity", f: (w) => w.maturity_date || "—", l: true },
-        { h: "Status", f: (w) => w.status || "—", l: true },
+        { h: "Listing", f: (w) => w.listing_date || NA, l: true }, { h: "Maturity", f: (w) => w.maturity_date || NA, l: true },
+        { h: "Status", f: (w) => w.status || NA, l: true },
       ], c.warrants_rights)));
     }
     frag.append(el("p", { class: "warn", text: "Amount: IDR per share (the dividend, or a rights issue's exercise price). Ratio: old:new. Source: IPOT; json actions … carries each announcement and RUPS agenda." }));
@@ -417,14 +419,14 @@ const R = {
     const frag = document.createDocumentFragment();
     const shown = l.instruments.slice(0, 200);
     frag.append(el("p", { class: "prose", text: `${l.instruments.length} of ${l.total} listed stocks${l.search ? ` · matching "${l.search}"` : ""}` }));
-    if (shown.length) frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", f: (i) => i.name || "—", l: true, cls: "name" }], shown)));
+    if (shown.length) frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", f: (i) => i.name || NA, l: true, cls: "name" }], shown)));
     if (l.instruments.length > shown.length) frag.append(el("p", { class: "warn", text: `Showing the first ${shown.length}; narrow with --search or use json list for all.` }));
     return frag;
   },
   members(l) {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", text: `${l.members.length} of ${l.total} exchange members${l.search ? ` · matching "${l.search}"` : ""}` }));
-    if (l.members.length) frag.append(wrapScroll(table([{ h: "Code", k: "code", l: true, cls: "sym" }, { h: "Member", f: (m) => m.name || "—", l: true, cls: "name" }], l.members)));
+    if (l.members.length) frag.append(wrapScroll(table([{ h: "Code", k: "code", l: true, cls: "sym" }, { h: "Member", f: (m) => m.name || NA, l: true, cls: "name" }], l.members)));
     return frag;
   },
   bandarBroker(a) {
@@ -432,9 +434,9 @@ const R = {
     frag.append(el("p", { class: "prose", html: `<b>${a.code}</b>${a.name ? ` · ${a.name}` : ""} · ${a.period} (${a.from} to ${a.to}) · ${a.scanned} scanned, ${a.checked} with trades` }));
     frag.append(el("p", { class: "prose", text: `Visible buying ${fmt.compact(a.bought_value)} in ${a.bought.length} stocks · visible selling ${fmt.compact(a.sold_value)} in ${a.sold.length} stocks` }));
     const cols = [
-      { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", f: (r) => r.name || "—", l: true, cls: "name" },
+      { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", f: (r) => r.name || NA, l: true, cls: "name" },
       { h: "Rank", k: "rank" }, { h: "Lots", f: (r) => fmt.compact(r.lots) }, { h: "Value", f: (r) => fmt.compact(r.value) },
-      { h: "Avg", f: (r) => fmt.price(r.average_price) }, { h: "Share", f: (r) => (r.share_pct == null ? "—" : `${fmt.num(r.share_pct, 1)}%`) },
+      { h: "Avg", f: (r) => fmt.price(r.average_price) }, { h: "Share", f: (r) => (r.share_pct == null ? NA : `${fmt.num(r.share_pct, 1)}%`) },
       { h: "Other side", f: (r) => fmt.compact(r.opposite_value) }, { h: "Net", f: (r) => fmt.compact(r.net_value), cls: (r) => `num ${signClass(r.net_value)}` },
     ];
     const grid = el("div", { class: "two" });
@@ -473,7 +475,7 @@ const R = {
     if (!h.holidays.length) frag.append(el("p", { class: "warn", text: "No holidays listed." }));
     else frag.append(wrapScroll(table([
       { h: "Date", k: "date", l: true, cls: "sym" }, { h: "Day", k: "weekday", l: true },
-      { h: "Holiday", k: "name", l: true, cls: "name" }, { h: "English", f: (d) => d.name_en || "—", l: true },
+      { h: "Holiday", k: "name", l: true, cls: "name" }, { h: "English", f: (d) => d.name_en || NA, l: true },
     ], h.holidays)));
     frag.append(el("p", { class: "warn", text: `Covers ${h.years_covered.join(", ")}, from the calendar idx.co.id publishes. Weekend holidays are not listed; IDX can add a holiday later.` }));
     return frag;
@@ -481,8 +483,8 @@ const R = {
   sentiment(s) {
     const frag = document.createDocumentFragment();
     const cls = s.label === "positive" ? "up" : s.label === "negative" ? "dn" : "";
-    frag.append(el("p", { class: "prose" }, [el("span", { class: `pill ${cls}`, text: s.label.replace("_", " ") }), ` score ${s.score > 0 ? "+" : ""}${fmt.num(s.score, 2)} · ${s.items} headlines: ${s.positive} positive, ${s.negative} negative, ${s.neutral} neutral${s.oldest ? ` · ${fmt.date(s.oldest)} → ${fmt.date(s.newest)}` : ""}`]));
-    const terms = (l) => (l.length ? l.map(([t, n]) => `${t} ×${n}`).join(", ") : "—");
+    frag.append(el("p", { class: "prose" }, [el("span", { class: `pill ${cls}`, text: s.label.replace("_", " ") }), ` score ${s.score > 0 ? "+" : ""}${fmt.num(s.score, 2)} · ${s.items} headlines: ${s.positive} positive, ${s.negative} negative, ${s.neutral} neutral${s.oldest ? ` · ${fmt.date(s.oldest)} to ${fmt.date(s.newest)}` : ""}`]));
+    const terms = (l) => (l.length ? l.map(([t, n]) => `${t} ×${n}`).join(", ") : NA);
     frag.append(el("p", { class: "prose", text: `Terms · positive: ${terms(s.top_positive_terms)} · negative: ${terms(s.top_negative_terms)}` }));
     if (s.headlines.length) frag.append(newsTable(s.headlines));
     frag.append(el("p", { class: "warn", text: "Lexicon count over Indonesian and English finance terms. Indicative only." }));
@@ -490,7 +492,7 @@ const R = {
   },
   market(m) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wib(m.refreshed_at)} · ${m.market_open ? "market open" : "market closed"}` }));
+    frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wibAt(m.refreshed_at)} · ${boardWords(m)}` }));
     if (m.index_tape.length > 1) frag.append(sparkline(m.index_tape, { cls: "spark" }));
     const grid = el("div", { class: "three" });
     const mk = (title, rows, valueCol) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Price", f: (r) => fmt.price(r.price) }, valueCol], rows))]);
@@ -515,13 +517,13 @@ const R = {
     const frag = document.createDocumentFragment();
     const s = c.summary;
     const pp = (v) => `${v > 0 ? "+" : ""}${fmt.num(v, 2)} pp`;
-    frag.append(el("p", { class: "prose", text: `Changes ${c.from} → ${c.to}${c.symbol ? ` · ${c.symbol}` : ""} · ${c.total_matches} match${c.total_matches === 1 ? "" : "es"}${s ? ` · ${s.issuers} issuers · ${s.holders} holders` : ""}` }));
+    frag.append(el("p", { class: "prose", text: `Changes ${c.from} to ${c.to}${c.symbol ? ` · ${c.symbol}` : ""} · ${c.total_matches} match${c.total_matches === 1 ? "" : "es"}${s ? ` · ${s.issuers} issuers · ${s.holders} holders` : ""}` }));
     if (s) {
       frag.append(el("p", { class: "prose", text: `Summary · ${s.new_holders} new · ${s.exits} exited · ${s.increased} increased · ${s.decreased} decreased · net ${pp(s.net_pp)} (foreign ${pp(s.foreign_net_pp)}, local ${pp(s.local_net_pp)})` }));
       if (s.by_investor_type.length) frag.append(el("p", { class: "prose", text: `By type · ${s.by_investor_type.slice(0, 6).map((t) => `${t.investor_type} ${pp(t.net_pp)} (${t.rows})`).join(" · ")}` }));
       if (!c.symbol && s.issuer_flow.length) frag.append(el("p", { class: "prose", text: `Issuer flow · ${s.issuer_flow.slice(0, 8).map((i) => `${i.symbol} ${pp(i.net_pp)} (foreign ${pp(i.foreign_net_pp)})`).join(" · ")}` }));
     }
-    if (c.changes.length < c.total_matches) frag.append(el("p", { class: "warn", text: `Rows ${(c.offset || 0) + 1}–${(c.offset || 0) + c.changes.length} of ${c.total_matches} · next page: --offset ${(c.offset || 0) + c.changes.length} · all: --limit 0` }));
+    if (c.changes.length < c.total_matches) frag.append(el("p", { class: "warn", text: `Rows ${(c.offset || 0) + 1}-${(c.offset || 0) + c.changes.length} of ${c.total_matches} · next page: --offset ${(c.offset || 0) + c.changes.length} · all: --limit 0` }));
     frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "Kind", k: "kind", l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
     return frag;
   },
@@ -543,7 +545,15 @@ async function run(line) {
   if (name === "json") { rawJson = true; toks.shift(); name = (toks[0] || "").toLowerCase(); name = ALIASES[name] || name; }
   const { pos, opt } = flags(toks.slice(1));
   const cmd = COMMANDS.find((c) => c.name === name);
-  if (!cmd) throw Object.assign(new Error(`unknown command "${toks[0]}"; type help`), { code: "usage" });
+  if (!cmd) {
+    // A bare ticker (or several) at the gate means quote.
+    const near = COMMANDS.find((c) => c.name.startsWith(name));
+    const known = new Set((await loadUniverse()).map((u) => u.symbol));
+    const tickerish = toks.every((t) => /^[A-Za-z]{4}(\.JK)?$/i.test(t));
+    const listed = known.size > 0 && toks.every((t) => known.has(t.toUpperCase().replace(/\.JK$/, "")));
+    if (tickerish && (listed || (!known.size && !near))) return run(`${rawJson ? "json " : ""}quote ${toks.join(",")}`);
+    throw Object.assign(new Error(`unknown command "${toks[0]}"${near ? `; did you mean ${near.name}?` : ""}; type help`), { code: "usage" });
+  }
   const sym = (i = 0) => pos[i];
   let env, render;
   switch (name) {
@@ -580,7 +590,7 @@ async function run(line) {
       }
       break;
     }
-    case "market": env = await api("market"); render = R.market; break;
+    case "market": env = await api("market"); await calendar; render = R.market; break;
     case "list": env = await api(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
     case "members": env = await api(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
     case "tools": {
@@ -614,17 +624,31 @@ async function run(line) {
 
 // ---- sheet ---------------------------------------------------------------------
 
+// Each result is a numbered panel, newest under the gate, closed by its
+// machine line. The URL follows the newest result, so Back retraces them.
+let seq = 0;
+const coarse = matchMedia("(pointer: coarse)").matches;
+
 function entry(cmdLine) {
-  const sec = el("section", { class: "entry" });
-  const cap = el("div", { class: "caption" }, [el("span", { class: "cmd", text: `idx ${cmdLine}` }), el("span", { class: "meta", text: "…" })]);
+  const n = ++seq;
+  const sec = el("section", { class: "panel result", id: `r${n}`, tabindex: "-1", "aria-labelledby": `r${n}-h` });
+  const meta = el("p", { class: "meta", text: "running" });
+  const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), `idx ${cmdLine}`]), meta]);
   const body = el("div", { class: "body" });
-  sec.append(cap, body);
-  out.append(sec);
-  return { sec, cap, body, meta: cap.lastChild };
+  const mline = el("p", { class: "mline" });
+  sec.append(cap, body, mline);
+  out.prepend(sec);
+  return { n, sec, cap, body, meta, mline };
 }
 
 function reveal(sec) {
-  sec.scrollIntoView({ block: "end", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  sec.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+
+function focusResult(p) {
+  if (!p) return false;
+  p.scrollIntoView({ block: "start" });
+  p.focus({ preventScroll: true });
 }
 
 /** What a typed line waits on (public/waits.js). */
@@ -636,9 +660,9 @@ function waitsOf(line) {
 }
 
 /**
- * The loading state of an entry while its request is out: the entry's rule
- * runs and a line says what it waits on, with a clock. Returns a stop
- * function that takes both down and gives the elapsed milliseconds.
+ * The loading state of an entry while its request is out: a run of lit dots
+ * crosses the panel's top rule and a line says what it waits on, with a clock.
+ * Returns a stop function that takes both down and gives the elapsed ms.
  */
 function pending(e, line) {
   const w = waitsOf(line);
@@ -666,7 +690,7 @@ function pending(e, line) {
 }
 
 /** Runs a line as if typed: kept in the history. */
-function runLine(s) { hist.push(s); hIdx = hist.length; execute(s); }
+function runLine(s) { execute(s); }
 
 /** One button per MCP tool: a web tool runs its example, an idx.co.id tool shows its CLI command. */
 function toolButtons() {
@@ -684,7 +708,7 @@ function renderHelp(which) {
   const list = which ? COMMANDS.filter((c) => c.name === (ALIASES[which] || which)) : COMMANDS;
   if (!list.length) frag.append(el("p", { class: "err", text: `no command "${which}"` }));
   frag.append(wrapScroll(table([{ h: "Command", k: "usage", l: true, cls: "sym" }, { h: "What it does", k: "help", l: true }], list.map((c) => ({ usage: c.usage, help: c.help })))));
-  frag.append(el("p", { class: "warn", text: "Aliases: q h f t n s c d r b own. Prefix any command with json for the raw envelope. Symbols accept BBCA or BBCA.JK; several symbols are comma or space separated." }));
+  frag.append(el("p", { class: "warn", text: "Aliases: q h f t n s c d r b own. Prefix any command with json for the raw envelope. Symbols accept BBCA or BBCA.JK; several symbols are comma or space separated. A bare ticker runs quote." }));
   if (!which) {
     frag.append(el("h3", { class: "stmt-title", text: `MCP tools · ${TOOLS.length} · click to run (dashed: CLI and MCP only)` }));
     frag.append(toolButtons());
@@ -692,9 +716,15 @@ function renderHelp(which) {
   return frag;
 }
 
-async function execute(line) {
+const local = (e, what) => machineLine(e.mline, ["local", what], "Answered in the browser, no request.");
+
+async function execute(line, { push = "push" } = {}) {
   const e = entry(line);
   input.value = "";
+  remember(line);
+  const url = `/terminal?cmd=${encodeURIComponent(line)}#r${e.n}`;
+  if (push === "push") history.pushState({ n: e.n }, "", url);
+  else if (push === "replace") history.replaceState({ n: e.n }, "", url);
   const stop = pending(e, line);
   const took = (ms) => (ms >= 1000 ? ` · took ${(ms / 1000).toFixed(1)}s` : "");
   try {
@@ -702,46 +732,162 @@ async function execute(line) {
     const ms = stop();
     if (!r) { e.sec.remove(); return; }
     if (r.clear) { out.replaceChildren(); return; }
-    if ("help" in r) { e.meta.textContent = ""; e.body.append(renderHelp(r.help)); return; }
-    if (r.local) { e.meta.textContent = r.local; e.body.append(r.node); return; }
-    const env = r.env;
-    e.meta.textContent = `${env.provider} · ${env.cached ? "cached" : "live"}${env.stale ? " · stale" : ""} · fetched ${fmt.wib(env.fetched_at.replace("Z", "+00:00")).replace(" WIB", " UTC")}${took(ms)}`;
-    for (const w of env.warnings || []) e.body.append(el("p", { class: "warn", text: w }));
-    e.body.append(r.render(env.data, env));
+    if ("help" in r) { e.meta.textContent = "local · no request"; e.body.append(renderHelp(r.help)); local(e, "help"); }
+    else if (r.local) { e.meta.textContent = r.local; e.body.append(r.node); local(e, r.local); }
+    else {
+      const env = r.env;
+      e.meta.textContent = `${env.provider} · ${env.cached ? "cached" : "live"}${env.stale ? " · stale" : ""} · fetched ${fmt.wib(env.fetched_at.replace("Z", "+00:00")).replace(" WIB", " UTC")}${took(ms)}`;
+      e.meta.classList.toggle("stale", !!env.stale);
+      for (const w of env.warnings || []) e.body.append(el("p", { class: "warn", text: w }));
+      e.body.append(r.render(env.data, env));
+      machineLine(e.mline, [env.schema, env.provider, env.cached ? "cached" : "live", env.stale ? "stale" : null, env.fetched_at],
+        `Schema ${env.schema}, provider ${env.provider}, ${env.cached ? "cached" : "live"}${env.stale ? ", stale" : ""}, fetched ${env.fetched_at}.`);
+    }
   } catch (err) {
     const ms = stop();
+    const exit = err.exit ?? (err.code === "usage" ? 2 : 3);
     e.meta.textContent = `${err.code ? `error · ${err.code}` : "error"}${took(ms)}`;
+    e.meta.classList.add("err");
     e.body.append(el("p", { class: "err", text: err.message }));
     if (err.code === "usage") e.body.append(el("p", { class: "warn", text: "Type help for the command list." }));
+    machineLine(e.mline, ["error", err.code || "provider", `exit ${exit}`], `Error ${err.code || "provider"}, exit code ${exit}.`);
   }
   reveal(e.sec);
-  input.focus();
+  if (!coarse) input.focus();
 }
 
-// history + completion
-const hist = [];
-let hIdx = -1;
-form.addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  const line = input.value.trim();
-  if (!line) return;
-  hist.push(line); hIdx = hist.length;
-  execute(line);
-});
-input.addEventListener("keydown", (ev) => {
-  if (ev.key === "ArrowUp" && hist.length) { ev.preventDefault(); hIdx = Math.max(0, hIdx - 1); input.value = hist[hIdx]; }
-  else if (ev.key === "ArrowDown" && hist.length) { ev.preventDefault(); hIdx = Math.min(hist.length, hIdx + 1); input.value = hist[hIdx] || ""; }
-  else if (ev.key === "Tab" && input.value && !input.value.includes(" ")) {
-    const hit = COMMANDS.map((c) => c.name).find((n) => n.startsWith(input.value.toLowerCase()));
-    if (hit) { ev.preventDefault(); input.value = `${hit} `; }
-  }
-});
+// ---- history: kept in this browser, recalled with the arrows and in the rail ----
 
-// hints + deep links (?cmd=)
+const HISTORY_KEY = "idx.history";
+const HISTORY_MAX = 50;
+const hist = (() => {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]").filter((x) => typeof x === "string").slice(-HISTORY_MAX); } catch { return []; }
+})();
+
+function remember(line) {
+  if (hist[hist.length - 1] !== line) hist.push(line);
+  if (hist.length > HISTORY_MAX) hist.splice(0, hist.length - HISTORY_MAX);
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(hist)); } catch { /* the history stays in this tab */ }
+  paintHistory();
+}
+
+function paintHistory() {
+  const recent = [...hist].reverse().slice(0, 20);
+  document.getElementById("rail-hist").replaceChildren(...recent.map((l, i) => el("li", {}, [
+    el("button", { type: "button", title: `Run again: ${l}`, onclick: () => runLine(l) }, [el("span", { class: "d", text: String(i + 1).padStart(2, "0") }), el("span", { class: "c", text: l })]),
+  ])));
+  document.getElementById("rail-empty").hidden = recent.length > 0;
+}
+
+// ---- the gate, the rail and the keys ------------------------------------------
+
 const SAMPLE = ["market", "brief BBCA", "quote BBCA", "returns BBCA BBRI BMRI", "dividends TLKM", "fundamental BBCA", "technical BBRI", "screen pe<10,div>5,mcap>5T --sort div", "news TLKM", "broker BBCA", "bandar BBCA --daily", "bandar screen --preset big-accumulation", "bandar broker YP", "actions BBCA", "holidays --upcoming", "compare BBCA BBRI BMRI", "ownership ticker BBCA", "tools", "help"];
 document.getElementById("hints").append(...SAMPLE.map((s) => el("button", { type: "button", text: s, onclick: () => runLine(s) })));
 
-api("market").then((m) => { dateline.textContent = `${fmt.wib(m.data.as_of || m.data.refreshed_at)} · ${m.data.market_open ? "market open" : "market closed"} · ${m.data.quoted} quoted`; }).catch(() => { dateline.textContent = "snapshot unavailable"; });
+const takesArgs = (usage) => /<[^>]+>/.test(usage.split(" | ")[0]);
+const EXAMPLE = new Map();
+for (const s of [...SAMPLE, ...TOOLS.map((t) => t.web).filter(Boolean)]) { const k = s.split(" ")[0]; if (!EXAMPLE.has(k)) EXAMPLE.set(k, s); }
+
+/** A command from the rail: run it when it needs nothing, else load its example into the gate. */
+function pick(c) {
+  if (!takesArgs(c.usage)) return runLine(c.name);
+  input.value = EXAMPLE.get(c.name) || `${c.name} `;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+// The rail is narrow: each command gets a label of a few words here; help prints the full text.
+const RAIL = {
+  quote: "quotes and chart", history: "OHLCV candles", profile: "company profile", financials: "statements",
+  earnings: "EPS vs estimates", fundamental: "ratios, verdict", technical: "indicators, signal", compare: "side by side",
+  screen: "filter the market", news: "headlines", dividends: "payments, yield", returns: "returns vs IHSG",
+  brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", bandar: "bandarmology",
+  actions: "corporate actions", market: "IHSG and movers", holidays: "trading holidays", list: "listed stocks",
+  members: "broker codes", tools: "MCP tools", ownership: "KSEI holders", json: "raw JSON envelope",
+  help: "every command", clear: "clear the sheet",
+};
+document.getElementById("rail-cmds").append(...COMMANDS.map((c) => el("li", {}, [
+  el("button", { type: "button", title: `${c.usage}: ${c.help}`, onclick: () => pick(c) }, [el("span", { class: "c", text: c.name }), el("span", { class: "d", text: RAIL[c.name] || c.help })]),
+])));
+paintHistory();
+
+const GATE = COMMANDS.map((c) => ({ name: c.name, help: c.help, value: takesArgs(c.usage) ? `${c.name} ` : c.name, run: !takesArgs(c.usage), symbols: /SYMBOL/.test(c.usage) }));
+let tickers = [];
+mountGate({
+  form, input, list: document.getElementById("gate-list"), status: document.getElementById("gate-status"),
+  history: () => hist,
+  suggest: (line) => suggestions(line, { commands: GATE, tickers, history: [...hist].reverse(), examples: SAMPLE.slice(0, 6) }),
+  onRun: (line) => execute(line),
+  onFocus: () => loadUniverse().then((u) => { tickers = u; }),
+});
+if (document.activeElement === input) loadUniverse().then((u) => { tickers = u; });
+
+/** J and K walk the results (newest first); digits jump to a result by its number. */
+function step(d) {
+  const list = [...out.querySelectorAll(".result")];
+  if (!list.length) return;
+  const at = list.indexOf(document.activeElement?.closest?.(".result"));
+  const i = at < 0 ? (d > 0 ? 0 : list.length - 1) : Math.min(list.length - 1, Math.max(0, at + d));
+  focusResult(list[i]);
+}
+const openKeys = initShell();
+hotkeys({
+  "/": () => input.focus(),
+  "?": openKeys,
+  j: () => step(1),
+  k: () => step(-1),
+  digit: (n) => focusResult(document.getElementById(`r${n}`)),
+});
+
+// Links to /terminal?cmd= inside results (tickers, tool commands) run here, in place.
+out.addEventListener("click", (ev) => {
+  const a = ev.target.closest?.('a[href^="/terminal?cmd="]');
+  if (!a || ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+  ev.preventDefault();
+  runLine(new URL(a.href).searchParams.get("cmd"));
+});
+
+addEventListener("popstate", (ev) => {
+  const p = ev.state?.n ? document.getElementById(`r${ev.state.n}`) : null;
+  if (p) return focusResult(p);
+  const cmd = new URLSearchParams(location.search).get("cmd");
+  if (cmd) execute(cmd, { push: "replace" });
+  else scrollTo({ top: 0 });
+});
+
+// ---- status bar: the minute board's state, read once a minute ------------------
+
+let holidays = new Map();
+// The IDX holiday calendar, read once; the market panel waits for it so a holiday never reads as a session.
+const calendar = api("holidays?all=1&upcoming=1")
+  .then((h) => { holidays = new Map(h.data.holidays.map((x) => [x.date, x.name_en || x.name])); })
+  .catch(() => {});
+
+/** The market panel's state words, from the session classification the monitor's band uses. */
+function boardWords(m) {
+  const b = boardState(new Date(m.refreshed_at), m.as_of ? new Date(m.as_of) : null, holidays);
+  return b.lastTrade ? `${b.state} · ${b.lastTrade}` : b.state;
+}
+
+/** The status bar: the lamp and the snapshot's age, read with the board once a minute; a phone keeps just those. */
+async function board() {
+  try {
+    const m = await api("market");
+    const at = new Date(m.data.refreshed_at);
+    const s = session(new Date(), holidays);
+    const age = Math.max(0, (Date.now() - at) / 1000);
+    if (!s.open) lamp("closed", "Closed");
+    else if (age > 180) lamp("stale", "Stale");
+    else lamp("live", "Live");
+    document.getElementById("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(at).secs)} WIB` }), ` · ${Math.floor(age / 60)} min ago`,
+      el("span", { class: "st-next", text: ` · ${fmt.int(m.data.quoted)} quoted · ${stateName(s)}` }));
+  } catch {
+    lamp("offline", "Offline");
+  }
+  setTimeout(board, 60_000);
+}
+calendar.then(board);
+
+// ---- deep links (?cmd=) -----------------------------------------------------------
 
 const initial = new URLSearchParams(location.search).get("cmd");
-if (initial) execute(initial);
+if (initial) execute(initial, { push: "replace" });

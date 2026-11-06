@@ -4,71 +4,65 @@
 <meta charset="utf-8">
 <title>idx social card</title>
 <!-- Source of public/og.png (1200x630). Not served; render with scripts/og.mjs.
-     Tokens and type follow DESIGN.md; the mono face is a web font so the
-     render does not depend on the machine's installed fonts. -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@500&display=block">
+     The station board of the site: black glass ground, 2px rules, an LED
+     band set in Doto, everything else in Martian Mono, mint as the one lit
+     circuit. Web fonts, so the render does not depend on installed fonts. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:ROND,wght@100,700..900&family=Martian+Mono:wdth,wght@75..100,300..700&display=block">
 <style>
   :root {
-    --paper: #f1f1ee; --ink: #111312; --ink-2: #3b413d; --ink-3: #5e665f;
-    --rule: #1b1e1c; --rule-soft: #b9bcb5; --green-deep: #0f6b31; --green-ink: #0b4d24; --red: #b3122f;
+    --ground: #0b0f14; --rule: #1b242d; --ghost: #17202a; --dim: #8b98a5; --lit: #e6edf3; --mint: #4ade80;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { width: 1200px; height: 630px; overflow: hidden; }
   body {
     display: flex; flex-direction: column;
-    background: var(--paper); color: var(--ink);
-    font-family: Archivo, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+    background: var(--ground); color: var(--lit);
+    font-family: "Martian Mono", monospace; font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
   }
-  .cond { font-stretch: 75%; font-variation-settings: "wdth" 75; }
+  .bar { flex: none; height: 84px; display: flex; align-items: center; gap: 18px; padding: 0 52px; border-bottom: 2px solid var(--rule); }
+  .bar img { width: 44px; height: 44px; display: block; }
+  .bar .word { font-size: 38px; font-weight: 700; letter-spacing: -0.03em; }
+  .bar .what { margin-left: 10px; font-size: 19px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); font-stretch: 87.5%; }
+  .bar .url { margin-left: auto; font-size: 20px; color: var(--dim); font-stretch: 87.5%; }
 
   .band {
-    flex: none; height: 118px; padding: 0 64px; display: flex; align-items: center; gap: 20px;
-    background: var(--green-deep); color: #fff; border-bottom: 4px solid var(--ink);
+    flex: none; padding: 34px 52px 32px; border-bottom: 2px solid var(--rule);
+    background-image: radial-gradient(circle at 3px 3px, var(--ghost) 2px, transparent 2.5px); background-size: 6px 6px;
   }
-  .band img { width: 70px; height: 70px; display: block; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.35); }
-  .band .word { font-size: 62px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
-  .band .kick { margin-left: auto; text-align: right; font-size: 36px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.05; }
-  .band .kick small { display: block; font-stretch: 100%; font-variation-settings: "wdth" 100; font-size: 22px; font-weight: 500; letter-spacing: 0; text-transform: none; color: #e9f6ee; }
+  .band .led { font-family: Doto, monospace; font-weight: 800; font-size: 124px; line-height: 0.9; letter-spacing: 0.02em; }
+  .band .sub { margin-top: 18px; font-size: 30px; font-stretch: 87.5%; }
 
-  main { flex: 1; display: flex; flex-direction: column; padding: 34px 64px 30px; }
-  h1 { font-size: 84px; font-weight: 900; line-height: 0.96; text-transform: uppercase; letter-spacing: 0.01em; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 23px 0 22px; border-bottom: 2px solid var(--rule); font-size: 25px; white-space: nowrap; }
+  td.no { width: 1%; padding-left: 52px; padding-right: 22px; color: var(--dim); font-size: 21px; font-weight: 600; }
+  td.who { width: 230px; font-size: 21px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-stretch: 87.5%; }
+  td.what { padding-right: 52px; text-align: right; color: var(--dim); font-stretch: 87.5%; }
 
-  table { width: 100%; margin-top: 30px; border-collapse: collapse; }
-  td { padding: 10px 0 9px; border-bottom: 2px solid var(--rule-soft); font-size: 26px; white-space: nowrap; }
-  tr:first-child td { border-top: 4px solid var(--rule); }
-  tr:last-child td { border-bottom: 3px solid var(--rule); }
-  .who { width: 250px; font-size: 26px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
-  .cmd { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 27px; }
-  .what { text-align: right; color: var(--ink-2); }
-
-  footer { margin-top: auto; padding-top: 16px; display: flex; align-items: center; gap: 28px; font-size: 24px; color: var(--ink-2); }
-  footer b { color: var(--ink); font-weight: 800; }
-  .stamp {
-    margin-left: auto; padding: 6px 14px; transform: rotate(2deg);
-    border: 3px solid var(--red); color: var(--red);
-    font-size: 24px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase;
+  .status {
+    margin-top: auto; flex: none; height: 58px; display: flex; align-items: center; gap: 22px; padding: 0 52px;
+    border-top: 2px solid var(--rule); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); font-stretch: 87.5%;
   }
+  .status .lamp { display: inline-flex; align-items: center; gap: 12px; color: var(--lit); font-weight: 700; }
+  .status .lamp::before { content: ""; width: 13px; height: 13px; background: var(--mint); }
 </style>
 </head>
 <body>
-  <header class="band">
+  <header class="bar">
     <img src="../public/mark.svg" alt="">
     <span class="word">idx</span>
-    <span class="kick cond">Laporan Pasar<small>Indonesian stock market · IDX / IHSG</small></span>
+    <span class="what">Indonesian stock market · IDX / IHSG</span>
+    <span class="url">ihsg.midoriresearch.com</span>
   </header>
-  <main>
-    <h1 class="cond">IDX stocks for people,<br>scripts and AI agents</h1>
-    <table>
-      <tr><td class="who cond">For people</td><td class="cmd">idx stocks quote BBCA</td><td class="what">ruled tables</td></tr>
-      <tr><td class="who cond">For scripts</td><td class="cmd">idx -o json stocks quote BBCA</td><td class="what">stable JSON envelope</td></tr>
-      <tr><td class="who cond">For agents</td><td class="cmd">idx mcp</td><td class="what">MCP server, stdio or HTTP</td></tr>
-    </table>
-    <footer>
-      <b>ihsg.midoriresearch.com</b>
-      <span>Free public data · no API keys · MIT</span>
-      <span class="stamp cond">[Public]</span>
-    </footer>
-  </main>
+  <section class="band">
+    <p class="led">IDX STOCKS</p>
+    <p class="sub">for people, scripts and AI agents</p>
+  </section>
+  <table>
+    <tr><td class="no">01</td><td class="who">For people</td><td>idx stocks quote BBCA</td><td class="what">tables</td></tr>
+    <tr><td class="no">02</td><td class="who">For scripts</td><td>idx -o json stocks quote BBCA</td><td class="what">JSON envelope</td></tr>
+    <tr><td class="no">03</td><td class="who">For agents</td><td>idx mcp</td><td class="what">MCP server</td></tr>
+  </table>
+  <footer class="status"><span class="lamp">Live</span><span>minute board · free public data · no API keys · MIT</span></footer>
 </body>
 </html>

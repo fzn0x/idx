@@ -165,7 +165,7 @@ export async function market(env) {
     gainers: liquidByChg.slice(0, 10).map(trim),
     losers: liquidByChg.slice(-10).reverse().map(trim),
     most_active: byValue.slice(0, 10).map(trim),
-    heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 12).map(trim),
+    heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 16).map(trim),
     universe: SYMBOLS.length,
   };
   return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, warnings: b.value.warnings || [] });
@@ -891,6 +891,36 @@ export async function brief(env, symbolRaw) {
   return envelope("idx.brief.v1", data, { cached: cachedAll, stale, warnings });
 }
 
+// ---- GitHub repository (the Star button) -------------------------------
+
+// The page shows the repository's live star count. GitHub's REST API needs a
+// User-Agent and allows 60 unauthenticated requests an hour per address, so
+// the count is read at most once an hour (D1 cache), a refusal is remembered
+// for ten minutes, and no token is ever sent.
+export const REPO = "fzn0x/idx";
+export const REPO_TTL_SECS = 3600;
+const REPO_RETRY_SECS = 600;
+export const GITHUB_UA = "idx-web (+https://ihsg.midoriresearch.com)";
+
+/** The fields the Star button shows, from GET https://api.github.com/repos/{owner}/{repo}. */
+export function parseRepo(body) {
+  const stars = body?.stargazers_count;
+  if (!Number.isInteger(stars) || stars < 0) throw provider("GitHub answered without a star count");
+  const forks = Number.isInteger(body.forks_count) ? body.forks_count : null;
+  return { repo: body.full_name || REPO, url: body.html_url || `https://github.com/${REPO}`, stars, forks };
+}
+
+export async function repo(env) {
+  const r = await cached(env, `repo:${REPO}`, REPO_TTL_SECS, async () => {
+    const res = await fetchWithin(`https://api.github.com/repos/${REPO}`, {
+      headers: { "User-Agent": GITHUB_UA, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    if (!res.ok) throw provider(`GitHub answered HTTP ${res.status}`);
+    return parseRepo(await res.json());
+  }, { retryAfter: REPO_RETRY_SECS });
+  return envelope("idx.repo.v1", r.value, { provider: "github", cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
+}
+
 // ---- router ----------------------------------------------------------
 
 const num = (v, d) => { if (v == null || v === "") return d; const n = Number(v); if (!Number.isFinite(n)) throw usage(`"${v}" is not a number`); return n; };
@@ -930,6 +960,7 @@ export async function route(env, url) {
     case "/ownership/releases": return ownershipReleases(env);
     case "/ownership/status": return envelope("idx.ownership.sync.v1", await syncStatus(env), { provider: "github-mirror", cached: true });
     case "/universe": return envelope("idx.universe.v1", UNIVERSE.map(([symbol, name]) => ({ symbol, name })), { provider: "bundled", cached: true });
+    case "/repo": return repo(env);
     default: throw notFound(`no such endpoint ${p}`);
   }
 }

@@ -1,3 +1,66 @@
 {
-  "buildPath": "code"
+  "buildPath": "code",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "martian mono",
+        "createdAt": "2026-11-06T00:56:07.854Z",
+        "reason": "direction contract .impeccable/surfaces/web-public-index-html.md (Papan Stasiun, the maintainer's chosen direction) sets Doto for the band figures and Martian Mono for all other text; DESIGN.md still describes the replaced newsprint world until the documenter rewrites it after review"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "doto",
+        "createdAt": "2026-11-06T00:56:08.152Z",
+        "reason": "direction contract .impeccable/surfaces/web-public-index-html.md (Papan Stasiun, the maintainer's chosen direction) sets Doto for the band figures and Martian Mono for all other text; DESIGN.md still describes the replaced newsprint world until the documenter rewrites it after review"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "web/public/terminal.html"
+        ],
+        "createdAt": "2026-11-06T01:47:03.715Z",
+        "reason": "Finish review (Papan Stasiun contract OWN-WORLD): flush panels split by 1px rules are the sanctioned layout; the flagged wrappers (.out, .monitor, .tabs-row) hold panels and tabs whose text keeps a 16px gutter, only their edges meet the rule"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "web/public/index.html"
+        ],
+        "createdAt": "2026-11-06T01:47:03.994Z",
+        "reason": "Finish review (Papan Stasiun contract OWN-WORLD): flush panels split by 1px rules are the sanctioned layout; the flagged wrappers (.out, .monitor, .tabs-row) hold panels and tabs whose text keeps a 16px gutter, only their edges meet the rule"
+      },
+      {
+        "rule": "all-caps-body",
+        "value": "*",
+        "files": [
+          "web/public/index.html"
+        ],
+        "createdAt": "2026-11-06T01:47:04.571Z",
+        "reason": "Finish review (contract OWN-WORLD, passport machine lines): the flagged caps runs are the aria-hidden machine-line strings, each paired with a screen-reader sentence set in normal case"
+      },
+      {
+        "rule": "all-caps-body",
+        "value": "*",
+        "files": [
+          "web/og/card.html"
+        ],
+        "createdAt": "2026-11-06T01:47:05.457Z",
+        "reason": "Finish review: the share card's caps are its short top-bar label and status-strip label on a 1200x630 raster source, not body copy"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "web/public/index.html"
+        ],
+        "createdAt": "2026-11-06T01:54:17.532Z",
+        "reason": "Finish reviewer: not a defect in the Papan Stasiun world; hierarchy comes from weight, caps tracking, the numbered panel strips on the ghost-dot band and the Doto step in the LED band, and a second Martian Mono size would break the single-size grid the TUI brief commits to"
+      }
+    ]
+  }
 }

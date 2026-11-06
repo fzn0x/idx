@@ -7,7 +7,7 @@
 <meta name="description" content="Browser terminal for idx: type quote BBCA, fundamental TLKM, screen pe<10 and get the same answers as the CLI, from a minute-refreshed snapshot.">
 <link rel="canonical" href="https://ihsg.midoriresearch.com/terminal">
 <meta name="robots" content="index,follow,max-image-preview:large">
-<meta name="theme-color" content="#0f6b31">
+<meta name="theme-color" content="#0b0f14">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="idx · Midori Research">
 <meta property="og:locale" content="en_US">
@@ -18,43 +18,88 @@
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="idx: IDX stocks for people, scripts and AI agents. idx stocks quote BBCA prints a ruled table, idx -o json a stable JSON envelope, idx mcp an MCP server.">
+<meta property="og:image:alt" content="idx: IDX stocks for people, scripts and AI agents. idx stocks quote BBCA prints a table, idx -o json a stable JSON envelope, idx mcp an MCP server.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/mark.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:ROND,wght@100,700..900&family=Martian+Mono:wdth,wght@75..100,300..700&display=swap">
 <link rel="stylesheet" href="/styles.css">
 <script type="module" src="/terminal.js"></script>
 </head>
-<body class="term-body">
-<header class="masthead">
-  <div class="wrap">
-    <a class="brand" href="/" aria-label="idx home"><img src="/mark.svg" alt="" width="34" height="34"><span>idx</span></a>
-    <h1 class="masthead-title"><b class="cond">Terminal</b> <span>the CLI in a browser, from a minute-refreshed snapshot</span></h1>
-    <p class="dateline"><strong id="dateline">connecting…</strong></p>
-  </div>
+<body class="term-page">
+<a class="skip" href="#cmd">Skip to the command line</a>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="idx home"><img src="/mark.svg" alt="" width="22" height="22"><span>idx</span></a>
+  <nav class="nav" aria-label="Site">
+    <a href="/">Monitor</a>
+    <a href="/terminal" aria-current="page">Terminal</a>
+    <a href="https://github.com/fzn0x/idx#readme">Docs</a>
+  </nav>
+  <a class="star" id="star" href="https://github.com/fzn0x/idx" aria-label="Star fzn0x/idx on GitHub"><span class="star-l"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6L9.7 6.25 14.66 6.44 10.76 9.5 12.11 14.26 8 11.5 3.89 14.26 5.24 9.5 1.34 6.44 6.3 6.25Z"/></svg>Star</span><span class="star-n" id="star-n" hidden></span></a>
 </header>
 
-<main class="term-main">
-  <div class="out" id="out" aria-live="polite" aria-label="Command output">
-    <section class="entry" id="welcome">
-      <div class="caption"><span class="cmd">help</span><span class="meta">type a command below, or click one</span></div>
-      <div class="body prose">
-        <p>Same commands as the CLI, same fields. Quotes come from a board refreshed every minute in IDX hours; everything else is fetched on demand and cached. Results print as statements, newest at the bottom.</p>
+<form class="gate" id="prompt" role="search" autocomplete="off">
+  <label class="gate-l" for="cmd">Perintah</label>
+  <div class="gate-field">
+    <input id="cmd" name="cmd" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="gate-list" aria-describedby="prompt-help" placeholder="quote BBCA,BBRI,TLKM" spellcheck="false" autocapitalize="off" autocorrect="off" autofocus>
+    <ul class="gate-list" id="gate-list" role="listbox" aria-label="Suggestions" hidden></ul>
+  </div>
+  <button class="gate-go" type="submit">Run</button>
+  <span class="gate-key" aria-hidden="true"><kbd>Esc</kbd> then <kbd>?</kbd> keys</span>
+  <p class="sr-only" id="prompt-help">Enter runs the command; up and down arrows move through suggestions or recall history; Tab completes; Escape closes the suggestions, clears the line, then leaves it.</p>
+  <p class="sr-only" id="gate-status" role="status"></p>
+</form>
+
+<main class="term" id="main">
+  <div class="out" id="out" aria-live="polite" aria-label="Command output, newest first">
+    <section class="panel result welcome" id="welcome" tabindex="-1" aria-labelledby="welcome-h">
+      <header class="ph"><h2 id="welcome-h"><span class="no">00</span>idx help</h2><p class="meta">type a command above, or pick one</p></header>
+      <div class="pbody">
+        <p class="prose">Same commands as the CLI, same fields. Quotes come from a board refreshed every minute in IDX hours; everything else is fetched on demand and cached. Each result prints as a numbered panel under the command line, newest first; a bare ticker runs quote.</p>
         <div class="hints" id="hints"></div>
         <noscript><p class="err">The terminal needs JavaScript. The CLI does not: <code>curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh</code></p></noscript>
       </div>
+      <p class="mline"><span class="sr-only">Answered in the browser, no request.</span><span aria-hidden="true">LOCAL&lt;&lt;HELP&lt;&lt;IDX&lt;WEB&lt;TERMINAL</span></p>
     </section>
   </div>
-
-  <form class="prompt" id="prompt" autocomplete="off">
-    <label for="cmd">Perintah · command</label>
-    <input id="cmd" name="cmd" type="text" placeholder="quote BBCA,BBRI,TLKM" spellcheck="false" autocapitalize="off" autofocus aria-describedby="prompt-help">
-    <button type="submit">Run</button>
-    <span id="prompt-help" class="sr-only">Enter runs the command; up and down arrows recall history; Tab completes a command name.</span>
-  </form>
+  <aside class="rail" aria-label="Commands and history">
+    <section aria-labelledby="rail-cmd-h">
+      <header class="ph"><h2 id="rail-cmd-h">Perintah</h2><p class="sub">Commands</p></header>
+      <ul class="cmds" id="rail-cmds"></ul>
+    </section>
+    <section aria-labelledby="rail-hist-h">
+      <header class="ph"><h2 id="rail-hist-h">Riwayat</h2><p class="sub">History, this browser</p></header>
+      <ul class="hist" id="rail-hist"></ul>
+      <p class="empty" id="rail-empty">Nothing run yet.</p>
+    </section>
+  </aside>
 </main>
+
+<div class="statusbar" id="statusbar">
+  <span class="st-state" id="st-state" data-state="idle">Connecting</span>
+  <span class="st-age" id="st-age"></span>
+  <span class="st-src">Board from Yahoo Finance via idx · other commands fetched on demand and cached</span>
+  <span class="st-right">
+    <button class="st-btn" id="keys-open" type="button">Keys</button>
+    <span class="st-keys"><kbd>/</kbd> command <kbd>J</kbd><kbd>K</kbd> results <kbd>?</kbd> keys</span>
+  </span>
+</div>
+
+<dialog class="keys" id="keys" aria-labelledby="keys-h">
+  <header class="ph"><h2 id="keys-h">Keys</h2><p class="sub">Every control also works with the mouse</p><button class="copy x" type="button" id="keys-close">Close</button></header>
+  <table>
+    <tr><th scope="row"><kbd>Enter</kbd></th><td>Run the line; a bare ticker runs quote</td></tr>
+    <tr><th scope="row"><kbd>Up</kbd> <kbd>Down</kbd></th><td>Move through suggestions, or recall earlier commands</td></tr>
+    <tr><th scope="row"><kbd>Tab</kbd></th><td>Complete the highlighted suggestion</td></tr>
+    <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the suggestions, clear the line, then leave it</td></tr>
+    <tr><th scope="row"><kbd>/</kbd></th><td>Back to the command line</td></tr>
+    <tr><th scope="row"><kbd>J</kbd> <kbd>K</kbd></th><td>Next or previous result</td></tr>
+    <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Jump to the result with that number</td></tr>
+    <tr><th scope="row">Back</th><td>The browser's Back button retraces earlier results</td></tr>
+    <tr><th scope="row"><kbd>?</kbd></th><td>Show these keys</td></tr>
+  </table>
+</dialog>
 </body>
 </html>
