@@ -221,6 +221,10 @@ test("rss parse and name matching", () => {
   assert.equal(matchName("PT Bank Central Asia Tbk"), "Bank Central Asia");
   assert.deepEqual(parseSymbols("bbca, BBRI tlkm bbca"), ["BBCA", "BBRI", "TLKM"]);
   assert.throws(() => parseSymbols("BB$CA"));
+  // A ticker starts with a letter or digit, like the CLI's Symbol::parse.
+  assert.throws(() => parseSymbols("-"));
+  assert.throws(() => parseSymbols("-BBCA"));
+  assert.deepEqual(parseSymbols("buka-w"), ["BUKA-W"]);
 });
 
 test("market hours in WIB", () => {

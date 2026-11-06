@@ -103,6 +103,10 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let instructions = r["result"]["instructions"].as_str().unwrap();
     assert!(instructions.contains("idx -o json"));
     assert!(instructions.contains("stale_reason"));
+    assert!(
+        instructions.contains("D05.SI"),
+        "other markets are explained"
+    );
 
     writeln!(
         stdin,
@@ -238,6 +242,33 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("behind_session"));
+
+    // Another market's ticker: accepted by the Yahoo-backed tools (offline
+    // here, so a cache miss rather than a usage error), refused by IDX-only ones.
+    let body = |r: &serde_json::Value| -> serde_json::Value {
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "idx_quote", "arguments": {"symbols": "D05.SI"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    assert_eq!(body(&r)["error"]["code"], "offline_miss");
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": "idx_broker", "arguments": {"symbols": "D05.SI"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    let b = body(&r);
+    assert_eq!(b["error"]["code"], "usage");
+    assert!(b["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("another exchange (SI)"));
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

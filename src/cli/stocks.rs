@@ -19,7 +19,7 @@ use crate::output::table_reports::{self as reports, StatementFlags};
 use crate::service::{self, ScreenOptions};
 use crate::universe;
 
-use super::{emit, Context};
+use super::{emit, input, Context};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Statement {
@@ -33,20 +33,20 @@ pub enum Statement {
 pub enum StocksCmd {
     /// Delayed quote for one or more tickers (comma or space separated).
     #[command(
-        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n\nRows carry behind_session: true when the last trade is dated before the latest IDX session that has ended (16:15 WIB; holidays skipped): suspended, not traded since, or the source lags. The table lists such rows under it."
+        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n  echo BBCA BBRI | idx stocks quote -          # tickers from stdin\n  idx stocks quote - < watchlist.txt\n\n`-` reads tickers from stdin: text (spaces, commas or lines; # starts a comment) or\nidx's own -o json / -o jsonl output, taking each row's symbol.\n\nOther Yahoo Finance markets: give the suffix (idx stocks quote D05.SI) or set the default\nfor bare tickers with IDX_EXCHANGE / `idx config set exchange SI`. Applies to quote, history,\nprofile, financials, earnings, dividends, returns, fundamental, technical and compare.\n\nRows carry behind_session: true when the last trade is dated before the latest IDX session that has ended (16:15 WIB; holidays skipped): suspended, not traded since, or the source lags. The table lists such rows under it."
     )]
     Quote {
-        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional.
+        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional; another market's suffix works too (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
 
     /// OHLCV price history.
     #[command(
-        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0"
+        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history D05.SI --period 5d             # another Yahoo Finance market, by its suffix"
     )]
     History {
-        /// IDX ticker, e.g. BBCA.
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Look-back window.
@@ -55,7 +55,7 @@ pub enum StocksCmd {
         /// Bar size. Intraday sizes (5m..1h) only work with short periods.
         #[arg(long, short = 'i', value_enum, default_value = "1d")]
         interval: Interval,
-        /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON is never limited.
+        /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON, JSONL and CSV are never limited.
         #[arg(long, short = 'n', default_value_t = 30)]
         limit: usize,
     },
@@ -65,6 +65,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks profile BBCA\n  idx -o json stocks profile TLKM | jq .data.sector"
     )]
     Profile {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -74,12 +75,13 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks financials BBCA\n  idx stocks financials TLKM --period quarterly --statement income\n  idx -o json stocks financials ASII --period ttm"
     )]
     Financials {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Reporting series.
         #[arg(long, short = 'p', value_enum, default_value = "annual")]
         period: StatementPeriod,
-        /// Which statement to show in table mode (JSON always carries all three).
+        /// Which statement to show in table mode (JSON, JSONL and CSV carry all three).
         #[arg(long, short = 's', value_enum, default_value = "all")]
         statement: Statement,
     },
@@ -89,6 +91,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks earnings BBCA\n  idx -o json stocks earnings BBRI | jq .data.next"
     )]
     Earnings {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -98,19 +101,20 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks dividends BBCA\n  idx stocks dividends TLKM --limit 20\n  idx -o json stocks dividends BBRI | jq '.data | {ttm_total, ttm_yield_pct, consecutive_years}'\n\nAmounts are per share as reported by the source (split-adjusted on Yahoo), keyed by ex-date.\nThe yearly totals, TTM yield (TTM total / last price) and streak are computed by idx."
     )]
     Dividends {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
-        /// Most recent payments listed in table mode (JSON carries all).
+        /// Most recent payments listed in table mode (JSON, JSONL and CSV carry all).
         #[arg(long, short = 'n', default_value_t = 12)]
         limit: usize,
     },
 
     /// Price returns over 1w..5y, YTD, CAGR, volatility, drawdowns and 52-week position, with excess returns over IHSG.
     #[command(
-        after_help = "Examples:\n  idx stocks returns BBCA\n  idx stocks returns BBCA BBRI BMRI BBNI          # side by side, plus IHSG\n  idx stocks returns TLKM --benchmark ^JKLQ45\n  idx stocks returns ASII --no-benchmark\n  idx -o json stocks returns BBCA | jq '.data[0] | {returns, benchmark}'\n\nComputed by idx from five years of daily closes (total price return, dividends excluded).\nIndex codes keep their caret: ^JKSE is IHSG, ^JKLQ45 is LQ45."
+        after_help = "Examples:\n  idx stocks returns BBCA\n  idx stocks returns BBCA BBRI BMRI BBNI          # side by side, plus IHSG\n  idx stocks returns TLKM --benchmark ^JKLQ45\n  idx stocks returns ASII --no-benchmark\n  idx -o json stocks returns BBCA | jq '.data[0] | {returns, benchmark}'\n  idx stocks returns - < tickers.txt              # tickers from stdin\n\nComputed by idx from five years of daily closes (total price return, dividends excluded).\nIndex codes keep their caret: ^JKSE is IHSG, ^JKLQ45 is LQ45."
     )]
     Returns {
-        /// One or more IDX tickers, comma or space separated.
+        /// One or more tickers, comma or space separated: IDX codes, or another Yahoo Finance market's with its suffix (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
         /// Index to measure excess returns against.
@@ -135,6 +139,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n  idx -o json stocks fundamental ITMG | jq '.data | {currency, financial_currency}'\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). Negative shareholders' equity scores against the company and sets the P/B, ROE and debt/equity rules aside. When the statements are in another currency than the price (financial_currency USD, price in IDR), P/B, P/S and EV multiples mix the two, so P/B is not scored and the table marks them with *. It is not investment advice."
     )]
     Fundamental {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -144,6 +149,7 @@ pub enum StocksCmd {
         after_help = "Examples:\n  idx stocks technical BBRI\n  idx stocks technical TLKM --period 2y\n  idx -o json stocks technical BBCA | jq '.data.signal'\n\nIndicators are computed locally from daily candles; the signal is a rule score, not investment advice."
     )]
     Technical {
+        /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// Daily candles to analyse (1y gives the 200-day average room to work).
@@ -249,10 +255,10 @@ pub enum StocksCmd {
 
     /// Side-by-side fundamentals for two or more tickers.
     #[command(
-        after_help = "Examples:\n  idx stocks compare BBCA BBRI BMRI BBNI\n  idx -o json stocks compare TLKM,ISAT,EXCL | jq '.data[].valuation.pe_trailing'"
+        after_help = "Examples:\n  idx stocks compare BBCA BBRI BMRI BBNI\n  idx -o json stocks compare TLKM,ISAT,EXCL | jq '.data[].valuation.pe_trailing'\n  idx -o jsonl stocks screen -f \"pe<10,roe>15\" -n 5 | idx stocks compare -   # the screen's rows"
     )]
     Compare {
-        /// Two or more IDX tickers, comma or space separated.
+        /// Two or more tickers, comma or space separated: IDX codes, or another Yahoo Finance market's with its suffix (D05.SI); `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
@@ -375,7 +381,7 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
 }
 
 async fn quote(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let result = service::quotes(ctx.provider.as_ref(), &symbols).await?;
     emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
 }
@@ -387,7 +393,7 @@ async fn history(
     interval: Interval,
     limit: usize,
 ) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.history(&symbol, period, interval).await?;
     let limit = if limit == 0 { None } else { Some(limit) };
     emit(ctx, SCHEMA_HISTORY, result, |d| {
@@ -396,7 +402,7 @@ async fn history(
 }
 
 async fn profile(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.profile(&symbol).await?;
     emit(ctx, SCHEMA_PROFILE, result, |d| {
         reports::profile(d, ctx.color)
@@ -409,7 +415,7 @@ async fn financials(
     period: StatementPeriod,
     statement: Statement,
 ) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.financials(&symbol, period).await?;
     let flags = StatementFlags {
         income: matches!(statement, Statement::All | Statement::Income),
@@ -422,7 +428,7 @@ async fn financials(
 }
 
 async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = ctx.provider.earnings(&symbol).await?;
     emit(ctx, SCHEMA_EARNINGS, result, |d| {
         reports::earnings(d, ctx.color)
@@ -430,7 +436,7 @@ async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn dividends(ctx: &Context, raw: &str, limit: usize) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::dividends(ctx.provider.as_ref(), &symbol).await?;
     emit(ctx, SCHEMA_DIVIDENDS, result, |d| {
         reports::dividends(d, limit, ctx.color)
@@ -438,11 +444,11 @@ async fn dividends(ctx: &Context, raw: &str, limit: usize) -> Result<()> {
 }
 
 async fn returns(ctx: &Context, raw: &[String], benchmark: &str, none: bool) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let bench = if none || benchmark.eq_ignore_ascii_case("none") {
         None
     } else {
-        Some(Symbol::parse(benchmark)?)
+        Some(Symbol::parse_on(benchmark, &ctx.settings.exchange)?)
     };
     let result = service::returns(ctx.provider.as_ref(), &symbols, bench.as_ref()).await?;
     emit(ctx, SCHEMA_RETURNS, result, |d| {
@@ -465,7 +471,7 @@ async fn brief(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn fundamental(ctx: &Context, raw: &str) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::fundamentals(ctx.provider.as_ref(), &symbol).await?;
     emit(ctx, SCHEMA_FUNDAMENTALS, result, |d| {
         reports::fundamentals(d, ctx.color)
@@ -473,7 +479,7 @@ async fn fundamental(ctx: &Context, raw: &str) -> Result<()> {
 }
 
 async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {
-    let symbol = Symbol::parse(raw)?;
+    let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
     let result = service::technical(ctx.provider.as_ref(), &symbol, period).await?;
     emit(ctx, SCHEMA_TECHNICAL, result, |d| {
         reports::technical(d, ctx.color)
@@ -481,7 +487,7 @@ async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {
 }
 
 async fn compare(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list_on(input::symbol_args(raw)?, &ctx.settings.exchange)?;
     let result = service::compare(ctx.provider.as_ref(), &symbols).await?;
     emit(ctx, SCHEMA_COMPARE, result, |d| {
         reports::compare(d, ctx.color)

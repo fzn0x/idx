@@ -1744,3 +1744,608 @@ fn completions_generate() {
         .success()
         .stdout(predicate::str::contains("Register-ArgumentCompleter"));
 }
+
+// ---- output formats, stdin symbols, --quiet, exchange suffix ----------------
+
+const YAHOO_QUOTE_3: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK";
+const YAHOO_QUOTE_PARTIAL: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK";
+const YAHOO_CHART_BBCA_1MO: &str =
+    "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1mo&interval=1d&includePrePost=false";
+
+/// A sandbox whose cache holds Yahoo's quotes for BBCA, BBRI and TLKM, the
+/// partial BBCA + ZZZZ answer and BBCA's one-month daily chart.
+fn seeded() -> Sandbox {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        YAHOO_QUOTE_3,
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
+    seed(
+        &sb.cache,
+        YAHOO_QUOTE_PARTIAL,
+        "yahoo/quote_v7_partial_bbca_zzzz.json",
+    );
+    seed(
+        &sb.cache,
+        YAHOO_CHART_BBCA_1MO,
+        "yahoo/chart_bbca_1mo_1d.json",
+    );
+    sb
+}
+
+/// Every stdout line parsed as JSON; fails on a line that is not.
+fn json_lines(stdout: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8(stdout.to_vec())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l:?}: {e}")))
+        .collect()
+}
+
+#[test]
+fn jsonl_streams_one_record_per_line() {
+    let sb = seeded();
+    // Holidays: one line per holiday of the year.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    assert_eq!(rows.len(), 22);
+    assert!(rows.iter().all(|r| r["date"].is_string()));
+    assert!(out.stderr.is_empty());
+    // IDX_OUTPUT=jsonl is the same as the flag.
+    let env = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "jsonl")
+        .args(["market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert_eq!(env.stdout, out.stdout);
+
+    // Quotes: one per line, the same objects -o json carries.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    let syms: Vec<&str> = rows.iter().map(|r| r["symbol"].as_str().unwrap()).collect();
+    assert_eq!(syms, ["BBCA", "BBRI", "TLKM"]);
+    let json = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    let env: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(env["data"][1], rows[1]);
+
+    // History: one candle per line.
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "jsonl", "stocks", "history", "BBCA", "--period", "1mo",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    assert!(rows.len() > 10, "{}", rows.len());
+    assert!(rows
+        .iter()
+        .all(|r| r["close"].is_number() && r["time"].is_string()));
+
+    // A partial answer: the rows on stdout, the warning on stderr.
+    idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stdout(predicate::function(|s: &str| s.lines().count() == 1))
+        .stderr(predicate::str::contains("warning: no data for ZZZZ"));
+
+    // Values without an envelope: one line.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "version"])
+        .output()
+        .unwrap();
+    let rows = json_lines(&out.stdout);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["version"], env!("CARGO_PKG_VERSION"));
+
+    // An error: nothing on stdout, one JSON line on stderr, exit 5.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "ASII"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    assert!(out.stdout.is_empty());
+    let err = json_lines(&out.stderr);
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0]["error"]["code"], "offline_miss");
+    assert_eq!(err[0]["exit_code"], 5);
+}
+
+#[test]
+fn jsonl_streams_ownership_changes() {
+    let sb = sandbox();
+    let db = sb.cache.join("own.sqlite");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ownership/");
+    for f in [
+        "above1_20260731_synthetic.xlsx",
+        "above1_20260831_excerpt.xlsx",
+    ] {
+        idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(["ownership", "import", "--file", &format!("{dir}{f}")])
+            .assert()
+            .success();
+    }
+    let range = ["--from", "2026-07-31", "--to", "2026-08-31"];
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "jsonl", "ownership", "changes"])
+        .args(range)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    let json = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "json", "ownership", "changes"])
+        .args(range)
+        .output()
+        .unwrap();
+    let env: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let changes = env["data"]["changes"].as_array().unwrap();
+    assert!(!changes.is_empty());
+    assert_eq!(&rows, changes);
+}
+
+#[test]
+fn auto_output_is_json_when_piped() {
+    let sb = sandbox();
+    // assert_cmd captures stdout, so auto resolves to the JSON envelope.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "auto", "market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.holidays.v1");
+    let env = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "auto")
+        .args(["market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert_eq!(env.stdout, out.stdout);
+
+    // The config file accepts it; `config get` reports setting and result.
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "output", "auto"])
+        .assert()
+        .success();
+    let out = idx(&sb.cache, &sb.config)
+        .args(["config", "get", "output"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["output"], "auto");
+    let out = idx(&sb.cache, &sb.config)
+        .args(["config", "get"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["output"], "json");
+    assert_eq!(v["output_setting"], "auto");
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "output", "yaml"])
+        .assert()
+        .code(6);
+
+    // Errors follow the resolved format too.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "ZZZZ"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let e: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(e["error"]["code"], "offline_miss");
+}
+
+#[test]
+fn error_format_follows_the_resolved_output() {
+    let sb = sandbox();
+    // The flag beats IDX_OUTPUT for the error as for the payload.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .args(["-o", "table", "stocks", "quote", "ZZZZ"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::starts_with("error: "))
+        .stderr(predicate::str::contains("hint:"));
+    // A JSON default in the config file gives JSON errors.
+    std::fs::write(&sb.config, "output = \"json\"\n").unwrap();
+    let out = idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "ZZZZ"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let e: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(e["exit_code"], 5);
+    // ...and the meta commands follow it as well.
+    let out = idx(&sb.cache, &sb.config).arg("version").output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    std::fs::remove_file(&sb.config).unwrap();
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .arg("version")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "json")
+        .arg("schema")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.as_array().unwrap().contains(&"quotes".into()));
+    // An invalid IDX_OUTPUT still fails a command (exit 6), reported as text.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "yaml")
+        .args(["market", "holidays"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::starts_with(
+            "error: config: unknown output format",
+        ));
+}
+
+#[test]
+fn symbols_from_stdin() {
+    let sb = seeded();
+    let quoted = |stdin: &str| -> Vec<String> {
+        let out = idx(&sb.cache, &sb.config)
+            .args(["-o", "jsonl", "stocks", "quote", "-"])
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        json_lines(&out.stdout)
+            .iter()
+            .map(|r| r["symbol"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(quoted("BBCA\nBBRI, TLKM\n"), ["BBCA", "BBRI", "TLKM"]);
+    assert_eq!(
+        quoted("# idx watchlist: one ticker per line\r\nBBCA\r\nBBRI\r\nTLKM\r\n"),
+        ["BBCA", "BBRI", "TLKM"]
+    );
+    // idx's own JSON feeds back in, envelope or lines.
+    let json = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    let json = String::from_utf8(json.stdout).unwrap();
+    assert_eq!(quoted(&json), ["BBCA", "BBRI", "TLKM"]);
+    let lines = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        quoted(&String::from_utf8(lines.stdout).unwrap()),
+        ["BBCA", "BBRI", "TLKM"]
+    );
+    // `-` mixes with arguments, in order, deduplicated.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "-"])
+        .write_stdin("BBRI TLKM BBCA")
+        .output()
+        .unwrap();
+    assert_eq!(json_lines(&out.stdout).len(), 3);
+
+    // Usage errors, exit 2, before any request.
+    for (args, stdin, needle) in [
+        (
+            vec!["stocks", "quote", "-"],
+            "",
+            "no symbols read from stdin",
+        ),
+        (vec!["stocks", "quote", "-", "-"], "BBCA", "only once"),
+        (vec!["stocks", "quote", "-"], "B$CA", "invalid symbol"),
+        (
+            vec!["stocks", "compare", "-"],
+            "{\"symbol\":",
+            "does not parse",
+        ),
+        (
+            vec!["bandar", "screen", "--symbols", "-"],
+            "\n",
+            "no symbols",
+        ),
+        (vec!["broker", "-"], "# nothing\n", "no symbols"),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(&args)
+            .write_stdin(stdin)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(needle));
+    }
+    // Nothing piped at all (stdin closed) is the same usage error.
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "-"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no symbols read from stdin"));
+
+    // The watchlist takes them too.
+    let file = sb.cache.join("watchlist.txt");
+    idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["watch", "add", "-"])
+        .write_stdin("bbca\nTLKM\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BBCA TLKM"));
+    idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["watch", "rm", "-"])
+        .write_stdin("TLKM")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(1 tickers)"));
+}
+
+#[test]
+fn idx_output_piped_back_ignores_the_default_exchange() {
+    // idx writes IDX tickers bare, so its own output read back through `-`
+    // stays on IDX even with another market as the default for typed codes.
+    let sb = seeded();
+    let file = sb.cache.join("watchlist.txt");
+    let watch = |args: &[&str], stdin: Vec<u8>| -> serde_json::Value {
+        let out = idx(&sb.cache, &sb.config)
+            .env("IDX_WATCHLIST", &file)
+            .env("IDX_EXCHANGE", "SI")
+            .arg("-o")
+            .arg("json")
+            .args(args)
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let add = |args: &[&str]| watch(&[&["watch", "add"], args].concat(), vec![]);
+    // Typed arguments follow IDX_EXCHANGE, so the IDX ones say .JK.
+    let v = add(&["BBCA.JK", "TLKM.JK", "D05.SI"]);
+    assert_eq!(
+        v["data"]["symbols"],
+        serde_json::json!(["BBCA", "TLKM", "D05.SI"])
+    );
+    // `-o jsonl watch list | watch rm -` empties the list.
+    let listed = idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["-o", "jsonl", "watch", "list"])
+        .output()
+        .unwrap();
+    let v = watch(&["watch", "rm", "-"], listed.stdout);
+    assert_eq!(v["data"]["symbols"], serde_json::json!([]));
+    // So does the watchlist file itself.
+    add(&["BBCA.JK", "TLKM.JK", "D05.SI"]);
+    let saved = std::fs::read(&file).unwrap();
+    let v = watch(&["watch", "rm", "-"], saved);
+    assert_eq!(v["data"]["symbols"], serde_json::json!([]));
+    // Typed text follows IDX_EXCHANGE, as the arguments do.
+    let v = watch(&["watch", "add", "-"], b"D05\n".to_vec());
+    assert_eq!(v["data"]["symbols"], serde_json::json!(["D05.SI"]));
+
+    // A quotes envelope with BBCA quotes IDX's BBCA (the .JK quote is seeded).
+    let envelope = r#"{"schema":"idx.quotes.v1","data":[
+        {"symbol":"BBCA"},{"symbol":"BBRI"},{"symbol":"TLKM"}]}"#;
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_EXCHANGE", "SI")
+        .args(["-o", "jsonl", "stocks", "quote", "-"])
+        .write_stdin(envelope)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let symbols: Vec<String> = json_lines(&out.stdout)
+        .iter()
+        .map(|r| r["symbol"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(symbols, ["BBCA", "BBRI", "TLKM"]);
+}
+
+#[test]
+fn quiet_silences_notes_but_not_the_payload_or_errors() {
+    let sb = seeded();
+    let run = |args: &[&str]| idx(&sb.cache, &sb.config).args(args).output().unwrap();
+    // Same stdout and exit code, stderr empty only with --quiet.
+    let loud = run(&["-o", "csv", "stocks", "quote", "BBCA", "ZZZZ"]);
+    let quiet = run(&["-o", "csv", "--quiet", "stocks", "quote", "BBCA", "ZZZZ"]);
+    assert!(loud.status.success() && quiet.status.success());
+    assert_eq!(loud.stdout, quiet.stdout);
+    assert!(String::from_utf8_lossy(&loud.stderr).contains("warning: no data for ZZZZ"));
+    assert!(
+        quiet.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    let q = run(&["-o", "jsonl", "-q", "stocks", "quote", "BBCA", "ZZZZ"]);
+    assert!(q.stderr.is_empty());
+    assert_eq!(json_lines(&q.stdout).len(), 1);
+    // The JSON envelope keeps its warnings.
+    let out = run(&["-o", "json", "--quiet", "stocks", "quote", "BBCA", "ZZZZ"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["warnings"][0], "no data for ZZZZ");
+    // IDX_QUIET=1 does the same; -v overrides it.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["-v", "stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: no data for ZZZZ"));
+    // Errors and the hint still print.
+    idx(&sb.cache, &sb.config)
+        .args(["--quiet", "stocks", "quote", "ASII"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("error: "))
+        .stderr(predicate::str::contains("hint:"));
+    // Confirmations go quiet.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["config", "set", "provider", "yahoo"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "provider", "auto"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("provider = auto"));
+    idx(&sb.cache, &sb.config)
+        .args(["--quiet", "cache", "clear"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+    // --quiet with -v is a usage error.
+    idx(&sb.cache, &sb.config)
+        .args(["-q", "-v", "version"])
+        .assert()
+        .code(2);
+}
+
+const YAHOO_CHART_D05_5D: &str =
+    "https://query1.finance.yahoo.com/v8/finance/chart/D05.SI?range=5d&interval=1d&includePrePost=false";
+
+#[test]
+fn other_markets_on_the_yahoo_backed_commands() {
+    let sb = seeded();
+    seed(
+        &sb.cache,
+        YAHOO_CHART_D05_5D,
+        "yahoo/chart_d05si_5d_1d.json",
+    );
+    let history = |c: &mut Command| -> serde_json::Value {
+        let out = c.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    // An explicit suffix.
+    let v = history(idx(&sb.cache, &sb.config).args([
+        "-o", "json", "stocks", "history", "d05.si", "--period", "5d",
+    ]));
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    assert_eq!(v["data"]["currency"], "SGD");
+    assert_eq!(v["data"]["candles"].as_array().unwrap().len(), 5);
+    // A default suffix for bare tickers.
+    let v = history(
+        idx(&sb.cache, &sb.config)
+            .env("IDX_EXCHANGE", "SI")
+            .args(["-o", "json", "stocks", "history", "D05", "--period", "5d"]),
+    );
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    // The confirmation shows the value stored, not the one typed.
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", "idx"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("exchange = JK ("));
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", ".si"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("exchange = SI ("));
+    idx(&sb.cache, &sb.config)
+        .args(["config", "get", "exchange"])
+        .assert()
+        .success()
+        .stdout("SI\n");
+    let v = history(
+        idx(&sb.cache, &sb.config)
+            .args(["-o", "json", "stocks", "history", "D05", "--period", "5d"]),
+    );
+    assert_eq!(v["data"]["symbol"], "D05.SI");
+    // `.JK` still means IDX whatever the default (the BBCA.JK chart is seeded).
+    let v = history(idx(&sb.cache, &sb.config).args([
+        "-o", "json", "stocks", "history", "bbca.jk", "--period", "1mo",
+    ]));
+    assert_eq!(v["data"]["symbol"], "BBCA");
+    std::fs::remove_file(&sb.config).unwrap();
+
+    // Quote: v7 is not cached here, so the chart fallback answers.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "D05.SI"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"][0]["symbol"], "D05.SI");
+    assert_eq!(v["data"][0]["currency"], "SGD");
+    assert_eq!(v["data"][0]["source"], "yahoo:chart");
+    assert!(v["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("reduced fields"));
+
+    // IDX-only commands refuse it by name; MSN cannot serve it.
+    for args in [
+        vec!["broker", "D05.SI"],
+        vec!["ownership", "ticker", "D05.SI"],
+        vec!["bandar", "detect", "D05.SI"],
+        vec!["stocks", "brief", "D05.SI"],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(&args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("another exchange (SI)"));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "msn", "stocks", "quote", "D05.SI"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("outside IDX"));
+    // A bad exchange setting is a config error.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_EXCHANGE", "S1")
+        .args(["stocks", "quote", "BBCA"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("exchange"));
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", "ABCDE"])
+        .assert()
+        .code(6);
+}

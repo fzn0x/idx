@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::config::{self, FileConfig, KEYS, TEMPLATE};
 use crate::error::{IdxError, Result};
-use crate::output::{self, OutputFormat};
+use crate::output;
 
 use super::GlobalOpts;
 
@@ -28,7 +28,7 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
         .config
         .clone()
         .unwrap_or_else(config::default_config_path);
-    let json = global.output == Some(OutputFormat::Json);
+    let format = super::requested_format(global);
     match cmd {
         ConfigCmd::Init { force } => {
             if path.exists() && !force {
@@ -41,29 +41,30 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&path, TEMPLATE)?;
-            output::print_stderr(&format!("wrote {}", path.display()));
+            output::print_notice(&format!("wrote {}", path.display()));
             Ok(())
         }
         ConfigCmd::Set { key, value } => {
             let mut cfg = FileConfig::load(&path)?;
             cfg.set(&key, &value)?;
             cfg.save(&path)?;
-            output::print_stderr(&format!("{key} = {value} ({})", path.display()));
+            // What was stored, which may be normalised (`.si` is `SI`).
+            let stored = cfg.get(&key)?.unwrap_or(value);
+            output::print_notice(&format!("{key} = {stored} ({})", path.display()));
             Ok(())
         }
         ConfigCmd::Get { key: Some(key) } => {
             let cfg = FileConfig::load(&path)?;
             let v = cfg.get(&key)?;
-            if json {
-                output::print_stdout(&output::json::to_pretty(&serde_json::json!({ key: v }))?)
-            } else {
-                output::print_stdout(&format!("{}\n", v.unwrap_or_else(|| "(unset)".into())))
+            if output::print_value(format, &serde_json::json!({ key: v }))? {
+                return Ok(());
             }
+            output::print_stdout(&format!("{}\n", v.unwrap_or_else(|| "(unset)".into())))
         }
         ConfigCmd::Get { key: None } => {
             let settings = super::resolve_settings(global)?;
-            if json {
-                return output::print_stdout(&output::json::to_pretty(&settings)?);
+            if output::print_value(format, &settings)? {
+                return Ok(());
             }
             let mut s = String::new();
             s.push_str(&format!(
@@ -76,9 +77,14 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 }
             ));
             s.push_str(&format!("provider    : {}\n", settings.provider));
-            s.push_str(&format!("output      : {}\n", settings.output));
+            if settings.output_setting == crate::output::OutputSetting::Auto {
+                s.push_str("output      : auto (table on a terminal, json when piped)\n");
+            } else {
+                s.push_str(&format!("output      : {}\n", settings.output));
+            }
             s.push_str(&format!("color       : {}\n", settings.color));
             s.push_str(&format!("timeout     : {}s\n", settings.timeout_secs));
+            s.push_str(&format!("exchange    : {}\n", settings.exchange));
             s.push_str(&format!("cache dir   : {}\n", settings.cache_dir.display()));
             s.push_str(&format!(
                 "cache ttl   : quote {}s · history {}s\n",

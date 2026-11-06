@@ -12,6 +12,9 @@ crumb session (`providers/yahoo/session.rs`); `v8/finance/chart` and
 | chart_events_bbca_max.json | `v8/finance/chart/BBCA.JK?range=max&interval=1mo&events=div,splits` | `events.dividends` (47, keyed by unix ex-date, split-adjusted amounts) and `events.splits` (2:1 2008, 5:1 2021); recorded 2026-10-17 |
 | chart_bbri_5d_1h.json | `v8/finance/chart/BBRI.JK?range=5d&interval=1h` | intraday |
 | chart_not_found.json | `v8/finance/chart/ZZZZ.JK` | HTTP 404 |
+| chart_d05si_5d_1d.json | `v8/finance/chart/D05.SI?range=5d&interval=1d&includePrePost=false` | another market (DBS, Singapore): `meta.symbol` `D05.SI`, currency `SGD`, exchange `SES`, gmtoffset 28800; serves `stocks history D05.SI --period 5d` and the quote fallback (recorded 2026-11-06 07:01 WIB) |
+| chart_ryto_5d_1d.json | `v8/finance/chart/RY.TO?range=5d&interval=1d&includePrePost=false` | a market west of Jakarta (Royal Bank of Canada, Toronto): gmtoffset -18000; recorded after the close, so `regularMarketTime` (16:00 EST on 2026-11-05) is already 2026-11-06 in WIB while that session's bar is stamped 09:30 EST; pins session dates to the exchange's clock (recorded 2026-11-06 10:03 WIB) |
+| chart_bbca_si_404.json | `v8/finance/chart/BBCA.SI?range=5d&interval=1d&includePrePost=false` | HTTP 404: an IDX code under the wrong suffix is a clean not-found (recorded 2026-11-06 07:01 WIB) |
 | quote_v7_bbca_bbri_tlkm.json | `v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK` | full quote rows |
 | quote_v7_partial_bbca_zzzz.json | `v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK` | unknown symbol silently omitted |
 | quote_v7_unauthorized.json | `v7/finance/quote` without crumb | HTTP 401 |

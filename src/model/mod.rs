@@ -88,16 +88,40 @@ pub enum StaleReason {
     FetchFailed,
 }
 
-/// An IDX ticker such as `BBCA`, always stored upper-case without any exchange suffix.
+/// Yahoo Finance's suffix for IDX listings. A bare ticker means IDX.
+pub const IDX_EXCHANGE: &str = "JK";
+
+/// A ticker, stored upper-case. An IDX ticker has no suffix (`BBCA`), an index
+/// code keeps its caret (`^JKSE`), and a ticker from another Yahoo Finance
+/// market keeps its suffix (`D05.SI`, accepted only by the Yahoo-backed
+/// commands through [`Symbol::parse_on`]).
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(transparent)]
 pub struct Symbol(String);
 
+/// A code starts with a letter or digit and holds letters, digits and `-`
+/// (`BUKA-W`), at most 12 characters.
+fn valid_code(body: &str) -> bool {
+    body.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && body.len() <= 12
+        && body.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// `BASE.XX` with XX one to four ASCII letters: `(BASE, XX)`.
+fn split_suffix(s: &str) -> Option<(&str, &str)> {
+    let (base, suffix) = s.rsplit_once('.')?;
+    let ok = (1..=4).contains(&suffix.len()) && suffix.chars().all(|c| c.is_ascii_alphabetic());
+    ok.then_some((base, suffix))
+}
+
 impl Symbol {
-    /// Accepts `bbca`, `BBCA`, `BBCA.JK`, ` bbca ` and returns `BBCA`.
-    /// Index codes keep their caret: `^JKSE` (IHSG), `^JKLQ45`.
+    /// An IDX ticker: accepts `bbca`, `BBCA`, `BBCA.JK`, ` bbca ` and returns
+    /// `BBCA`. Index codes keep their caret: `^JKSE` (IHSG), `^JKLQ45`. A code
+    /// starts with a letter or digit (`BUKA-W` is fine, `-` and `-BBCA` are
+    /// not, so the `-` that reads stdin never passes as a ticker). Another
+    /// market's suffix (`D05.SI`) is refused; see [`Symbol::parse_on`].
     pub fn parse(raw: &str) -> Result<Symbol> {
         let mut s = raw.trim().to_ascii_uppercase();
         if let Some(stripped) = s.strip_suffix(".JK") {
@@ -107,15 +131,54 @@ impl Symbol {
             return Err(IdxError::Usage("empty symbol".into()));
         }
         let body = s.strip_prefix('^').unwrap_or(&s);
-        let ok = !body.is_empty()
-            && body.len() <= 12
-            && body.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-        if !ok {
+        if !valid_code(body) {
+            let other = split_suffix(&s).filter(|(base, _)| valid_code(base));
+            if let Some((_, suffix)) = other {
+                return Err(IdxError::Usage(format!(
+                    "invalid symbol {raw:?}: listed on another exchange ({suffix}); \
+                     this command takes IDX tickers only"
+                )));
+            }
             return Err(IdxError::Usage(format!(
                 "invalid symbol {raw:?}: expected an IDX ticker like BBCA or BBRI"
             )));
         }
         Ok(Symbol(s))
+    }
+
+    /// A ticker for the Yahoo-backed commands. An explicit suffix wins: `.JK`
+    /// gives the bare IDX ticker, any other (`D05.SI`) is kept. A bare code is
+    /// IDX when `exchange` is `JK`, else it gets `.{exchange}` (`exchange` is
+    /// a normalised suffix such as `SI`). Index codes (`^STI`) stay as they are.
+    pub fn parse_on(raw: &str, exchange: &str) -> Result<Symbol> {
+        let s = raw.trim().to_ascii_uppercase();
+        if s.starts_with('^') {
+            return Symbol::parse(raw);
+        }
+        let invalid = || {
+            IdxError::Usage(format!(
+                "invalid symbol {raw:?}: expected a ticker like BBCA, or one with a \
+                 Yahoo Finance suffix like D05.SI"
+            ))
+        };
+        if let Some((base, suffix)) = split_suffix(&s) {
+            if suffix == IDX_EXCHANGE {
+                return Symbol::parse(raw);
+            }
+            return if valid_code(base) {
+                Ok(Symbol(format!("{base}.{suffix}")))
+            } else {
+                Err(invalid())
+            };
+        }
+        if s.is_empty() || exchange.eq_ignore_ascii_case(IDX_EXCHANGE) {
+            return Symbol::parse(raw);
+        }
+        if valid_code(&s) {
+            Ok(Symbol(format!("{s}.{}", exchange.to_ascii_uppercase())))
+        } else {
+            Err(invalid())
+        }
     }
 
     /// `true` for index codes (`^JKSE`), which have no `.JK` suffix anywhere.
@@ -124,18 +187,48 @@ impl Symbol {
     }
 
     /// `true` when the symbol trades on IDX and so follows its sessions:
-    /// every plain code (a `.JK` listing such as `BBCA` or `IDX30`) and the
-    /// exchange's own indices (`^JKSE`, `^JKLQ45`). Other indices (`^GSPC`,
-    /// `^N225`) and Yahoo's currency or futures codes (`USDIDR=X`) do not.
+    /// every plain code without another market's suffix (a `.JK` listing such
+    /// as `BBCA` or `IDX30`, not `D05.SI`) and the exchange's own indices
+    /// (`^JKSE`, `^JKLQ45`). Other indices (`^GSPC`, `^N225`) and Yahoo's
+    /// currency or futures codes (`USDIDR=X`) do not.
     pub fn trades_on_idx(&self) -> bool {
         match self.0.strip_prefix('^') {
             Some(index) => index.starts_with("JK"),
-            None => !self.0.contains('='),
+            None => !self.0.contains('=') && self.exchange().is_none(),
         }
     }
 
-    /// Parses `BBCA,BBRI TLKM` into unique symbols, preserving order.
+    /// The Yahoo Finance suffix of a ticker listed outside IDX (`SI` for
+    /// `D05.SI`); `None` for IDX tickers and index codes.
+    pub fn exchange(&self) -> Option<&str> {
+        if self.is_index() {
+            return None;
+        }
+        self.0.rsplit_once('.').map(|(_, x)| x)
+    }
+
+    /// Parses `BBCA,BBRI TLKM` into unique IDX symbols, preserving order.
     pub fn parse_list<I, S>(items: I) -> Result<Vec<Symbol>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::parse_list_with(items, Symbol::parse)
+    }
+
+    /// [`Symbol::parse_list`] with [`Symbol::parse_on`].
+    pub fn parse_list_on<I, S>(items: I, exchange: &str) -> Result<Vec<Symbol>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::parse_list_with(items, |p| Symbol::parse_on(p, exchange))
+    }
+
+    fn parse_list_with<I, S>(
+        items: I,
+        parse: impl Fn(&str) -> Result<Symbol>,
+    ) -> Result<Vec<Symbol>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -146,7 +239,7 @@ impl Symbol {
                 if piece.trim().is_empty() {
                     continue;
                 }
-                let sym = Symbol::parse(piece)?;
+                let sym = parse(piece)?;
                 if !out.contains(&sym) {
                     out.push(sym);
                 }
@@ -162,12 +255,13 @@ impl Symbol {
         &self.0
     }
 
-    /// Yahoo Finance form, e.g. `BBCA.JK`; indices stay as `^JKSE`.
+    /// Yahoo Finance form, e.g. `BBCA.JK`; indices stay as `^JKSE` and other
+    /// markets' tickers keep their suffix (`D05.SI`).
     pub fn yahoo(&self) -> String {
-        if self.is_index() {
+        if self.is_index() || self.exchange().is_some() {
             self.0.clone()
         } else {
-            format!("{}.JK", self.0)
+            format!("{}.{IDX_EXCHANGE}", self.0)
         }
     }
 
@@ -547,7 +641,67 @@ mod tests {
         assert_eq!(quote("USDIDR=X", t("2025-01-02T13:45:00+07:00")), None);
         assert!(Symbol::parse("^jklq45").unwrap().trades_on_idx());
         assert!(!Symbol::from_yahoo("^STI").trades_on_idx());
+        assert!(!Symbol::from_yahoo("D05.SI").trades_on_idx());
         assert_eq!(behind_session(None, latest), None);
+    }
+
+    #[test]
+    fn symbol_starts_with_a_letter_or_digit() {
+        for bad in ["-", "--", "-BBCA", "^-", "^-JKSE"] {
+            let e = Symbol::parse(bad).unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{bad}");
+        }
+        assert_eq!(Symbol::parse("buka-w").unwrap().as_str(), "BUKA-W");
+        assert_eq!(Symbol::parse("1A").unwrap().as_str(), "1A");
+    }
+
+    #[test]
+    fn idx_commands_refuse_other_markets_by_name() {
+        let e = Symbol::parse("D05.SI").unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(e.to_string().contains("another exchange (SI)"), "{e}");
+        let e = Symbol::parse("D05.TOOLONG").unwrap_err();
+        assert!(e.to_string().contains("expected an IDX ticker"), "{e}");
+        assert_eq!(Symbol::parse("bbca.jk").unwrap().as_str(), "BBCA");
+    }
+
+    #[test]
+    fn parse_on_honours_explicit_and_default_suffixes() {
+        let on = |raw: &str, ex: &str| Symbol::parse_on(raw, ex).map(|s| s.as_str().to_string());
+        assert_eq!(on("d05.si", "JK").unwrap(), "D05.SI");
+        assert_eq!(on("BBCA", "JK").unwrap(), "BBCA");
+        assert_eq!(on("BBCA", "SI").unwrap(), "BBCA.SI");
+        assert_eq!(on("D05", "si").unwrap(), "D05.SI");
+        assert_eq!(
+            on("BBCA.JK", "SI").unwrap(),
+            "BBCA",
+            ".JK is IDX whatever the default"
+        );
+        assert_eq!(on("^STI", "SI").unwrap(), "^STI");
+        assert_eq!(on("^jkse", "JK").unwrap(), "^JKSE");
+        assert_eq!(on("0700.HK", "JK").unwrap(), "0700.HK");
+        for bad in ["D05.TOOLONG", "-", "-X.SI", ".SI", "B$CA", "", "A.B.C"] {
+            assert!(Symbol::parse_on(bad, "SI").is_err(), "{bad}");
+            assert!(Symbol::parse_on(bad, "JK").is_err(), "{bad}");
+        }
+        // Bare codes take the default, explicit suffixes win, duplicates go.
+        let list = Symbol::parse_list_on(["BBCA,D05.SI", "bbca.jk D05"], "SI").unwrap();
+        let names: Vec<&str> = list.iter().map(Symbol::as_str).collect();
+        assert_eq!(names, ["BBCA.SI", "D05.SI", "BBCA"]);
+    }
+
+    #[test]
+    fn exchange_and_yahoo_forms() {
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        assert_eq!(d05.exchange(), Some("SI"));
+        assert_eq!(d05.yahoo(), "D05.SI");
+        assert_eq!(Symbol::from_yahoo("D05.SI"), d05);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        assert_eq!(bbca.exchange(), None);
+        assert_eq!(bbca.yahoo(), "BBCA.JK");
+        assert_eq!(Symbol::from_yahoo("BBCA.JK"), bbca);
+        assert_eq!(Symbol::parse("^JKSE").unwrap().exchange(), None);
+        assert_eq!(serde_json::to_string(&d05).unwrap(), "\"D05.SI\"");
     }
 
     #[test]

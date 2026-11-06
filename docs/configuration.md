@@ -23,9 +23,10 @@ idx config path
 
 ```toml
 provider = "auto"      # auto | yahoo | msn | stockbit
-output = "table"       # table | json | csv
+output = "table"       # auto | table | json | jsonl | csv
 color = "auto"         # auto | always | never
 timeout_secs = 15
+exchange = "JK"        # Yahoo suffix for bare tickers in the Yahoo-backed commands
 
 [cache]
 dir = "/custom/cache/dir"
@@ -41,7 +42,9 @@ history_ttl_secs = 3600
 | variable | flag | meaning |
 | --- | --- | --- |
 | `IDX_PROVIDER` | `--provider` | `auto`, `yahoo`, `msn`, `stockbit` |
-| `IDX_OUTPUT` | `-o, --output` | `table`, `json` |
+| `IDX_OUTPUT` | `-o, --output` | `table` (default), `json`, `jsonl`, `csv`, or `auto`: a table when stdout is a terminal, `json` when it is piped or captured |
+| `IDX_QUIET` | `-q, --quiet` | `1`/`true`/`yes`/`on`: stderr carries errors only (no warnings, notes or loading line); ignored when `-v` is given. No config key |
+| `IDX_EXCHANGE` | | Yahoo Finance suffix a bare ticker gets in `stocks quote`, `history`, `profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`, `technical`, `compare` and `watch`: `JK` (default, IDX), `SI`, `HK`, ... One to four letters, an optional leading dot, any case; `IDX` means `JK`. Config key `exchange` |
 | `IDX_COLOR` | | `auto`, `always`, `never` |
 | `NO_COLOR` | `--no-color` | any non-empty value disables colour |
 | `IDX_PROGRESS` | | `auto` (default): a loading line on stderr while a command waits on the network, naming the hosts it waits on; only when stderr is a terminal and without `-v`. `never` turns it off, `always` shows it where stderr does not report a terminal (mintty, some IDE consoles) |
@@ -58,6 +61,37 @@ history_ttl_secs = 3600
 | `IDX_STOCKBIT_REFRESH_TOKEN` | | Seeds an unattended Stockbit session (the refresh token); the session file wins once it exists |
 | `IDX_STOCKBIT_ACCESS_TOKEN` | | Optional access token to seed alongside the refresh token |
 | `IDX_BROWSER` | | Browser executable `idx stockbit login` launches (default: the first Chrome/Edge/Brave found) |
+
+## Output on a terminal and in a pipe
+
+`table` stays the default whether stdout is a terminal or not, so existing
+`idx ... > file` and `| grep` pipelines keep reading tables. Opt in to
+`output = "auto"` (or `IDX_OUTPUT=auto`) for a table on a terminal and the
+JSON envelope whenever stdout is piped or captured, which suits agents that
+forget `-o json`. `idx config get` shows the setting next to what it resolves
+to (`output_setting` and `output` in its JSON).
+
+Errors and the commands that need no data source (`version`, `schema`,
+`config`, `mcp setup`) resolve the format the same way, flag first, then
+`IDX_OUTPUT`, then the config file; a layer that does not parse is skipped
+there, so a broken setting still gets a readable error.
+
+## Other markets (`exchange`)
+
+Yahoo Finance lists IDX shares under `.JK`, which idx adds for you. The
+Yahoo-backed commands also take a ticker from another Yahoo market with its
+suffix (`idx stocks history D05.SI`), or bare once `exchange` says which
+market (`idx config set exchange SI`, then `idx stocks history D05`). `.JK`
+always means IDX, and every other command (brief, screen, news, broker,
+bandar, foreign, actions, market, ownership, stockbit) reads IDX tickers only
+and refuses `D05.SI` with exit 2. MSN and Stockbit cover IDX only, so with
+`--provider auto` Yahoo answers for other markets. Saved watchlist entries
+keep their suffix (`D05.SI`), so changing `exchange` later does not change
+them. For the same reason idx's own output piped back through `-` (`-o json`,
+`-o jsonl`, a watchlist file) reads a bare code as IDX; only typed text on
+stdin follows `exchange`. MCP tools take explicit suffixes but do not use
+`IDX_EXCHANGE`: a bare code is always IDX there. An invalid value still stops
+`idx mcp` from starting, as any invalid setting does.
 
 ## Cache
 

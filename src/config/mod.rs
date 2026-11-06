@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{IdxError, Result};
 use crate::http::CacheMode;
-use crate::output::{ColorMode, OutputFormat};
+use crate::model::IDX_EXCHANGE;
+use crate::output::{ColorMode, OutputFormat, OutputSetting};
 use crate::providers::ProviderKind;
 
 pub const ENV_PREFIX: &str = "IDX_";
@@ -26,12 +27,15 @@ pub const ENV_PREFIX: &str = "IDX_";
 pub struct FileConfig {
     /// `auto` | `yahoo` | `msn`
     pub provider: Option<String>,
-    /// `table` | `json`
+    /// `auto` | `table` | `json` | `jsonl` | `csv`
     pub output: Option<String>,
     /// `auto` | `always` | `never`
     pub color: Option<String>,
     /// Per-request timeout.
     pub timeout_secs: Option<u64>,
+    /// Yahoo Finance suffix a bare ticker gets in the Yahoo-backed commands
+    /// (`JK`, IDX, by default).
+    pub exchange: Option<String>,
     pub cache: CacheSection,
     pub msn: MsnSection,
     pub ownership: OwnershipSection,
@@ -98,7 +102,7 @@ impl FileConfig {
                 self.provider = Some(value.to_string());
             }
             "output" => {
-                value.parse::<OutputFormat>()?;
+                value.parse::<OutputSetting>()?;
                 self.output = Some(value.to_string());
             }
             "color" => {
@@ -106,6 +110,7 @@ impl FileConfig {
                 self.color = Some(value.to_string());
             }
             "timeout_secs" => self.timeout_secs = Some(value.parse().map_err(|_| bad())?),
+            "exchange" => self.exchange = Some(parse_exchange(value)?),
             "cache.dir" => self.cache.dir = Some(PathBuf::from(value)),
             "cache.quote_ttl_secs" => {
                 self.cache.quote_ttl_secs = Some(value.parse().map_err(|_| bad())?)
@@ -139,6 +144,7 @@ impl FileConfig {
             "output" => self.output.clone(),
             "color" => self.color.clone(),
             "timeout_secs" => self.timeout_secs.map(|v| v.to_string()),
+            "exchange" => self.exchange.clone(),
             "cache.dir" => self.cache.dir.as_ref().map(|p| p.display().to_string()),
             "cache.quote_ttl_secs" => self.cache.quote_ttl_secs.map(|v| v.to_string()),
             "cache.history_ttl_secs" => self.cache.history_ttl_secs.map(|v| v.to_string()),
@@ -168,6 +174,7 @@ pub const KEYS: &[&str] = &[
     "output",
     "color",
     "timeout_secs",
+    "exchange",
     "cache.dir",
     "cache.quote_ttl_secs",
     "cache.history_ttl_secs",
@@ -185,14 +192,20 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 # Data source: "auto" tries providers in order and falls back when one fails.
 # provider = "auto"          # auto | yahoo | msn      (env: IDX_PROVIDER)
 
-# Default output format.
-# output = "table"           # table | json | csv      (env: IDX_OUTPUT)
+# Default output format. auto: a table on a terminal, JSON when piped.
+# output = "table"           # auto | table | json | jsonl | csv  (env: IDX_OUTPUT)
 
 # ANSI colours in tables.
 # color = "auto"             # auto | always | never   (env: IDX_COLOR, NO_COLOR)
 
 # Per-request network timeout in seconds.
 # timeout_secs = 15          # (env: IDX_TIMEOUT_SECS)
+
+# Yahoo Finance suffix a bare ticker gets in stocks quote, history, profile,
+# financials, earnings, dividends, returns, fundamental, technical, compare and
+# watch. JK is IDX; SI would read D05 as D05.SI (Singapore). An explicit suffix
+# always works, and every other command reads IDX tickers only.
+# exchange = "JK"            # (env: IDX_EXCHANGE)
 
 [cache]
 # dir = "/path/to/cache"     # (env: IDX_CACHE_DIR)
@@ -222,7 +235,9 @@ pub const TEMPLATE: &str = r#"# idx configuration. Every key is optional.
 #[derive(Debug, Default, Clone)]
 pub struct CliOverrides {
     pub provider: Option<ProviderKind>,
-    pub output: Option<OutputFormat>,
+    pub output: Option<OutputSetting>,
+    /// Whether stdout is a terminal in this run (resolves `auto`).
+    pub stdout_is_terminal: bool,
     pub no_color: bool,
     pub offline: bool,
     pub no_cache: bool,
@@ -234,7 +249,10 @@ pub struct CliOverrides {
 #[derive(Debug, Clone, Serialize)]
 pub struct Settings {
     pub provider: ProviderKind,
+    /// The format of this run (`auto` already resolved).
     pub output: OutputFormat,
+    /// What was asked for, `auto` included.
+    pub output_setting: OutputSetting,
     pub color: ColorMode,
     pub timeout_secs: u64,
     pub cache_dir: PathBuf,
@@ -244,6 +262,9 @@ pub struct Settings {
     pub history_ttl_secs: u64,
     pub fundamentals_ttl_secs: u64,
     pub financials_ttl_secs: u64,
+    /// Yahoo Finance suffix for bare tickers in the Yahoo-backed commands,
+    /// upper-case without the dot (`JK` is IDX).
+    pub exchange: String,
     /// Not serialised; `config get` reports whether it is set.
     #[serde(skip)]
     pub msn_api_key: Option<String>,
@@ -339,6 +360,28 @@ fn truthy(v: &str) -> bool {
     )
 }
 
+/// Normalises an exchange suffix: one to four ASCII letters, an optional
+/// leading dot, any case (`.si` -> `SI`); `IDX` is an alias of `JK`.
+pub fn parse_exchange(raw: &str) -> Result<String> {
+    let v = raw.trim();
+    let v = v.strip_prefix('.').unwrap_or(v).to_ascii_uppercase();
+    if v == "IDX" {
+        return Ok(IDX_EXCHANGE.to_string());
+    }
+    if (1..=4).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Ok(v);
+    }
+    Err(IdxError::Config(format!(
+        "exchange: invalid value {raw:?}; expected a Yahoo Finance suffix of 1-4 letters such as JK (IDX) or SI"
+    )))
+}
+
+/// `--quiet`, or `IDX_QUIET` set to `1`/`true`/`yes`/`on` when no `-v` asks
+/// for diagnostics. A flag and an env var only, no config key.
+pub fn quiet_requested(flag: bool, verbose: u8, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    flag || (verbose == 0 && env(&format!("{ENV_PREFIX}QUIET")).is_some_and(|v| truthy(&v)))
+}
+
 /// Merge the three layers. `env` is injectable so precedence is unit-testable.
 pub fn resolve(
     cli: &CliOverrides,
@@ -355,12 +398,13 @@ pub fn resolve(
         _ => ProviderKind::Auto,
     };
 
-    let output = match (&cli.output, env_s("OUTPUT"), &file.output) {
+    let output_setting = match (&cli.output, env_s("OUTPUT"), &file.output) {
         (Some(o), _, _) => *o,
         (None, Some(e), _) => e.parse()?,
         (None, None, Some(f)) => f.parse()?,
-        _ => OutputFormat::Table,
+        _ => OutputSetting::Table,
     };
+    let output = output_setting.resolve(cli.stdout_is_terminal);
 
     let color = if cli.no_color || env("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         ColorMode::Never
@@ -433,6 +477,11 @@ pub fn resolve(
         (None, Some(f)) => f,
         _ => DEFAULT_FINANCIALS_TTL_SECS,
     };
+    let exchange = match (env_s("EXCHANGE"), &file.exchange) {
+        (Some(e), _) => parse_exchange(&e)?,
+        (None, Some(f)) => parse_exchange(f)?,
+        _ => IDX_EXCHANGE.to_string(),
+    };
     let msn_api_key = env_s("MSN_API_KEY").or_else(|| file.msn.api_key.clone());
     let ownership_db = env_s("OWNERSHIP_DB")
         .map(PathBuf::from)
@@ -450,6 +499,7 @@ pub fn resolve(
     Ok(Settings {
         provider,
         output,
+        output_setting,
         color,
         timeout_secs,
         cache_dir,
@@ -458,6 +508,7 @@ pub fn resolve(
         history_ttl_secs,
         fundamentals_ttl_secs,
         financials_ttl_secs,
+        exchange,
         msn_api_key,
         ownership_db,
         stockbit_session,
@@ -465,6 +516,33 @@ pub fn resolve(
         stockbit_refresh_seed,
         config_path,
     })
+}
+
+/// The output format for code that must answer even when the configuration
+/// is broken: error reports and the commands that build no context (`version`,
+/// `schema`, `config`, `mcp setup`). Same precedence as [`resolve`] (flag,
+/// `IDX_OUTPUT`, the config file's `output`, `table`), but a layer that does
+/// not parse or load is skipped instead of failing.
+pub fn requested_output(
+    cli: Option<OutputSetting>,
+    config_path: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    stdout_is_terminal: bool,
+) -> OutputFormat {
+    let setting = cli
+        .or_else(|| {
+            env(&format!("{ENV_PREFIX}OUTPUT"))
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse().ok())
+        })
+        .or_else(|| {
+            FileConfig::load(config_path)
+                .ok()
+                .and_then(|f| f.output)
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(OutputSetting::Table);
+    setting.resolve(stdout_is_terminal)
 }
 
 #[cfg(test)]
@@ -519,7 +597,7 @@ mod tests {
         // cli beats env
         let cli = CliOverrides {
             provider: Some(ProviderKind::Yahoo),
-            output: Some(OutputFormat::Table),
+            output: Some(OutputSetting::Table),
             timeout_secs: Some(1),
             ..Default::default()
         };
@@ -593,5 +671,147 @@ mod tests {
         // The template must itself be valid TOML.
         let t: FileConfig = toml::from_str(TEMPLATE).unwrap();
         assert_eq!(t, FileConfig::default());
+    }
+
+    #[test]
+    fn auto_output_follows_the_terminal_and_jsonl_parses() {
+        let file = FileConfig {
+            output: Some("auto".into()),
+            ..Default::default()
+        };
+        let on_tty = CliOverrides {
+            stdout_is_terminal: true,
+            ..Default::default()
+        };
+        let s = resolve(&on_tty, &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.output, OutputFormat::Table);
+        assert_eq!(s.output_setting, OutputSetting::Auto);
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.output, OutputFormat::Json, "auto when piped");
+        let env = env_from(&[("IDX_OUTPUT", "jsonl")]);
+        let s = resolve(&on_tty, &file, "x".into(), &env).unwrap();
+        assert_eq!(s.output, OutputFormat::Jsonl);
+        assert_eq!(s.output_setting, OutputSetting::Jsonl);
+        // An invalid value is still a config error here.
+        let env = env_from(&[("IDX_OUTPUT", "yaml")]);
+        let e = resolve(&on_tty, &file, "x".into(), &env).unwrap_err();
+        assert_eq!(e.exit_code(), 6);
+        // Without any layer the default stays a table, terminal or not.
+        let s = resolve(
+            &CliOverrides::default(),
+            &FileConfig::default(),
+            "x".into(),
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(s.output, OutputFormat::Table);
+        assert_eq!(s.output_setting, OutputSetting::Table);
+    }
+
+    #[test]
+    fn requested_output_is_lenient_with_the_same_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let none = |_: &str| None;
+        // Nothing anywhere: a table.
+        assert_eq!(
+            requested_output(None, &path, &none, false),
+            OutputFormat::Table
+        );
+        // The file's output counts (it did not for errors before).
+        std::fs::write(&path, "output = \"json\"\n").unwrap();
+        assert_eq!(
+            requested_output(None, &path, &none, true),
+            OutputFormat::Json
+        );
+        // Env beats the file, the flag beats env.
+        let env = env_from(&[("IDX_OUTPUT", "jsonl")]);
+        assert_eq!(
+            requested_output(None, &path, &env, true),
+            OutputFormat::Jsonl
+        );
+        assert_eq!(
+            requested_output(Some(OutputSetting::Table), &path, &env, false),
+            OutputFormat::Table
+        );
+        // An invalid env value is skipped, not fatal.
+        let bad = env_from(&[("IDX_OUTPUT", "yaml")]);
+        assert_eq!(
+            requested_output(None, &path, &bad, true),
+            OutputFormat::Json
+        );
+        // A file that does not parse is skipped too.
+        std::fs::write(&path, "output = 3").unwrap();
+        assert_eq!(
+            requested_output(None, &path, &none, true),
+            OutputFormat::Table
+        );
+        // auto resolves against the terminal.
+        let auto = env_from(&[("IDX_OUTPUT", "auto")]);
+        assert_eq!(
+            requested_output(None, &path, &auto, true),
+            OutputFormat::Table
+        );
+        assert_eq!(
+            requested_output(None, &path, &auto, false),
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn output_key_accepts_auto_and_jsonl() {
+        let mut cfg = FileConfig::default();
+        cfg.set("output", "auto").unwrap();
+        assert_eq!(cfg.get("output").unwrap().as_deref(), Some("auto"));
+        cfg.set("output", "jsonl").unwrap();
+        assert_eq!(cfg.get("output").unwrap().as_deref(), Some("jsonl"));
+        assert_eq!(cfg.set("output", "yaml").unwrap_err().exit_code(), 6);
+    }
+
+    #[test]
+    fn quiet_from_the_flag_or_env_unless_verbose() {
+        let none = |_: &str| None;
+        assert!(!quiet_requested(false, 0, &none));
+        assert!(quiet_requested(true, 0, &none));
+        for v in ["1", "true", "YES", " on "] {
+            let env = env_from(&[("IDX_QUIET", v)]);
+            assert!(quiet_requested(false, 0, &env), "{v}");
+            assert!(!quiet_requested(false, 1, &env), "-v beats IDX_QUIET={v}");
+        }
+        for v in ["0", "false", "", "no"] {
+            let env = env_from(&[("IDX_QUIET", v)]);
+            assert!(!quiet_requested(false, 0, &env), "{v}");
+        }
+    }
+
+    #[test]
+    fn exchange_defaults_to_idx_and_validates() {
+        let s = resolve(
+            &CliOverrides::default(),
+            &FileConfig::default(),
+            "x".into(),
+            &|_| None,
+        )
+        .unwrap();
+        assert_eq!(s.exchange, "JK");
+        let file = FileConfig {
+            exchange: Some(".si".into()),
+            ..Default::default()
+        };
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &|_| None).unwrap();
+        assert_eq!(s.exchange, "SI");
+        let env = env_from(&[("IDX_EXCHANGE", "hk")]);
+        let s = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap();
+        assert_eq!(s.exchange, "HK", "env beats file");
+        for bad in ["S1", "ABCDE", ".", "S I", "JK.SI"] {
+            let env = env_from(&[("IDX_EXCHANGE", bad)]);
+            let e = resolve(&CliOverrides::default(), &file, "x".into(), &env).unwrap_err();
+            assert_eq!(e.exit_code(), 6, "{bad}");
+        }
+        assert_eq!(parse_exchange("idx").unwrap(), "JK");
+        let mut cfg = FileConfig::default();
+        cfg.set("exchange", "si").unwrap();
+        assert_eq!(cfg.get("exchange").unwrap().as_deref(), Some("SI"));
+        assert_eq!(cfg.set("exchange", "S1").unwrap_err().exit_code(), 6);
     }
 }

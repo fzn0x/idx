@@ -25,6 +25,7 @@ use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -54,6 +55,9 @@ pub mod schema;
 const INSTRUCTIONS: &str = "\
 idx: Indonesian stock market (IDX / IHSG) data and analysis from free public sources.
 Tickers are IDX codes such as BBCA, BBRI, TLKM (no .JK suffix needed).
+The quote, history, profile, financials, earnings, dividends, returns, fundamental,
+technical and compare tools also take a ticker from another Yahoo Finance market
+with its suffix, e.g. D05.SI; every other tool is IDX only.
 Every tool returns the same JSON envelope as the `idx -o json` CLI:
 {schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data}. Fields the
 source did not return are null; nothing is estimated. Prices are delayed as published.
@@ -69,15 +73,25 @@ Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
+// Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolsArg {
-    /// One or more IDX tickers, comma or space separated, e.g. "BBCA,BBRI,TLKM".
+    /// One or more tickers, comma or space separated, e.g. "BBCA,BBRI,TLKM". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbols: String,
 }
 
+// One ticker for an IDX-only tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolArg {
     /// One IDX ticker, e.g. "BBCA".
+    pub symbol: String,
+}
+
+// One ticker for a Yahoo-backed tool (idx_profile, idx_earnings,
+// idx_dividends, idx_fundamental).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct YahooSymbolArg {
+    /// One ticker, e.g. "BBCA". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
 }
 
@@ -90,7 +104,7 @@ pub struct StockbitLoginArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HistoryArgs {
-    /// One IDX ticker, e.g. "TLKM".
+    /// One ticker, e.g. "TLKM". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// Look-back window: 1d, 5d, 1mo, 3mo, 6mo, 1y (default), 2y, 5y, 10y, ytd, max.
     #[serde(default)]
@@ -105,7 +119,7 @@ pub struct HistoryArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FinancialsArgs {
-    /// One IDX ticker, e.g. "BBCA".
+    /// One ticker, e.g. "BBCA". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// annual (default, ~4 fiscal years), quarterly (~5 quarters) or ttm (trailing twelve months).
     #[serde(default)]
@@ -114,7 +128,7 @@ pub struct FinancialsArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TechnicalArgs {
-    /// One IDX ticker, e.g. "BBRI".
+    /// One ticker, e.g. "BBRI". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbol: String,
     /// Daily candles to analyse: 6mo, 1y (default), 2y, 5y. Shorter windows leave the 200-day averages null.
     #[serde(default)]
@@ -321,7 +335,7 @@ pub struct HolidaysArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReturnsArgs {
-    /// One or more IDX tickers, comma or space separated, e.g. "BBCA,BBRI".
+    /// One or more tickers, comma or space separated, e.g. "BBCA,BBRI". A bare code is IDX; another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
     pub symbols: String,
     /// Index for excess returns: "^JKSE" (IHSG, default), "^JKLQ45", or "none" to skip it.
     #[serde(default)]
@@ -556,7 +570,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_QUOTES,
                     service::quotes(self.provider.as_ref(), &symbols).await?,
@@ -576,7 +590,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = parse_opt(&a.period, Period::Y1)?;
                 let interval = parse_opt(&a.interval, Interval::Day1)?;
                 let mut h = self.provider.history(&symbol, period, interval).await?;
@@ -600,11 +614,11 @@ impl IdxServer {
     )]
     async fn profile(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(SCHEMA_PROFILE, self.provider.profile(&symbol).await?)
             }
             .await,
@@ -621,7 +635,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = match a.period.as_deref().map(str::trim) {
                     None | Some("") | Some("annual") => StatementPeriod::Annual,
                     Some("quarterly") => StatementPeriod::Quarterly,
@@ -647,11 +661,11 @@ impl IdxServer {
     )]
     async fn earnings(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(SCHEMA_EARNINGS, self.provider.earnings(&symbol).await?)
             }
             .await,
@@ -664,11 +678,11 @@ impl IdxServer {
     )]
     async fn dividends(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_DIVIDENDS,
                     service::dividends(self.provider.as_ref(), &symbol).await?,
@@ -973,11 +987,11 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 let bench = match a.benchmark.as_deref().map(str::trim) {
                     None | Some("") => Some(Symbol::parse("^JKSE")?),
                     Some(s) if s.eq_ignore_ascii_case("none") => None,
-                    Some(s) => Some(Symbol::parse(s)?),
+                    Some(s) => Some(Symbol::parse_on(s, IDX_EXCHANGE)?),
                 };
                 ok(
                     SCHEMA_RETURNS,
@@ -994,11 +1008,11 @@ impl IdxServer {
     )]
     async fn fundamental(
         &self,
-        Parameters(a): Parameters<SymbolArg>,
+        Parameters(a): Parameters<YahooSymbolArg>,
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_FUNDAMENTALS,
                     service::fundamentals(self.provider.as_ref(), &symbol).await?,
@@ -1018,7 +1032,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbol = Symbol::parse(&a.symbol)?;
+                let symbol = Symbol::parse_on(&a.symbol, IDX_EXCHANGE)?;
                 let period = parse_opt(&a.period, Period::Y1)?;
                 ok(
                     SCHEMA_TECHNICAL,
@@ -1039,7 +1053,7 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let symbols = Symbol::parse_list([a.symbols.as_str()])?;
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
                 ok(
                     SCHEMA_COMPARE,
                     service::compare(self.provider.as_ref(), &symbols).await?,
@@ -1854,7 +1868,7 @@ mod tests {
     async fn fundamental_tool_adds_a_verdict() {
         let s = server();
         let r = s
-            .fundamental(Parameters(SymbolArg {
+            .fundamental(Parameters(YahooSymbolArg {
                 symbol: "BBCA".into(),
             }))
             .await
