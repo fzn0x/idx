@@ -79,9 +79,10 @@ a TTL applies immediately.
   failure (`live fetch failed (...); showing cached copy`). Table mode prints
   the warnings and `warning: showing stale cached data from <fetch time> WIB`
   to stderr.
-- Error text, warnings and log lines never include a URL's query string, so
-  the Yahoo crumb and the MSN key stay out of them; `-vv` debug logging still
-  prints full request URLs.
+- Network error text and warnings never include a URL's query string, and
+  cache keys never hold a session token, so the Yahoo crumb and the MSN key
+  stay out of every message; `-vv` debug logging still prints full request
+  URLs.
 - News feeds: a feed that times out or refuses the connection is not asked
   again for five minutes. Until then its cached copy is served with a warning
   naming the failure, or the warning alone when nothing is cached, so one
