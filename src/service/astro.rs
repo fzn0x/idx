@@ -35,11 +35,13 @@ pub async fn astro(p: &dyn Provider, q: &AstroQuery) -> Result<Sourced<Astro>> {
             let mut history = p
                 .history(&symbol, period.history_period(), Interval::Day1)
                 .await?;
+            // Decided by when the candles were fetched, not by the clock now:
+            // a cached copy can hold a mid-session price long after the close.
             if let Some(day) =
-                crate::analysis::astro::drop_unfinished(&mut history.data, chrono::Utc::now())
+                crate::analysis::astro::drop_unfinished(&mut history.data, history.fetched_at)
             {
                 history.warnings.push(format!(
-                    "the backtest leaves out {day}, a session that has not closed yet"
+                    "the backtest leaves out {day}, a session that had not closed when the history was fetched"
                 ));
             }
             sky.backtest = Some(crate::analysis::astro::backtest(&history.data, period)?);
@@ -57,7 +59,9 @@ mod tests {
     use crate::model::{History, Period, Quote};
     use async_trait::async_trait;
 
-    struct Recorded;
+    /// Two recorded years of ^JKSE (last bar 2026-11-04), served from cache
+    /// as fetched at the given time (`None`: now).
+    struct Recorded(Option<&'static str>);
 
     #[async_trait]
     impl Provider for Recorded {
@@ -73,6 +77,9 @@ mod tests {
             let mut out =
                 Sourced::fresh(crate::providers::yahoo::parse_chart(body, p, i)?, "yahoo");
             out.cached = true;
+            if let Some(at) = self.0 {
+                out.fetched_at = at.parse().unwrap();
+            }
             Ok(out)
         }
     }
@@ -111,12 +118,44 @@ mod tests {
 
     #[tokio::test]
     async fn backtest_carries_the_history_provenance() {
-        let s = astro(&Recorded, &q(Some(AstroPeriod::Y2))).await.unwrap();
+        let s = astro(&Recorded(None), &q(Some(AstroPeriod::Y2)))
+            .await
+            .unwrap();
         assert_eq!((s.provider, s.cached), ("yahoo", true));
         assert_eq!(s.data.backtest.as_ref().unwrap().returns, 473);
+        assert!(s.warnings.iter().all(|w| !w.contains("leaves out")));
         let e = astro(&Offline, &q(Some(AstroPeriod::Y2)))
             .await
             .unwrap_err();
         assert_eq!(e.exit_code(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_cached_mid_session_price_is_left_out_whenever_it_is_read() {
+        // Fetched at 10:00 WIB on 2026-11-04, the last bar's date, and read
+        // now (days later, after the close): its price is still not a close.
+        let s = astro(
+            &Recorded(Some("2026-11-04T03:00:00Z")),
+            &q(Some(AstroPeriod::Y2)),
+        )
+        .await
+        .unwrap();
+        let b = s.data.backtest.as_ref().unwrap();
+        assert_eq!((b.returns, b.to.to_string()), (472, "2026-11-03".into()));
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("leaves out 2026-11-04")),
+            "{:?}",
+            s.warnings
+        );
+        // Fetched after 17:00 WIB that day: the close is final and kept.
+        let s = astro(
+            &Recorded(Some("2026-11-04T11:00:00Z")),
+            &q(Some(AstroPeriod::Y2)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.backtest.as_ref().unwrap().returns, 473);
     }
 }

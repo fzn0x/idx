@@ -96,13 +96,16 @@ fn group(name: &str, members: &[f64], rest: &[f64]) -> BacktestGroup {
     }
 }
 
-/// Removes the last candle when it is today's session (Jakarta) before
-/// 17:00 WIB: until the close and the post-trading session are over, its
-/// price is not a close. Returns the date left out.
-pub fn drop_unfinished(h: &mut History, now: DateTime<Utc>) -> Option<NaiveDate> {
-    let now = now.with_timezone(&wib());
+/// Removes the last candle when the history was fetched on that session's
+/// date (Jakarta) before 17:00 WIB: until the close and the post-trading
+/// session are over, its price is not a close. `fetched_at` is when the data
+/// was fetched, not the clock now, so a cached mid-session price read in the
+/// evening (`--offline`, a long TTL, a long-running MCP server) is still left
+/// out. Returns the date left out.
+pub fn drop_unfinished(h: &mut History, fetched_at: DateTime<Utc>) -> Option<NaiveDate> {
+    let at = fetched_at.with_timezone(&wib());
     let last = h.candles.last()?.date();
-    if last == now.date_naive() && now.hour() < 17 {
+    if last == at.date_naive() && at.hour() < 17 {
         h.candles.pop();
         return Some(last);
     }

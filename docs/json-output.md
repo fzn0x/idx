@@ -360,9 +360,11 @@ Bundled; `provider` is `bundled`.
   `stdev_pct` when `n` < 2), `win_rate_pct`, `t_stat` (Welch's t against all
   other sessions, 3 decimals) and `p_value` (two-sided, 6 decimals), `null`
   with fewer than two sessions on either side, and `significant`. Returns
-  are close to close, one close per WIB date; a session still trading
-  (before 17:00 WIB) is left out with a warning. A history coarser than
-  daily is a provider error; fewer than 31 closes is `not_found`.
+  are close to close, one close per WIB date; a session that was still
+  trading when the history was fetched (on its date, before 17:00 WIB) is
+  left out with a warning, however much later the cached copy is read. A
+  history coarser than daily is a provider error; fewer than 31 closes is
+  `not_found`.
 - `method` and `disclaimer` are fixed text. There is no interpretive text
   in v1; meanings, if added, will be a new optional field.
 

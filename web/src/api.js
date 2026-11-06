@@ -569,7 +569,7 @@ export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, period
   const r = await cached(env, `astro_backtest:${period}`, 6 * 3600, async () => {
     const h = await history(env, "^JKSE", period, "1d", 0);
     const hist = { ...h.data };
-    const leftOut = astroLib.dropUnfinished(hist);
+    const leftOut = astroLib.dropUnfinished(hist, Date.parse(h.fetched_at));
     try {
       return { backtest: astroLib.backtest(hist, period), left_out: leftOut };
     } catch (e) {
@@ -578,7 +578,7 @@ export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, period
     }
   });
   data.backtest = r.value.backtest;
-  if (r.value.left_out) warnings.push(`the backtest leaves out ${r.value.left_out}, a session that has not closed yet`);
+  if (r.value.left_out) warnings.push(`the backtest leaves out ${r.value.left_out}, a session that had not closed when the history was fetched`);
   if (r.warning) warnings.push(r.warning);
   return envelope("idx.astro.v1", data, { provider: "yahoo", cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
 }

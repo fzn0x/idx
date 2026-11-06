@@ -544,10 +544,12 @@ export class BacktestError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
-/** Drops the last candle when it is today's session (Jakarta) before 17:00 WIB; returns its date or null. */
-export function dropUnfinished(history, nowMs = Date.now()) {
+/** Drops the last candle when the history was fetched on that session's date (Jakarta) before 17:00 WIB,
+ * so its price was not a close; returns its date or null. Mirrors analysis::astro::drop_unfinished: it takes
+ * the fetch time, not the clock now, since a cached copy can hold a mid-session price after the close. */
+export function dropUnfinished(history, fetchedMs) {
   const last = history.candles.at(-1);
-  const wib = new Date(nowMs + WIB).toISOString();
+  const wib = new Date(fetchedMs + WIB).toISOString();
   if (last && last.time.slice(0, 10) === wib.slice(0, 10) && Number(wib.slice(11, 13)) < 17) {
     history.candles = history.candles.slice(0, -1);
     return last.time.slice(0, 10);
