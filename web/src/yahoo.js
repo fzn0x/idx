@@ -156,6 +156,13 @@ const text = (o, k) => {
   const v = o?.[k];
   return typeof v === "string" && v.trim() ? v.trim() : null;
 };
+// Yahoo pads amounts it has not loaded as {raw: 0, fmt: null}; a reported
+// figure carries its formatted form. Padded means missing, not zero.
+const amount = (o, k) => {
+  const v = o?.[k];
+  if (v && typeof v === "object" && v.fmt === null && v.raw === 0) return null;
+  return raw(o, k);
+};
 const dateOf = (o, k) => {
   const v = raw(o, k);
   return v == null ? null : new Date(v * 1000).toISOString().slice(0, 10);
@@ -322,10 +329,10 @@ export function parseEarnings(r, symbol) {
     surprise_pct: typeof q.surprisePct === "string" ? (parseFloat(q.surprisePct) || null) : num(q.surprisePct),
   }));
   const re = (arr) => (arr || []).map((x) => {
-    const revenue = raw(x, "revenue");
-    let earnings = raw(x, "earnings");
+    const revenue = amount(x, "revenue");
+    let earnings = amount(x, "earnings");
     if (earnings === 0 && revenue) earnings = null;
-    return { period: label(x), revenue, earnings, profit_margin_pct: earnings == null ? null : pct(x, "profitMargin") };
+    return { period: label(x), revenue, earnings, profit_margin_pct: earnings != null && revenue ? pct(x, "profitMargin") : null };
   });
   const ce = cal.earnings || {};
   const cur = (trend.trend || []).find((t) => t.period === "0q");

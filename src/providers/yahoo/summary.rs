@@ -196,20 +196,40 @@ fn period_label(v: &Value) -> String {
     }
 }
 
-/// Yahoo pads quarters it has not loaded yet with `earnings: 0`; a company
-/// with revenue and exactly zero earnings is a gap in the feed, not a result.
+/// An amount Yahoo may have padded: values it has not loaded come as
+/// `{"raw": 0, "fmt": null}`, while a reported figure carries its formatted
+/// form. A padded value is missing, not zero.
+fn amount(v: &Value, key: &str) -> Option<f64> {
+    let x = v.get(key)?;
+    let padded = x.get("fmt").is_some_and(Value::is_null)
+        && x.get("raw").and_then(Value::as_f64) == Some(0.0);
+    if padded {
+        None
+    } else {
+        raw(v, key)
+    }
+}
+
+/// Yahoo pads quarters it has not loaded yet with zeros (`{"raw": 0, "fmt":
+/// null}` for revenue or earnings); a company with revenue and exactly zero
+/// earnings is a gap in the feed, not a result. The margin is kept only when
+/// both figures are there.
 fn revenue_earnings(arr: Option<&Vec<Value>>) -> Vec<RevenueEarnings> {
     arr.map(|a| {
         a.iter()
             .map(|e| {
-                let revenue = raw(e, "revenue");
-                let earnings = raw(e, "earnings")
+                let revenue = amount(e, "revenue");
+                let earnings = amount(e, "earnings")
                     .filter(|x| !(*x == 0.0 && revenue.is_some_and(|r| r != 0.0)));
+                let profit_margin_pct = match (revenue, earnings) {
+                    (Some(r), Some(_)) if r != 0.0 => pct(e, "profitMargin"),
+                    _ => None,
+                };
                 RevenueEarnings {
                     period: period_label(e),
                     revenue,
-                    profit_margin_pct: pct(e, "profitMargin").filter(|_| earnings.is_some()),
                     earnings,
+                    profit_margin_pct,
                 }
             })
             .collect()
@@ -312,6 +332,8 @@ mod tests {
         include_str!("../../../tests/fixtures/yahoo/quote_summary_statements_bbca.json");
     const EARN_TLKM: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm.json");
+    const EARN_TLKM_20261106: &str =
+        include_str!("../../../tests/fixtures/yahoo/quote_summary_earnings_tlkm_20261106.json");
     const NOT_FOUND: &str =
         include_str!("../../../tests/fixtures/yahoo/quote_summary_not_found.json");
 
@@ -410,6 +432,32 @@ mod tests {
         let e = parse_earnings(EARN_TLKM, &sym("TLKM")).unwrap();
         assert!(!e.quarters.is_empty());
         assert!(!e.yearly.is_empty());
+    }
+
+    #[test]
+    fn padded_revenue_is_null_with_no_margin() {
+        // Recorded 2026-11-06: 1Q2026 revenue is {"raw":0,"fmt":null} while its
+        // earnings are reported; it used to print as 0 revenue at a 0.00% margin.
+        for body in [EARN_TLKM_20261106, EARN_TLKM] {
+            let e = parse_earnings(body, &sym("TLKM")).unwrap();
+            let q = e.quarterly.iter().find(|q| q.period == "1Q2026").unwrap();
+            assert_eq!(q.revenue, None);
+            assert_eq!(q.profit_margin_pct, None);
+            assert_eq!(q.earnings, Some(4_344_000_000_000.0));
+            let q = e.quarterly.iter().find(|q| q.period == "2Q2026").unwrap();
+            assert_eq!(q.revenue, Some(38_689_000_000_000.0));
+            assert!((q.profit_margin_pct.unwrap() - 17.503685).abs() < 1e-6);
+        }
+        let e = parse_earnings(EARN_TLKM_20261106, &sym("TLKM")).unwrap();
+        assert_eq!(e.quarterly.len(), 4);
+        assert_eq!(e.quarterly[3].period, "3Q2026");
+        assert!(e.quarterly[3].revenue.is_some());
+        // BBCA's padded 2Q2025 earnings stay null, its revenue stays.
+        let e = parse_earnings(EARN_BBCA, &sym("BBCA")).unwrap();
+        let q = e.quarterly.iter().find(|q| q.period == "2Q2025").unwrap();
+        assert_eq!(q.earnings, None);
+        assert_eq!(q.profit_margin_pct, None);
+        assert_eq!(q.revenue, Some(28_589_918_000_000.0));
     }
 
     #[test]

@@ -53,6 +53,23 @@ test("earnings parse: padded zero quarters become null", () => {
   assert.equal(e.next.analysts, 3);
 });
 
+test("earnings parse: padded zero revenue is null and has no margin (recorded 2026-11-06)", () => {
+  for (const f of ["yahoo/quote_summary_earnings_tlkm_20261106.json", "yahoo/quote_summary_earnings_tlkm.json"]) {
+    const r = JSON.parse(fixture(f)).quoteSummary.result[0];
+    const e = y.parseEarnings(r, "TLKM");
+    const q = e.quarterly.find((x) => x.period === "1Q2026");
+    assert.equal(q.revenue, null, f);
+    assert.equal(q.profit_margin_pct, null, f);
+    assert.equal(q.earnings, 4344000000000, f);
+    const ok = e.quarterly.find((x) => x.period === "2Q2026");
+    assert.ok(Math.abs(ok.profit_margin_pct - 17.503685) < 1e-6, f);
+  }
+  const b = y.parseEarnings(JSON.parse(fixture("yahoo/quote_summary_statements_bbca.json")).quoteSummary.result[0], "BBCA");
+  const q = b.quarterly.find((x) => x.period === "2Q2025");
+  assert.equal(q.earnings, null);
+  assert.equal(q.revenue, 28589918000000);
+});
+
 test("timeseries pivot", () => {
   const body = JSON.parse(fixture("yahoo/timeseries_bbca.json"));
   const f = y.parseTimeseries(body, "BBCA", "annual");
