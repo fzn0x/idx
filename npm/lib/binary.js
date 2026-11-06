@@ -1,14 +1,20 @@
 // Locates or downloads the idx release binary for this platform.
 //
-// Used by install.js (postinstall) and by bin/idx.js on first run, because
-// npm 12 no longer runs dependency install scripts by default, and installs
-// from GitHub (`npm install -g github:fzn0x/idx`) ship no install script at
-// all: the launcher fetches the binary on first use instead. Either path
-// verifies SHA-256 against the release's SHA256SUMS before writing anything
-// executable.
+// Shared by both npm packages: ihsg-cli (npm/) and ihsg-mcp (npm-mcp/, which
+// carries a byte-identical copy of this file; npm/test/launcher.test.mjs
+// compares them, so edit npm/lib/binary.js and copy it over).
 //
-// The binary goes next to the package (npm/bin) when that folder is
-// writable, otherwise into a per-user cache (root-owned global installs):
+// Used by install.js (postinstall) and by the launchers (bin/idx.js,
+// bin/ihsg-mcp.js) on first run, because npm 12 no longer runs dependency
+// install scripts by default, installs from GitHub
+// (`npm install -g github:fzn0x/idx`) ship no install script at all, and
+// ihsg-mcp has none: the launcher fetches the binary on first use instead.
+// Either path verifies SHA-256 against the release's SHA256SUMS before
+// writing anything executable.
+//
+// The binary goes next to the package (its bin/ folder) when that folder is
+// writable, otherwise into a per-user cache (root-owned global installs),
+// one cache for both packages:
 // %LOCALAPPDATA%\ihsg-cli\<version> on Windows, $XDG_CACHE_HOME or
 // ~/.cache/ihsg-cli/<version> elsewhere; IDX_NPM_CACHE overrides it.
 "use strict";
