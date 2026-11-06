@@ -16,10 +16,10 @@ use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
-    BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Fundamentals,
-    History, Interval, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
-    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport, Symbol,
-    Technical,
+    BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Earnings,
+    EarningsFilter, Fundamentals, History, Interval, MarketOverview, MarketRow, NewsItem,
+    NewsReport, NewsSummary, OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow,
+    SentimentReport, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
@@ -28,6 +28,18 @@ use crate::universe::Issuer;
 
 mod exchange;
 pub use exchange::*;
+
+/// Earnings with the rows `filter` leaves out dropped (and `data.scope` set
+/// when it drops any).
+pub async fn earnings(
+    p: &dyn Provider,
+    symbol: &Symbol,
+    filter: EarningsFilter,
+) -> Result<Sourced<Earnings>> {
+    let mut result = p.earnings(symbol).await?;
+    filter.apply(&mut result.data);
+    Ok(result)
+}
 
 /// Ratios plus the rule-based verdict.
 pub async fn fundamentals(p: &dyn Provider, symbol: &Symbol) -> Result<Sourced<Fundamentals>> {

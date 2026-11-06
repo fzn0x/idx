@@ -371,6 +371,7 @@ export function parseEarnings(r, symbol) {
     },
     ex_dividend_date: dateOf(cal, "exDividendDate"), dividend_date: dateOf(cal, "dividendDate"),
     source: "yahoo:quoteSummary",
+    scope: null,
   };
 }
 

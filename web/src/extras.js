@@ -1,5 +1,6 @@
-// Ports of src/analysis/{returns,dividends}.rs and the news ordering in
-// src/service.rs, plus the ownership changes summary. Pure; shared by the
+// Ports of src/analysis/{returns,dividends}.rs, the news ordering in
+// src/service.rs and the earnings filter in src/model/fundamentals.rs, plus
+// the ownership changes summary. Pure; shared by the
 // Worker API and tests so the web terminal agrees with the CLI.
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -141,6 +142,43 @@ export function enrichDividends(h, today) {
     for (let i = h.years.length - 1; i >= 0; i--) { if (h.years[i].year !== year) break; h.consecutive_years++; year--; }
   }
   return h;
+}
+
+// ---- earnings filter -----------------------------------------------------------
+
+/**
+ * Mirrors EarningsFilter::from_names: period annual | quarterly, kind
+ * reported | estimates; empty or "all" keeps both. Throws a RangeError with
+ * the CLI's message on anything else.
+ */
+export function earningsFilter(period, kind) {
+  const norm = (v) => (v == null ? "" : String(v).trim().toLowerCase());
+  const f = { annual: false, quarterly: false, reported: false, estimates: false };
+  const p = norm(period), k = norm(kind);
+  if (p === "annual" || p === "quarterly") f[p] = true;
+  else if (p && p !== "all") throw new RangeError(`invalid period "${p}"; use annual or quarterly (or leave it out for both)`);
+  if (k === "reported" || k === "estimates") f[k] = true;
+  else if (k && k !== "all") throw new RangeError(`invalid kind "${k}"; use reported or estimates (or leave it out for both)`);
+  return f;
+}
+
+/** What a filter keeps, each unset pair widened to both (EarningsFilter::scope). */
+export function earningsScope(f) {
+  const periods = !f.annual && !f.quarterly, kinds = !f.reported && !f.estimates;
+  return { annual: f.annual || periods, quarterly: f.quarterly || periods, reported: f.reported || kinds, estimates: f.estimates || kinds };
+}
+
+/** Mirrors EarningsFilter::apply: the rows the filter keeps and data.scope, or e untouched. */
+export function filterEarnings(e, f) {
+  const s = earningsScope(f);
+  if (s.annual && s.quarterly && s.reported && s.estimates) return e;
+  const out = { ...e };
+  if (!(s.reported && s.quarterly)) { out.quarters = []; out.quarterly = []; }
+  if (!(s.reported && s.annual)) out.yearly = [];
+  out.estimates = s.estimates ? (e.estimates || []).filter((x) => (x.period_type === "annual" ? s.annual : s.quarterly)) : [];
+  if (!(s.estimates && s.quarterly)) out.next = null;
+  out.scope = s;
+  return out;
 }
 
 // ---- news ordering -------------------------------------------------------------

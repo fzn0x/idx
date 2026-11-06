@@ -6,9 +6,9 @@ use comfy_table::{Attribute, Cell, Color, Table};
 
 use crate::analysis::fundamental::summary_line;
 use crate::model::{
-    Brief, DividendHistory, Earnings, EarningsEstimate, FinancialPeriod, Financials, Fundamentals,
-    MarketOverview, MarketRow, Performance, Profile, ReturnWindows, SignalLabel, StatementPeriod,
-    Technical, Trend, VerdictLabel,
+    Brief, DividendHistory, Earnings, EarningsEstimate, EarningsScope, FinancialPeriod, Financials,
+    Fundamentals, MarketOverview, MarketRow, Performance, Profile, ReturnWindows, SignalLabel,
+    StatementPeriod, Technical, Trend, VerdictLabel,
 };
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
@@ -569,14 +569,41 @@ fn estimates_table(rows: &[EarningsEstimate], color: bool) -> String {
     out
 }
 
+/// "showing annual estimates" and the like, for a filtered earnings call.
+fn scope_label(s: &EarningsScope) -> String {
+    let period = match (s.annual, s.quarterly) {
+        (true, false) => "annual ",
+        (false, true) => "quarterly ",
+        _ => "",
+    };
+    let kind = match (s.reported, s.estimates) {
+        (true, false) => "reported figures",
+        (false, true) => "estimates",
+        _ => "rows",
+    };
+    format!("showing {period}{kind}")
+}
+
 pub fn earnings(e: &Earnings, color: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "{} · {} · EPS in {}\n",
+        "{} · {} · EPS in {}{}\n",
         e.symbol,
         e.name.clone().unwrap_or_else(|| f::DASH.into()),
-        e.currency.clone().unwrap_or_default()
+        e.currency.clone().unwrap_or_default(),
+        e.scope
+            .as_ref()
+            .map(|s| format!(" · {}", scope_label(s)))
+            .unwrap_or_default()
     ));
+    let nothing = e.quarters.is_empty()
+        && e.yearly.is_empty()
+        && e.quarterly.is_empty()
+        && e.estimates.is_empty()
+        && e.next.is_none();
+    if e.scope.is_some() && nothing {
+        out.push_str("The source has no rows of this kind for this ticker.\n");
+    }
     if !e.quarters.is_empty() {
         let mut t = base_table(color);
         t.set_header(header(&[

@@ -366,6 +366,7 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
         ex_dividend_date: date(cal, "exDividendDate"),
         dividend_date: date(cal, "dividendDate"),
         source: SOURCE.to_string(),
+        scope: None,
     })
 }
 

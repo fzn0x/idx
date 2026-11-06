@@ -5,7 +5,7 @@ use clap::Subcommand;
 use crate::analysis::screen::{parse_filters, Key};
 use crate::error::IdxError;
 use crate::error::Result;
-use crate::model::{Interval, Period, StatementPeriod, Symbol};
+use crate::model::{EarningsFilter, Interval, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSTRUMENTS,
@@ -104,13 +104,25 @@ pub enum StocksCmd {
         statement: Vec<Statement>,
     },
 
-    /// Reported quarterly EPS vs estimates, yearly revenue and earnings, next earnings date.
+    /// Reported quarterly EPS vs estimates, yearly and quarterly revenue and earnings, analyst consensus, next earnings date.
     #[command(
-        after_help = "Examples:\n  idx stocks earnings BBCA\n  idx -o json stocks earnings BBRI | jq .data.next"
+        after_help = "Examples:\n  idx stocks earnings BBCA\n  idx stocks earnings TLKM --annual --estimates\n  idx stocks earnings BBRI --quarterly --reported\n  idx -o json stocks earnings BBRI | jq .data.next\n\nWith neither --annual nor --quarterly every period is shown; with neither --reported nor\n--estimates both are (--history and --forecast are aliases). The filters apply to JSON and\nCSV too, and data.scope records what was kept."
     )]
     Earnings {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
+        /// Only fiscal-year rows: yearly revenue and earnings, this and next year's consensus.
+        #[arg(long)]
+        annual: bool,
+        /// Only quarterly rows: reported quarters, quarterly revenue and earnings, the quarter consensus and the next report date.
+        #[arg(long)]
+        quarterly: bool,
+        /// Only reported figures (no consensus).
+        #[arg(long, visible_alias = "history")]
+        reported: bool,
+        /// Only analyst consensus: the estimates and the next earnings date.
+        #[arg(long, visible_alias = "forecast")]
+        estimates: bool,
     },
 
     /// Cash dividend and split history with yearly totals, trailing-twelve-month yield and the payout streak.
@@ -293,7 +305,21 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             period,
             statement,
         } => financials(ctx, &symbol, period, &statement).await,
-        StocksCmd::Earnings { symbol } => earnings(ctx, &symbol).await,
+        StocksCmd::Earnings {
+            symbol,
+            annual,
+            quarterly,
+            reported,
+            estimates,
+        } => {
+            let filter = EarningsFilter {
+                annual,
+                quarterly,
+                reported,
+                estimates,
+            };
+            earnings(ctx, &symbol, filter).await
+        }
         StocksCmd::Dividends { symbol, limit } => dividends(ctx, &symbol, limit).await,
         StocksCmd::Brief { symbol } => brief(ctx, &symbol).await,
         StocksCmd::Returns {
@@ -437,9 +463,9 @@ async fn financials(
     })
 }
 
-async fn earnings(ctx: &Context, raw: &str) -> Result<()> {
+async fn earnings(ctx: &Context, raw: &str, filter: EarningsFilter) -> Result<()> {
     let symbol = Symbol::parse(raw)?;
-    let result = ctx.provider.earnings(&symbol).await?;
+    let result = service::earnings(ctx.provider.as_ref(), &symbol, filter).await?;
     emit(ctx, SCHEMA_EARNINGS, result, |d| {
         reports::earnings(d, ctx.color)
     })

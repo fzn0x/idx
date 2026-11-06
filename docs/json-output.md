@@ -415,7 +415,7 @@ Symbols that failed are listed in `warnings`.
 `quarterly[]` (`period`, `revenue`, `earnings`, `profit_margin_pct`), `next`
 (`date`, `date_is_estimate`, `eps_avg`/`eps_low`/`eps_high`, `eps_growth_pct`,
 `revenue_avg`/`revenue_low`/`revenue_high`, `analysts`), `ex_dividend_date`,
-`dividend_date`, `source`.
+`dividend_date`, `source`, `scope`.
 
 - `estimates[]` is the analyst consensus for this and next quarter and fiscal
   year, in source order: `period` (`0q`, `+1q`, `0y`, `+1y`), `period_type`
@@ -428,6 +428,14 @@ Symbols that failed are listed in `warnings`.
   (a quarter's `revenue`, `earnings` and `profit_margin_pct`, a consensus
   amount), never as `0`. `profit_margin_pct` is set only when both revenue and
   earnings are.
+- `scope` is `null` unless rows were filtered out (`stocks earnings --annual
+  --quarterly --reported --estimates`, MCP `period` and `kind`). Then it is
+  `{ "annual", "quarterly", "reported", "estimates" }`, each `true` when those
+  rows were kept, and an empty list or a `null` `next` comes from the filter,
+  not the source. Giving neither flag of a pair keeps both. `quarters[]` and
+  `quarterly[]` are reported quarterly rows, `yearly[]` reported annual rows,
+  `estimates[]` follow their `period_type`, and `next` counts as a quarterly
+  estimate. The filter applies to JSON and CSV alike.
 
 ## `idx.technical.v1` (`stocks technical`)
 

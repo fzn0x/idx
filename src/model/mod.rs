@@ -43,9 +43,9 @@ pub use flow::{
 };
 pub use fundamentals::{
     Analyst, BalanceSheet, CashFlow, Director, Dividend, Earnings, EarningsEstimate,
-    EarningsQuarter, FinancialPeriod, Financials, Fundamentals, Growth, Health, IncomeStatement,
-    NextEarnings, PerShare, PeriodKind, Profile, Profitability, RevenueEarnings, StatementPeriod,
-    Valuation, Verdict, VerdictLabel,
+    EarningsFilter, EarningsQuarter, EarningsScope, FinancialPeriod, Financials, Fundamentals,
+    Growth, Health, IncomeStatement, NextEarnings, PerShare, PeriodKind, Profile, Profitability,
+    RevenueEarnings, StatementPeriod, Valuation, Verdict, VerdictLabel,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
 pub use market::{MarketOverview, MarketRow};

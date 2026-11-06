@@ -862,6 +862,108 @@ fn msn_provider_is_selectable() {
 }
 
 #[test]
+fn earnings_filters_apply_to_every_format() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query2.finance.yahoo.com/v10/finance/quoteSummary/TLKM.JK?modules=earnings,earningsHistory,earningsTrend,calendarEvents,price",
+        "yahoo/quote_summary_earnings_tlkm.json",
+    );
+    let run = |args: &[&str]| -> std::process::Output {
+        let out = idx(&sb.cache, &sb.config).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    let json = |extra: &[&str]| -> serde_json::Value {
+        let mut args = vec!["-o", "json", "stocks", "earnings", "TLKM"];
+        args.extend_from_slice(extra);
+        serde_json::from_slice(&run(&args).stdout).unwrap()
+    };
+    let periods = |v: &serde_json::Value| -> Vec<String> {
+        v["data"]["estimates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["period"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Unfiltered: every row, the four consensus rows, scope null.
+    let v = json(&[]);
+    assert_eq!(periods(&v), ["0q", "+1q", "0y", "+1y"]);
+    assert_eq!(v["data"]["quarters"].as_array().unwrap().len(), 4);
+    assert!(v["data"]["scope"].is_null());
+    assert!(v["data"]["next"].is_object());
+
+    // --annual: the yearly rows and the 0y/+1y consensus, next null, scope set.
+    let v = json(&["--annual"]);
+    let d = &v["data"];
+    assert_eq!(d["quarters"], serde_json::json!([]));
+    assert_eq!(d["quarterly"], serde_json::json!([]));
+    assert_eq!(d["yearly"].as_array().unwrap().len(), 4);
+    assert_eq!(periods(&v), ["0y", "+1y"]);
+    assert!(d["next"].is_null());
+    assert_eq!(
+        d["scope"],
+        serde_json::json!({"annual": true, "quarterly": false, "reported": true, "estimates": true})
+    );
+    assert!(d["ex_dividend_date"].is_string());
+
+    // The reference CLI's names are visible aliases.
+    let v = json(&["--forecast"]);
+    assert_eq!(v["data"]["quarters"], serde_json::json!([]));
+    assert_eq!(periods(&v).len(), 4);
+    assert!(v["data"]["next"].is_object());
+    let v = json(&["--history", "--quarterly"]);
+    assert_eq!(v["data"]["estimates"], serde_json::json!([]));
+    assert_eq!(v["data"]["yearly"], serde_json::json!([]));
+    assert_eq!(v["data"]["quarterly"].as_array().unwrap().len(), 4);
+    // Both flags of a pair: no filter.
+    let v = json(&["--annual", "--quarterly", "--reported", "--estimates"]);
+    assert!(v["data"]["scope"].is_null());
+
+    // Table: the quarter consensus only.
+    let out = run(&["stocks", "earnings", "TLKM", "--quarterly", "--estimates"]);
+    let t = String::from_utf8(out.stdout).unwrap();
+    assert!(t.contains("showing quarterly estimates"), "{t}");
+    assert!(t.contains("this quarter (0q)"), "{t}");
+    assert!(t.contains("next quarter (+1q)"), "{t}");
+    assert!(!t.contains("this year"), "{t}");
+    assert!(!t.contains("2022"), "{t}");
+    assert!(t.contains("Next earnings"), "{t}");
+
+    // CSV: the filtered payload's main list is the consensus.
+    let out = run(&[
+        "-o",
+        "csv",
+        "stocks",
+        "earnings",
+        "TLKM",
+        "--annual",
+        "--estimates",
+    ]);
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let mut lines = csv.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap()
+            .starts_with("period,period_type,end_date"),
+        "{csv}"
+    );
+    assert_eq!(lines.count(), 2, "{csv}");
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "earnings", "TLKM", "--weekly"])
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn financials_show_several_statements() {
     let sb = sandbox();
     seed(

@@ -72,6 +72,12 @@ expect "$TMP/fin.json" '"net_income":' "financials have net income"
 
 "$IDX" -o json stocks earnings BBCA >"$TMP/e.json" || fail "earnings json"
 expect "$TMP/e.json" '"eps_actual":' "earnings have reported EPS"
+expect "$TMP/e.json" '"period": "+1y"' "earnings have next year's consensus"
+"$IDX" -o json stocks earnings BBCA --annual --estimates >"$TMP/ea.json" || fail "earnings filtered"
+expect "$TMP/ea.json" '"scope": {' "filtered earnings record their scope"
+expect "$TMP/ea.json" '"period_type": "annual"' "filtered earnings keep the annual consensus"
+"$IDX" stocks financials BBCA -s income,cash >"$TMP/fs.txt" || fail "financials two statements"
+expect "$TMP/fs.txt" "CASH FLOW" "financials table has the cash flow"
 
 "$IDX" stocks technical BBRI >"$TMP/t.txt" || fail "technical table"
 expect "$TMP/t.txt" "RSI (14)" "technical table has RSI"

@@ -16,7 +16,7 @@ const COMMANDS = [
   { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 5m 15m 30m 1h 1d 1wk 1mo" },
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
   { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm] [--statement income,balance,cash]", help: "income statement, balance sheet, cash flow; --statement shows only those" },
-  { name: "earnings", usage: "earnings <SYMBOL>", help: "quarterly EPS vs estimates, next date" },
+  { name: "earnings", usage: "earnings <SYMBOL> [--annual|--quarterly] [--reported|--estimates]", help: "quarterly EPS vs estimates, revenue and earnings, analyst consensus, next date; the flags keep only those rows (--history and --forecast work too)" },
   { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
   { name: "compare", usage: "compare <SYMBOLS>", help: "side-by-side fundamentals" },
@@ -72,6 +72,12 @@ function kv(pairs) {
 }
 const pct = (v) => fmt.pctPlain(v);
 const ESTIMATE_NAMES = { "0q": "this quarter", "+1q": "next quarter", "0y": "this year", "+1y": "next year" };
+// "showing annual estimates" and the like (scope_label in src/output/table_reports.rs).
+function scopeLabel(s) {
+  const period = s.annual && !s.quarterly ? "annual " : s.quarterly && !s.annual ? "quarterly " : "";
+  const kind = s.reported && !s.estimates ? "reported figures" : s.estimates && !s.reported ? "estimates" : "rows";
+  return `showing ${period}${kind}`;
+}
 const x = (v) => (v == null ? "—" : `${fmt.num(v, 2)}x`);
 
 const newsTable = (items) => wrapScroll(table([
@@ -179,7 +185,7 @@ const R = {
   },
   earnings(e) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}${e.scope ? ` · ${scopeLabel(e.scope)}` : ""}` }));
     if (e.quarters.length) frag.append(wrapScroll(table([{ h: "Quarter", k: "period", l: true, cls: "sym" }, { h: "Period end", f: (q) => fmt.date(q.end_date), l: true }, { h: "Reported", f: (q) => fmt.date(q.reported_date), l: true }, { h: "EPS actual", f: (q) => fmt.price(q.eps_actual) }, { h: "EPS est.", f: (q) => fmt.price(q.eps_estimate) }, { h: "Surprise", f: (q) => fmt.pct(q.surprise_pct), cls: (q) => `num ${signClass(q.surprise_pct)}` }], e.quarters)));
     const re = [...e.yearly, ...e.quarterly];
     if (re.length) frag.append(wrapScroll(table([{ h: "Period", k: "period", l: true, cls: "sym" }, { h: "Revenue", f: (r) => fmt.compact(r.revenue) }, { h: "Earnings", f: (r) => fmt.compact(r.earnings) }, { h: "Margin", f: (r) => pct(r.profit_margin_pct) }], re)));
@@ -581,7 +587,17 @@ async function run(line) {
       render = (d) => R.financials(d, only);
       break;
     }
-    case "earnings": need(pos, 1, cmd.usage); env = await api(`earnings?symbol=${encodeURIComponent(sym())}`); render = R.earnings; break;
+    case "earnings": {
+      // Boolean flags: a word the flag parser took as a flag's value is the symbol.
+      for (const k of ["annual", "quarterly", "reported", "estimates", "history", "forecast"]) if (typeof opt[k] === "string") { pos.push(opt[k]); opt[k] = true; }
+      need(pos, 1, cmd.usage);
+      const reported = opt.reported || opt.history, estimates = opt.estimates || opt.forecast;
+      const period = opt.annual && !opt.quarterly ? "annual" : opt.quarterly && !opt.annual ? "quarterly" : null;
+      const kind = reported && !estimates ? "reported" : estimates && !reported ? "estimates" : null;
+      env = await api(`earnings?${qs({ symbol: sym(), period, kind })}`);
+      render = R.earnings;
+      break;
+    }
     case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
     case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;

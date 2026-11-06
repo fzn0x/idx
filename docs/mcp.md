@@ -311,7 +311,7 @@ local agents can share one process and one cache this way.
 | `idx_history` | `symbol`, `period?`, `interval?`, `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
 | `idx_profile` | `symbol` | `idx.profile.v1` |
 | `idx_financials` | `symbol`, `period?` (`annual` \| `quarterly` \| `ttm`) | `idx.financials.v1` |
-| `idx_earnings` | `symbol` | `idx.earnings.v1` |
+| `idx_earnings` | `symbol`, `period?` (`annual` \| `quarterly`), `kind?` (`reported` \| `estimates`) | `idx.earnings.v1` |
 | `idx_dividends` | `symbol` | `idx.dividends.v1`: payments, splits, yearly totals, TTM total/yield, streak |
 | `idx_returns` | `symbols`, `benchmark?` (`^JKSE` default, `none`) | `idx.returns.v1`: windows, CAGR, volatility, drawdowns, 52-week, excess over the benchmark |
 | `idx_fundamental` | `symbol` | `idx.fundamentals.v1` (verdict included) |
