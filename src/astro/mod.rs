@@ -7,6 +7,7 @@
 //! `web/src/astro.js` is a line-for-line port: same tables, same steps, same
 //! rounding, so the CLI, the MCP server and the web terminal agree.
 
+pub mod calendar;
 pub mod ephem;
 pub mod events;
 pub mod moon;
