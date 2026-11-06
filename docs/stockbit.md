@@ -301,7 +301,9 @@ read-only paths above and refuses any other URL before a token is read. A 401,
 or a 403 with a JSON body, means Stockbit refused the access token: idx
 refreshes once and retries once. A 403 with an HTML body is Stockbit's CDN
 (CloudFront) refusing this client or network; a refresh cannot change that,
-so idx reports it and does not retry.
+so idx reports it and does not retry. The same goes for `POST /login/refresh`:
+only a 401, or a 403 with a JSON body, counts as a refused refresh token there;
+an HTML 403 is reported as the block, and the token stays usable once it lifts.
 
 Indices use Stockbit's own code (`IHSG`, `LQ45`), mapped from idx's caret form
 (`^JKSE`, `^JKLQ45`). The token is never written to a log, an error message or a

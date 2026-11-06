@@ -83,8 +83,8 @@ impl Session {
 /// Why a refresh did not produce a new pair.
 #[derive(Debug)]
 pub enum RefreshError {
-    /// Stockbit answered 401/403: the refresh token is expired, revoked or
-    /// already spent. Retrying it cannot help.
+    /// Stockbit answered 401, or 403 with a JSON body: the refresh token is
+    /// expired, revoked or already spent. Retrying it cannot help.
     Rejected,
     /// Anything else (network, offline, an unexpected answer); a later try may work.
     Failed(IdxError),
@@ -462,9 +462,17 @@ impl SessionStore {
             .post_uncached(REFRESH_URL, &headers, "{}")
             .await
             .map_err(RefreshError::Failed)?;
-        if resp.status == 401 || resp.status == 403 {
+        if super::rejected(resp.status, &resp.body) {
             *self.refused.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
             return Err(RefreshError::Rejected);
+        }
+        if resp.status == 403 {
+            // An HTML 403 is the CDN refusing this client, not a verdict on
+            // the token: report the block and keep the token usable.
+            return Err(RefreshError::Failed(IdxError::provider(
+                super::NAME,
+                super::CDN_BLOCKED,
+            )));
         }
         if !(200..300).contains(&resp.status) {
             return Err(RefreshError::Failed(IdxError::provider(
@@ -714,6 +722,34 @@ mod tests {
         let e = IdxError::from(RefreshError::Rejected);
         assert_eq!(e.exit_code(), 3);
         assert!(e.to_string().contains("idx stockbit login"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn an_html_403_on_refresh_is_a_block_not_a_refused_token() {
+        const BLOCKED: &str = include_str!("../../../tests/fixtures/stockbit/blocked_403.html");
+        let dir = tempfile::tempdir().unwrap();
+        let be = std::sync::Arc::new(crate::http::FixtureBackend::new().route(
+            "login/refresh",
+            403,
+            BLOCKED,
+        ));
+        let fetcher = fetcher_with(be.clone(), dir.path());
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        let s = Session {
+            access: String::new(),
+            refresh: "eyJ0.eyJleHAiOjF9.sig".into(),
+        };
+        // Not remembered as refused: each try is sent, and each says CDN.
+        for n in 1..=2 {
+            match store.refresh_checked(&fetcher, &s).await {
+                Err(RefreshError::Failed(e)) => {
+                    assert!(e.to_string().contains("HTTP 403 from its CDN"), "{e}");
+                    assert!(super::super::is_fatal(&e));
+                }
+                other => panic!("expected a CDN failure, got {other:?}"),
+            }
+            assert_eq!(be.calls_matching("login/refresh"), n);
+        }
     }
 
     #[tokio::test]

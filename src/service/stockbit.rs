@@ -451,6 +451,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cdn_block_on_refresh_stops_and_keeps_the_token() {
+        let blocked = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/stockbit/blocked_403.html",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let be = std::sync::Arc::new(
+            FixtureBackend::new()
+                .route("login/refresh", 403, &blocked)
+                .route("corpaction/", 200, &fx("corpaction_dividend")),
+        );
+        let fetcher = std::sync::Arc::new(crate::http::Fetcher::new(
+            be.clone(),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        // Only a refresh token: every request needs a refresh first.
+        let store = std::sync::Arc::new(crate::providers::stockbit::SessionStore::new(
+            dir.path().join("session.json"),
+            None,
+            Some("eyJ0.eyJleHAiOjF9.dummy".into()),
+        ));
+        let sb = Stockbit::new(fetcher, Default::default(), store).with_pace(Duration::ZERO);
+        for n in 1..=2 {
+            let e = stockbit_calendar(&sb, &StockbitCalendarQuery::default(), d("2026-11-03"))
+                .await
+                .unwrap_err();
+            assert!(e.to_string().contains("HTTP 403 from its CDN"), "{e}");
+            assert!(!e.to_string().contains("rejected"), "{e}");
+            // One refresh per command, no kind after it; the token is not
+            // taken for refused, so the next command tries again.
+            assert_eq!(be.calls_matching("login/refresh"), n);
+            assert_eq!(be.calls_matching("corpaction/"), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn without_a_session_nothing_is_sent() {
         let dir = tempfile::tempdir().unwrap();
         let be = std::sync::Arc::new(FixtureBackend::new());
