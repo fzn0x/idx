@@ -34,7 +34,7 @@ const COMMANDS = [
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
   { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
-  { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
+  { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | search <NAME> | cross-holders [--type T] [--origin foreign|local] [--min-issuers N] | concentration [SYMBOLS] [--by hhi|top1|top3] [--asc] | graph <ROOT> [--depth N] [--min-pct P] [--holder] | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, holder search, holders across issuers, concentration (HHI), the ownership network, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
   { name: "clear", usage: "clear", help: "clear the sheet" },
@@ -546,6 +546,60 @@ const R = {
     frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, ...(flagged ? [CONTROL_COL] : []), { h: "Kind", f: changeKind, l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
     return frag;
   },
+  ownSearch(r) {
+    const frag = document.createDocumentFragment();
+    const shown = r.matches.length < r.total_matches ? ` · showing ${r.matches.length}` : "";
+    frag.append(el("p", { class: "prose", text: `"${r.query}" · ${r.total_matches} holder${r.total_matches === 1 ? " matches" : "s match"}${shown} · issuers counted as of ${r.as_of}` }));
+    if (!r.matches.length) return frag;
+    frag.append(wrapScroll(table([
+      { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Match", k: "matched", l: true }, { h: "Issuers", f: (m) => String(m.issuers) },
+      { h: "Total %", f: (m) => (m.issuers ? pct(m.total_pct) : null) }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true },
+      { h: "Spellings", f: (m) => m.spellings.join(" | "), l: true }, { h: "Key", k: "entity_key", l: true },
+    ], r.matches)));
+    frag.append(el("p", { class: "warn", text: `Total %: stakes in different issuers added up (a breadth measure). Next: ownership entity ${r.matches[0].entity_key}` }));
+    return frag;
+  },
+  crossHolders(r) {
+    const frag = document.createDocumentFragment();
+    const filters = [r.investor_type ? `type ~ ${r.investor_type}` : null, r.origin ? (r.origin === "foreign" ? "foreign (A)" : "local (L)") : null].filter(Boolean);
+    const shown = r.holders.length < r.total_matches ? ` · showing ${r.holders.length} (--limit 0 for all)` : "";
+    frag.append(el("p", { class: "prose", text: `Holders above 1 % in at least ${r.min_issuers} issuer${r.min_issuers === 1 ? "" : "s"} as of ${r.as_of}${filters.map((f) => ` · ${f}`).join("")} · ${r.total_matches} holder${r.total_matches === 1 ? "" : "s"}${shown}` }));
+    if (!r.holders.length) return frag;
+    const largest = (h) => h.positions.slice(0, 4).map((p) => `${p.symbol} ${pct(p.pct)}`).join(", ") + (h.positions.length > 4 ? ", …" : "");
+    frag.append(wrapScroll(table([
+      { h: "#", f: (h) => String(h.n) }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true },
+      { h: "Issuers", f: (h) => String(h.issuers) }, { h: "Total %", f: (h) => pct(h.total_pct) }, { h: "Largest positions", f: largest, l: true },
+    ], r.holders.map((h, i) => ({ ...h, n: i + 1 })))));
+    frag.append(el("p", { class: "warn", text: "Total % adds stakes in different companies: a breadth measure, not a share of anything. Custodian and nominee accounts (securities companies, private banks) hold for their clients. A holder printed two ways counts twice." }));
+    return frag;
+  },
+  concentration(r) {
+    const frag = document.createDocumentFragment();
+    const by = { hhi: "HHI", top1: "largest stake", top3: "top-3 stakes" }[r.sort] || r.sort;
+    const shown = r.rows.length < r.total_matches ? ` · showing ${r.rows.length} (--limit 0 for all)` : "";
+    frag.append(el("p", { class: "prose", text: `Ownership concentration as of ${r.as_of} · by ${by}, ${r.ascending ? "least" : "most"} first · ${r.total_matches} issuer${r.total_matches === 1 ? "" : "s"}${shown}` }));
+    frag.append(wrapScroll(table([
+      { h: "#", f: (c) => String(c.n) }, { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "HHI", f: (c) => fmt.num(c.hhi, 2) },
+      { h: "Top 1 %", f: (c) => pct(c.top1_pct) }, { h: "Top 3 %", f: (c) => pct(c.top3_pct) }, { h: "Listed %", f: (c) => pct(c.listed_pct) }, { h: "Undisclosed %", f: (c) => pct(c.undisclosed_pct) },
+      ...(r.controller_reported ? [{ h: "Control %", f: (c) => pct(c.controller_pct) }] : []),
+      { h: "Holders", f: (c) => String(c.holders_listed) }, { h: "Largest holder", k: "top_holder", l: true },
+    ], r.rows.map((c, i) => ({ ...c, n: i + 1 })))));
+    frag.append(el("p", { class: "warn", text: `HHI is the sum of the squared stakes of the holders listed above 1 % (0 to 10,000). Holders at or below 1 % are not published, so HHI covers the listed holders only (a lower bound) and Undisclosed is what the register does not show.${r.controller_reported ? " Control %: stakes flagged CONTROLLER or AFFILIATE OF THE CONTROLLER." : ""}` }));
+    return frag;
+  },
+  graph(g) {
+    const frag = document.createDocumentFragment();
+    const label = g.issuers.find((i) => i.id === g.root)?.symbol || g.holders.find((h) => h.id === g.root)?.holder || g.root;
+    const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+    frag.append(el("p", { class: "prose", text: `Ownership network around ${label} as of ${g.as_of} · ${n(g.depth, "hop", "hops")} · ${n(g.holders.length, "holder", "holders")} · ${n(g.issuers.length, "issuer", "issuers")} · ${n(g.links.length, "link", "links")}${g.min_pct > 0 ? ` · stakes of ${g.min_pct}% or more` : ""}${g.truncated ? " · truncated" : ""}` }));
+    const holders = new Map(g.holders.map((h) => [h.id, h]));
+    frag.append(wrapScroll(table([
+      { h: "Hops", f: (l) => String(l.hops) }, { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true },
+      { h: "Type", f: (l) => holders.get(l.from)?.investor_type ?? null, l: true }, { h: "L/A", f: (l) => holders.get(l.from)?.local_foreign ?? null, l: true }, { h: "%", f: (l) => pct(l.pct) },
+    ], g.links)));
+    frag.append(el("p", { class: "warn", text: "Each row is a holding above 1 %. The CLI draws it too: idx ownership graph … --dot | dot -Tsvg" }));
+    return frag;
+  },
   releases(list) {
     return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Positions", f: (r) => (r.positions == null ? "" : fmt.int(r.positions)) }, { h: "Source", k: "source", l: true }], list));
   },
@@ -626,6 +680,19 @@ async function run(line) {
       else if (sub === "changes") { need(pos, 3, cmd.usage); env = await api(`ownership/changes?${qs({ from: pos[1], to: pos[2], symbol: pos[3], min_change: opt["min-change"], limit: opt.limit, offset: opt.offset })}`); render = R.changes; }
       else if (sub === "foreign") { env = await api(`ownership/foreign?${qs({ symbol: pos[1], from: opt.from, to: opt.to, limit: opt.limit })}`); render = R.foreign; }
       else if (sub === "releases") { env = await api("ownership/releases"); render = R.releases; }
+      else if (sub === "search") { need(pos, 2, cmd.usage); env = await api(`ownership/search?${qs({ q: pos.slice(1).join(" "), limit: opt.limit, as_of: opt["as-of"] })}`); render = R.ownSearch; }
+      else if (sub === "cross-holders") { env = await api(`ownership/cross-holders?${qs({ min_issuers: opt["min-issuers"] ?? opt["min-tickers"], type: opt.type, origin: opt.origin, limit: opt.limit, as_of: opt["as-of"] })}`); render = R.crossHolders; }
+      else if (sub === "concentration") {
+        // `--asc BBCA` hands the symbol to the flag; take it back.
+        const syms = [...pos.slice(1), ...[opt.asc, opt.ascending].filter((v) => typeof v === "string")];
+        env = await api(`ownership/concentration?${qs({ symbols: syms.join(","), by: opt.by, asc: opt.asc || opt.ascending ? "1" : null, limit: opt.limit, as_of: opt["as-of"] })}`);
+        render = R.concentration;
+      } else if (sub === "graph") {
+        const root = [...pos.slice(1), ...(typeof opt.holder === "string" ? [opt.holder] : [])];
+        need(root, 1, cmd.usage);
+        env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
+        render = R.graph;
+      }
       else throw Object.assign(new Error(`usage: ${cmd.usage}`), { code: "usage" });
       break;
     }

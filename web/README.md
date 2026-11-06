@@ -40,7 +40,8 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `bandar/screen`, `bandar/status`, `bandar/broker`, `actions`, `holidays`,
   `instruments`, `members`, `ownership/ticker`,
   `ownership/entity`, `ownership/changes`, `ownership/foreign`,
-  `ownership/releases`, `universe`.
+  `ownership/releases`, `ownership/search`, `ownership/cross-holders`,
+  `ownership/concentration`, `ownership/graph`, `universe`.
 - `public/tools.js` the 33 MCP tools with their CLI and web commands: the
   terminal's `tools` command and help buttons and the landing page's Daftar
   Perintah table use it; `test/tools.test.mjs` checks it against docs/mcp.md.
@@ -68,6 +69,10 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `/api/refresh?token=…&what=ownership`. Each holding is one holder's
   register lines summed by idx (`accounts`, plus `controller_or_affiliate`
   from the 30 Oct 2026 register; `migrations/0004_ownership_accounts.sql`).
+  `ownership/search`, `cross-holders`, `concentration` and `graph` run
+  `src/ownership.js` (the port of `src/ownership/analytics.rs`) over one
+  month of `own_holdings`, one D1 read of the release each; search covers
+  that month's spellings only, and there are no local `resolve` rules.
   A month reloads when its IDX file changes or, for an index written by idx
   0.8.2 or later, when its parts change (`parts_key`): after the mirror is
   rebuilt every kept month reloads once, newest first, about 21,600 writes
