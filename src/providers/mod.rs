@@ -84,7 +84,7 @@ impl<T> Sourced<T> {
 pub struct Ttls {
     pub quote: Duration,
     pub history: Duration,
-    /// Profile, ratios, earnings.
+    /// Profile, ratios, earnings, MSN insights.
     pub fundamentals: Duration,
     /// Financial statements.
     pub financials: Duration,
