@@ -53,7 +53,7 @@ export default {
       return new Response("Not found", { status: 404 });
     }
     if (url.pathname === "/healthz") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      return new Response("ok", { headers: { "content-type": "text/plain", ...SECURITY_HEADERS } });
     }
     if (url.pathname.startsWith("/api/")) {
       if (request.method !== "GET") return json({ error: { code: "usage", message: "GET only" }, exit_code: 2 }, 405);

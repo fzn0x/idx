@@ -49,7 +49,7 @@ test("Worker responses carry the same security headers", async () => {
     PUBLIC_HOST: "ihsg.midoriresearch.com",
     ASSETS: { fetch: async () => new Response("<!doctype html>", { status: 200, headers: { "content-type": "text/html" } }) },
   };
-  for (const path of ["/healthz-missing-page", "/api/nope"]) {
+  for (const path of ["/healthz", "/healthz-missing-page", "/api/nope"]) {
     const r = await worker.fetch(new Request(`https://ihsg.midoriresearch.com${path}`), env, {});
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) assert.equal(r.headers.get(k), v, `${path} ${k}`);
   }
