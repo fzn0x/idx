@@ -293,7 +293,7 @@ browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `returns BBCA BBRI`,
 `screen pe<10,div>5,mcap>5T --sort div`, `news ASII`, `ownership ticker BBCA`,
 `ownership foreign`, `bandar BBCA --daily`, `bandar screen --preset
 big-accumulation`, `bandar broker YP`, `actions BBCA`, `holidays --upcoming`,
-`list --search bank`, `members`, and `tools` (all 33 MCP tools as buttons). The idx.co.id
+`list --search bank`, `members`, and `tools` (every MCP tool as a button). The idx.co.id
 commands (foreign flow, top brokers, the calendar, indices) are CLI and MCP
 only, because idx.co.id refuses requests from Cloudflare Workers. `quote` with one symbol also draws a price chart (1D, 5D,
 1M, 6M, YTD, 1Y, 5Y) with volume, the previous close and a crosshair readout.
