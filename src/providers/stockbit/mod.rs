@@ -53,6 +53,7 @@ pub mod corpaction;
 pub mod login;
 pub mod movement;
 mod parse;
+pub mod signin;
 
 pub use auth::{Session, SessionStore, Status};
 

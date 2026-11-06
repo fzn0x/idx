@@ -473,6 +473,60 @@ fn stockbit_corporate_actions_and_calendar() {
 }
 
 #[test]
+fn stockbit_login_takes_a_paste_and_checks_it_first() {
+    let sb = sandbox();
+    let session = sb.config.parent().unwrap().join("stockbit-session.json");
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains(
+            "never asks for your Stockbit password",
+        ));
+    // stdin is a pipe here, so login reads the paste from it.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login"])
+        .write_stdin("")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("nothing on stdin"));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--manual"])
+        .write_stdin("my password is hunter2\n")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not a Stockbit session"))
+        .stderr(predicate::str::contains("hunter2").not());
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--manual", "--browser", "/x/chrome"])
+        .write_stdin("")
+        .assert()
+        .code(2);
+    // A real-looking cookie, but the harness is offline: the check cannot be
+    // made, so nothing is stored (exit 5) and the token is never printed.
+    let cookie = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/stockbit/credential_storage_cookie_constructed.txt"),
+    )
+    .unwrap();
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login"])
+        .write_stdin(cookie)
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("eyJ").not());
+    assert!(!session.exists(), "nothing stored");
+    // Offline, the browser sign-in stops before opening anything.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--browser", "/no/such/chrome"])
+        .write_stdin("")
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("needs the network"));
+}
+
+#[test]
 fn stockbit_holder_movements() {
     let sb = sandbox();
     idx(&sb.cache, &sb.config)

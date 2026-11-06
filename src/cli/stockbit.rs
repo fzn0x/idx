@@ -18,6 +18,7 @@ use crate::model::{CorporateEventKind, MovementFilter, MovementSource, Symbol};
 use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS, SCHEMA_STOCKBIT_MOVEMENTS};
 use crate::output::{self, table, table_corporate, table_movements};
 use crate::providers::stockbit::movement::MovementQuery;
+use crate::providers::stockbit::signin::Accepted;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{StockbitOptions, Ttls};
 use crate::service;
@@ -27,23 +28,26 @@ use super::{emit, Context};
 
 #[derive(Debug, Subcommand)]
 pub enum StockbitCmd {
-    /// Sign in to Stockbit in your browser and store the session (auto-captured).
+    /// Sign in to Stockbit and store the session: in a browser idx opens, or by pasting the session cookie.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                      # opens Chrome/Edge; sign in, idx captures the session\n  idx stockbit login --browser /path/to/chrome\n  idx stockbit login --manual             # paste the credentialStorage cookie instead\n\nThe token is your own Stockbit session. idx stores it locally and refreshes it\nfor you; it is never sent anywhere but Stockbit. Because Stockbit rotates the\nrefresh token on every refresh, do not share one session between idx and another\ntool (they would log each other out)."
+        after_help = "Examples:\n  idx stockbit login                       # opens Chrome/Edge/Brave on Stockbit's sign-in page\n  idx stockbit login --browser /path/to/chrome\n  pbpaste | ssh you@host idx stockbit login   # or pipe the credentialStorage cookie\n  idx stockbit login --manual              # paste it into this terminal\n\nidx never asks for your Stockbit password: you sign in on stockbit.com and idx takes only the\nsession (the credentialStorage cookie), checks it with one request and stores it (0600); a\nsession Stockbit refuses leaves the previous one in place. When the stored session still works,\nlogin says so and stops (--force signs in anyway). Stockbit rotates the refresh token on every\nrefresh, so never share one session with another tool or browser (they would log each other out)."
     )]
     Login {
-        /// Paste the token yourself instead of driving a browser (any browser).
-        #[arg(long)]
+        /// Paste the session cookie into this terminal (also what happens when stdin is a pipe).
+        #[arg(long, conflicts_with = "browser")]
         manual: bool,
         /// Browser executable (default: the first Chrome/Edge/Brave found; env IDX_BROWSER).
         #[arg(long, value_name = "PATH")]
         browser: Option<PathBuf>,
-        /// Persistent browser profile directory, so a second login need not re-type.
+        /// Browser profile only idx uses (keeps Stockbit's device cookies, not the session).
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
-        /// Seconds to wait for the login before giving up.
+        /// Seconds to wait for the sign-in.
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        /// Sign in again even when the stored session still works.
+        #[arg(long)]
+        force: bool,
     },
     /// Show whether a session is stored and when its tokens expire (no token values).
     Status,
@@ -167,7 +171,8 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
             browser,
             profile,
             timeout,
-        } => login_cmd(ctx, manual, browser, profile, timeout).await,
+            force,
+        } => login_cmd(ctx, manual, browser, profile, timeout, force).await,
         StockbitCmd::Status => status_cmd(ctx),
         StockbitCmd::Logout => {
             let removed = store(ctx).clear()?;
@@ -283,9 +288,89 @@ fn status_cmd(ctx: &Context) -> Result<()> {
             dur(status.refresh.expires_in_secs)
         ));
     } else {
-        out.push_str("logged in    : no — run `idx stockbit login`\n");
+        out.push_str("logged in    : no; run `idx stockbit login`\n");
     }
     output::print_stdout(&out)
+}
+
+/// How `idx stockbit login` takes the session in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Method {
+    /// From stdin: `--manual`, or stdin is not a terminal (a pipe).
+    Paste,
+    /// A browser idx launches on this machine (`None`: the first one found).
+    Browser(Option<PathBuf>),
+}
+
+/// The sign-in method for the flags given; pure, so it is tested.
+pub fn choose_method(manual: bool, browser: Option<PathBuf>, stdin_is_tty: bool) -> Method {
+    if manual || (!stdin_is_tty && browser.is_none()) {
+        Method::Paste
+    } else {
+        Method::Browser(browser)
+    }
+}
+
+const PASTE_HELP: &str = "Paste stockbit.com's credentialStorage cookie and press Enter.
+  1. Sign in at https://stockbit.com (a private window keeps your everyday browser's session apart).
+  2. DevTools (F12) > Application > Cookies > https://stockbit.com
+  3. Copy the value of credentialStorage.
+idx checks it with Stockbit before storing it, and never asks for your password.";
+
+/// The session the user pastes: one line from a terminal, else all of stdin.
+fn read_paste(stdin_is_tty: bool) -> Result<String> {
+    use std::io::Read;
+    let mut raw = String::new();
+    if stdin_is_tty {
+        output::print_stderr(PASTE_HELP);
+        std::io::stdin().read_line(&mut raw)
+    } else {
+        std::io::stdin().read_to_string(&mut raw)
+    }
+    .map_err(|e| IdxError::Usage(format!("could not read the session from stdin: {e}")))?;
+    if raw.trim().is_empty() {
+        return Err(IdxError::Usage(
+            "nothing on stdin: run `idx stockbit login` in a terminal, or pipe the credentialStorage cookie (pbpaste | ssh host idx stockbit login)".into(),
+        ));
+    }
+    Ok(raw)
+}
+
+/// What to print once a session is taken.
+fn report(ctx: &Context, acc: &Accepted) -> Result<()> {
+    if acc.unchanged {
+        output::print_stderr("That session is already stored and works; nothing changed.");
+    } else {
+        output::print_stderr("Signed in: Stockbit accepted the session and idx stored it.");
+    }
+    if let Some(w) = &acc.warning {
+        output::print_stderr(&format!("warning: {w}"));
+    }
+    status_cmd(ctx)
+}
+
+/// `true` (after saying so) when the stored session still works, so a
+/// sign-in would only replace a good session.
+async fn already_signed_in(ctx: &Context, sb: &Stockbit) -> Result<bool> {
+    if !sb.store().status(chrono::Utc::now().timestamp()).logged_in {
+        return Ok(false);
+    }
+    if sb.verify().await.is_err() {
+        return Ok(false);
+    }
+    output::print_stderr(
+        "Already signed in to Stockbit; run `idx stockbit logout` to switch accounts, or pass --force.",
+    );
+    status_cmd(ctx).map(|_| true)
+}
+
+/// The browser profile idx's sign-in window uses: beside the session file.
+fn default_profile(session: &std::path::Path) -> PathBuf {
+    session
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("stockbit-chrome-profile")
 }
 
 async fn login_cmd(
@@ -294,56 +379,68 @@ async fn login_cmd(
     browser: Option<PathBuf>,
     profile: Option<PathBuf>,
     timeout: u64,
+    force: bool,
 ) -> Result<()> {
-    let store = store(ctx);
-    if manual {
-        return manual_login(ctx, &store);
+    use std::io::IsTerminal;
+    let sb = Arc::new(provider(ctx, store(ctx)));
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    match choose_method(manual, browser, stdin_is_tty) {
+        Method::Paste => {
+            let raw = read_paste(stdin_is_tty)?;
+            let acc = sb.accept_session(&raw).await?;
+            report(ctx, &acc)
+        }
+        Method::Browser(browser) => {
+            if ctx.fetcher.is_offline() {
+                return Err(IdxError::OfflineMiss(
+                    "`idx stockbit login` checks the session with Stockbit, so it needs the network"
+                        .into(),
+                ));
+            }
+            if !force && already_signed_in(ctx, &sb).await? {
+                return Ok(());
+            }
+            let opts = login::LoginOptions {
+                browser,
+                profile_dir: profile
+                    .unwrap_or_else(|| default_profile(&ctx.settings.stockbit_session)),
+                timeout: Duration::from_secs(timeout),
+            };
+            output::print_stderr(
+                "Opening a browser on Stockbit's sign-in page. Sign in there; idx takes the session once Stockbit accepts it.",
+            );
+            let say = |s: &str| output::print_stderr(s);
+            let acc = login::capture(
+                &opts,
+                |v: String| {
+                    let sb = sb.clone();
+                    async move { sb.accept_session(&v).await }
+                },
+                &say,
+            )
+            .await?;
+            report(ctx, &acc)
+        }
     }
-
-    let profile_dir = profile.unwrap_or_else(|| {
-        ctx.settings
-            .stockbit_session
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("stockbit-chrome-profile")
-    });
-    output::print_stderr(
-        "Opening a browser for Stockbit. Sign in there; idx will capture the session automatically.",
-    );
-    let opts = login::LoginOptions {
-        browser,
-        profile_dir,
-        timeout: Duration::from_secs(timeout),
-    };
-    let (session, how) = login::capture(&opts).await?;
-    store.save(&session)?;
-    let note = match how {
-        login::Captured::Login => "captured your sign-in",
-        login::Captured::AlreadySignedIn => "reused your already-signed-in browser session",
-    };
-    output::print_stderr(&format!("Logged in — {note}."));
-    status_cmd(ctx)
 }
 
-/// Read the `credentialStorage` cookie (or a bare refresh token) from stdin.
-fn manual_login(ctx: &Context, store: &SessionStore) -> Result<()> {
-    output::print_stderr(
-        "Manual login:\n  1. Open https://stockbit.com and sign in.\n  2. DevTools (F12) → Application → Cookies → https://stockbit.com\n  3. Copy the value of the `credentialStorage` cookie.\n  4. Paste it below and press Enter.\n",
-    );
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|e| IdxError::Usage(format!("could not read input: {e}")))?;
-    let session = crate::providers::stockbit::auth::session_from_credential_blob(&line)
-        .filter(|s| !s.refresh.trim().is_empty())
-        .ok_or_else(|| {
-            IdxError::Usage(
-                "no refresh token found in that value; paste the whole credentialStorage cookie"
-                    .into(),
-            )
-        })?;
-    store.save(&session)?;
-    output::print_stderr("Saved the Stockbit session.");
-    status_cmd(ctx)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sign_in_method_follows_the_flags_and_stdin() {
+        let chrome = Some(PathBuf::from("/opt/chrome"));
+        assert_eq!(choose_method(true, None, true), Method::Paste);
+        assert_eq!(choose_method(false, None, false), Method::Paste);
+        assert_eq!(choose_method(false, None, true), Method::Browser(None));
+        assert_eq!(
+            choose_method(false, chrome.clone(), false),
+            Method::Browser(chrome.clone())
+        );
+        assert_eq!(
+            choose_method(false, chrome.clone(), true),
+            Method::Browser(chrome)
+        );
+    }
 }

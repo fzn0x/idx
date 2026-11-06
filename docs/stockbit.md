@@ -21,11 +21,39 @@ calendar`, `idx stockbit movements`).
 idx stockbit login
 ```
 
-This launches a Chromium-family browser (Chrome, Edge, Brave; set `IDX_BROWSER`
-to choose one) pointed at Stockbit's login page. You sign in — password, OTP,
-whatever Stockbit asks — and `idx` captures the session token off the network
-automatically. If you are already signed in in that browser profile, it reuses
-that session in a couple of seconds.
+idx never asks for your Stockbit password. You sign in on stockbit.com itself,
+and idx takes only what that sign-in leaves behind: the `credentialStorage`
+cookie, which holds the session's two tokens. Whichever way it arrives, idx
+first stores it (`0600`), then checks it with one request to Stockbit; when
+Stockbit refuses it, the previous session is put back (or none, if there was
+none) and nothing changes. When the session already stored still works,
+`login` says so and stops; `--force` signs in anyway.
+
+**In a browser idx opens** (the default on a desktop): idx launches a
+Chromium-family browser (Chrome, Edge, Brave; `--browser` or `IDX_BROWSER`
+chooses one) on Stockbit's sign-in page, with a profile only idx uses
+(`stockbit-chrome-profile` beside the session file; `--profile` moves it). You
+sign in there, with whatever Stockbit asks (password, OTP, captcha). idx reads
+nothing but cookies over the Chrome DevTools Protocol: it intercepts no request,
+so the password never passes through idx. Once Stockbit accepts the session,
+idx closes Stockbit's tab, deletes the cookie from its profile (so a later run
+cannot pick up a pair idx has since rotated) and closes the browser. The
+profile keeps Stockbit's other cookies, so the next sign-in may skip a step.
+Google sign-in refuses browsers driven this way ("This browser or app may not
+be secure"); paste the cookie instead.
+
+**By pasting the cookie**, from any browser:
+
+```sh
+idx stockbit login --manual                  # paste it into this terminal
+pbpaste | ssh you@host idx stockbit login    # or pipe it; a pipe on stdin means paste
+```
+
+Sign in at stockbit.com (a private window keeps your everyday browser's session
+apart, see **One refresher per session**), open DevTools (F12) > Application >
+Cookies > `https://stockbit.com` and copy the value of `credentialStorage`. A
+bare refresh token works too. Close that window afterwards without signing out:
+signing out there may end the session idx now holds.
 
 The session is stored locally (see **Where the session lives**) and refreshed
 for you from then on. Check it any time:
@@ -34,15 +62,6 @@ for you from then on. Check it any time:
 idx stockbit status        # logged in? when do the tokens expire?
 idx stockbit logout        # delete the stored session
 ```
-
-No Chromium browser, or a login that will not drive? Paste the token yourself:
-
-```sh
-idx stockbit login --manual
-```
-
-It prints where to copy the `credentialStorage` cookie from (DevTools →
-Application → Cookies → `https://stockbit.com`) and reads it from stdin.
 
 ## Use it
 
@@ -177,9 +196,10 @@ The MCP server exposes five Stockbit tools alongside the rest:
 - `idx_stockbit_movements`: insider and 5 % holder movements; `symbol`,
   `from`, `to`, `holder`, `action`, `source`, `pages` as on the CLI.
 - `idx_stockbit_login`: opens a browser **on the machine running the server**
-  for the user to sign in; only meaningful for a local stdio server the user is
-  sitting at, never a remote HTTP one. Prefer telling the user to run
-  `idx stockbit login` in a terminal themselves.
+  for the user to sign in, and checks the session before storing it; a session
+  that already works is reported without opening anything. Only meaningful for
+  a local stdio server the user is sitting at, never a remote HTTP one. Prefer
+  telling the user to run `idx stockbit login` in a terminal themselves.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
 provider: `idx --provider stockbit mcp`.
@@ -234,6 +254,7 @@ and browser-shaped `origin`/`referer` headers:
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `GET /corpaction/{type}[?symbol={SYM}]` | corporate actions, one kind per request: `dividend`, `stock_dividend`, `bonus`, `rightissue`, `warrant`, `stocksplit`, `reversesplit`, `rups`, `pubex`, `ipo`, `tenderoffer` |
 | `GET /insider/company/majorholder?page=N[&symbol=][&date_start=][&date_end=][&insider=][&action_type=][&source_type=]` | insider and 5 % holder movements, 50 rows a page |
+| `GET /company-price-feed/market-time/session` | checks a session before `idx stockbit login` stores it (never from the cache) |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 
 The same API places orders and moves cash, so idx keeps an allowlist of the

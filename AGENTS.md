@@ -44,8 +44,10 @@ src/
                      field suffix; movement.rs: /insider/company/majorholder -> insider and 5 % holder
                      movements (model/movements.rs); only allow-listed read paths carry the bearer; auth.rs is
                      the rotating-token session store (file 0600 + env seed, POST /login/refresh; one
-                     store per session file per process, refreshes under a lock file), login.rs
-                     captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
+                     store per session file per process, refreshes under a lock file), signin.rs the one
+                     accept step every sign-in ends in (store, check with one GET, restore when refused),
+                     login.rs the browser sign-in: polls only the credentialStorage cookie over the Chrome
+                     DevTools Protocol (ws, no TLS; no request interception), then deletes it from its profile
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL),
                      sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,

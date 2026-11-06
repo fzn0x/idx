@@ -1542,7 +1542,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_login",
-        description = "Opens a browser ON THE MACHINE RUNNING THIS SERVER for the user to sign in to Stockbit, then captures and stores the session. Only useful for a local (stdio) server the user is sitting at; it cannot work for a remote HTTP server. Blocks until the user signs in or it times out. Prefer telling the user to run `idx stockbit login` themselves; use this only when they ask you to start it."
+        description = "Opens a browser ON THE MACHINE RUNNING THIS SERVER on Stockbit's own sign-in page for the user to sign in, then checks the session with Stockbit and stores it. A session that already works is reported without opening anything. Only useful for a local (stdio) server the user is sitting at; it cannot work for a remote HTTP server. Blocks until the user signs in or it times out. Prefer telling the user to run `idx stockbit login` themselves; use this only when they ask you to start it. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
     )]
     async fn stockbit_login(
         &self,
@@ -1559,16 +1559,32 @@ impl IdxServer {
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join("stockbit-chrome-profile");
                 let secs = a.timeout.unwrap_or(300).clamp(30, 900);
+                let sb = Arc::new(self.stockbit_provider());
+                let now = chrono::Utc::now().timestamp();
+                // A session that already works is reported, not replaced.
+                if sb.store().status(now).logged_in && sb.verify().await.is_ok() {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
+                        json::to_pretty(&sb.store().status(now))?,
+                    )]));
+                }
                 let opts = login::LoginOptions {
                     browser: None,
                     profile_dir,
                     timeout: std::time::Duration::from_secs(secs),
                 };
-                let (session, _how) = login::capture(&opts).await?;
-                self.stockbit_store().save(&session)?;
-                let status = self.stockbit_store().status(chrono::Utc::now().timestamp());
+                // Progress goes to the server's log (stderr), never stdout.
+                let say = |s: &str| tracing::info!("{s}");
+                let acc = login::capture(
+                    &opts,
+                    |v: String| {
+                        let sb = sb.clone();
+                        async move { sb.accept_session(&v).await }
+                    },
+                    &say,
+                )
+                .await?;
                 Ok(CallToolResult::success(vec![ContentBlock::text(
-                    json::to_pretty(&status)?,
+                    json::to_pretty(&acc.status)?,
                 )]))
             }
             .await,
