@@ -359,6 +359,9 @@ fn stockbit_corporate_actions_and_calendar() {
             "2027-06-01",
         ][..],
         &["stockbit", "actions", "^JKSE"][..],
+        // Past the last date chrono holds: a usage error, not a panic.
+        &["stockbit", "calendar", "--days", "4000000000"][..],
+        &["stockbit", "calendar", "--from", "+262142-12-31"][..],
     ] {
         idx(&sb.cache, &sb.config).args(args).assert().code(2);
     }

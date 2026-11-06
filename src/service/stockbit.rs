@@ -238,8 +238,18 @@ pub async fn stockbit_calendar(
         ));
     }
     let days = q.days.unwrap_or(STOCKBIT_CALENDAR_DEFAULT_DAYS);
-    let to =
-        q.to.unwrap_or_else(|| from + chrono::Days::new(u64::from(days)));
+    if i64::from(days) > STOCKBIT_CALENDAR_MAX_DAYS {
+        return Err(IdxError::Usage(format!(
+            "a calendar range covers at most {STOCKBIT_CALENDAR_MAX_DAYS} days, not {days}"
+        )));
+    }
+    let to = match q.to {
+        Some(t) => t,
+        // Checked: `NaiveDate + Days` panics past the last representable day.
+        None => from
+            .checked_add_days(chrono::Days::new(u64::from(days)))
+            .ok_or_else(|| IdxError::Usage(format!("{from} plus {days} days is out of range")))?,
+    };
     if from > to {
         return Err(IdxError::Usage(format!(
             "the range starts ({from}) after it ends ({to})"
@@ -530,6 +540,10 @@ mod tests {
             one(Some(d("2026-01-01")), Some(d("2027-01-03")), None),
             one(None, None, Some(367)),
             one(None, Some(d("2026-12-01")), Some(5)),
+            // Past the last date chrono can hold: a usage error, not a panic.
+            one(None, None, Some(u32::MAX)),
+            one(Some(NaiveDate::MAX), None, None),
+            one(Some(NaiveDate::MAX), None, Some(1)),
         ] {
             let e = stockbit_calendar(&sb, &bad, d("2026-11-03"))
                 .await

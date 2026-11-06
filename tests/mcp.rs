@@ -229,6 +229,36 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
             "{text}"
         );
     }
+    // A calendar end past the last date chrono holds is a usage error, not
+    // a panic that would take the server down.
+    for (id, args, needle) in [
+        (
+            14,
+            serde_json::json!({"days": 4_000_000_000u32}),
+            "at most 366 days",
+        ),
+        (
+            15,
+            serde_json::json!({"from": "+262142-12-31"}),
+            "out of range",
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_stockbit_actions", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+        assert!(
+            body["error"]["message"].as_str().unwrap().contains(needle),
+            "{body}"
+        );
+    }
 
     // The sign-in tool refuses an unknown method before opening anything;
     // status carries no sign_in while none was started.
