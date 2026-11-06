@@ -890,7 +890,7 @@ async fn broker_one(
         return latest_broker_day(fetcher, &symbol, q, today).await;
     };
     let mut s =
-        ipot::broker_summary(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
+        ipot::broker_summary_range(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
     if s.data.is_empty() {
         s.warnings
             .push(format!("{symbol}: no trades from {from} to {to}"));
@@ -1090,7 +1090,7 @@ async fn bandar_one(
                 latest
             } else {
                 let end = latest.data.to;
-                let mut r = ipot::broker_summary(
+                let mut r = ipot::broker_summary_range(
                     fetcher,
                     &symbol,
                     q.period.start(end),
@@ -1259,7 +1259,7 @@ async fn screen_summary(
     to: NaiveDate,
     today: NaiveDate,
 ) -> (Symbol, Result<Sourced<BrokerSummary>>) {
-    let r = ipot::broker_summary(
+    let r = ipot::broker_summary_range(
         fetcher,
         &symbol,
         from,
@@ -1400,8 +1400,9 @@ async fn scan_summaries(
 /// Bandarmology screener: reads the most traded stocks (or the given ones)
 /// over the period ending on the latest session and keeps those matching
 /// the preset and filters. One broker-summary request per scanned ticker;
-/// on multi-day periods one history request per row the other filters
-/// left.
+/// on multi-day periods up to three more for the rebuilt foreign net (see
+/// `ipot::broker_summary_range`) and one history request per row the other
+/// filters left.
 pub async fn bandar_screen(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
@@ -2040,10 +2041,58 @@ mod tests {
             list.iter().map(|s| Symbol::parse(s).unwrap()).collect()
         }
 
+        /// BRPT and TLKM over the week: the range page (its foreign net
+        /// counts the 16th twice), plus the pages the net is rebuilt from.
+        fn others(be: FixtureBackend) -> FixtureBackend {
+            be.route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
+                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM)
+                .route(
+                    "code=BRPT&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_brpt_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=BRPT&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261015.html"),
+                )
+                .route(
+                    "code=BRPT&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261016.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_tlkm_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=TLKM&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261015.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261016.html"),
+                )
+        }
+
         fn days() -> FixtureBackend {
             let mut be = FixtureBackend::new()
                 .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK);
+                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
+                .route(
+                    "code=BBCA&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_bbca_20261012_20261014.html"
+                    ),
+                );
             for (day, html) in [
                 (
                     "12",
@@ -2103,6 +2152,18 @@ mod tests {
                 Some("CLSA SEKURITAS INDONESIA")
             );
             assert!(r.daily.is_none());
+            // The week page says -4.1 T (the 16th counted twice); the five
+            // sessions one by one give -1.82 T, -18.4% of the 9.9 T traded.
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -1_823.1 / 9_900.0 * 100.0).abs() < 1e-9, "{fpct}");
+            assert!(
+                r.reasons
+                    .iter()
+                    .any(|x| x == "Foreign investors net sold 1.82T (-18.4% of value)."),
+                "{:?}",
+                r.reasons
+            );
 
             // One session: the quote's previous close is the base.
             let got = super::super::bandar(
@@ -2136,7 +2197,12 @@ mod tests {
             assert_eq!(daily.days.len(), 5);
             assert_eq!(daily.days[4].date, d(10, 16));
             assert!(daily.streak < 0);
-            assert_eq!(be.call_count(), 6, "range + five sessions");
+            assert_eq!(
+                be.call_count(),
+                7,
+                "the range, the 16th, the 15th and the rest for the foreign net, then the three other sessions"
+            );
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
             // Base for a range that starts on the 12th is the close of the 9th.
             assert!((r.price_change_pct.unwrap() - (5_175.0 / 6_050.0 - 1.0) * 100.0).abs() < 1e-9);
         }
@@ -2168,13 +2234,7 @@ mod tests {
 
         #[tokio::test]
         async fn the_screen_keeps_big_distribution_heaviest_first() {
-            let (f, be, _d) = fetcher(
-                FixtureBackend::new()
-                    .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                    .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
-                    .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                    .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM),
-            );
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BandarScreenOptions {
                 period: BandarPeriod::Week1,
                 top: 5,
@@ -2197,6 +2257,15 @@ mod tests {
             let order: Vec<&str> = s.rows.iter().map(|r| r.symbol.as_str()).collect();
             assert_eq!(order, ["BBCA", "TLKM"]);
             assert_eq!(s.rows[0].phase, Some(BandarPhase::Markdown));
+            // Rebuilt from single sessions: TLKM -96.6 B - 17.9 B - 90.2 B
+            // where its week page says -319.8 B.
+            assert_eq!(s.rows[0].foreign_net_value, Some(-1_823_100_000_000.0));
+            assert_eq!(s.rows[1].foreign_net_value, Some(-204_700_000_000.0));
+            assert!(
+                !got.warnings.iter().any(|w| w.contains("no foreign net")),
+                "{:?}",
+                got.warnings
+            );
             assert!(
                 got.warnings
                     .iter()
@@ -2222,10 +2291,7 @@ mod tests {
 
         #[tokio::test]
         async fn broker_activity_finds_one_member_across_the_scan() {
-            let be = days()
-                .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM);
-            let (f, _be, _d) = fetcher(be);
+            let (f, _be, _d) = fetcher(others(days()));
             let opts = BrokerActivityOptions {
                 code: " yp ".into(),
                 period: BandarPeriod::Week1,

@@ -41,18 +41,24 @@ function memoryDb() {
   return { DB: { prepare: (sql) => stmt(sql), batch: async (list) => list.map((s) => s.exec()) }, kv, scan };
 }
 
-/** IPOT and Yahoo from the recorded pages: BBCA, BRPT, TLKM; ZZZZ is unknown. */
+/**
+ * IPOT and Yahoo from the recorded pages: BBCA, BRPT, TLKM; ZZZZ is unknown.
+ * A page recorded for the exact range answers it; any other range gets the
+ * stock's 10-12..10-16 page (it stands in for the 1m and 3m periods).
+ */
 function recordedFetch(calls = []) {
   return async (u) => {
     const url = String(u);
     calls.push(url);
     if (url.includes("finance/chart")) return new Response(CHART, { status: 200 });
-    const code = url.match(/code=([A-Z]+)/)[1];
+    const code = url.match(/code=([A-Z]+)/)[1].toLowerCase();
     const d = url.match(/start=(\d\d)\/(\d\d)\/(\d{4})&end=(\d\d)\/(\d\d)\/(\d{4})/);
-    const oneDay = d[1] + d[2] === d[4] + d[5];
-    if (code === "ZZZZ") return new Response(page("brokersummary_zzzz_invalid.html"), { status: 200 });
-    if (code === "BBCA" && oneDay) return new Response(page("brokersummary_bbca_2026" + d[4] + d[5] + ".html"), { status: 200 });
-    return new Response(page("brokersummary_" + code.toLowerCase() + "_20261012_20261016.html"), { status: 200 });
+    const [start, end] = [d[3] + d[1] + d[2], d[6] + d[4] + d[5]];
+    if (code === "zzzz") return new Response(page("brokersummary_zzzz_invalid.html"), { status: 200 });
+    const exact = start === end ? `brokersummary_${code}_${end}.html` : `brokersummary_${code}_${start}_${end}.html`;
+    let body;
+    try { body = page(exact); } catch { body = page(`brokersummary_${code}_20261012_20261016.html`); }
+    return new Response(body, { status: 200 });
   };
 }
 
@@ -127,6 +133,9 @@ test("the nightly scan fills D1 and the screen reads it like the CLI", async () 
     assert.deepEqual([s.scanned, s.checked], [4, 3]);
     assert.deepEqual(s.rows.map((r) => r.symbol), ["BBCA", "TLKM"], "same order as the Rust screen test");
     assert.equal(s.rows[0].phase, "markdown");
+    // The week pages count the 16th twice (BBCA -4.1 T, TLKM -319.8 B); the
+    // scan rebuilds the nets from single sessions like the CLI.
+    assert.deepEqual(s.rows.map((r) => r.foreign_net_value), [-1_823_100_000_000, -204_700_000_000]);
     assert.ok(Math.abs(s.rows[0].price_change_pct - (5175 / 6050 - 1) * 100) < 1e-9);
     assert.ok(out.warnings.includes("1 of 4 scanned stocks had no broker summary"), out.warnings);
 

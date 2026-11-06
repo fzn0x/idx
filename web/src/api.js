@@ -446,24 +446,44 @@ function isoDate(raw, what) {
   return s;
 }
 
-async function brokerRange(env, symbol, from, to, investor, board, today) {
-  // A range that ended before today no longer changes; today's moves with every trade.
+/** One parsed IPOT page through the D1 cache. A range that ended before today no longer changes; today's moves with every trade. */
+async function ipotPage(env, symbol, from, to, investor, board, today) {
   const ttl = to < today ? 7 * 86400 : 5 * 60;
-  const r = await cached(env, `ipot:${symbol}:${from}:${to}:${investor}:${board}`, ttl, async () => {
+  return cached(env, `ipot:${symbol}:${from}:${to}:${investor}:${board}`, ttl, async () => {
     let html;
     try { html = await ipot.fetchPage(ipot.url(symbol, from, to, investor, board)); } catch (e) { throw provider(`ipot: broker summary for ${symbol}: ${e.message}`); }
     const p = ipot.parse(html);
     if (p.invalid) throw notFound(`${symbol} is not a stock code IPOT knows`);
     return p;
   });
+}
+
+/** A summary like ipot::broker_summary_range: over a range that reached the latest sessions the foreign net is rebuilt from single sessions. */
+async function brokerRange(env, symbol, from, to, investor, board, today) {
+  const r = await ipotPage(env, symbol, from, to, investor, board, today);
   const p = r.value;
+  const warnings = r.warning ? [r.warning] : [];
+  let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at, net = p.foreign_net_value;
+  if (ipot.rangeNetSuspect(from, to, p, ipot.wibDate(r.fetched_at), today)) {
+    try {
+      net = await ipot.rebuildNet(from, to, today, async (f, t) => {
+        const x = await ipotPage(env, symbol, f, t, investor, board, today);
+        cachedAll &&= x.cached; stale ||= x.stale; fetchedAt = Math.min(fetchedAt, x.fetched_at);
+        if (x.warning && !warnings.includes(x.warning)) warnings.push(x.warning);
+        return { page: x.value, fetchedOn: ipot.wibDate(x.fetched_at) };
+      });
+    } catch (e) {
+      net = null;
+      warnings.push(`${symbol}: no foreign net from ${from} to ${to}: the source counts the latest session twice over a range, and reading the sessions one by one failed (${e.message})`);
+    }
+  }
   const flow = (f) => ({ ...f, name: BROKERS[f.code] ?? null });
   const data = {
     symbol, name: NAME_BY_SYMBOL.get(symbol) || null, from: p.from || from, to: p.to || to, investor, board,
     buyers: p.buyers.map(flow), sellers: p.sellers.map(flow),
-    total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: p.foreign_net_value, average_price: p.average_price, rounded: p.rounded,
+    total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: net, average_price: p.average_price, rounded: p.rounded,
   };
-  return { data, cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] };
+  return { data, cached: cachedAll, stale, fetched_at: fetchedAt, warnings };
 }
 
 async function brokerLatest(env, symbol, investor, board, today) {

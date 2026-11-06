@@ -2,9 +2,12 @@
 // src/providers/ipot. Same endpoints and parsing rules, tested on the same
 // tests/fixtures/ipot pages. Figures of a million and more arrive abbreviated
 // to one decimal (1.6 M); they keep that precision and set `rounded`. A
-// spurious nginx 404 is retried.
+// spurious nginx 404 is retried. Over a range that reaches the latest
+// session the footer's foreign net counts that session twice; rebuildNet
+// sums single sessions instead, like ipot::broker_summary_range.
 
 import { fetchWithin } from "./net.js";
+import * as hol from "./holidays.js";
 
 export const NAME = "ipot";
 const ENDPOINT = "https://www.indopremier.com/module/saham/include/data-brokersummary.php";
@@ -62,6 +65,63 @@ export function parse(html) {
     average_price: total_lots > 0 ? avg : null,
     rounded,
   };
+}
+
+// ---- range foreign net -------------------------------------------------
+
+const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+const traded = (p) => p.buyers.length > 0 || p.sellers.length > 0;
+/** Trading days the rebuild reads one by one from the end of a range. */
+const REBUILD_WALK = 5;
+
+/** The trading day before `d` (bundled holiday list). */
+export function prevTradingDay(d) {
+  let x = addDays(d, -1);
+  while (!hol.isTradingDay(x)) x = addDays(x, -1);
+  return x;
+}
+const lastTradingDay = (d) => (hol.isTradingDay(d) ? d : prevTradingDay(d));
+
+/** Unix seconds to the date in Jakarta. */
+export const wibDate = (secs) => new Date(secs * 1000 + 7 * 3600e3).toISOString().slice(0, 10);
+
+/**
+ * Like ipot::range_net_suspect: a page of several days with trades whose
+ * range, on the day it was fetched (`fetchedOn`), reached one of the last
+ * two trading days. Its foreign net may count the latest session twice.
+ */
+export function rangeNetSuspect(from, to, p, fetchedOn, today) {
+  if (from >= to || !traded(p) || p.foreign_net_value == null) return false;
+  const on = fetchedOn < today ? fetchedOn : today;
+  return to >= prevTradingDay(lastTradingDay(on));
+}
+
+/**
+ * The foreign net of from..to from pages that hold, like the Rust rebuild:
+ * single sessions walked back from the end until two had trades, plus the
+ * rest of the range (split again if that page is itself suspect). `get(from,
+ * to)` resolves to { page, fetchedOn }; null when a page carries no net.
+ */
+export async function rebuildNet(from, to, today, get) {
+  let net = 0, end = to < today ? to : today;
+  for (;;) {
+    let walked = 0, trades = 0, earliest = null;
+    for (let d = end; d >= from && trades < 2 && walked < REBUILD_WALK; d = addDays(d, -1)) {
+      if (!hol.isTradingDay(d)) continue;
+      const { page } = await get(d, d);
+      if (page.foreign_net_value == null) return null;
+      net += page.foreign_net_value;
+      if (traded(page)) trades++;
+      walked++;
+      earliest = d;
+    }
+    if (!earliest) return null;
+    const restEnd = prevTradingDay(earliest);
+    if (restEnd < from) return net;
+    const { page: rest, fetchedOn } = await get(from, restEnd);
+    if (!rangeNetSuspect(from, restEnd, rest, fetchedOn, today)) return rest.foreign_net_value == null ? null : net + rest.foreign_net_value;
+    end = restEnd;
+  }
 }
 
 /** GET with the source's spurious 404 retried (up to 5 tries, doubling pauses); each try has a deadline. */

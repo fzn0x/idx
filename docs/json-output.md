@@ -150,6 +150,13 @@ list or `null`, `kind` = `local` | `foreign` | `state_owned` or `null`, `lots`
 of a million and more to one decimal (`1.6 M`); those arrive as plain numbers
 at that precision and the summary carries `rounded: true`. Nothing is netted
 per broker or estimated. A range without trades has empty lists and a warning.
+Over a range that starts before the source's latest session and contains it,
+the source's foreign net counts that session twice (its value, lots and lists
+are right). When a range reached the last two trading days at the time it
+was read, `foreign_net_value` is therefore the sum of the last two sessions
+with trades, each read on its own, and of the rest of the range: one to
+three more requests, most of them cached. If those cannot be read it is
+`null` with a warning.
 With `-o csv` the rows are one broker per side: `symbol, from, to, investor,
 board, side (buy|sell), rank, code, name, kind, lots, value, average_price`.
 
@@ -178,7 +185,9 @@ top N, shaped as in `idx.broker.v1`), `daily` (`null` unless `--daily`:
 `distribution_days`, `neutral_days`, `streak` (+3 = three accumulation
 sessions in a row, -2 = two distribution sessions) and
 `cumulative_net_value`), `reasons[]` and `rounded`. A range without trades
-reads `neutral` with a single reason.
+reads `neutral` with a single reason. `foreign_net_value` over several
+sessions is rebuilt from single sessions as described for `idx.broker.v1`;
+`bandar screen` and `bandar broker` read their ranges the same way.
 
 ## `idx.bandar.screen.v1` (`bandar screen`)
 

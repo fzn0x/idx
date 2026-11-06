@@ -32,7 +32,8 @@ src/
   providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
     msn/             autosuggest lookup -> Quotes / Equities (public web key)
-    ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried) and
+    ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried; a range's
+                     foreign net rebuilt from single sessions, broker_summary_range) and
                      corporate actions, RUPS, warrants/rights (actions.rs; nested announcement tables)
     idx/             idx.co.id JSON endpoints: stock/broker/index daily summaries, per-stock history,
                      exchange calendar (parse.rs classifies entries), securities, members; Cloudflare
