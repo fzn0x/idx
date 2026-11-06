@@ -1,5 +1,5 @@
 // Shared browser helpers: API access, number formatting, small renderers.
-// Plain ES module, no build step. Served with script-src 'self'. Numbers follow
+// Plain ES module, no build step. Served with script-src 'self' (plus Cloudflare's analytics beacon). Numbers follow
 // the page's language (i18n.js): 5.050,43 on the Indonesian pages, 5,050.43 on
 // the English ones; the machine formats (fmt.wib, fmt.time, fmt.date) do not.
 import { LOCALE, ID, TIME_SEP, MONTHS_SHORT, t } from "./i18n.js";
