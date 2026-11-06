@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
-    <img src="assets/logo.svg" alt="IHSG: Indonesian market data for people and agents" width="480">
+    <img src="assets/logo.svg" alt="IDX: Indonesian market data for people and agents" width="480">
   </picture>
 </p>
 
