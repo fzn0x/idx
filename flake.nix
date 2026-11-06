@@ -71,8 +71,16 @@
           };
 
           # Dependencies are built once per profile: release for the package,
-          # dev for clippy and the tests (the profile CI uses).
-          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { doCheck = false; });
+          # dev for clippy and the tests (the profile CI uses). The release
+          # set only feeds `cargo build`, so it skips buildDepsOnly's default
+          # `cargo check` pass, which only clippy would reuse.
+          cargoArtifacts = craneLib.buildDepsOnly (
+            commonArgs
+            // {
+              doCheck = false;
+              buildPhaseCargoCommand = "cargoWithProfile build --locked";
+            }
+          );
           devArgs = commonArgs // {
             CARGO_PROFILE = "dev";
           };
