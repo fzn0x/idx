@@ -8,6 +8,7 @@
 //! - `Equities?ids=a` returns `[Equity]` with `company`, `analysis.keyMetrics`,
 //!   `analysis.companyMetrics`, `analysis.estimate`, `analysis.shareStatistics`.
 //!   Percentages are already percent (21.8), ratios are ratios (0.0017).
+//!   `±999.9999` in a ratio means "not applicable" and parses as `null`.
 
 use chrono::{DateTime, NaiveDate};
 use serde_json::Value;
@@ -25,6 +26,17 @@ pub const IDX_MIC: &str = "XIDX";
 
 fn f64_of(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite())
+}
+
+/// MSN writes ±999.9999 where it cannot compute a ratio, e.g. debt/equity
+/// for a company with negative equity (GIAA, INAF, POLY, SRIL, WSKT on
+/// 2026-11-06, whose annual statements put the real figure between about -1
+/// and -100). That means "not applicable", not a ratio.
+const NOT_APPLICABLE: f64 = 999.9999;
+
+/// A ratio field, with MSN's "not applicable" placeholder read as missing.
+fn ratio_of(v: &Value, key: &str) -> Option<f64> {
+    f64_of(v, key).filter(|x| (x.abs() - NOT_APPLICABLE).abs() > 1e-6)
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -218,10 +230,10 @@ pub fn parse_fundamentals(
             (Some(p), Some(e)) if e > 0.0 => Some(p / e),
             _ => None,
         },
-        pe_forward: f64_of(km, "forwardPriceToEPS"),
-        peg: f64_of(cm, "pEGrowthRatio"),
-        price_to_book: f64_of(km, "priceToBookRatio"),
-        price_to_sales: f64_of(cm, "priceSalesRatio"),
+        pe_forward: ratio_of(km, "forwardPriceToEPS"),
+        peg: ratio_of(cm, "pEGrowthRatio"),
+        price_to_book: ratio_of(km, "priceToBookRatio"),
+        price_to_sales: ratio_of(cm, "priceSalesRatio"),
         ev_to_ebitda: None,
         ev_to_revenue: None,
     };
@@ -234,7 +246,8 @@ pub fn parse_fundamentals(
             .or_else(|| f64_of(km, "latestNetProfitMargin")),
     };
     f.health = Health {
-        debt_to_equity: f64_of(km, "debtToEquityRatio").or_else(|| f64_of(cm, "debtEquityRatio")),
+        debt_to_equity: ratio_of(km, "debtToEquityRatio")
+            .or_else(|| ratio_of(cm, "debtEquityRatio")),
         current_ratio: None,
         quick_ratio: None,
         total_debt: None,
@@ -284,6 +297,7 @@ mod tests {
     const QB: &str = include_str!("../../../tests/fixtures/msn/quotes_bbca_with_bogus_ids.json");
     const EQ_BBCA: &str = include_str!("../../../tests/fixtures/msn/equities_bbca.json");
     const EQ_TLKM: &str = include_str!("../../../tests/fixtures/msn/equities_tlkm.json");
+    const EQ_GIAA: &str = include_str!("../../../tests/fixtures/msn/equities_giaa.json");
     const EQ_404: &str = include_str!("../../../tests/fixtures/msn/equities_bogus_404.json");
 
     fn sym(s: &str) -> Symbol {
@@ -388,6 +402,30 @@ mod tests {
         assert_eq!(t.profitability.operating_margin_pct, Some(23.313));
         assert_eq!(t.health.debt_to_equity, Some(0.3882));
         assert_eq!(t.sector.as_deref(), Some("Technology"));
+    }
+
+    #[test]
+    fn negative_equity_placeholder_is_not_a_ratio() {
+        // GIAA, recorded 2026-11-06: keyMetrics.debtToEquityRatio and
+        // companyMetrics.debtEquityRatio are both -999.9999.
+        let f = parse_fundamentals(EQ_GIAA, &sym("GIAA"), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.health.debt_to_equity, None);
+        assert_eq!(f.per_share.book_value, Some(-9.829));
+        assert_eq!(f.valuation.price_to_book, None);
+        assert_eq!(
+            f.valuation.price_to_sales,
+            Some(0.2652),
+            "a real ratio stays"
+        );
+        assert_eq!(f.profitability.roe_pct, None);
+        assert_eq!(f.growth.earnings_growth_pct, Some(-92.482));
+        assert_eq!(f.profitability.net_margin_pct, Some(-11.1661));
+        assert_eq!(f.analyst.target_mean, Some(130.0));
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert_eq!(f.financial_currency, None, "MSN does not name it");
+        assert_eq!(f.negative_equity(), Some(true));
     }
 
     #[test]
