@@ -176,6 +176,8 @@ idx -o json stocks history TLKM --period 1y --interval 1wk \
 
 Full field reference: [docs/json-output.md](docs/json-output.md).
 Configuration and cache: [docs/configuration.md](docs/configuration.md).
+Calling idx from an agent (rules, exit codes, recipes, an agent-led install):
+[docs/agent-guide.md](docs/agent-guide.md).
 
 ### MCP server
 
@@ -299,6 +301,12 @@ IDX board every minute in trading hours and serves `/api/*` with the exact JSON
 envelopes the CLI prints; everything else is fetched on demand and cached. The
 Worker lives in [`web/`](web/) and answers on the custom domain only
 (`workers_dev = false`, Host check in the Worker).
+
+The same site serves this README and `docs/` as
+**https://ihsg.midoriresearch.com/docs/**, every page also as Markdown at its
+`.md` address (`/docs/mcp.md`), with
+[`/llms.txt`](https://ihsg.midoriresearch.com/llms.txt) and `/llms-full.txt`
+for language models. They are built from the repository at deploy time.
 
 ## Ownership data pipeline
 

@@ -77,10 +77,14 @@ tests/
   mcp.rs             spawns `idx mcp`, speaks JSON-RPC over stdio, offline
   fixtures/<provider>/  recorded raw responses used by unit tests
 scripts/smoke.sh     hits live providers; run manually, never in CI's test job
-docs/                json-output.md, configuration.md, mcp.md, ownership.md
+docs/                agent-guide.md, json-output.md, configuration.md, mcp.md, ownership.md, stockbit.md
+                     (also served as the site's /docs pages; a new file goes into PAGES in web/scripts/docs.mjs)
 web/                 Cloudflare Worker for ihsg.midoriresearch.com: landing page, browser terminal, D1 board;
                      src/analysis.js, src/extras.js and src/bandar.js are JS ports of src/analysis/* tested on
-                     the same fixtures; src/bandar-scan.js is the nightly scan behind the web bandar screen
+                     the same fixtures; src/bandar-scan.js is the nightly scan behind the web bandar screen;
+                     scripts/docs.mjs (+ md.mjs) builds /docs, /docs/<page>.md, /llms.txt and /llms-full.txt
+                     from README.md and docs/*.md at deploy time (wrangler [build], outputs gitignored);
+                     src/headers.js is the security header set, mirrored for static assets in public/_headers
 npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies the release
                      (postinstall when allowed, otherwise on first run)
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
