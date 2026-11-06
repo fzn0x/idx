@@ -199,9 +199,9 @@ export function verdict(f) {
   const v = f.valuation, p = f.profitability, bank = isFinancial(f);
   // Negative equity scores -2 and sets P/B, ROE and debt/equity aside (they
   // still count as inputs); a P/B over statements in another currency is
-  // neither scored nor counted.
+  // neither scored, counted nor listed as a reason.
   const neg = negativeEquity(f) === true;
-  const mixed = mixedCurrency(f) ? `statements in ${f.financial_currency} and price in ${f.currency}` : null;
+  const mixed = mixedCurrency(f);
   if (v.pe_trailing != null) {
     inputs++; const pe = v.pe_trailing;
     if (pe <= 0) { score--; reasons.push("negative trailing earnings"); }
@@ -214,8 +214,7 @@ export function verdict(f) {
   if (neg) { inputs++; score -= 2; reasons.push(NEGATIVE_EQUITY_REASON); }
   if (v.price_to_book != null) {
     if (neg) inputs++;
-    else if (mixed) reasons.push(`${mixed}: P/B rule skipped`);
-    else { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
+    else if (!mixed) { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
   }
   if (v.peg != null) { inputs++; if (v.peg > 0 && v.peg < 1) { score++; reasons.push(`PEG ${v.peg.toFixed(2)} under 1: growth is cheap`); } else if (v.peg > 2) { score--; reasons.push(`PEG ${v.peg.toFixed(2)} over 2: paying up for growth`); } }
   if (p.roe_pct != null) {

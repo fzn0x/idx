@@ -13,19 +13,15 @@ use crate::model::{Fundamentals, Verdict, VerdictLabel};
 ///   set-aside figures still count in `inputs_available` (they were reported).
 /// - When the statements are in another currency than the price
 ///   ([`Fundamentals::mixed_currency`]), the source's P/B divides one by the
-///   other, so it is neither scored nor counted.
+///   other, so it is neither scored, counted nor listed as a reason;
+///   `financial_currency` and the tables' `*` note say why it is missing.
 pub fn verdict(f: &Fundamentals) -> Verdict {
     let mut score = 0;
     let mut reasons = Vec::new();
     let mut inputs = 0;
     let bank = f.is_financial_sector();
     let negative_equity = f.negative_equity() == Some(true);
-    let mixed_currency = match (&f.financial_currency, &f.currency) {
-        (Some(statements), Some(price)) if f.mixed_currency() => {
-            Some(format!("statements in {statements} and price in {price}"))
-        }
-        _ => None,
-    };
+    let mixed_currency = f.mixed_currency();
     let v = &f.valuation;
     let p = &f.profitability;
 
@@ -64,9 +60,9 @@ pub fn verdict(f: &Fundamentals) -> Verdict {
         if negative_equity {
             // Set aside by the negative-equity rule.
             inputs += 1;
-        } else if let Some(currencies) = &mixed_currency {
-            reasons.push(format!("{currencies}: P/B rule skipped"));
-        } else {
+        } else if !mixed_currency {
+            // A price over a book value in another currency is no ratio, so
+            // a mixed-currency P/B gets nothing at all.
             inputs += 1;
             if pb < 1.0 {
                 score += 1;
@@ -386,14 +382,10 @@ mod tests {
         f.profitability.roe_pct = Some(11.1);
         let v = verdict(&f);
         assert!(
-            !v.reasons.iter().any(|r| r.contains("rich")),
-            "{:?}",
+            !v.reasons.iter().any(|r| r.contains("P/B")),
+            "no P/B reason at all: {:?}",
             v.reasons
         );
-        assert!(v
-            .reasons
-            .iter()
-            .any(|r| r == "statements in USD and price in IDR: P/B rule skipped"));
         assert_eq!(v.inputs_available, 2, "the mixed P/B is not an input");
 
         // Same currency, same figures: the P/B rule runs as before.
@@ -452,16 +444,13 @@ mod tests {
 
         #[test]
         fn itmg_pb_is_set_aside() {
+            // #25: the ITMG verdict lists no P/B reason.
             let v = verdict(&from_yahoo(Y_ITMG, "ITMG"));
             assert!(
-                !v.reasons.iter().any(|r| r.contains("P/B 14103")),
+                !v.reasons.iter().any(|r| r.contains("P/B")),
                 "{:?}",
                 v.reasons
             );
-            assert!(v
-                .reasons
-                .iter()
-                .any(|r| r == "statements in USD and price in IDR: P/B rule skipped"));
             assert_eq!(summary(&v), (VerdictLabel::Undervalued, 7, 8));
         }
 

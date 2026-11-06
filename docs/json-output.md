@@ -400,7 +400,7 @@ already percentages (`21.8` = 21.8 %). Ratios are plain multiples
   the P/B, ROE and debt/equity rules aside; those figures still count in
   `inputs_available`. An ROE above 15 % next to a net loss (negative net
   margin or EPS) is not rewarded either. A P/B that mixes currencies is
-  neither scored nor counted.
+  neither scored nor counted, and no reason is listed for it.
 
 ## `idx.compare.v1` (`stocks compare`)
 

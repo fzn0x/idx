@@ -946,12 +946,9 @@ fn usd_statements_do_not_score_pb() {
         d["valuation"]["price_to_book"].as_f64().unwrap() > 14000.0,
         "the reported value is kept"
     );
+    // #25: no P/B reason at all; the table's note says why P/B is not scored.
     let reasons = d["verdict"]["reasons"].to_string();
-    assert!(!reasons.contains("is rich"), "{reasons}");
-    assert!(
-        reasons.contains("statements in USD and price in IDR: P/B rule skipped"),
-        "{reasons}"
-    );
+    assert!(!reasons.contains("P/B"), "{reasons}");
     assert_eq!(d["verdict"]["inputs_available"], 8);
 
     idx(&sb.cache, &sb.config)

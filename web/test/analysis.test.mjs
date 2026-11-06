@@ -119,8 +119,8 @@ test("USD statements: ITMG's P/B is not scored, BBCA's is", () => {
   assert.ok(an.mixedCurrency(f));
   assert.ok(f.valuation.price_to_book > 14000, "the reported value is kept");
   const v = an.verdict(f);
-  assert.ok(!v.reasons.some((x) => x.includes("is rich")), v.reasons.join(" | "));
-  assert.ok(v.reasons.includes("statements in USD and price in IDR: P/B rule skipped"));
+  // #25: no P/B reason at all.
+  assert.ok(!v.reasons.some((x) => x.includes("P/B")), v.reasons.join(" | "));
   // Same figures as the Rust test itmg_pb_is_set_aside.
   assert.deepEqual(brief(v), ["undervalued", 7, 8]);
   const same = { ...f, financial_currency: "idr" };
