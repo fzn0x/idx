@@ -328,7 +328,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_changes` | `from`, `to`, `symbol?`, `min_pct_change?`, `limit?`, `offset?` | `idx.ownership.changes.v1`: `summary` over every match, one page of rows |
 | `idx_ownership_foreign` | `symbol?`, `from?`, `to?`, `limit?` | `idx.ownership.foreign.v1` (one issuer over time) or `idx.ownership.foreign-flow.v1` (every issuer between two months) |
 | `idx_ownership_releases` | none | `idx.ownership.releases.v1` |
-| `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current, as it does during trading). Needs a Stockbit login (`--provider stockbit`) |
+| `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current, seen during trading). Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
 

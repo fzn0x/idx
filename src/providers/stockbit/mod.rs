@@ -15,8 +15,9 @@
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
 //! The order book's foreign flow is kept only while Stockbit marks it current
-//! (`has_foreign_bs: true`); during trading it still holds the previous
-//! session's figures, so it is left empty and the envelope says why.
+//! (`has_foreign_bs: true`); otherwise it is left empty and the envelope says
+//! why (a book recorded during trading with the flag `false` still held the
+//! previous session's figures).
 //!
 //! Symbols are IDX codes (`BBCA`); indices use Stockbit's own code (`IHSG`,
 //! `LQ45`), not idx's caret form.
@@ -62,7 +63,8 @@ pub fn request_headers(bearer: &str) -> Vec<(String, String)> {
 }
 
 /// The envelope warning when the order book's foreign figures were left out;
-/// `flag` is the `has_foreign_bs` value Stockbit sent (`false` in session).
+/// `flag` is the `has_foreign_bs` value Stockbit sent (`false` in the recorded
+/// in-session book).
 fn foreign_not_current(flag: &str) -> String {
     format!(
         "foreign flow left empty: Stockbit flags it as not current (has_foreign_bs {flag}); \

@@ -84,9 +84,9 @@ pub fn parse_quote(symbol: &Symbol, body: &str) -> Result<Quote> {
 /// The orderbook fields that carry foreign flow, IDR values.
 const FOREIGN_FIELDS: [&str; 3] = ["fbuy", "fsell", "fnet"];
 
-/// Whether `fbuy`/`fsell`/`fnet` describe the current session. Stockbit sets
-/// `has_foreign_bs: false` while they still hold the previous session's
-/// figures: BBCA's book in session 2 on 2026-11-03 carried 2026-11-02's
+/// Whether `fbuy`/`fsell`/`fnet` describe the current session. A book with
+/// `has_foreign_bs: false` still held the previous session's figures:
+/// BBCA's book in session 2 on 2026-11-03 carried 2026-11-02's
 /// foreign net (-116.1B, IPOT's figure for that day; 2026-11-03 itself closed
 /// at -28.8B). Only an explicit `true` counts; a missing or odd flag does not.
 fn foreign_is_current(d: &Value) -> bool {
@@ -328,8 +328,9 @@ mod tests {
 
     #[test]
     fn foreign_flow_only_when_stockbit_marks_it_current() {
-        // In session the flag is false and fbuy/fsell/fnet are the previous
-        // session's: left out, while the ladder and today's figures still parse.
+        // In this in-session book the flag is false and fbuy/fsell/fnet are the
+        // previous session's: left out, while the ladder and today's figures
+        // still parse.
         let ob = parse_orderbook(&sym("BBCA"), IN_SESSION).unwrap();
         assert_eq!(
             (ob.foreign_buy, ob.foreign_sell, ob.foreign_net),
@@ -362,7 +363,7 @@ mod tests {
         let ask: u64 = ob.asks.iter().map(|l| l.shares).sum();
         assert_eq!((bid, ask), (36_866_000, 70_567_200));
 
-        // After the close (weekend recordings) the flag is true: kept, no warning.
+        // idx's own weekend recordings carry the flag true: kept, no warning.
         let ob = parse_orderbook(&sym("BBCA"), ORDERBOOK).unwrap();
         assert_eq!(ob.foreign_buy, Some(1_616_461_977_500.0));
         assert_eq!(ob.foreign_net, Some(-2_329_493_087_500.0));

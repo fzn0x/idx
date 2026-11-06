@@ -1459,7 +1459,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_orderbook",
-        description = "Realtime order book for one IDX ticker from the user's Stockbit session: the full depth ladder (bids and asks, sizes in shares), last/open/high/low, session volume and value, and foreign buy/sell/net (null while Stockbit marks them as not current, as it does during trading when they still hold the previous session's figures; a warning then says so). Returns the idx.orderbook.v1 envelope. Needs a Stockbit login (idx_stockbit_status says whether one exists); errors with 'no Stockbit session' otherwise."
+        description = "Realtime order book for one IDX ticker from the user's Stockbit session: the full depth ladder (bids and asks, sizes in shares), last/open/high/low, session volume and value, and foreign buy/sell/net (null, with a warning, while Stockbit marks them as not current with has_foreign_bs not true; a book recorded during trading carried the previous session's figures that way). Returns the idx.orderbook.v1 envelope. Needs a Stockbit login (idx_stockbit_status says whether one exists); errors with 'no Stockbit session' otherwise."
     )]
     async fn orderbook(
         &self,
