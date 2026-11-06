@@ -204,8 +204,12 @@ What `sync` does, first match wins:
 After installing, `sync` imports any month `index.json` lists that the
 snapshot does not have yet (a snapshot built before the newest file, or an
 older idx installing a frozen older version), from the raw files with their
-SHA-256 checked. Files are compared by the SHA-256 of the IDX file, never the
-SQLite files themselves: idx rewrites a database's header when it opens it.
+SHA-256 checked. It also imports again a month the database holds exactly as
+its snapshot carried it while `index.json` lists another file for it (IDX
+re-published the month after that snapshot was built); `status` lists those
+in `outdated`. A month imported locally from another file is never touched.
+Files are compared by the SHA-256 of the IDX file, never the SQLite files
+themselves: idx rewrites a database's header when it opens it.
 
 Safety:
 

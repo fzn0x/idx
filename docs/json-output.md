@@ -347,7 +347,8 @@ added field, and the values now match the documented "one entity's position".
 `imported` or `up_to_date`), `database`, `snapshot` (the mirror's snapshot for
 this idx's schema: `file`, `generated_at`, `db_schema_version`, `oldest`,
 `newest`, `releases`, `bytes`; `null` when the mirror has none), the months
-`installed` from it, `imported` from the monthly files, `kept` (only in the
+`installed` from it, `imported` from the monthly files (missing or
+re-published months), `kept` (only in the
 local database, kept without `--force`) and `dropped` (replaced with
 `--force`), `backup` (the `.bak` path or `null`), and `releases` / `newest`
 after the sync. The name is not `idx.ownership.sync.v1` because the web
@@ -360,6 +361,8 @@ its D1 loader).
 for a database built by local imports), `remote` (`mirror`,
 `index_generated_at`, `releases`, `newest`, `snapshot`; `null` offline, with
 `IDX_OWNERSHIP_MIRROR=off` or when the mirror cannot be read), `missing`,
+`outdated` (months held as the installed snapshot carried them while
+`index.json` lists a re-published file; sync imports them again),
 `local_only` and `sync` (`up_to_date`, `install`, `update`, `import` or `null`
 without `remote`). Status never creates the database file.
 

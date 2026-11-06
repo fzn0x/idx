@@ -103,7 +103,8 @@ pub struct SyncReport {
     pub snapshot: Option<SnapshotSummary>,
     /// Months that came from the snapshot (installed or updated).
     pub installed: Vec<NaiveDate>,
-    /// Months imported from the mirror's monthly files.
+    /// Months imported from the mirror's monthly files: missing ones, and
+    /// ones IDX re-published after the snapshot was built.
     pub imported: Vec<NaiveDate>,
     /// Months only the local database has (or re-imported locally with
     /// another file), kept because `--force` was not given.
@@ -185,6 +186,11 @@ pub struct StatusReport {
     pub remote: Option<MirrorState>,
     /// Months on the mirror the local database lacks.
     pub missing: Vec<NaiveDate>,
+    /// Months the database holds as its installed snapshot carried them
+    /// while the mirror's `index.json` lists another IDX file (re-published
+    /// after the snapshot was built); sync imports them again. `[]` without
+    /// the index.
+    pub outdated: Vec<NaiveDate>,
     /// Months only the local database has (`[]` without `remote`).
     pub local_only: Vec<NaiveDate>,
     /// What `idx ownership sync` would do; `null` without `remote`.

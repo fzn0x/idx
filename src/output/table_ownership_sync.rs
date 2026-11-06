@@ -162,10 +162,17 @@ pub fn status(r: &StatusReport) -> String {
             }
         },
     ));
-    let missing = if r.missing.is_empty() {
+    let mut todo = Vec::new();
+    if !r.missing.is_empty() {
+        todo.push(format!("missing {}", dates(&r.missing)));
+    }
+    if !r.outdated.is_empty() {
+        todo.push(format!("re-published {}", dates(&r.outdated)));
+    }
+    let missing = if todo.is_empty() {
         String::new()
     } else {
-        format!(" (missing {})", dates(&r.missing))
+        format!(" ({})", todo.join("; "))
     };
     rows.push((
         "Sync",
@@ -273,6 +280,7 @@ mod tests {
             installed_snapshot: None,
             remote: None,
             missing: vec![],
+            outdated: vec![],
             local_only: vec![],
             sync: None,
         };
@@ -294,5 +302,14 @@ mod tests {
         let t = status(&r);
         assert!(t.contains("8 months, newest 2026-09-30 (index of 2026-10-17T08:49:52Z); snapshot of 2026-11-06 01:17 UTC (8 months, newest 2026-09-30, 6.9 MB)"), "{t}");
         assert!(t.contains("would install the snapshot (missing 2026-09-30)"));
+        r.sync = Some(SyncNeeded::Import);
+        r.outdated = vec![d("2026-08-31")];
+        let t = status(&r);
+        assert!(
+            t.contains(
+                "would import the monthly files (missing 2026-09-30; re-published 2026-08-31)"
+            ),
+            "{t}"
+        );
     }
 }

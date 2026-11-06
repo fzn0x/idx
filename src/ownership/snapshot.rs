@@ -507,8 +507,12 @@ impl Divergence {
 ///
 /// Months on neither the snapshot nor the index are local-only; a month the
 /// index lists with the same SHA-256 is not (after the swap it is imported
-/// again from the raw file). Files are compared by the SHA-256 of the IDX
-/// file, never the SQLite files themselves (idx rewrites their header).
+/// again from the raw file, see [`to_import`]). For the same reason a month
+/// held from the file the index lists counts as current even when the
+/// snapshot carries an older file of it (a frozen snapshot of an older
+/// schema, or a run that stopped before its manifest). Files are compared by
+/// the SHA-256 of the IDX file, never the SQLite files themselves (idx
+/// rewrites their header).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Plan {
     NewerSchema(i64),
@@ -546,17 +550,18 @@ pub fn plan(
     let empty_info = SnapshotInfo::default();
     let r = &local.info.as_ref().unwrap_or(&empty_info).releases;
 
+    let listed = |d: &NaiveDate, sha: &str| index.get(d).map(String::as_str) == Some(sha);
     let mut div = Divergence::default();
     for (d, sha) in &local.months {
         match s.get(d) {
             None => {
-                if index.get(d).map(String::as_str) != Some(sha.as_str()) {
+                if !listed(d, sha) {
                     div.local_only.push(*d);
                 }
             }
             Some(snap_sha) => {
                 if let Some(installed) = r.get(d) {
-                    if installed != sha && *snap_sha != sha.as_str() {
+                    if installed != sha && *snap_sha != sha.as_str() && !listed(d, sha) {
                         div.modified.push(*d);
                     }
                 }
@@ -576,7 +581,7 @@ pub fn plan(
         if !force {
             return Plan::Keep(div);
         }
-        let differed = differed(local, &s, &div);
+        let differed = differed(local, &s, index, &div);
         return Plan::Replace {
             divergence: div,
             differed,
@@ -587,29 +592,65 @@ pub fn plan(
         .as_ref()
         .and_then(|i| i.content_sha256.as_deref())
         == Some(snap.content_sha256.as_str());
-    let holds_all = s
-        .iter()
-        .all(|(d, sha)| local.months.get(d).map(String::as_str) == Some(*sha));
+    let holds_all = s.iter().all(|(d, sha)| {
+        local
+            .months
+            .get(d)
+            .is_some_and(|l| l == sha || listed(d, l))
+    });
     if same_content && local.user_version == Some(SCHEMA_VERSION) && holds_all {
         return Plan::UpToDate;
     }
     Plan::Replace {
-        differed: differed(local, &s, &div),
+        differed: differed(local, &s, index, &div),
         divergence: div,
     }
 }
 
-/// Local months the snapshot also has, from another file (not counting
-/// the ones `div` already names).
-fn differed(local: &LocalState, s: &BTreeMap<NaiveDate, &str>, div: &Divergence) -> Vec<NaiveDate> {
+/// Local months the snapshot also has, from another file that the index
+/// does not list either, so the swap loses it (not counting the ones `div`
+/// already names). A month held from the listed file is imported again.
+fn differed(
+    local: &LocalState,
+    s: &BTreeMap<NaiveDate, &str>,
+    index: &BTreeMap<NaiveDate, String>,
+    div: &Divergence,
+) -> Vec<NaiveDate> {
     local
         .months
         .iter()
         .filter(|(d, sha)| {
-            s.get(d).is_some_and(|snap| *snap != sha.as_str()) && !div.modified.contains(d)
+            s.get(d).is_some_and(|snap| *snap != sha.as_str())
+                && index.get(*d) != Some(*sha)
+                && !div.modified.contains(d)
         })
         .map(|(d, _)| *d)
         .collect()
+}
+
+/// Months of the mirror's index (as_of → SHA-256) a sync imports from the
+/// monthly files: the ones the database lacks (`missing`), and the ones it
+/// holds exactly as its installed snapshot carried them while the index
+/// lists another file (`outdated`: IDX re-published the month after the
+/// snapshot was built). A month imported locally from another file is never
+/// touched.
+pub fn to_import(
+    local: &LocalState,
+    index: &BTreeMap<NaiveDate, String>,
+) -> (Vec<NaiveDate>, Vec<NaiveDate>) {
+    let from_snapshot = local.info.as_ref().map(|i| &i.releases);
+    let mut missing = Vec::new();
+    let mut outdated = Vec::new();
+    for (d, sha) in index {
+        match local.months.get(d) {
+            None => missing.push(*d),
+            Some(have) if have != sha && from_snapshot.and_then(|r| r.get(d)) == Some(have) => {
+                outdated.push(*d)
+            }
+            Some(_) => {}
+        }
+    }
+    (missing, outdated)
 }
 
 fn join_dates(d: &[NaiveDate]) -> String {
@@ -1141,10 +1182,10 @@ fn index_months(ix: &MirrorIndex) -> BTreeMap<NaiveDate, String> {
 
 /// `idx ownership sync`: brings the database at `db_path` up to date from
 /// the mirror at `base` (see [`plan`]), then imports the mirror's monthly
-/// files the database still lacks (months newer than the snapshot, or all of
-/// them when there is no snapshot or the database was kept). One sync of a
-/// database runs at a time; a second one waits for it and then finds the
-/// database up to date.
+/// files the database still needs ([`to_import`]: months newer than the
+/// snapshot or re-published since it was built, or all of them when there is
+/// no snapshot or the database was kept). One sync of a database runs at a
+/// time; a second one waits for it and then finds the database up to date.
 pub async fn sync(
     db_path: &Path,
     base: &str,
@@ -1182,7 +1223,6 @@ pub async fn sync(
         releases: 0,
         newest: None,
     };
-    let mut have: BTreeSet<NaiveDate> = local.months.keys().copied().collect();
     match &decision {
         Plan::NewerSchema(v) => {
             return Err(IdxError::Config(format!(
@@ -1206,7 +1246,6 @@ pub async fn sync(
                 d.sort();
                 d
             };
-            have = report.installed.iter().copied().collect();
             report.backup = bak.as_ref().map(|b| b.display().to_string());
             if let Plan::Replace {
                 divergence,
@@ -1242,14 +1281,21 @@ pub async fn sync(
     }
 
     if let Some(ix) = &index {
+        let now = if report.installed.is_empty() {
+            local
+        } else {
+            inspect(db_path)?
+        };
+        let (missing, outdated) = to_import(&now, &listed);
         let files: Vec<_> = mirror::to_discovered(base, ix)
             .into_iter()
-            .filter(|f| !have.contains(&f.as_of))
+            .filter(|f| missing.contains(&f.as_of) || outdated.contains(&f.as_of))
             .collect();
         if !files.is_empty() {
             let mut db = OwnershipDb::open(db_path)?;
+            // `force`: an outdated month replaces the snapshot's copy.
             let (reports, notes) =
-                super::import_discovered(&mut db, &files, false, false, timeout).await?;
+                super::import_discovered(&mut db, &files, false, true, timeout).await?;
             let mut imported: Vec<NaiveDate> = reports.iter().map(|r| r.release.as_of).collect();
             imported.sort();
             report.imported = imported;
@@ -1267,12 +1313,12 @@ pub async fn sync(
     Ok(s)
 }
 
-fn needed(decision: &Plan, missing_from_index: bool) -> Option<SyncNeeded> {
+fn needed(decision: &Plan, to_import: bool) -> Option<SyncNeeded> {
     match decision {
         Plan::NewerSchema(_) => None,
         Plan::Install => Some(SyncNeeded::Install),
         Plan::Replace { .. } => Some(SyncNeeded::Update),
-        Plan::NoSnapshot | Plan::Keep(_) | Plan::UpToDate => Some(if missing_from_index {
+        Plan::NoSnapshot | Plan::Keep(_) | Plan::UpToDate => Some(if to_import {
             SyncNeeded::Import
         } else {
             SyncNeeded::UpToDate
@@ -1313,6 +1359,7 @@ pub async fn status(
         }),
         remote: None,
         missing: vec![],
+        outdated: vec![],
         local_only: vec![],
         sync: None,
     };
@@ -1350,8 +1397,9 @@ pub async fn status(
             let mut no_snapshot = matches!(&remote, Ok(Remote::Unsupported(_)));
             if let (Ok(r), Ok(_)) = (&remote, &index) {
                 let decision = plan(&local, r.manifest(), &listed, false);
-                let missing_from_index = listed.keys().any(|d| !local.months.contains_key(d));
-                report.sync = needed(&decision, missing_from_index);
+                let (missing, outdated) = to_import(&local, &listed);
+                report.sync = needed(&decision, !missing.is_empty() || !outdated.is_empty());
+                report.outdated = outdated;
                 no_snapshot |= matches!(decision, Plan::NoSnapshot);
             }
             if let (true, Ok(r)) = (no_snapshot, &remote) {
@@ -1897,17 +1945,57 @@ mod tests {
             plan(&older, Some(&snap), &ix, false),
             Plan::Replace { .. }
         ));
-        // A re-published IDX file: replaced, and named.
+        // A re-published IDX file (index and snapshot list it): replaced, and named.
         let republished = manifest(&[("2026-07-31", 'a'), ("2026-08-31", 'i')], 'j');
+        let ix_i = index(&[("2026-07-31", 'a'), ("2026-08-31", 'i')]);
         let Plan::Replace {
             differed,
             divergence,
-        } = plan(&same, Some(&republished), &ix, false)
+        } = plan(&same, Some(&republished), &ix_i, false)
         else {
             panic!("replace")
         };
         assert_eq!(differed, vec![d("2026-08-31")]);
         assert!(divergence.is_empty());
+
+        // The index lists a file the snapshot predates (a frozen snapshot of
+        // an older schema, or a run that stopped before its manifest).
+        // Installed from the snapshot: up to date, and the month is outdated.
+        assert_eq!(plan(&same, Some(&snap), &ix_i, false), Plan::UpToDate);
+        assert_eq!(to_import(&same, &ix_i), (vec![], vec![d("2026-08-31")]));
+        // Once imported again from the index: still up to date, nothing to do.
+        let reimported = local(
+            &[("2026-07-31", 'a'), ("2026-08-31", 'i')],
+            Some(('c', installed)),
+        );
+        assert_eq!(plan(&reimported, Some(&snap), &ix_i, false), Plan::UpToDate);
+        assert_eq!(to_import(&reimported, &ix_i), (vec![], vec![]));
+        // Built by local imports of the listed file: replaced, nothing named
+        // as lost (sync imports it again after the swap).
+        let raw = local(&[("2026-07-31", 'a'), ("2026-08-31", 'i')], None);
+        assert_eq!(
+            plan(&raw, Some(&snap), &ix_i, false),
+            Plan::Replace {
+                divergence: Divergence::default(),
+                differed: vec![]
+            }
+        );
+        // A month imported locally from a third file is the user's: kept, and
+        // never imported again behind their back.
+        let third = local(
+            &[("2026-07-31", 'a'), ("2026-08-31", 'k')],
+            Some(('c', installed)),
+        );
+        assert!(matches!(
+            plan(&third, Some(&snap), &ix_i, false),
+            Plan::Keep(ref div) if div.modified == vec![d("2026-08-31")]
+        ));
+        assert_eq!(to_import(&third, &ix_i), (vec![], vec![]));
+        // Missing months come first.
+        assert_eq!(
+            to_import(&local(&[("2026-07-31", 'a')], None), &ix_i),
+            (vec![d("2026-08-31")], vec![])
+        );
     }
 
     fn imported_db(path: &Path, files: &[&str]) {
@@ -2174,6 +2262,18 @@ mod tests {
         }
     }
 
+    /// Another IDX file of the same month: the fixture with a one-byte zip
+    /// comment, so it parses the same and hashes differently.
+    fn republished(path: &str) -> Vec<u8> {
+        let mut b = std::fs::read(path).unwrap();
+        let eocd = b.windows(4).rposition(|w| w == b"PK\x05\x06").unwrap();
+        let len = u16::from_le_bytes([b[eocd + 20], b[eocd + 21]]);
+        assert_eq!(eocd + 22 + len as usize, b.len());
+        b[eocd + 20..eocd + 22].copy_from_slice(&(len + 1).to_le_bytes());
+        b.push(b'x');
+        b
+    }
+
     /// The monthly files of a mirror in `dir` and their index.json.
     fn write_index(dir: &Path, files: &[(&str, Vec<u8>)]) {
         let releases: Vec<serde_json::Value> = files
@@ -2262,6 +2362,52 @@ mod tests {
         assert!(other.execute_batch("BEGIN EXCLUSIVE").is_err());
         drop(held);
         other.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_imports_a_month_re_published_after_the_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, base) = snapshot_mirror(root.path());
+        let live = root.path().join("o.sqlite");
+        let first = sync(&live, &base, false, T).await.unwrap().data;
+        assert_eq!(first.action, SyncAction::Installed);
+        assert!(first.imported.is_empty());
+
+        // IDX re-publishes August: the index lists the new file, the
+        // snapshot stays (frozen for an older schema, or the run stopped
+        // before its manifest).
+        let aug2 = republished(AUGUST);
+        let mut files = july_august();
+        files[1].1 = aug2.clone();
+        write_index(&dir, &files);
+        let st = status(&live, Some(&base), T).await.unwrap().data;
+        assert_eq!(st.outdated, vec![d("2026-08-31")]);
+        assert!(st.missing.is_empty());
+        assert_eq!(st.sync, Some(SyncNeeded::Import));
+
+        let second = sync(&live, &base, false, T).await.unwrap().data;
+        assert_eq!(second.action, SyncAction::Imported);
+        assert_eq!(second.imported, vec![d("2026-08-31")]);
+        assert_eq!(
+            inspect(&live).unwrap().months[&d("2026-08-31")],
+            sha256_hex(&aug2)
+        );
+        let st = status(&live, Some(&base), T).await.unwrap().data;
+        assert!(st.outdated.is_empty());
+        assert_eq!(st.sync, Some(SyncNeeded::UpToDate));
+        let third = sync(&live, &base, false, T).await.unwrap().data;
+        assert_eq!(third.action, SyncAction::UpToDate);
+        assert!(third.imported.is_empty());
+
+        // A fresh database gets both in one sync.
+        let fresh = root.path().join("fresh.sqlite");
+        let r = sync(&fresh, &base, false, T).await.unwrap().data;
+        assert_eq!(r.action, SyncAction::Installed);
+        assert_eq!(r.imported, vec![d("2026-08-31")]);
+        assert_eq!(
+            inspect(&fresh).unwrap().months[&d("2026-08-31")],
+            sha256_hex(&aug2)
+        );
     }
 
     #[tokio::test]
