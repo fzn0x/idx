@@ -209,9 +209,13 @@ pub fn looks_like(name: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// The longest share count accepted. KSEI's largest (GOTO's listed shares,
+/// 1.19e12) has 13 digits; at 15, no sum of a row's counts can overflow.
+const MAX_COUNT_DIGITS: usize = 15;
+
 fn cell_int(v: &str) -> Option<i64> {
     let v = v.trim();
-    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+    if v.is_empty() || v.len() > MAX_COUNT_DIGITS || !v.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     v.parse().ok()
@@ -286,7 +290,7 @@ pub fn parse_txt(text: &str) -> Result<ParsedComposition> {
         let nums: Option<Vec<i64>> = c[5..25].iter().map(|v| cell_int(v)).collect();
         let Some(nums) = nums else {
             skipped.push(format!(
-                "line {n} ({symbol}): a share count is not a whole number"
+                "line {n} ({symbol}): a share count is not a whole number of at most {MAX_COUNT_DIGITS} digits"
             ));
             continue;
         };
@@ -961,6 +965,9 @@ mod tests {
             "30-OCT-2026|AAAA|EQUITY|100|5|1|0|0|0|0|0|0|0|0|1|0|0|0|0|0|0|0|0|0|0",
             "30-OCT-2026|GGGG|EQUITY|100||1|0|0|0|0|0|0|0|0|9|0|0|0|0|0|0|0|0|0|0",
             "29-OCT-2026|HHHH|EQUITY|100|5|1|0|0|0|0|0|0|0|0|1|0|0|0|0|0|0|0|0|0|0",
+            // Two counts near i64::MAX would overflow the type sum.
+            "30-OCT-2026|IIII|EQUITY|100|5|9223372036854775807|9223372036854775807|0|0|0|0|0|0|0|1|0|0|0|0|0|0|0|0|0|0",
+            "30-OCT-2026|JJJJ|EQUITY|9999999999999999|5|1|0|0|0|0|0|0|0|0|1|0|0|0|0|0|0|0|0|0|0",
         ]
         .join("\r\n");
         let p = parse_txt(&text).unwrap();
@@ -980,6 +987,8 @@ mod tests {
             "AAAA appears twice",
             "GGGG): the local types add up to 1",
             "HHHH is dated 2026-10-29",
+            "IIII): a share count is not a whole number of at most 15 digits",
+            "JJJJ): Sec. Num",
         ] {
             assert!(all.contains(needle), "{needle} in {all}");
         }
