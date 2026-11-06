@@ -272,23 +272,39 @@ pub struct Release {
 }
 
 /// `ownership import`.
+///
+/// For a KSEI composition archive (`family` = `composition`) `release`
+/// describes the month stored in the composition tables: `rows` and
+/// `issuers` count the stocks (EQUITY rows), `entities` is 0 (the archive
+/// names no holders) and `positions`, `other_date_rows` and
+/// `controller_column` are `null` (they describe the register only).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImportReport {
     pub release: Release,
     /// `true` when this `as_of` already existed and was replaced.
     pub replaced: bool,
     pub database: String,
+    /// `above1` (the register of holders above 1 %) or `composition` (KSEI's
+    /// "Kepemilikan Efek" archive), detected from the file's content.
+    #[serde(default = "default_family")]
+    pub family: String,
+    /// Composition archives only: rows of other security types (bonds,
+    /// warrants, rights, funds, ...) left out; `null` for the register.
+    #[serde(default)]
+    pub other_securities: Option<u64>,
 }
 
-/// A downloadable monthly file found on IDX's "Data Kepemilikan Saham" page.
+/// A downloadable file found on IDX's "Data Kepemilikan Saham" page, the
+/// GitHub mirror or KSEI's "Kepemilikan Efek" page.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DiscoveredFile {
     pub as_of: NaiveDate,
     pub title: String,
-    /// Where the file is downloaded from (idx.co.id or the GitHub mirror).
+    /// Where the file is downloaded from (idx.co.id, the GitHub mirror or
+    /// ksei.co.id).
     pub url: String,
     pub format: String,
-    /// `idx.co.id` or `github-mirror`.
+    /// `idx.co.id`, `github-mirror` or `ksei.co.id`.
     #[serde(default = "default_origin")]
     pub origin: String,
     /// SHA-256 of the file when the listing provides it (mirror index).
@@ -297,8 +313,26 @@ pub struct DiscoveredFile {
     /// The file's original address on idx.co.id when `url` is a mirror copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
+    /// `above1` (holders above 1 %), `above5` (holders above 5 %, a daily
+    /// register), `investor-type` and `classification` (IDX's summaries per
+    /// investor type and classification), all on idx.co.id, or
+    /// `composition` (KSEI's monthly "Kepemilikan Efek" archive).
+    #[serde(default = "default_family")]
+    pub family: String,
+    /// Whether `idx ownership import` can read this file (`above1` and
+    /// `composition`); the other families are listed only.
+    #[serde(default = "default_importable")]
+    pub importable: bool,
 }
 
 fn default_origin() -> String {
     "idx.co.id".to_string()
+}
+
+fn default_family() -> String {
+    "above1".to_string()
+}
+
+fn default_importable() -> bool {
+    true
 }

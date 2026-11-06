@@ -464,7 +464,7 @@ const R = {
   },
   tools() {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
+    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
     frag.append(wrapScroll(table([
       { h: "Tool", k: "tool", l: true, cls: "sym" }, { h: "CLI", k: "cli", l: true },
       { h: "Web terminal", f: (t) => t.web || "CLI and MCP only", l: true }, { h: "What", k: "what", l: true, cls: "name" },
@@ -479,7 +479,9 @@ const R = {
     const stockbit = t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit");
     const reason = stockbit
       ? "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page."
-      : CLI_ONLY_REASON;
+      : t.tool === "idx_ownership_composition"
+        ? "KSEI's composition archive is downloaded from ksei.co.id into the CLI's local ownership database, so this tool runs in the CLI and the MCP server only for now."
+        : CLI_ONLY_REASON;
     frag.append(el("p", { class: "warn", text: `${reason} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
     return frag;
   },

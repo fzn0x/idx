@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 37 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -328,6 +328,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_changes` | `from`, `to`, `symbol?`, `min_pct_change?`, `limit?`, `offset?` | `idx.ownership.changes.v1`: `summary` over every match, one page of rows |
 | `idx_ownership_foreign` | `symbol?`, `from?`, `to?`, `limit?` | `idx.ownership.foreign.v1` (one issuer over time) or `idx.ownership.foreign-flow.v1` (every issuer between two months) |
 | `idx_ownership_releases` | none | `idx.ownership.releases.v1` |
+| `idx_ownership_composition` | `symbol`, `as_of?` | `idx.ownership.composition.v1`: KSEI's monthly archive, local vs foreign shares in nine investor types as a percent of the scripless shares, `scripless_pct`, and every imported month. Downloads the newest month from ksei.co.id on first use (not with `--offline`) |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net. Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
@@ -345,6 +346,14 @@ accounts) are summed, with `accounts` saying how many, and from the 30 Oct
 2026 register each row carries `controller_or_affiliate`
 (`controller_reported` on the report says whether the release has it).
 `idx_ownership_entity` needs at least 3 letters or digits in `name`.
+
+`idx_ownership_composition` reads a second dataset: KSEI's "Kepemilikan Efek"
+archive, which counts every holder and names none. It covers the shares held
+in KSEI accounts only, so its percents are of those (`scripless_pct` says how
+much of the listed shares that is). The first call downloads the newest month
+(about 125 KB) into the same local database; later calls read it and ask
+ksei.co.id again only once a newer month can exist. `provider` is `ksei` when
+the call imported a month, `local-db` otherwise.
 
 ## Harness compatibility
 

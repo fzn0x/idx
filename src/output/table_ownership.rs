@@ -411,6 +411,31 @@ pub fn imports(list: &[ImportReport]) -> String {
     let mut out = String::new();
     for r in list {
         let rel = &r.release;
+        if r.family == "composition" {
+            let other = r.other_securities.unwrap_or(0);
+            out.push_str(&format!(
+                "Imported KSEI composition {} ({}): {} stocks{}{} → {}\n",
+                rel.as_of,
+                rel.format,
+                f::num(rel.rows as f64, 0),
+                if other > 0 {
+                    format!(
+                        ", {} other securit{} left out",
+                        f::num(other as f64, 0),
+                        if other == 1 { "y" } else { "ies" }
+                    )
+                } else {
+                    String::new()
+                },
+                if r.replaced {
+                    " (replaced earlier import)"
+                } else {
+                    ""
+                },
+                r.database
+            ));
+            continue;
+        }
         let other = rel.other_date_rows.unwrap_or(0);
         let positions = match rel.positions {
             Some(p) => {

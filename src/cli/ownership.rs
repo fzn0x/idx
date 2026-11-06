@@ -1,4 +1,5 @@
-//! `idx ownership ...`: KSEI's monthly ">1 % holders" register in local SQLite.
+//! `idx ownership ...`: KSEI's monthly ">1 % holders" register and KSEI's
+//! monthly composition archive ("Kepemilikan Efek") in local SQLite.
 
 use std::path::PathBuf;
 
@@ -8,21 +9,21 @@ use clap::{Args, Subcommand};
 use crate::error::{IdxError, Result};
 use crate::model::Symbol;
 use crate::output::json::{
-    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_DISCOVER, SCHEMA_OWNERSHIP_ENTITY,
-    SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS,
-    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
+    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_OWNERSHIP_DISCOVER,
+    SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
+    SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
 };
-use crate::output::{self, table_ownership as tbl};
-use crate::ownership::{self, OwnershipDb};
+use crate::output::{self, table_composition, table_ownership as tbl};
+use crate::ownership::{self, composition, ksei, OwnershipDb};
 use crate::providers::Sourced;
 
 use super::{emit, Context};
 
 #[derive(Debug, Subcommand)]
 pub enum OwnershipCmd {
-    /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) into the local database.
+    /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) or a KSEI composition archive (ZIP or TXT) into the local database.
     #[command(
-        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror."
+        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n  idx ownership import --latest --family composition    # KSEI's newest Kepemilikan Efek archive\n  idx ownership import --file BalanceposEfek20261030.zip   # or the Balancepos20261030.txt inside\n  idx ownership import --url https://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror. A refusal by Cloudflare is the JSON error code `blocked` (exit 3).\n\n--file and --url tell the family from the content: a KSEI composition archive goes to its own\ntables (see `idx ownership composition`), never into the register of holders above 1%."
     )]
     Import(ImportArgs),
 
@@ -99,14 +100,26 @@ pub enum OwnershipCmd {
     /// List the monthly files currently published on idx.co.id (needs network).
     Discover,
 
+    /// KSEI's monthly composition of one stock: local and foreign shares by investor type.
+    #[command(
+        after_help = "Examples:\n  idx ownership composition BBCA\n  idx ownership composition TLKM --as-of 2026-09-30\n  idx -o json ownership composition BBCA | jq '.data.foreign_pct'\n\nKSEI's monthly \"Kepemilikan Efek\" archive (ksei.co.id) splits every share held in KSEI\naccounts (scripless) between local and foreign holders in nine investor types: insurance,\ncorporate, pension fund, financial institution, individual, mutual fund, securities company,\nfoundation, others. Percentages are of the scripless shares; shares still held as\ncertificates (scrip) are outside the archive, so scripless_pct can be far below 100 (BBCA,\n30 Oct 2026: 42.55 %, its controlling holder's stake is scrip). It covers every holder, not\nonly those above 1 %, and names none.\n\nThe first call downloads the newest month (about 125 KB) into the local database; later\ncalls read it and ask ksei.co.id again only once a newer month can exist. --as-of imports a\nlisted month that is missing. --offline never downloads."
+    )]
+    Composition {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Month (the archive's date, e.g. 2026-10-30; default: newest).
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        as_of: Option<NaiveDate>,
+    },
+
     /// Print the database path.
     Path,
 }
 
 #[derive(Debug, Args)]
 // The mode group names its four arguments: a struct-level `#[group]` would
-// take in every field, `--force` too, and refuse `--all --force` (idx 0.8.1
-// did).
+// take in every field, `--force` and `--family` too, and refuse
+// `--all --force` (idx 0.8.1 did).
 #[command(group(
     clap::ArgGroup::new("mode")
         .required(true)
@@ -114,21 +127,33 @@ pub enum OwnershipCmd {
         .args(["file", "url", "latest", "all"])
 ))]
 pub struct ImportArgs {
-    /// Local XLSX or PDF file.
+    /// Local file: a register (XLSX or PDF) or a KSEI composition archive (ZIP or TXT).
     #[arg(long, value_name = "PATH")]
     pub file: Option<PathBuf>,
-    /// Direct URL of an XLSX or PDF file.
+    /// Direct URL of a register (XLSX or PDF) or a KSEI composition archive (ZIP or TXT).
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
-    /// Newest file on the IDX page that is not imported yet.
+    /// Newest listed file that is not imported yet.
     #[arg(long)]
     pub latest: bool,
-    /// Every file on the IDX page that is not imported yet.
+    /// Every listed file that is not imported yet.
     #[arg(long)]
     pub all: bool,
+    /// What --latest/--all import: the register of holders above 1 % (idx.co.id or the mirror) or KSEI's composition archive (ksei.co.id). --file and --url detect it from the content.
+    #[arg(long, value_enum, value_name = "FAMILY", conflicts_with_all = ["file", "url"])]
+    pub family: Option<ImportFamily>,
     /// Re-import even when the release date already exists (with --latest/--all).
     #[arg(long)]
     pub force: bool,
+}
+
+/// The families `import --latest/--all` can fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ImportFamily {
+    /// The register of holders above 1 % (default).
+    Above1,
+    /// KSEI's composition archive.
+    Composition,
 }
 
 fn open(ctx: &Context) -> Result<OwnershipDb> {
@@ -252,18 +277,38 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 tbl::discovered(r, &have, ctx.color)
             })
         }
+        OwnershipCmd::Composition { symbol, as_of } => {
+            let sym = Symbol::parse(&symbol)?;
+            let mut db = open(ctx)?;
+            let s = composition::report(
+                &mut db,
+                &ctx.fetcher,
+                sym.as_str(),
+                as_of,
+                download_timeout(ctx),
+                crate::service::today_wib(),
+            )
+            .await?;
+            emit(ctx, SCHEMA_OWNERSHIP_COMPOSITION, s, |r| {
+                table_composition::composition(r, ctx.color)
+            })
+        }
         OwnershipCmd::Path => {
             output::print_stdout(&format!("{}\n", ctx.settings.ownership_db.display()))
         }
     }
 }
 
+/// Downloads get at least a minute whatever `--timeout` says.
+fn download_timeout(ctx: &Context) -> std::time::Duration {
+    ctx.settings
+        .timeout()
+        .max(std::time::Duration::from_secs(60))
+}
+
 async fn import(ctx: &Context, args: ImportArgs) -> Result<()> {
     let mut db = open(ctx)?;
-    let timeout = ctx
-        .settings
-        .timeout()
-        .max(std::time::Duration::from_secs(60));
+    let timeout = download_timeout(ctx);
     let (reports, warnings) = if let Some(path) = &args.file {
         let (r, w) = ownership::import_file(&mut db, path)?;
         (vec![r], w)
@@ -279,7 +324,15 @@ async fn import(ctx: &Context, args: ImportArgs) -> Result<()> {
                 "--latest/--all need the network".into(),
             ));
         }
-        let (files, notes) = ownership::discover::discover(timeout).await?;
+        let (files, notes) = match args.family.unwrap_or(ImportFamily::Above1) {
+            ImportFamily::Above1 => ownership::discover::discover(timeout).await?,
+            ImportFamily::Composition => {
+                // --latest needs the first listing page only; --all walks them.
+                let s =
+                    ksei::list(&ctx.fetcher, if args.latest { ksei::PER_PAGE } else { 0 }).await?;
+                (s.data, s.warnings)
+            }
+        };
         let (reports, mut warnings) =
             ownership::import_discovered(&mut db, &files, args.latest, args.force, timeout).await?;
         warnings.splice(0..0, notes.clone());

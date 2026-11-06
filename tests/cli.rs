@@ -1349,6 +1349,164 @@ fn completions_generate() {
         .stdout(predicate::str::contains("Register-ArgumentCompleter"));
 }
 
+#[test]
+fn ownership_composition_works_offline() {
+    let sb = sandbox();
+    let db = sb.cache.join("composition.sqlite");
+    let fx = |name: &str| {
+        format!(
+            "{}/tests/fixtures/ownership/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    };
+    let own = |sb: &Sandbox| {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+    // Nothing imported and --offline (the test harness): no download.
+    own(&sb)
+        .args(["ownership", "composition", "BBCA"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("--family composition"));
+    // The ZIP and the TXT inside it are both detected from their content.
+    let out = own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "import",
+            "--file",
+            &fx("ksei_balancepos_20261030_excerpt_constructed.zip"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.import.v1");
+    assert_eq!(v["data"][0]["family"], "composition");
+    assert_eq!(v["data"][0]["release"]["rows"], 6);
+    assert_eq!(v["data"][0]["release"]["format"], "zip");
+    assert_eq!(v["data"][0]["other_securities"], 7);
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--file",
+            &fx("ksei_balancepos_20260930_excerpt.txt"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Imported KSEI composition 2026-09-30 (txt): 6 stocks, 7 other securities left out",
+        ));
+    own(&sb)
+        .args(["ownership", "composition", "bbca"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "BBCA · KSEI composition 2026-10-30",
+        ))
+        .stdout(predicate::str::contains("scripless"))
+        .stdout(predicate::str::contains("42.55% of listed"))
+        .stdout(predicate::str::contains("ID individual"))
+        .stdout(predicate::str::contains("Imported months"));
+    let out = own(&sb)
+        .args(["-o", "json", "ownership", "composition", "BBCA"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.composition.v1");
+    assert_eq!(v["provider"], "local-db");
+    assert_eq!(v["data"]["scripless_pct"], 42.5501);
+    assert_eq!(v["data"]["foreign_pct"], 67.2201);
+    assert_eq!(v["data"]["history"].as_array().unwrap().len(), 2);
+    assert!(v["data"]["history"][0]["foreign_change_pp"].is_null());
+    let out = own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "composition",
+            "BBCA",
+            "--as-of",
+            "2026-09-30",
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["as_of"], "2026-09-30");
+    own(&sb)
+        .args(["-o", "csv", "ownership", "composition", "BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "code,investor_type,local_shares,foreign_shares,local_pct,foreign_pct\n",
+        ));
+    own(&sb)
+        .args(["ownership", "composition", "ZZZZ"])
+        .assert()
+        .code(4);
+    // A month that is not imported needs ksei.co.id.
+    own(&sb)
+        .args(["ownership", "composition", "BBCA", "--as-of", "2026-08-31"])
+        .assert()
+        .code(5);
+    // The register of holders above 1 % is untouched.
+    let out = own(&sb)
+        .args(["-o", "json", "ownership", "releases"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"], serde_json::json!([]));
+    own(&sb)
+        .args(["ownership", "ticker", "BBCA"])
+        .assert()
+        .code(4);
+    // A register workbook is still a register.
+    own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "import",
+            "--file",
+            &fx("above1_20260831_excerpt.xlsx"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\": \"above1\""));
+    // Downloads need the network.
+    own(&sb)
+        .args(["ownership", "import", "--latest", "--family", "composition"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--family",
+            "composition",
+            "--file",
+            &fx("ksei_balancepos_20261030_excerpt_constructed.zip"),
+        ])
+        .assert()
+        .code(2);
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "ownership-composition"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["$schema"].as_str().unwrap().contains("json-schema.org"));
+    assert!(v.to_string().contains("scripless_pct"));
+}
+
 /// A one-shot HTTP server on 127.0.0.1 answering every request with the
 /// response for its path: Cloudflare's challenge and block pages and an
 /// ordinary outage, without leaving the machine.

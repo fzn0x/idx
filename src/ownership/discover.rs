@@ -40,7 +40,7 @@ const IMPERSONATE_BINARIES: &[&str] = &[
 /// What to do when Cloudflare refuses idx.co.id.
 pub const MANUAL_HINT: &str = "Ways out: retry later or from another network; let `idx ownership import --latest` use the GitHub mirror (the default, or IDX_OWNERSHIP_SOURCE=mirror); install curl-impersonate (https://github.com/lexiforest/curl-impersonate) and put curl_chrome131 on PATH; or open https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/ in a browser, download the workbook and run `idx ownership import --file <path>`";
 
-fn unescape_js(s: &str) -> String {
+pub(super) fn unescape_js(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -143,6 +143,8 @@ pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
             origin: "idx.co.id".to_string(),
             sha256: None,
             source_url: None,
+            family: "above1".to_string(),
+            importable: true,
         });
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.as_of));
@@ -249,7 +251,7 @@ fn provider_for(host: &str) -> &'static str {
     if h == "idx.co.id" || h.ends_with(".idx.co.id") {
         "idx"
     } else if h == "ksei.co.id" || h.ends_with(".ksei.co.id") {
-        "ksei"
+        super::ksei::PROVIDER
     } else {
         "ownership"
     }
@@ -475,6 +477,7 @@ mod tests {
             !files.iter().any(|f| f.url.contains("lima-persen")),
             "above-5% files are filtered out"
         );
+        assert!(files.iter().all(|f| f.family == "above1" && f.importable));
     }
 
     #[test]

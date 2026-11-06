@@ -1,6 +1,9 @@
 //! KSEI shareholder register ("Pemegang Saham di Atas 1%") as published
 //! monthly by IDX: discovery and download (`discover`), parsing (`ingest`),
-//! name normalisation (`normalize`) and the local SQLite store (`db`).
+//! name normalisation (`normalize`) and the local SQLite store (`db`). KSEI's
+//! own monthly composition archive ("Kepemilikan Efek", ksei.co.id) is a
+//! second dataset in the same file: listing and download (`ksei`), parser,
+//! tables and report (`composition`).
 //!
 //! Unlike the quote providers, this data is not fetched on demand: a monthly
 //! file is imported once and every query runs locally, so the ownership
@@ -24,9 +27,11 @@ use crate::model::{
 };
 use crate::providers::Sourced;
 
+pub mod composition;
 pub mod db;
 pub mod discover;
 pub mod ingest;
+pub mod ksei;
 pub mod mirror;
 pub mod normalize;
 
@@ -51,14 +56,21 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// Parses `bytes` (XLSX or PDF) and stores them. `name` is the file name or
-/// URL used for provenance and format detection.
+/// Parses `bytes` and stores them: a KSEI composition archive (ZIP or TXT)
+/// into the composition tables, otherwise a register file (XLSX or PDF).
+/// `name` is the file name or URL used for provenance and format detection.
 pub fn import_bytes(
     db: &mut OwnershipDb,
     name: &str,
     source: &str,
     bytes: &[u8],
 ) -> Result<(ImportReport, Vec<String>)> {
+    // Before the register: an XLSX is a ZIP too, the entries tell them apart.
+    if composition::looks_like(name, bytes) {
+        let (parsed, format) = composition::parse_any(name, bytes)?;
+        let report = composition::import(db, &parsed, format, source, &sha256_hex(bytes))?;
+        return Ok((report, parsed.skipped));
+    }
     let (parsed, format) = ingest::parse_any(name, bytes)?;
     let report = db.import(&parsed, format, source, &sha256_hex(bytes))?;
     let mut warnings = parsed.skipped.clone();
@@ -149,12 +161,18 @@ pub fn import_file(db: &mut OwnershipDb, path: &Path) -> Result<(ImportReport, V
     import_bytes(db, &name, &path.display().to_string(), &bytes)
 }
 
+/// Downloads and imports one file. ksei.co.id archives are fetched plainly;
+/// anything else as a browser would (idx.co.id is behind Cloudflare).
 pub async fn import_url(
     db: &mut OwnershipDb,
     url: &str,
     timeout: Duration,
 ) -> Result<(ImportReport, Vec<String>)> {
-    let bytes = discover::fetch_browser(url, timeout).await?;
+    let bytes = if ksei::is_ksei_url(url) {
+        ksei::download(url, timeout).await?
+    } else {
+        discover::fetch_browser(url, timeout).await?
+    };
     import_bytes(db, &discover::basename(url), url, &bytes)
 }
 
@@ -168,10 +186,22 @@ pub async fn import_discovered(
     force: bool,
     timeout: Duration,
 ) -> Result<(Vec<ImportReport>, Vec<String>)> {
-    let have: Vec<chrono::NaiveDate> = db.releases()?.iter().map(|r| r.as_of).collect();
+    // Tracked apart: a register and a composition archive can share a date.
+    let have_register: Vec<NaiveDate> = db.releases()?.iter().map(|r| r.as_of).collect();
+    let have_composition = composition::months(db)?;
     let mut reports = Vec::new();
     let mut warnings = Vec::new();
-    for f in files.iter().filter(|f| force || !have.contains(&f.as_of)) {
+    let imported = |f: &DiscoveredFile| {
+        if f.family == "composition" {
+            have_composition.contains(&f.as_of)
+        } else {
+            have_register.contains(&f.as_of)
+        }
+    };
+    for f in files
+        .iter()
+        .filter(|f| f.importable && (force || !imported(f)))
+    {
         tracing::info!(as_of = %f.as_of, url = %f.url, origin = %f.origin, "importing ownership file");
         let (report, skipped) = if f.origin == mirror::ORIGIN {
             let bytes = mirror::download(&f.url, f.sha256.as_deref(), timeout).await?;
