@@ -20,7 +20,7 @@ const COMMANDS = [
   { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
   { name: "compare", usage: "compare <SYMBOLS>", help: "side-by-side fundamentals" },
-  { name: "screen", usage: "screen [FILTER] [--preset P] [--sort KEY] [--asc|--desc] [--limit N]", help: "e.g. screen pe<10,div>5,mcap>5T --sort div; presets: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include range (52-week position, 0 to 100) and ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it)" },
+  { name: "screen", usage: "screen [FILTER] [--preset P] [--sort KEY] [--asc|--desc] [--returns] [--limit N]", help: "e.g. screen pe<10,div>5,mcap>5T --sort div; --returns adds the return windows when no filter or sort needs them; presets: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include range (52-week position, 0 to 100) and ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it)" },
   { name: "news", usage: "news [SYMBOL] [--limit N] [--company-only]", help: "headlines; with a symbol the company's first, then market context" },
   { name: "dividends", usage: "dividends <SYMBOL>", help: "payments, yearly totals, TTM yield, streak, splits" },
   { name: "returns", usage: "returns <SYMBOLS> [--benchmark ^JKSE|none]", help: "1w..5y returns, CAGR, volatility, drawdown, excess over IHSG" },
@@ -49,6 +49,9 @@ function tokenize(line) {
   while ((m = re.exec(line))) toks.push(m[1] ?? m[2] ?? m[3]);
   return toks;
 }
+// Switches never take the next word as their value: `screen --returns mcap>10T`
+// keeps mcap>10T as a filter clause instead of losing it to --returns.
+const BOOL_FLAGS = new Set(["all", "asc", "company-only", "daily", "desc", "returns", "upcoming"]);
 function flags(toks) {
   const pos = [], opt = {};
   for (let i = 0; i < toks.length; i++) {
@@ -56,7 +59,7 @@ function flags(toks) {
     if (t.startsWith("--")) {
       const [k, v] = t.slice(2).split("=");
       if (v != null) opt[k] = v;
-      else if (i + 1 < toks.length && !toks[i + 1].startsWith("--")) opt[k] = toks[++i];
+      else if (!BOOL_FLAGS.has(k) && i + 1 < toks.length && !toks[i + 1].startsWith("--")) opt[k] = toks[++i];
       else opt[k] = true;
     } else pos.push(t);
   }
@@ -593,18 +596,16 @@ async function run(line) {
     case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
     case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
-    case "screen": if (!opt.preset) need(pos, 1, cmd.usage); env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
+    case "screen": env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
     case "news": env = await api(`news?${qs({ symbol: sym(), limit: opt.limit || 20, company_only: opt["company-only"] ? "1" : null })}`); render = R.news; break;
     case "dividends": need(pos, 1, cmd.usage); env = await api(`dividends?symbol=${encodeURIComponent(sym())}`); render = R.dividends; break;
     case "returns": need(pos, 1, cmd.usage); env = await api(`returns?${qs({ symbols: pos.join(","), benchmark: opt.benchmark })}`); render = R.returns; break;
     case "brief": need(pos, 1, cmd.usage); env = await api(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
     case "sentiment": need(pos, 1, cmd.usage); env = await api(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
     case "insights": {
-      // `insights --all BBCA`: the flag parser hands the symbol to the flag.
-      const symbol = pos[0] || (typeof opt.all === "string" ? opt.all : null);
-      need(symbol ? [symbol] : [], 1, cmd.usage);
+      need(pos, 1, cmd.usage);
       const all = opt.all != null;
-      env = await api(`insights?symbol=${encodeURIComponent(symbol)}`);
+      env = await api(`insights?symbol=${encodeURIComponent(sym())}`);
       render = (d) => R.insights(d, all);
       break;
     }
