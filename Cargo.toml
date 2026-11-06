@@ -48,7 +48,7 @@ comfy-table = "7"
 dirs = "5"
 flate2 = "1"
 futures = "0.3"
-getrandom = "0.3"
+getrandom = "0.4"
 hex = "0.4"
 pdf-extract = "0.12"
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
