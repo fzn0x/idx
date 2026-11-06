@@ -10,8 +10,8 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
-`ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
-`candle`.
+`ownership-import`, `ownership-discover`, `ownership-institutions`,
+`watchlist`, `error`, `quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -437,6 +437,24 @@ level `{price, shares, orders}`, best price first), and the session foreign
 flow `foreign_buy`, `foreign_sell`, `foreign_net` (IDR). Sizes are shares (one
 IDX lot is 100 shares). A level the book does not show, or a field the source
 omits, is absent/`null`.
+
+## `idx.ownership.institutions.v1` (`ownership institutions`)
+
+From MSN Money's ownership data (`provider` is `msn`), live, no import.
+`data`: `symbol`, `name`, `institutions_pct`, `top10_institutions_pct`,
+`funds_pct` (percent of shares outstanding, as MSN reports them),
+`float_pct` (free float, percent of shares outstanding), `oldest_report`,
+`newest_report`, `flow` (`institutions` and `funds`, each `new`, `buyers`,
+`sellers`, `exited`, `unchanged`, `net_shares_change`) and `holders[]`
+(institutions first, then funds): `kind` (`institution` | `fund`), `rank`,
+`name`, `shares`, `shares_change` (since that holder's previous report),
+`pct_outstanding`, `pct_outstanding_change` (percentage points),
+`pct_portfolio` (funds only, percent of the fund), `report_date` (each
+holder's own) and `signal` (`new` | `buyer` | `seller` | `exited` |
+`unchanged`, computed by idx; `null` when `shares` or `shares_change` is
+missing). Funds overlap their managers: never add the two lists. A stock MSN
+lists no holders for has empty `holders` and a warning. `-o csv` prints one
+row per holder. See [ownership.md](ownership.md#institutional-and-fund-holders-msn).
 
 ## Errors
 

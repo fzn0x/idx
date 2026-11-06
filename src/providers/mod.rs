@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    DividendHistory, Earnings, Financials, Fundamentals, History, Interval, Period, Profile, Quote,
-    StatementPeriod, Symbol,
+    DividendHistory, Earnings, Financials, Fundamentals, History, InstitutionalOwnership, Interval,
+    Period, Profile, Quote, StatementPeriod, Symbol,
 };
 
 pub mod idx;
@@ -178,6 +178,12 @@ pub trait Provider: Send + Sync {
     async fn dividends(&self, _symbol: &Symbol) -> Result<Sourced<DividendHistory>> {
         Err(IdxError::unsupported(self.name(), "dividend history"))
     }
+
+    /// Institutional and fund holders with their latest changes (MSN's
+    /// ownership data); the signal and flow counts are computed by idx.
+    async fn institutions(&self, _symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        Err(IdxError::unsupported(self.name(), "institutional holders"))
+    }
 }
 
 #[derive(
@@ -189,7 +195,7 @@ pub enum ProviderKind {
     Auto,
     /// Yahoo Finance (chart, quote, quoteSummary, fundamentals timeseries).
     Yahoo,
-    /// MSN Money (quotes, profile, fundamentals).
+    /// MSN Money (quotes, profile, fundamentals, institutional holders).
     Msn,
     /// Stockbit realtime (your own session; `idx stockbit login` first).
     Stockbit,
@@ -370,6 +376,10 @@ impl Provider for Chain {
     async fn dividends(&self, symbol: &Symbol) -> Result<Sourced<DividendHistory>> {
         first_ok!(self, p => p.dividends(symbol))
     }
+
+    async fn institutions(&self, symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        first_ok!(self, p => p.institutions(symbol))
+    }
 }
 
 /// Names of the providers `auto` tries, in order.
@@ -511,6 +521,44 @@ mod tests {
         assert_eq!(got.data.valuation.pe_trailing, Some(9.0));
         assert_eq!(got.data.valuation.price_to_book, Some(2.0));
         assert_eq!(got.data.sources, vec!["ok".to_string(), "ok2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn chain_finds_the_provider_with_institutional_holders() {
+        struct Holders;
+        #[async_trait]
+        impl Provider for Holders {
+            fn name(&self) -> &'static str {
+                "holders"
+            }
+            async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+                unimplemented!()
+            }
+            async fn history(
+                &self,
+                _: &Symbol,
+                _: Period,
+                _: Interval,
+            ) -> Result<Sourced<History>> {
+                unimplemented!()
+            }
+            async fn institutions(&self, s: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+                Ok(Sourced::fresh(
+                    InstitutionalOwnership::empty(s.clone()),
+                    "holders",
+                ))
+            }
+        }
+        let chain = Chain::new(vec![Box::new(Ok1), Box::new(Holders)]);
+        let got = chain.institutions(&sym()).await.unwrap();
+        assert_eq!(got.provider, "holders");
+        // A provider without the capability alone: exit 6, pointing at auto.
+        let err = Chain::new(vec![Box::new(Ok1)])
+            .institutions(&sym())
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 6);
+        assert!(err.to_string().contains("institutional holders"), "{err}");
     }
 
     #[test]

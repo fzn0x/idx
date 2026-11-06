@@ -861,6 +861,128 @@ fn msn_provider_is_selectable() {
 }
 
 #[test]
+fn ownership_institutions_reads_msn_offline() {
+    let sb = sandbox();
+    // Cache keys leave MSN's api key out, so the seeded entries are what a
+    // live run would have stored.
+    let lookup =
+        "https://services.bingapis.com/contentservices-finance.csautosuggest/api/v1/Query?query=";
+    seed(
+        &sb.cache,
+        &format!("{lookup}JTPE&market=en-id"),
+        "msn/autosuggest_jtpe.json",
+    );
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Equities?ids=bkgwu2",
+        "msn/equities_jtpe_all_signals.json",
+    );
+    seed(
+        &sb.cache,
+        &format!("{lookup}ATAP&market=en-id"),
+        "msn/autosuggest_atap.json",
+    );
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Equities?ids=bwzup2",
+        "msn/equities_atap_empty_holders.json",
+    );
+
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "institutions", "jtpe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "JTPE · PT Jasuindo Tiga Perkasa Tbk · institutional and fund holders (MSN)",
+        ))
+        .stdout(predicate::str::contains(
+            "Funds (5): 1 new, 0 buying, 1 selling, 2 exited",
+        ))
+        .stdout(predicate::str::contains("exited"));
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "ownership", "institutions", "JTPE"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.institutions.v1");
+    assert_eq!(v["provider"], "msn");
+    assert_eq!(v["cached"], true);
+    assert_eq!(v["data"]["flow"]["funds"]["exited"], 2);
+    assert_eq!(
+        v["data"]["flow"]["institutions"]["net_shares_change"],
+        -3_556_219
+    );
+    assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 9);
+    assert_eq!(v["data"]["holders"][0]["kind"], "institution");
+    assert!(v["data"]["holders"][0]["pct_portfolio"].is_null());
+    assert_eq!(v["data"]["holders"][6]["signal"], "new");
+    assert!(v.get("warnings").is_none());
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "ownership", "institutions", "JTPE"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        csv.starts_with("kind,rank,name,shares,shares_change,pct_outstanding,"),
+        "{csv}"
+    );
+    assert_eq!(csv.lines().count(), 10, "header plus every holder: {csv}");
+
+    // MSN lists nobody: an empty report, a warning, exit 0.
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "institutions", "ATAP"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "MSN lists no institutional or fund holders for ATAP.",
+        ))
+        .stderr(predicate::str::contains(
+            "warning: MSN lists no institutional",
+        ));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "ownership", "institutions", "ATAP"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 0);
+    assert_eq!(v["data"]["float_pct"], 15.0635);
+    assert!(v["data"]["institutions_pct"].is_null());
+    assert_eq!(
+        v["warnings"][0],
+        "MSN lists no institutional or fund holders for ATAP"
+    );
+
+    // Nothing cached: offline miss. A provider without the data: exit 6.
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "institutions", "BBRI"])
+        .assert()
+        .code(5);
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "yahoo", "ownership", "institutions", "JTPE"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("institutional holders"));
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "institutions", "BB$CA"])
+        .assert()
+        .code(2);
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "ownership-institutions"])
+        .output()
+        .unwrap();
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(schema.contains("pct_outstanding_change"), "{schema}");
+    assert!(schema.contains("unchanged"), "{schema}");
+}
+
+#[test]
 fn ownership_import_and_queries_work_offline() {
     let sb = sandbox();
     let db = sb.cache.join("own.sqlite");

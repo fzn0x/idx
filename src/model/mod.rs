@@ -16,6 +16,7 @@ pub mod calendar;
 pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
+pub mod institutions;
 pub mod instruments;
 pub mod market;
 pub mod news;
@@ -46,6 +47,10 @@ pub use fundamentals::{
     FinancialPeriod, Financials, Fundamentals, Growth, Health, IncomeStatement, NextEarnings,
     PerShare, Profile, Profitability, RevenueEarnings, StatementPeriod, Valuation, Verdict,
     VerdictLabel,
+};
+pub use institutions::{
+    HolderFlow, HolderKind, HolderSignal, InstitutionalFlow, InstitutionalHolder,
+    InstitutionalOwnership,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
 pub use market::{MarketOverview, MarketRow};

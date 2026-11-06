@@ -6,7 +6,7 @@
 //!   `XIDX` and remember its `SecId` for 30 days.
 //! - `GET https://assets.msn.com/service/Finance/Quotes?ids=<secid>,..&apikey=..`
 //! - `GET https://assets.msn.com/service/Finance/Equities?ids=<secid>&apikey=..`
-//!   (profile, key metrics, analyst estimates).
+//!   (profile, key metrics, analyst estimates, institutional and fund holders).
 //!
 //! The `apikey` is MSN's own public web-client key, not a user credential; the
 //! service answers 401 without one. Override it with `IDX_MSN_API_KEY` if MSN
@@ -21,7 +21,9 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
-use crate::model::{Fundamentals, History, Interval, Period, Profile, Quote, Symbol};
+use crate::model::{
+    Fundamentals, History, InstitutionalOwnership, Interval, Period, Profile, Quote, Symbol,
+};
 
 use super::{Provider, Sourced, Ttls};
 
@@ -264,6 +266,22 @@ impl Provider for Msn {
         }
         Ok(out)
     }
+
+    /// The `ownershipSummary` block of the same `Equities` response that
+    /// `profile` and `fundamentals` read (one request, one cache entry).
+    async fn institutions(&self, symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        let id = self.lookup(symbol).await?;
+        let eq = self.equity(symbol, &id).await?;
+        let report = parse::parse_institutions(&eq.data, symbol)?
+            .ok_or_else(|| IdxError::NotFound(format!("MSN has no company data for {symbol}")))?;
+        let mut out = eq.map(|_| report);
+        if out.data.holders.is_empty() {
+            out.warnings.push(format!(
+                "MSN lists no institutional or fund holders for {symbol}"
+            ));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -354,6 +372,61 @@ mod tests {
     async fn offline_miss_is_exit_5() {
         let (m, _be, _d) = msn(FixtureBackend::new(), CacheMode::Offline);
         let err = m.quotes(&[sym("BBCA")]).await.unwrap_err();
+        assert_eq!(err.exit_code(), 5, "{err}");
+    }
+
+    const AS_JTPE: &str = include_str!("../../../tests/fixtures/msn/autosuggest_jtpe.json");
+    const EQ_JTPE: &str =
+        include_str!("../../../tests/fixtures/msn/equities_jtpe_all_signals.json");
+    const AS_ATAP: &str = include_str!("../../../tests/fixtures/msn/autosuggest_atap.json");
+    const EQ_ATAP: &str =
+        include_str!("../../../tests/fixtures/msn/equities_atap_empty_holders.json");
+
+    #[tokio::test]
+    async fn institutions_share_the_equities_request_with_fundamentals() {
+        let be = FixtureBackend::new()
+            .route("csautosuggest/api/v1/Query?query=JTPE", 200, AS_JTPE)
+            .route("csautosuggest/api/v1/Query?query=ATAP", 200, AS_ATAP)
+            .route("csautosuggest/api/v1/Query?query=ZZZZ", 200, AS_ZZZZ)
+            .route("Finance/Quotes", 404, "[]")
+            .route("Finance/Equities?ids=bkgwu2", 200, EQ_JTPE)
+            .route("Finance/Equities?ids=bwzup2", 200, EQ_ATAP);
+        let (m, be, _d) = msn(be, CacheMode::Normal);
+        m.fundamentals(&sym("JTPE")).await.unwrap();
+        assert_eq!(be.calls_matching("Finance/Equities"), 1);
+        let got = m.institutions(&sym("JTPE")).await.unwrap();
+        assert_eq!(
+            be.calls_matching("Finance/Equities"),
+            1,
+            "served from the cached Equities response"
+        );
+        assert_eq!(got.provider, "msn");
+        assert!(got.cached);
+        assert_eq!(got.data.holders.len(), 9);
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+
+        let empty = m.institutions(&sym("ATAP")).await.unwrap();
+        assert!(empty.data.holders.is_empty());
+        assert_eq!(empty.data.float_pct, Some(15.0635));
+        assert_eq!(
+            empty.warnings,
+            vec!["MSN lists no institutional or fund holders for ATAP".to_string()]
+        );
+
+        let err = m.institutions(&sym("ZZZZ")).await.unwrap_err();
+        assert_eq!(err.exit_code(), 4, "{err}");
+    }
+
+    #[tokio::test]
+    async fn institutions_unknown_id_and_offline() {
+        let be = FixtureBackend::new()
+            .route("csautosuggest", 200, AS_BBCA)
+            .route("Finance/Equities", 404, "[]");
+        let (m, _be, _d) = msn(be, CacheMode::Normal);
+        let err = m.institutions(&sym("BBCA")).await.unwrap_err();
+        assert_eq!(err.exit_code(), 4, "{err}");
+        let (m, _be, _d) = msn(FixtureBackend::new(), CacheMode::Offline);
+        let err = m.institutions(&sym("BBCA")).await.unwrap_err();
         assert_eq!(err.exit_code(), 5, "{err}");
     }
 

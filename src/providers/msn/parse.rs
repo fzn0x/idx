@@ -6,16 +6,19 @@
 //! - `Quotes?ids=a` returns `[Quote]`; `Quotes?ids=a,b` returns `[[Quote],[Quote]]`.
 //!   Unknown ids are dropped silently.
 //! - `Equities?ids=a` returns `[Equity]` with `company`, `analysis.keyMetrics`,
-//!   `analysis.companyMetrics`, `analysis.estimate`, `analysis.shareStatistics`.
+//!   `analysis.companyMetrics`, `analysis.estimate`, `analysis.shareStatistics`
+//!   and `ownershipSummary` (institutions, funds).
 //!   Percentages are already percent (21.8), ratios are ratios (0.0017).
 
 use chrono::{DateTime, NaiveDate};
 use serde_json::Value;
 
 use crate::error::Result;
+use crate::model::institutions::signal;
 use crate::model::{
-    wib, Analyst, Director, Dividend, Fundamentals, Growth, Health, PerShare, Profile,
-    Profitability, Quote, Symbol, Valuation,
+    wib, Analyst, Director, Dividend, Fundamentals, Growth, Health, HolderKind,
+    InstitutionalHolder, InstitutionalOwnership, PerShare, Profile, Profitability, Quote, Symbol,
+    Valuation,
 };
 
 pub const SOURCE_QUOTES: &str = "msn:quotes";
@@ -270,6 +273,66 @@ pub fn parse_fundamentals(
     Ok(Some(f))
 }
 
+/// One `institutionalOwnership` / `mutualFundOwnership` row. Rows without a
+/// holder name are skipped. `marketValue` and `change` are deliberately not
+/// read: they are holder-level totals in an unstated currency, not the value
+/// of this position.
+fn holder(h: &Value, kind: HolderKind, index: usize) -> Option<InstitutionalHolder> {
+    let name = text(obj(h, "/entity"), "displayName")?;
+    let shares = f64_of(h, "shares").map(|x| x.max(0.0) as u64);
+    let shares_change = f64_of(h, "sharesChange").map(|x| x as i64);
+    Some(InstitutionalHolder {
+        kind,
+        rank: f64_of(h, "rank")
+            .filter(|r| *r >= 1.0)
+            .map(|r| r as u32)
+            .unwrap_or(index as u32 + 1),
+        name,
+        shares,
+        shares_change,
+        pct_outstanding: f64_of(h, "outstandingPercent"),
+        pct_outstanding_change: f64_of(h, "changePercent"),
+        pct_portfolio: match kind {
+            HolderKind::Fund => f64_of(h, "percentPortfolio"),
+            HolderKind::Institution => None,
+        },
+        report_date: date(h, "reportDate"),
+        signal: signal(shares, shares_change),
+    })
+}
+
+/// Institutional and fund holders from an `Equities` body's `ownershipSummary`.
+/// `None` when the body holds no equity (404 `[]`); an equity without the
+/// block gives an empty report. `insiderOwnershipPercent` is not read: it
+/// contradicts the KSEI register (1.21 % for BBCA, whose controlling holder
+/// has 54.94 %).
+pub fn parse_institutions(body: &str, symbol: &Symbol) -> Result<Option<InstitutionalOwnership>> {
+    let Some(e) = first_equity(body)? else {
+        return Ok(None);
+    };
+    let o = obj(&e, "/ownershipSummary");
+    let mut r = InstitutionalOwnership::empty(symbol.clone());
+    r.name = display_name(&e);
+    r.institutions_pct = f64_of(o, "institutionalOwnershipPercent");
+    r.top10_institutions_pct = f64_of(o, "top10InstitutesPercent");
+    r.funds_pct = f64_of(o, "mutualFundOwnershipPercent");
+    r.float_pct = f64_of(o, "floatOwnershipPercent");
+    for (key, kind) in [
+        ("institutionalOwnership", HolderKind::Institution),
+        ("mutualFundOwnership", HolderKind::Fund),
+    ] {
+        if let Some(rows) = o.get(key).and_then(Value::as_array) {
+            r.holders.extend(
+                rows.iter()
+                    .enumerate()
+                    .filter_map(|(i, h)| holder(h, kind, i)),
+            );
+        }
+    }
+    r.summarise();
+    Ok(Some(r))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +457,188 @@ mod tests {
     fn snake_case() {
         assert_eq!(snake("strongBuy"), "strong_buy");
         assert_eq!(snake("hold"), "hold");
+    }
+
+    const EQ_JTPE: &str =
+        include_str!("../../../tests/fixtures/msn/equities_jtpe_all_signals.json");
+    const EQ_STAR: &str =
+        include_str!("../../../tests/fixtures/msn/equities_star_no_ownership.json");
+    const EQ_ATAP: &str =
+        include_str!("../../../tests/fixtures/msn/equities_atap_empty_holders.json");
+
+    fn day(s: &str) -> Option<NaiveDate> {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+    }
+
+    #[test]
+    fn institutions_bbca() {
+        use crate::model::{HolderFlow, HolderSignal};
+        let r = parse_institutions(EQ_BBCA, &sym("BBCA")).unwrap().unwrap();
+        assert_eq!(r.symbol.as_str(), "BBCA");
+        assert_eq!(r.name.as_deref(), Some("PT Bank Central Asia Tbk"));
+        assert_eq!(r.institutions_pct, Some(19.33));
+        assert_eq!(r.top10_institutions_pct, Some(9.24));
+        assert_eq!(r.funds_pct, Some(16.71));
+        assert_eq!(r.float_pct, Some(38.2045));
+        assert_eq!(r.holders.len(), 35);
+        let kinds: Vec<HolderKind> = r.holders.iter().map(|h| h.kind).collect();
+        assert!(kinds[..15].iter().all(|k| *k == HolderKind::Institution));
+        assert!(kinds[15..].iter().all(|k| *k == HolderKind::Fund));
+        let ranks: Vec<u32> = r.of_kind(HolderKind::Fund).map(|h| h.rank).collect();
+        assert_eq!(ranks, (1..=20).collect::<Vec<u32>>());
+
+        let h = &r.holders[0];
+        assert_eq!(h.rank, 1);
+        assert_eq!(h.name, "Fidelity Management & Research Company LLC");
+        assert_eq!(h.shares, Some(2_550_310_952));
+        assert_eq!(h.shares_change, Some(20_110_296));
+        assert_eq!(h.pct_outstanding, Some(2.09));
+        assert_eq!(h.pct_outstanding_change, Some(0.0165));
+        assert_eq!(
+            h.pct_portfolio, None,
+            "institutions carry no portfolio weight"
+        );
+        assert_eq!(h.report_date, day("2026-09-30"));
+        assert_eq!(h.signal, Some(HolderSignal::Buyer));
+        let f = &r.holders[15];
+        assert_eq!(f.name, "Statens Pensjonsfond Utland");
+        assert_eq!(f.pct_portfolio, Some(0.0211));
+        assert_eq!(f.report_date, day("2026-06-30"));
+
+        assert_eq!(
+            r.flow.institutions,
+            HolderFlow {
+                new: 1,
+                buyers: 10,
+                sellers: 4,
+                exited: 0,
+                unchanged: 0,
+                net_shares_change: 142_132_958,
+            }
+        );
+        assert_eq!(
+            r.flow.funds,
+            HolderFlow {
+                new: 1,
+                buyers: 11,
+                sellers: 3,
+                exited: 0,
+                unchanged: 5,
+                net_shares_change: 739_658_106,
+            }
+        );
+        assert_eq!(r.oldest_report, day("2025-12-31"));
+        assert_eq!(r.newest_report, day("2026-09-30"));
+
+        // MSN's holder-level totals and insider share never reach the output.
+        let v = serde_json::to_value(&r).unwrap();
+        let keys: Vec<&str> = v["holders"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "kind",
+                "rank",
+                "name",
+                "shares",
+                "shares_change",
+                "pct_outstanding",
+                "pct_outstanding_change",
+                "pct_portfolio",
+                "report_date",
+                "signal"
+            ]
+        );
+        let top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            top,
+            [
+                "symbol",
+                "name",
+                "institutions_pct",
+                "top10_institutions_pct",
+                "funds_pct",
+                "float_pct",
+                "oldest_report",
+                "newest_report",
+                "flow",
+                "holders"
+            ]
+        );
+    }
+
+    #[test]
+    fn institutions_jtpe_has_every_signal() {
+        use crate::model::HolderSignal::*;
+        let r = parse_institutions(EQ_JTPE, &sym("JTPE")).unwrap().unwrap();
+        let signals = |k| r.of_kind(k).map(|h| h.signal.unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            signals(HolderKind::Institution),
+            [Unchanged, Seller, Buyer, Exited]
+        );
+        assert_eq!(
+            signals(HolderKind::Fund),
+            [Unchanged, Seller, New, Exited, Exited]
+        );
+        let niche = &r.holders[3];
+        assert_eq!(niche.name, "Niche Asset Management Limited");
+        assert_eq!(
+            (niche.shares, niche.shares_change),
+            (Some(0), Some(-3_434_200))
+        );
+        assert_eq!(niche.report_date, day("2026-03-31"));
+        assert_eq!(r.flow.institutions.net_shares_change, -3_556_219);
+        assert_eq!(r.flow.funds.net_shares_change, -3_556_219);
+        assert_eq!(r.flow.funds.exited, 2);
+        assert_eq!(r.flow.funds.new, 1);
+        assert_eq!(r.institutions_pct, Some(0.11));
+        assert_eq!(r.float_pct, Some(6.0732));
+        assert_eq!(r.oldest_report, day("2025-12-31"));
+        assert_eq!(r.newest_report, day("2026-09-30"));
+    }
+
+    #[test]
+    fn institutions_tlkm() {
+        let r = parse_institutions(EQ_TLKM, &sym("TLKM")).unwrap().unwrap();
+        let i = &r.flow.institutions;
+        assert_eq!(
+            (i.new, i.buyers, i.sellers, i.exited, i.unchanged),
+            (0, 8, 6, 0, 1)
+        );
+        let f = &r.flow.funds;
+        assert_eq!(
+            (f.new, f.buyers, f.sellers, f.exited, f.unchanged),
+            (1, 7, 8, 0, 4)
+        );
+        assert_eq!(r.holders[0].name, "Employees Provident Fund Board");
+        assert_eq!(r.institutions_pct, Some(21.15));
+    }
+
+    #[test]
+    fn institutions_without_holders() {
+        // No ownershipSummary block at all.
+        let star = parse_institutions(EQ_STAR, &sym("STAR")).unwrap().unwrap();
+        assert!(star.holders.is_empty());
+        assert_eq!(
+            star.name.as_deref(),
+            Some("PT Calculus Global Ventures Tbk")
+        );
+        assert_eq!(
+            (star.institutions_pct, star.funds_pct, star.float_pct),
+            (None, None, None)
+        );
+        assert_eq!(star.oldest_report, None);
+        assert_eq!(star.flow, Default::default());
+        // A block with empty lists keeps the figures it has.
+        let atap = parse_institutions(EQ_ATAP, &sym("ATAP")).unwrap().unwrap();
+        assert!(atap.holders.is_empty());
+        assert_eq!(atap.float_pct, Some(15.0635));
+        assert_eq!(atap.institutions_pct, None);
+        // Unknown id: MSN answers 404 with `[]`.
+        assert!(parse_institutions(EQ_404, &sym("ZZZZ")).unwrap().is_none());
     }
 }

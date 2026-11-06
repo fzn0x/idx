@@ -1,4 +1,5 @@
-//! `idx ownership ...`: KSEI's monthly ">1 % holders" register in local SQLite.
+//! `idx ownership ...`: KSEI's monthly ">1 % holders" register in local SQLite,
+//! plus `institutions`, which asks MSN live for institutional and fund holders.
 
 use std::path::PathBuf;
 
@@ -10,9 +11,9 @@ use crate::model::Symbol;
 use crate::output::json::{
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_DISCOVER, SCHEMA_OWNERSHIP_ENTITY,
     SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS,
-    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
+    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_INSTITUTIONS, SCHEMA_OWNERSHIP_RELEASES,
 };
-use crate::output::{self, table_ownership as tbl};
+use crate::output::{self, table_institutions, table_ownership as tbl};
 use crate::ownership::{self, OwnershipDb};
 use crate::providers::Sourced;
 
@@ -90,6 +91,23 @@ pub enum OwnershipCmd {
         /// Rows in the market-wide view; 0 for all.
         #[arg(long, short = 'n', default_value_t = 25)]
         limit: usize,
+    },
+
+    /// Institutional and fund holders from MSN Money (live): positions, change since each holder's last report, new/buyer/seller/exited.
+    #[command(after_help = "Examples:
+  idx ownership institutions BBCA
+  idx -o json ownership institutions TLKM | jq '.data.flow'
+  idx -o json ownership institutions BBCA | jq '.data.holders[] | select(.signal == \"exited\")'
+  idx -o csv ownership institutions BBRI > holders.csv
+
+From MSN Money's ownership data (its vendor's fund and institution filings), not the KSEI
+register: up to 15 institutions and 20 funds, each as of its own report date, with the change
+since that holder's previous report. The signal is computed by idx: new (position opened),
+buyer, seller, exited (sold out), unchanged. Funds are part of their managers' institutional
+positions, so never add the two lists. Needs no import; MSN's response is cached for 6 hours.")]
+    Institutions {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
     },
 
     /// Imported releases in the local database.
@@ -198,6 +216,13 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                     })
                 }
             }
+        }
+        OwnershipCmd::Institutions { symbol } => {
+            let sym = Symbol::parse(&symbol)?;
+            let report = ctx.provider.institutions(&sym).await?;
+            emit(ctx, SCHEMA_OWNERSHIP_INSTITUTIONS, report, |r| {
+                table_institutions::institutions(r, ctx.color)
+            })
         }
         OwnershipCmd::Releases => {
             let db = open(ctx)?;
