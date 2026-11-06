@@ -122,7 +122,9 @@ impl HolderFlow {
                 Some(HolderSignal::Unchanged) => f.unchanged += 1,
                 None => {}
             }
-            f.net_shares_change += h.shares_change.unwrap_or(0);
+            f.net_shares_change = f
+                .net_shares_change
+                .saturating_add(h.shares_change.unwrap_or(0));
         }
         f
     }
@@ -255,5 +257,13 @@ mod tests {
         assert_eq!(r.oldest_report.unwrap().to_string(), "2025-12-31");
         assert_eq!(r.newest_report.unwrap().to_string(), "2026-09-30");
         assert_eq!(r.of_kind(HolderKind::Fund).count(), 1);
+
+        // Absurd upstream changes saturate instead of overflowing.
+        r.holders = vec![
+            row(HolderKind::Fund, 1, i64::MAX, "2026-06-30"),
+            row(HolderKind::Fund, 1, i64::MAX, "2026-06-30"),
+        ];
+        r.summarise();
+        assert_eq!(r.flow.funds.net_shares_change, i64::MAX);
     }
 }
