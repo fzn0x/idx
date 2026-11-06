@@ -842,7 +842,7 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
     const rows = (await env.DB.prepare("SELECT as_of, MAX(issuer_name) AS issuer_name, COALESCE(SUM(CASE WHEN local_foreign = 'A' THEN pct END), 0) AS fp, COALESCE(SUM(CASE WHEN local_foreign = 'L' THEN pct END), 0) AS lp, COALESCE(SUM(CASE WHEN local_foreign IS NULL OR local_foreign NOT IN ('A','L') THEN pct END), 0) AS up, SUM(CASE WHEN local_foreign = 'A' THEN 1 ELSE 0 END) AS fh, SUM(CASE WHEN local_foreign = 'L' THEN 1 ELSE 0 END) AS lh, SUM(pct) AS listed FROM own_holdings WHERE symbol = ?1 AND as_of IN (SELECT as_of FROM own_releases) GROUP BY as_of ORDER BY as_of").bind(symbol).all()).results;
     if (!rows.length) { await ownershipRelease(env, null); throw notFound(`no holders above 1% recorded for ${symbol} in any loaded release`); }
     const points = rows.map((r, i) => ({ as_of: r.as_of, foreign_pct: r4(r.fp), local_pct: r4(r.lp), unflagged_pct: r4(r.up), foreign_holders: r.fh, local_holders: r.lh, listed_pct: r4(r.listed), foreign_change_pp: i ? r4(r.fp - rows[i - 1].fp) : null }));
-    return envelope("idx.ownership.foreign.v1", { symbol, issuer_name: rows.map((r) => r.issuer_name).filter(Boolean).pop() || null, points }, { provider: "github-mirror", cached: true });
+    return envelope("idx.ownership.foreign.v1", { symbol, issuer_name: rows.map((r) => r.issuer_name).filter(Boolean).pop() || null, points }, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, rows.map((r) => r.as_of)) });
   }
   const releases = (await env.DB.prepare("SELECT as_of FROM own_releases ORDER BY as_of").all()).results.map((r) => r.as_of);
   if (!releases.length) throw notFound("no ownership data loaded on the web terminal yet");
@@ -855,7 +855,7 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
   const rows = [...after.entries()].map(([symbol, a]) => { const b = before.get(symbol); const pf = b ? r4(b.foreign_pct) : null; return { symbol, issuer_name: a.issuer_name, foreign_pct_from: pf, foreign_pct_to: r4(a.foreign_pct), change_pp: r4(a.foreign_pct - (pf || 0)), foreign_holders_to: a.foreign_holders }; })
     .sort((a, b) => Math.abs(b.change_pp) - Math.abs(a.change_pp) || a.symbol.localeCompare(b.symbol));
   const data = { from: fromDate, to: toDate, issuers: rows.length, inflows: rows.filter((r) => r.change_pp > 0).length, outflows: rows.filter((r) => r.change_pp < 0).length, net_pp: r4(rows.reduce((s, r) => s + r.change_pp, 0)), rows: limit > 0 ? rows.slice(0, limit) : rows };
-  return envelope("idx.ownership.foreign-flow.v1", data, { provider: "github-mirror", cached: true });
+  return envelope("idx.ownership.foreign-flow.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [fromDate, toDate]) });
 }
 
 // ---- brief ---------------------------------------------------------------------

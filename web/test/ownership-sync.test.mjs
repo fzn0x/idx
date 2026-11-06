@@ -1,6 +1,6 @@
-// node --test web/test/*.mjs (no network). The ownership sync step runs
-// against SQLite (node:sqlite) with web/migrations applied, behind a small
-// D1-shaped adapter; the mirror is a stubbed fetch.
+// node --test web/test/*.mjs (no network). The ownership sync step and the
+// ownership endpoints run against SQLite (node:sqlite) with web/migrations
+// applied, behind a small D1-shaped adapter; the mirror is a stubbed fetch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { ownershipSync, fitsBudget, partsKey, sha256Hex } from "../src/ownership-sync.js";
+import { route } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const migrations = join(root, "web", "migrations");
@@ -153,4 +154,28 @@ test("ownership sync: pruning a month charges its delete and waits when it does 
     assert.equal(released(DB, "2026-08-31"), null);
     assert.equal(budgetUsed(DB), aug.length * 3);
   });
+});
+
+test("ownership foreign endpoints on the web name months loaded before idx 0.8.2", { skip }, async () => {
+  const DB = d1();
+  const env = { DB, OWN_MIRROR_URL: MIRROR };
+  seedLegacy(DB, "2026-08-31", partRows("20260831"));
+  seedLegacy(DB, "2026-09-30", partRows("20260930"));
+  DB.db.prepare("UPDATE own_releases SET lines = 46, other_date_rows = 0, controller_column = 0, parts_key = 'p' WHERE as_of = '2026-09-30'").run();
+
+  const legacyNote = (w) => (w || []).some((s) => s.includes("2026-08-31") && s.includes("predates idx 0.8.2"));
+  const trend = await route(env, new URL("https://x/api/ownership/foreign?symbol=KREN"));
+  assert.equal(trend.schema, "idx.ownership.foreign.v1");
+  assert.deepEqual(trend.data.points.map((p) => p.as_of), ["2026-08-31", "2026-09-30"]);
+  assert.ok(legacyNote(trend.warnings), JSON.stringify(trend.warnings));
+  assert.ok(!trend.warnings.some((s) => s.includes("2026-09-30")), JSON.stringify(trend.warnings));
+
+  const flow = await route(env, new URL("https://x/api/ownership/foreign"));
+  assert.equal(flow.schema, "idx.ownership.foreign-flow.v1");
+  assert.deepEqual([flow.data.from, flow.data.to], ["2026-08-31", "2026-09-30"]);
+  assert.ok(legacyNote(flow.warnings), JSON.stringify(flow.warnings));
+
+  // Both months current: no note.
+  DB.db.prepare("UPDATE own_releases SET lines = 45 WHERE as_of = '2026-08-31'").run();
+  assert.equal((await route(env, new URL("https://x/api/ownership/foreign"))).warnings, undefined);
 });
