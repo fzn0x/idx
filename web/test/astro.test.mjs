@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 
 import * as A from "../src/astro.js";
 import * as y from "../src/yahoo.js";
-import { astro } from "../src/api.js";
+import { astro, history, fitCacheRow } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (...p) => readFileSync(join(root, "tests", "fixtures", ...p), "utf8");
@@ -154,10 +154,115 @@ test("/api/astro computes offline and keeps the web limits", async () => {
   assert.equal(e.data.natal.date, "1982-08-10");
   assert.equal(e.data.upcoming.to, "2026-11-13T00:00:00+07:00");
   assert.equal((await astro(env, "2026-11-06", null, "none", null, null)).data.natal, null);
-  for (const args of [["2026-11-06", "91"], ["2026-11-06", "0"], ["1799-12-31"], ["2051-01-01"], ["06/11/2026"], ["2026-11-06", null, "birth"], ["2026-11-06", null, null, "1", "max"], ["2026-11-06", null, null, "1", "6mo"]]) {
+  for (const args of [["2026-11-06", "91"], ["2026-11-06", "0"], ["1799-12-31"], ["2051-01-01"], ["06/11/2026"], ["2026-02-30"], ["2026-04-31"], ["2026-11-06", null, "birth"], ["2026-11-06", null, null, "1", "max"], ["2026-11-06", null, null, "1", "6mo"], ["2026-11-06", null, null, null, "2y"], ["2026-11-06", null, null, "0", "max"]]) {
     const [date, days, natal, backtest, period] = args;
     await assert.rejects(astro(env, date, days, natal, backtest, period), (err) => err.code === "usage", args.join(" "));
   }
   await assert.rejects(astro(env, "2026-11-06", null, null, "1", "max"), /CLI runs max/);
   await assert.rejects(astro(env, "2026-11-06", "91"), /up to 90|1 to 90/);
+  // Like the CLI's --period, which requires --backtest.
+  await assert.rejects(astro(env, "2026-11-06", null, null, null, "2y"), /pass it with backtest=1/);
+  // 2026-02-30 is not 2 March under another name.
+  await assert.rejects(astro(env, "2026-02-30"), /invalid date "2026-02-30"/);
+  assert.equal((await astro(env, "2024-02-29", "1", "none")).data.date, "2024-02-29");
+});
+
+/** In-memory D1 for the cache table; `cap` mimics D1's row limit (SQLITE_TOOBIG). */
+function memoryD1(cap = 2_000_000) {
+  const cache = new Map();
+  const run = (sql, a) => {
+    if (sql.startsWith("SELECT v, fetched_at, expires_at FROM cache")) return cache.get(a[0]) || null;
+    if (sql.startsWith("INSERT OR REPLACE INTO cache")) {
+      if (a[1].length > cap) throw new Error("D1_ERROR: string or blob too big: SQLITE_TOOBIG");
+      return cache.set(a[0], { v: a[1], expires_at: a[2], fetched_at: a[3] });
+    }
+    throw new Error("memoryD1: unexpected SQL " + sql);
+  };
+  const stmt = (sql, a = []) => ({ bind: (...b) => stmt(sql, b), first: async () => run(sql, a), run: async () => (run(sql, a), {}) });
+  return { DB: { prepare: (sql) => stmt(sql) }, cache };
+}
+
+async function withFetch(fn, body) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fn;
+  try {
+    await body();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test("/api/astro?backtest=1 runs on ^JKSE's history, caches the result and maps errors", async () => {
+  const golden = JSON.parse(fixture("astro", "golden_backtest_jkse_2y.json"));
+  const env = memoryD1();
+  const asked = [];
+  await withFetch(async (u) => { asked.push(String(u)); return new Response(fixture("yahoo", "chart_jkse_2y_1d.json"), { status: 200 }); }, async () => {
+    const e = await astro(env, "2026-11-06", null, "none", "1", "2y");
+    assert.deepEqual([e.schema, e.provider, e.cached, e.stale], ["idx.astro.v1", "yahoo", false, false]);
+    assert.equal(e.warnings, undefined);
+    assert.deepEqual(e.data.backtest, golden);
+    assert.equal(e.data.backtest.returns, 473);
+    assert.match(e.fetched_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // The result is one D1 row per period; the second call reads it.
+    assert.ok(env.cache.has("astro_backtest:2y"));
+    const again = await astro(env, "2026-11-06", null, "none", "1", "2y");
+    assert.deepEqual([again.cached, again.data.backtest], [true, golden]);
+    assert.deepEqual(asked, [y.chartUrl("^JKSE", "2y", "1d")]);
+  });
+
+  // A history cached at 10:00 WIB on its last bar's date holds a mid-session price: that bar is left
+  // out even when the copy is read after the close (the clock now is days later).
+  const mid = memoryD1();
+  const h = y.parseChart(JSON.parse(fixture("yahoo", "chart_jkse_2y_1d.json")), "2y", "1d");
+  mid.cache.set(`history:${y.chartUrl("^JKSE", "2y", "1d")}`, { v: JSON.stringify(h), expires_at: 4e9, fetched_at: Date.parse("2026-11-04T03:00:00Z") / 1000 });
+  await withFetch(async () => { throw new Error("served from cache"); }, async () => {
+    const e = await astro(mid, "2026-11-06", null, "none", "1", "2y");
+    assert.deepEqual([e.data.backtest.returns, e.data.backtest.to], [472, "2026-11-03"]);
+    assert.deepEqual(e.warnings, ["the backtest leaves out 2026-11-04, a session that had not closed when the history was fetched"]);
+  });
+
+  // Monthly bars are a provider error, a month of closes is not_found; neither is cached.
+  for (const [file, code] of [["chart_jkse_range_max_1d.json", "provider"], ["chart_bbca_1mo_1d.json", "not_found"]]) {
+    const bad = memoryD1();
+    await withFetch(async () => new Response(fixture("yahoo", file), { status: 200 }), async () => {
+      await assert.rejects(astro(bad, "2026-11-06", null, "none", "1", "10y"), (err) => err.code === code, file);
+    });
+    assert.equal(bad.cache.has("astro_backtest:10y"), false);
+  }
+});
+
+test("/api/history keeps a history that outgrows one D1 row to its most recent candles", async () => {
+  // 12,000 daily bars, more than all of ^JKSE since 1990: over 2 MB parsed.
+  const n = 12_000, t0 = Date.parse("1977-01-03T02:00:00Z") / 1000;
+  const ts = Array.from({ length: n }, (_, i) => t0 + i * 86400);
+  const px = ts.map((_, i) => 1000 + i / 7 + 0.123456789);
+  const body = JSON.stringify({ chart: { result: [{ meta: { symbol: "^OLD", currency: "USD", dataGranularity: "1d" }, timestamp: ts, indicators: { quote: [{ open: px, high: px, low: px, close: px, volume: ts.map(() => 123456789) }], adjclose: [{ adjclose: px }] } }], error: null } });
+  assert.ok(JSON.stringify(y.parseChart(JSON.parse(body), "max", "1d")).length > 2_000_000, "the synthetic history does not fit one row");
+  const env = memoryD1();
+  await withFetch(async () => new Response(body, { status: 200 }), async () => {
+    const e = await history(env, "^OLD", "max", "1d", 0);
+    const c = e.data.candles;
+    assert.ok(c.length > 9000 && c.length < n, String(c.length));
+    assert.equal(c.at(-1).close, px.at(-1));
+    assert.equal(e.data.summary.candles, n);
+    assert.equal(e.data.summary.first_close, px[0]);
+    assert.deepEqual(e.warnings, [`the web terminal keeps the last ${c.length} of ${n} candles (one cache row); summary covers all of them; the CLI returns every candle`]);
+    const row = env.cache.get(`history:${y.chartUrl("^OLD", "max", "1d")}`);
+    assert.ok(row.v.length <= 1_900_000, String(row.v.length));
+  });
+  // A history that fits is returned as it is.
+  const short = y.parseChart(JSON.parse(fixture("yahoo", "chart_jkse_2y_1d.json")), "2y", "1d");
+  assert.equal(fitCacheRow(short), short);
+  const all = y.parseChart(JSON.parse(fixture("yahoo", "chart_jkse_period1_max_1d.json")), "max", "1d");
+  assert.equal(fitCacheRow(all), all);
+});
+
+test("/api/history is keyed on the request, so a row written for 0.8.1's range=max is never served", async () => {
+  const env = memoryD1();
+  // 0.8.1 cached monthly bars labelled 1d under history:^JKSE:max:1d; they must not come back, even stale.
+  const monthly = y.parseChart(JSON.parse(fixture("yahoo", "chart_jkse_range_max_1d.json")), "max", "1d");
+  env.cache.set("history:^JKSE:max:1d", { v: JSON.stringify({ ...monthly, interval: "1d" }), expires_at: 0, fetched_at: 0 });
+  await withFetch(async () => { throw new Error("Yahoo is down"); }, async () => {
+    await assert.rejects(history(env, "^JKSE", "max", "1d", 0), /Yahoo is down/);
+  });
 });
