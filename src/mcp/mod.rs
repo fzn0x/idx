@@ -129,7 +129,7 @@ pub struct OwnershipTickerArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OwnershipEntityArgs {
-    /// Part of a holder's name (person or institution), at least 3 characters, e.g. "Dwimuria".
+    /// Part of a holder's name (person or institution), at least 3 letters or digits, e.g. "Dwimuria".
     pub name: String,
     /// Release date YYYY-MM-DD (default: newest imported).
     #[serde(default)]

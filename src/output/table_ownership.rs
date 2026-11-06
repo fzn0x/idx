@@ -399,10 +399,9 @@ pub fn releases(list: &[Release], db: &Path, color: bool) -> String {
         );
     }
     if legacy {
-        out.push_str(&format!(
-            "Positions {}: imported by idx 0.8.1 or older, which kept one account per holder; run `idx ownership import --all --force`.\n",
-            f::DASH
-        ));
+        out.push_str(
+            "A release without positions was imported by idx 0.8.1 or older, which kept one account per holder; run `idx ownership import --all --force`.\n",
+        );
     }
     out.push_str(&format!("Database: {}\n", db.display()));
     out
