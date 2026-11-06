@@ -2,8 +2,14 @@
 
 Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 
-- `public/` landing page (`index.html`) and the browser terminal (`terminal.html`),
-  plain HTML/CSS/ES modules, no bundler.
+- `public/` the market page (`index.html`) and the browser terminal (`terminal.html`)
+  in Bahasa Indonesia, their English copies under `public/en/`, and the 404 page in
+  both; plain HTML/CSS/ES modules, no bundler. `public/i18n.js` reads the page's
+  `<html lang>` and gives the scripts their words and number style (5.050,43 or
+  5,050.43); `public/styles.css` holds the Halaman Bursa tokens for the light and
+  dark themes. The two home pages share one structure: change both together, and
+  `test/tools.test.mjs` and `test/seo.test.mjs` check their command tables,
+  language links and search tags.
 - Docs: `scripts/docs.mjs` builds `/docs/` (README.md), `/docs/<page>` (one
   per `docs/*.md`), the same pages as Markdown at `/docs/<page>.md` with
   absolute links, `/llms.txt` (llmstxt.org index) and `/llms-full.txt` (every
@@ -13,7 +19,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `wrangler deploy`, and `node web/scripts/docs.mjs` (or `npm run docs` here)
   writes them for a local look. `scripts/md.mjs` is the small Markdown
   renderer behind it (no dependencies). The pages load only `public/docs.css`
-  (the site's station-board tokens, no script). The Worker serves `/docs*` and
+  (the site's Halaman Bursa tokens, no script). The Worker serves `/docs*` and
   `/llms*.txt` (`run_worker_first`) to give the `.md` and `.txt` files
   `charset=utf-8` and `access-control-allow-origin: *`. A new `docs/*.md`
   file goes into `PAGES` in `scripts/docs.mjs` and `public/sitemap.xml`;
