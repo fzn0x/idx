@@ -1114,10 +1114,10 @@ fn risk_lens_reads_a_year_against_ihsg() {
             "fundamental",
             "TLKM",
             "--lens",
-            "risk",
+            "Risk",
         ],
     );
-    assert_eq!(same["schema"], "idx.risk.v1");
+    assert_eq!(same["schema"], "idx.risk.v1", "--lens ignores case");
     assert_eq!(same["data"], v["data"]);
 
     idx(&sb.cache, &sb.config)

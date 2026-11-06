@@ -139,7 +139,7 @@ pub enum StocksCmd {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
         /// A focused reading instead of the full report: the same as `stocks growth|valuation|risk`.
-        #[arg(long, value_enum, value_name = "LENS")]
+        #[arg(long, value_enum, ignore_case = true, value_name = "LENS")]
         lens: Option<Lens>,
     },
 
