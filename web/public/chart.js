@@ -140,7 +140,7 @@ export function priceChart(q) {
     const first = p[0], last = p[p.length - 1];
     const base = ref() ?? first.close;
     const chg = last.close - base, pct = base ? (chg / base) * 100 : null;
-    const span = range.unit === "hour" ? `${day(first.time)} ${hhmm(first.time)}–${hhmm(last.time)} WIB` : `${fmt.date(first.time)} → ${fmt.date(last.time)}`;
+    const span = range.unit === "hour" ? `${day(first.time)} ${hhmm(first.time)} to ${hhmm(last.time)} WIB` : `${fmt.date(first.time)} to ${fmt.date(last.time)}`;
     return [`${span} · `, el("b", { text: fmt.price(last.close) }), " ", signed(chg, `${fmt.change(chg)} (${fmt.pct(pct)})`), ref() != null ? ` vs previous close ${fmt.price(base)}` : ` from ${fmt.price(base)}`];
   }
   function at(i) {
