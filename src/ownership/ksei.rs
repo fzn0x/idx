@@ -180,6 +180,10 @@ pub async fn list_until(
         ));
     }
     let last = last_page(&first.body).unwrap_or(1);
+    // Deeper pages are cached under page 1's newest month: a page cached
+    // before KSEI published a month starts one month too far back, and next
+    // to a newer page 1 the walk would skip the month at the boundary.
+    let newest = files.iter().map(|f| f.as_of).max().unwrap_or_default();
     let mut s = Sourced::fresh(Vec::new(), PROVIDER);
     s.cached = first.cached;
     s.stale = first.stale;
@@ -195,7 +199,8 @@ pub async fn list_until(
         }
         n += 1;
         let url = page_url(n);
-        let page = match fetcher.get(&url, &headers, TTL_LISTING, None).await {
+        let key = format!("{url}#after={newest}");
+        let page = match fetcher.get(&url, &headers, TTL_LISTING, Some(&key)).await {
             Ok(f) => check(&url, &f).map(|_| f),
             Err(e) => Err(e),
         };
@@ -445,6 +450,54 @@ mod tests {
         assert_eq!(s.data[8].as_of, d(2026, 2, 28), "{:?}", s.data[8]);
         assert_eq!(be.calls_matching("?page=2"), 1);
         assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    }
+
+    #[tokio::test]
+    async fn a_page_cached_before_a_new_month_is_not_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = |be: &Arc<FixtureBackend>| {
+            Arc::new(Fetcher::new(
+                be.clone(),
+                Cache::new(dir.path()),
+                CacheMode::Normal,
+            ))
+        };
+        // Eight months from `newest` back, one link each.
+        let page = |newest: NaiveDate| {
+            let mut html = String::new();
+            for i in 0..8 {
+                let m = newest - chrono::Months::new(i);
+                html.push_str(&format!(
+                    "<a href=\"https://www.ksei.co.id/storage/Download/{NAME}{}.zip\">",
+                    m.format("%Y%m%d")
+                ));
+            }
+            html + " last_page:5"
+        };
+        // Before October is published: page 1 runs Sep..Feb, page 2 Jan..
+        let before = Arc::new(
+            FixtureBackend::new()
+                .route(&page_url(2), 200, &page(d(2026, 1, 28)))
+                .route(PAGE_URL, 200, &page(d(2026, 9, 28))),
+        );
+        let s = list(&fetcher(&before), 16).await.unwrap();
+        assert_eq!((s.data[0].as_of, s.data.len()), (d(2026, 9, 28), 16));
+        // October is out and page 1 is read again while page 2's copy is
+        // still fresh: that copy would leave February out.
+        let after = Arc::new(
+            FixtureBackend::new()
+                .route(&page_url(2), 200, &page(d(2026, 2, 28)))
+                .route(PAGE_URL, 200, &page(d(2026, 10, 28))),
+        );
+        let f = fetcher(&after);
+        f.cache()
+            .put(PAGE_URL, 200, &page(d(2026, 10, 28)))
+            .unwrap();
+        let s = list(&f, 16).await.unwrap();
+        let dates: Vec<NaiveDate> = s.data.iter().map(|f| f.as_of).collect();
+        assert_eq!((dates[0], dates.len()), (d(2026, 10, 28), 16));
+        assert!(dates.contains(&d(2026, 2, 28)), "{dates:?}");
+        assert_eq!(after.calls_matching("?page=2"), 1);
     }
 
     #[tokio::test]
