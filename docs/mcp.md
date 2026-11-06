@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 37 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -313,9 +313,10 @@ local agents can share one process and one cache this way.
 | `idx_fundamental` | `symbol` | `idx.fundamentals.v1` (verdict included) |
 | `idx_technical` | `symbol`, `period?` | `idx.technical.v1` |
 | `idx_compare` | `symbols` | `idx.compare.v1` |
-| `idx_screen` | `filter`, `sort?`, `limit?`, `max_fundamentals?` | `idx.screen.v1` |
+| `idx_screen` | `preset?`, `filter?`, `sort?`, `ascending?`, `limit?`, `max_fundamentals?`, `returns?` | `idx.screen.v1`: presets top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include `range` (52-week position) and `ret1w`..`ret1y` (price return %, as MSN reports it, one market-wide request) |
 | `idx_news` | `symbol?`, `sources?`, `limit?`, `company_only?` | `idx.news.v1`: company items first (`scope=company`), then market context |
 | `idx_sentiment` | `symbol`, `sources?` | `idx.sentiment.v1` |
+| `idx_insights` | `symbol` | `idx.insights.v1`: about 30 MSN Money statements rated good, bad, neutral or not_rated against peers, the industry, the company's own history, the price or a threshold; the peer tickers |
 | `idx_corporate_actions` | `symbol`, `since?` (default a year ago) | `idx.actions.v1`: dividends, splits, bonus, rights (amount, ratio, cum/ex/recording/payment dates, status), RUPS, warrants and rights, upcoming included (IPOT) |
 | `idx_foreign` | `symbol`, `days?` (default 20, at most 250) | `idx.foreign.v1`: foreign buy, sell and net per session (shares), net × close, totals and streak (idx.co.id) |
 | `idx_instruments` | `board?`, `search?` | `idx.instruments.v1`: listed stocks with board, listing date and shares |

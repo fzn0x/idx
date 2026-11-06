@@ -33,15 +33,18 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 - `src/yahoo.js` the Yahoo endpoints and parsers; `src/analysis.js` ports of
   the Rust indicators, verdict, screener DSL and sentiment lexicon;
   `src/extras.js` ports of returns, dividends, news ordering and the
-  ownership changes summary.
+  ownership changes summary; `src/msn-insights.js` (ticker lookup, insights,
+  peers) and `src/msn-screen.js` (the whole-market return windows, one POST)
+  port `src/providers/msn` and are tested on the same `tests/fixtures/msn`.
 - Endpoints under `/api`: `market`, `quote`, `history`, `profile`,
   `fundamental`, `earnings`, `financials`, `dividends`, `returns`, `technical`,
-  `brief`, `compare`, `screen`, `news`, `sentiment`, `broker`, `bandar`,
+  `brief`, `compare`, `screen` (`preset`, `returns`), `news`, `sentiment`,
+  `insights`, `broker`, `bandar`,
   `bandar/screen`, `bandar/status`, `bandar/broker`, `actions`, `holidays`,
   `instruments`, `members`, `ownership/ticker`,
   `ownership/entity`, `ownership/changes`, `ownership/foreign`,
   `ownership/releases`, `universe`.
-- `public/tools.js` the 33 MCP tools with their CLI and web commands: the
+- `public/tools.js` the 37 MCP tools with their CLI and web commands: the
   terminal's `tools` command and help buttons and the landing page's Daftar
   Perintah table use it; `test/tools.test.mjs` checks it against docs/mcp.md.
   `bandar/broker` reads the nightly scan; `instruments` and `members` serve the

@@ -16,7 +16,7 @@ const read = (...p) => readFileSync(join(root, ...p), "utf8");
 
 test("the tool list matches docs/mcp.md", () => {
   const documented = [...read("docs", "mcp.md").matchAll(/^\| `(idx_[a-z_]+)` \|/gm)].map((m) => m[1]);
-  assert.equal(documented.length, 36);
+  assert.equal(documented.length, 37);
   assert.deepEqual(TOOLS.map((t) => t.tool).sort(), [...documented].sort());
   assert.equal(new Set(TOOLS.map((t) => t.tool)).size, TOOLS.length);
   for (const t of TOOLS) {
@@ -49,7 +49,7 @@ test("the landing page lists every tool with its commands", () => {
     if (t.web) assert.ok(web.includes(`href="/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /CLI and MCP only/, tool);
   }
-  assert.match(html, /idx mcp · 36 tools/);
+  assert.match(html, /idx mcp · 37 tools/);
 });
 
 test("/api/instruments and /api/members serve the bundled lists", () => {

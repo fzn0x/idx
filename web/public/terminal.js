@@ -20,12 +20,13 @@ const COMMANDS = [
   { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
   { name: "compare", usage: "compare <SYMBOLS>", help: "side-by-side fundamentals" },
-  { name: "screen", usage: "screen <FILTER> [--sort KEY] [--limit N]", help: 'e.g. screen pe<10,div>5,mcap>5T --sort div' },
+  { name: "screen", usage: "screen [FILTER] [--preset P] [--sort KEY] [--asc|--desc] [--limit N]", help: "e.g. screen pe<10,div>5,mcap>5T --sort div; presets: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include range (52-week position, 0 to 100) and ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it)" },
   { name: "news", usage: "news [SYMBOL] [--limit N] [--company-only]", help: "headlines; with a symbol the company's first, then market context" },
   { name: "dividends", usage: "dividends <SYMBOL>", help: "payments, yearly totals, TTM yield, streak, splits" },
   { name: "returns", usage: "returns <SYMBOLS> [--benchmark ^JKSE|none]", help: "1w..5y returns, CAGR, volatility, drawdown, excess over IHSG" },
   { name: "brief", usage: "brief <SYMBOL>", help: "one page: quote, verdict, signal, returns, dividends, holders, headlines" },
   { name: "sentiment", usage: "sentiment <SYMBOL>", help: "lexicon sentiment over matching headlines" },
+  { name: "insights", usage: "insights <SYMBOL> [--all]", help: "MSN Money's rated statements on valuation, earnings, growth, performance and health, against peers, the industry and the company's own history; --all adds the ones MSN could not rate" },
   { name: "broker", usage: "broker <SYMBOLS> [--date D | --from D --to D] [--investor foreign|domestic] [--board regular|cash|negotiated]", help: "which brokers bought and sold it: top 10 per side ranked by lots (IPOT), latest session by default" },
   { name: "bandar", usage: "bandar <SYMBOLS> [--period 1d|1w|1m|3m] [--top 1|3|5|10] [--daily] [--date D | --from D --to D] | bandar screen [--preset P] [--filter F] [--period P] [--sort KEY] [--limit N] | bandar broker <CODE> [--period P] [--limit N]", help: "bandarmology: are the top brokers accumulating or distributing? screen presets: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: where one broker (YP, CC, ...) is a top-10 buyer or seller of the session's 100 most traded stocks" },
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
@@ -33,7 +34,7 @@ const COMMANDS = [
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
-  { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
+  { name: "tools", usage: "tools [idx_TOOL]", help: "the 37 MCP tools with their CLI and web commands; tools idx_quote runs one" },
   { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
@@ -198,16 +199,51 @@ const R = {
   },
   screen(s) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${s.filters.join(", ") || "no filters"} · ${s.quoted} of ${s.universe} quoted · ${s.matched_quote_level} passed quote filters${s.fundamentals_checked ? ` · fundamentals checked for ${s.fundamentals_checked}${s.fundamentals_capped ? " (capped)" : ""}` : ""} · ${s.total_matches} match${s.total_matches === 1 ? "" : "es"} · sorted by ${s.sort}` }));
+    const what = [s.preset, s.filters.join(", ")].filter(Boolean).join(": ") || "no filters";
+    frag.append(el("p", { class: "prose", text: `${what} · ${s.quoted} of ${s.universe} quoted · ${s.matched_quote_level} passed quote filters${s.fundamentals_checked ? ` · fundamentals checked for ${s.fundamentals_checked}${s.fundamentals_capped ? " (capped)" : ""}` : ""} · ${s.total_matches} match${s.total_matches === 1 ? "" : "es"} · sorted by ${s.sort} ${s.descending ? "desc" : "asc"}` }));
     const withF = s.rows.some((r) => r.fundamentals_checked);
+    const keyOf = (clause) => (clause.match(/^\s*([^<>=!]+?)\s*(<=|>=|!=|<|>|=)/) || [])[1]?.toLowerCase();
+    const filterKeys = s.filters.map(keyOf);
+    // One return column: the sort key's window, else the first one filtered on, else 1 year.
+    const WINDOWS = { ret1w: ["1W %", "return_1w_pct"], ret1m: ["1M %", "return_1m_pct"], ret3m: ["3M %", "return_3m_pct"], ret6m: ["6M %", "return_6m_pct"], retytd: ["YTD %", "return_ytd_pct"], ytd: ["YTD %", "return_ytd_pct"], ret1y: ["1Y %", "return_1y_pct"] };
+    const win = WINDOWS[s.sort] || WINDOWS[filterKeys.find((k) => WINDOWS[k])] || WINDOWS.ret1y;
+    const withRange = s.sort === "range" || filterKeys.some((k) => ["range", "pos52", "52w"].includes(k));
     const cols = [
       { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", k: "name", l: true, cls: "name" }, { h: "Price", f: (r) => fmt.price(r.price) },
       { h: "Chg %", f: (r) => fmt.pct(r.change_pct), cls: (r) => `num ${signClass(r.change_pct)}` }, { h: "Mkt Cap", f: (r) => fmt.compact(r.market_cap) },
       { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "P/B", f: (r) => fmt.ratio(r.price_to_book) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
     ];
+    if (s.returns_source) cols.push({ h: win[0], f: (r) => fmt.pct(r[win[1]]), cls: (r) => `num ${signClass(r[win[1]])}` });
+    if (withRange) cols.push({ h: "52w pos", f: (r) => fmt.num(r.range_52w_pct, 1) });
     if (withF) cols.push({ h: "ROE", f: (r) => pct(r.roe_pct) }, { h: "Net mgn", f: (r) => pct(r.net_margin_pct) }, { h: "D/E", f: (r) => x(r.debt_to_equity) }, { h: "Sector", k: "sector", l: true });
     frag.append(wrapScroll(table(cols, s.rows)));
     if (s.rows.length < s.total_matches) frag.append(el("p", { class: "warn", text: `Showing ${s.rows.length} of ${s.total_matches}; add --limit 0 for all.` }));
+    if (s.returns_source) frag.append(el("p", { class: "warn", text: `Return windows: price return % as reported by ${s.returns_source}.` }));
+    if (withRange) frag.append(el("p", { class: "warn", text: "52w pos: where the price sits in its 52-week range, 0 at the low, 100 at the high." }));
+    return frag;
+  },
+  insights(r, all) {
+    const frag = document.createDocumentFragment();
+    frag.append(el("p", { class: "prose" }, [
+      el("b", { text: r.symbol }), `${r.name ? ` · ${r.name}` : ""} · MSN insights${r.updated ? `, updated ${r.updated.slice(0, 16).replace("T", " ")} UTC` : ""}`,
+    ]));
+    frag.append(el("p", { class: "prose", text: `${r.good} good · ${r.bad} bad · ${r.neutral} neutral · ${r.not_rated} not rated${r.peers.length ? ` · peers ${r.peers.join(", ")}` : ""}` }));
+    const MARK = { good: "✓", bad: "✗", neutral: "=", not_rated: "·" };
+    const VS = { peers: "peers", industry: "industry", own_history: "own history", price: "price", threshold: "threshold" };
+    const categories = [...new Set(r.insights.map((i) => i.category))];
+    for (const cat of categories) {
+      const items = r.insights.filter((i) => i.category === cat && (all || i.status !== "not_rated"));
+      if (!items.length) continue;
+      frag.append(el("h3", { class: "stmt-title", text: cat }));
+      frag.append(wrapScroll(table([
+        { h: "", f: (i) => MARK[i.status] || "·", cls: (i) => signClass(i.status === "good" ? 1 : i.status === "bad" ? -1 : 0) },
+        { h: "Statement", f: (i) => i.statement || i.short_statement || i.name, l: true },
+        { h: "vs", f: (i) => VS[i.compared_with] || fmt.text(null), l: true },
+      ], items)));
+    }
+    if (!r.insights.length) frag.append(el("p", { class: "warn", text: "MSN lists no statements for this company." }));
+    if (!all && r.not_rated) frag.append(el("p", { class: "warn", text: `${r.not_rated} statement${r.not_rated === 1 ? "" : "s"} MSN could not rate ${r.not_rated === 1 ? "is" : "are"} hidden; add --all.` }));
+    frag.append(el("p", { class: "warn", text: "Rule-based statements by MSN Money (✓ good, ✗ bad, = neutral, · not rated). Not investment advice." }));
     return frag;
   },
   news(n) {
@@ -557,12 +593,21 @@ async function run(line) {
     case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
     case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
-    case "screen": need(pos, 1, cmd.usage); env = await api(`screen?${qs({ filter: pos.join(","), sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : null })}`); render = R.screen; break;
+    case "screen": if (!opt.preset) need(pos, 1, cmd.usage); env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
     case "news": env = await api(`news?${qs({ symbol: sym(), limit: opt.limit || 20, company_only: opt["company-only"] ? "1" : null })}`); render = R.news; break;
     case "dividends": need(pos, 1, cmd.usage); env = await api(`dividends?symbol=${encodeURIComponent(sym())}`); render = R.dividends; break;
     case "returns": need(pos, 1, cmd.usage); env = await api(`returns?${qs({ symbols: pos.join(","), benchmark: opt.benchmark })}`); render = R.returns; break;
     case "brief": need(pos, 1, cmd.usage); env = await api(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
     case "sentiment": need(pos, 1, cmd.usage); env = await api(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
+    case "insights": {
+      // `insights --all BBCA`: the flag parser hands the symbol to the flag.
+      const symbol = pos[0] || (typeof opt.all === "string" ? opt.all : null);
+      need(symbol ? [symbol] : [], 1, cmd.usage);
+      const all = opt.all != null;
+      env = await api(`insights?symbol=${encodeURIComponent(symbol)}`);
+      render = (d) => R.insights(d, all);
+      break;
+    }
     case "broker": need(pos, 1, cmd.usage); env = await api(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
     case "bandar": {
       if ((pos[0] || "").toLowerCase() === "screen") {
