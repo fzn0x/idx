@@ -24,7 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    AstroPeriod, BandarPeriod, BrokerBoard, BrokerInvestor, Interval, NatalChoice, Period,
+    StatementPeriod, Symbol,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -38,8 +39,8 @@ use crate::output::json::{
     SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
 };
 use crate::output::json::{
-    SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
-    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
+    SCHEMA_ASTRO, SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER,
+    SCHEMA_HOLIDAYS, SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
 };
 use crate::ownership::OwnershipDb;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
@@ -64,6 +65,8 @@ idx_bandar reads it as bandarmology (are the top brokers accumulating or distrib
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
+idx_astro is traditional astrology computed offline; never present it as a forecast;
+its backtest says whether IHSG's history supports it.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -314,6 +317,25 @@ pub struct HolidaysArgs {
     /// Only holidays from today on (default false).
     #[serde(default)]
     pub upcoming: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AstroArgs {
+    /// Date YYYY-MM-DD, 1800-01-01 to 2050-12-31 (default today in Jakarta). Positions are for 16:00 WIB, the IDX close.
+    #[serde(default)]
+    pub date: Option<String>,
+    /// Days of lunar phases, stations and sign ingresses to list from the date (default 30, at most 366).
+    #[serde(default)]
+    pub days: Option<u32>,
+    /// IHSG chart for the transits: "launch" (1983-04-01, default), "base" (1982-08-10, value 100) or "none".
+    #[serde(default)]
+    pub natal: Option<String>,
+    /// Add the backtest of IHSG daily returns by lunar phase, Mercury retrograde, pasaran and Sun sign (default false; fetches ^JKSE history).
+    #[serde(default)]
+    pub backtest: Option<bool>,
+    /// Backtest look-back: 1y, 2y, 5y, 10y or max (default max, since 1990).
+    #[serde(default)]
+    pub period: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -951,6 +973,32 @@ impl IdxServer {
                 ok(
                     SCHEMA_HOLIDAYS,
                     service::holidays(year, a.upcoming.unwrap_or(false), today)?,
+                )
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_astro",
+        description = "Astrology for IHSG, computed offline: apparent positions of the Sun, Moon and planets (sign, degree, speed, retrograde) at 16:00 WIB on a date; the Moon's phase, illumination and next new and full moon; Mercury's retrograde period; the Javanese weton (day, pasaran, neptu) and Chinese shio; lunar phases, stations and sign ingresses ahead; aspects to IHSG's own chart (launched 1983-04-01, a date from secondary sources). backtest=true adds IHSG's daily returns since 1990 by lunar phase, Mercury retrograde, pasaran and Sun sign, each tested against all other days (Welch t, Bonferroni). Traditional astrology, not a forecast: present the backtest when asked whether it works. Returns the idx.astro.v1 envelope."
+    )]
+    async fn astro(
+        &self,
+        Parameters(a): Parameters<AstroArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let period = parse_opt(&a.period, AstroPeriod::Max)?;
+                let q = service::AstroQuery {
+                    date: parse_date(&a.date)?.unwrap_or_else(service::today_wib),
+                    days: a.days.unwrap_or(service::ASTRO_DEFAULT_DAYS),
+                    natal: parse_opt(&a.natal, NatalChoice::Launch)?,
+                    backtest: a.backtest.unwrap_or(false).then_some(period),
+                };
+                ok(
+                    SCHEMA_ASTRO,
+                    service::astro(self.provider.as_ref(), &q).await?,
                 )
             }
             .await,
@@ -1639,6 +1687,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "idx_astro",
                 "idx_bandar",
                 "idx_bandar_broker",
                 "idx_bandar_screen",
@@ -1853,6 +1902,57 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    #[tokio::test]
+    async fn astro_tool_computes_offline_and_checks_its_arguments() {
+        let s = server();
+        let args = |date: Option<&str>,
+                    natal: Option<&str>,
+                    backtest: Option<bool>,
+                    period: Option<&str>| {
+            Parameters(AstroArgs {
+                date: date.map(Into::into),
+                days: Some(7),
+                natal: natal.map(Into::into),
+                backtest,
+                period: period.map(Into::into),
+            })
+        };
+        let r = s
+            .astro(args(Some("2026-11-06"), None, None, None))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.astro.v1");
+        assert_eq!(v["provider"], "computed");
+        assert_eq!(v["data"]["weton"]["pasaran"], "Pahing");
+        assert_eq!(v["data"]["natal"]["chart"], "launch");
+        assert!(v["data"]["backtest"].is_null());
+        for bad in [
+            args(Some("2026-11-06"), Some("birth"), None, None),
+            args(Some("2026-11-06"), None, Some(true), Some("6mo")),
+            args(Some("1700-01-01"), None, None, None),
+            args(Some("06/11/2026"), None, None, None),
+        ] {
+            let r = s.astro(bad).await.unwrap();
+            assert_eq!(r.is_error, Some(true));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+        // The fake provider has no history cached: the backtest is an offline miss.
+        let r = s
+            .astro(args(
+                Some("2026-11-06"),
+                Some("none"),
+                Some(true),
+                Some("2y"),
+            ))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["exit_code"], 5, "{v}");
     }
 
     #[tokio::test]

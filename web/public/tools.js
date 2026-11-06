@@ -1,4 +1,4 @@
-// The 36 MCP tools, each with its CLI command and, where the web terminal can
+// The 37 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host) and the
 // Stockbit realtime ones (they carry a personal account session).
@@ -30,6 +30,7 @@ export const TOOLS = [
   { tool: "idx_calendar", cli: "idx market calendar", web: null, what: "dividend and rights dates, RUPS, public exposes" },
   { tool: "idx_holidays", cli: "idx market holidays --upcoming", web: "holidays --upcoming", what: "trading holidays and the next trading day" },
   { tool: "idx_members", cli: "idx market members", web: "members", what: "exchange members: broker codes and names" },
+  { tool: "idx_astro", cli: "idx market astro", web: "astro", what: "planets, Moon phase, Mercury retrograde, weton and shio for IHSG, with a returns backtest" },
   { tool: "idx_broker", cli: "idx broker BBCA", web: "broker BBCA", what: "top 10 buyers and sellers of a stock" },
   { tool: "idx_bandar", cli: "idx bandar detect BBCA --daily", web: "bandar BBCA --daily", what: "bandarmology: accumulation or distribution" },
   { tool: "idx_bandar_screen", cli: "idx bandar screen --preset big-accumulation", web: "bandar screen --preset big-accumulation", what: "the most traded stocks the top brokers accumulate" },

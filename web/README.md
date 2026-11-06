@@ -41,7 +41,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `instruments`, `members`, `ownership/ticker`,
   `ownership/entity`, `ownership/changes`, `ownership/foreign`,
   `ownership/releases`, `universe`.
-- `public/tools.js` the 33 MCP tools with their CLI and web commands: the
+- `public/tools.js` the 37 MCP tools with their CLI and web commands: the
   terminal's `tools` command and help buttons and the landing page's Daftar
   Perintah table use it; `test/tools.test.mjs` checks it against docs/mcp.md.
   `bandar/broker` reads the nightly scan; `instruments` and `members` serve the

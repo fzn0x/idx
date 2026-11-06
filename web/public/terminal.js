@@ -34,7 +34,7 @@ const COMMANDS = [
   { name: "astro", usage: "astro [DATE] [--days N] [--natal launch|base|none] [--backtest] [--period 1y|2y|5y|10y]", help: "IHSG astrology: planets, Moon phase, Mercury retrograde, weton and shio for a date (16:00 WIB), upcoming phases and ingresses, transits to IHSG's chart; --backtest tests them on IHSG's daily returns (5y by default). Traditional astrology, not a forecast" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
-  { name: "tools", usage: "tools [idx_TOOL]", help: "the 33 MCP tools with their CLI and web commands; tools idx_quote runs one" },
+  { name: "tools", usage: "tools [idx_TOOL]", help: "the 37 MCP tools with their CLI and web commands; tools idx_quote runs one" },
   { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },

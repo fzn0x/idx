@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 37 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -302,6 +302,7 @@ local agents can share one process and one cache this way.
 | `idx_indices` | `codes?` ("LQ45,IDX30"), `date?` | `idx.indices.v1`: every IDX index for one session |
 | `idx_calendar` | `date?` or `from?`/`to?`, `days?` (default 14), `symbol?`, `types?` (`all`, or `dividend,rights,...`) | `idx.calendar.v1`: dividend and rights dates, RUPS, public exposes, listings (bonds and buybacks with `all`) |
 | `idx_holidays` | `year?` (0 = every year), `upcoming?` | `idx.holidays.v1`: trading holidays, trading days, today and the next trading day (bundled, offline) |
+| `idx_astro` | `date?`, `days?` (default 30), `natal?` (`launch` \| `base` \| `none`), `backtest?`, `period?` (`1y` \| `2y` \| `5y` \| `10y` \| `max`, default `max`) | `idx.astro.v1`: planets (sign, degree, speed, retrograde) at 16:00 WIB, Moon phase, Mercury retrograde, weton, shio, phases, stations and ingresses ahead, transits to IHSG's chart (computed offline); `backtest` adds IHSG's daily returns by lunar phase, Mercury, pasaran and Sun sign (Welch t, Bonferroni). Traditional astrology, not a forecast |
 | `idx_members` | `search?` | `idx.members.v1`: exchange members (broker codes) with licences |
 | `idx_quote` | `symbols` ("BBCA,BBRI"; `^JKSE` is IHSG) | `idx.quotes.v1` |
 | `idx_history` | `symbol`, `period?`, `interval?`, `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
