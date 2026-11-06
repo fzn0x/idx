@@ -104,19 +104,27 @@ pub enum OwnershipCmd {
 }
 
 #[derive(Debug, Args)]
-#[group(id = "mode", required = true, multiple = false)]
+// The mode group names its four arguments: a struct-level `#[group]` would
+// take in every field, `--force` too, and refuse `--all --force` (idx 0.8.1
+// did).
+#[command(group(
+    clap::ArgGroup::new("mode")
+        .required(true)
+        .multiple(false)
+        .args(["file", "url", "latest", "all"])
+))]
 pub struct ImportArgs {
     /// Local XLSX or PDF file.
-    #[arg(long, value_name = "PATH", group = "mode")]
+    #[arg(long, value_name = "PATH")]
     pub file: Option<PathBuf>,
     /// Direct URL of an XLSX or PDF file.
-    #[arg(long, value_name = "URL", group = "mode")]
+    #[arg(long, value_name = "URL")]
     pub url: Option<String>,
     /// Newest file on the IDX page that is not imported yet.
-    #[arg(long, group = "mode")]
+    #[arg(long)]
     pub latest: bool,
     /// Every file on the IDX page that is not imported yet.
-    #[arg(long, group = "mode")]
+    #[arg(long)]
     pub all: bool,
     /// Re-import even when the release date already exists (with --latest/--all).
     #[arg(long)]

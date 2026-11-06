@@ -1019,6 +1019,15 @@ fn ownership_import_and_queries_work_offline() {
         .assert()
         .code(5);
     own(&sb).args(["ownership", "import"]).assert().code(2);
+    // --force combines with --latest/--all (idx 0.8.1 refused it as a usage error).
+    own(&sb)
+        .args(["ownership", "import", "--all", "--force"])
+        .assert()
+        .code(5);
+    own(&sb)
+        .args(["ownership", "import", "--all", "--latest"])
+        .assert()
+        .code(2);
 }
 
 #[test]
