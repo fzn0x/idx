@@ -82,7 +82,7 @@ https://ihsg.midoriresearch.com/docs/agent-guide.md".
      (checks the SHA-256, installs into `~/.local/bin`).
    - Windows: download `idx-<version>-x86_64-pc-windows-msvc.zip` from
      https://github.com/fzn0x/idx/releases and put `idx.exe` on `PATH`.
-   - With Node.js: `npm install -g github:fzn0x/idx`.
+   - With Node.js: `npm install -g ihsg-cli`.
    - With a Rust toolchain: `cargo install ihsg-cli --locked`.
    - With Nix (Linux): `nix profile install github:fzn0x/idx`.
 3. Check it: `idx version`, then `idx -o json stocks quote BBCA`. Exit 0 is
