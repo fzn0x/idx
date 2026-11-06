@@ -388,8 +388,9 @@ already percentages (`21.8` = 21.8 %). Ratios are plain multiples
   2026-11-06), and `per_share.book_value`, `per_share.revenue`,
   `health.total_debt` and `health.total_cash` are in USD. idx publishes them
   as reported, never converted; the verdict does not score P/B then, and the
-  tables mark those multiples with `*`. P/E, EPS and the dividend yield are
-  consistent.
+  tables mark those multiples with `*`. Under `auto` none of these eight
+  fields is filled from MSN, which names no statement currency, so each of
+  them is Yahoo's or `null`. P/E, EPS and the dividend yield are consistent.
 - `verdict.label` is `undervalued` | `fair` | `overvalued` |
   `insufficient_data` (fewer than three rule inputs). Every rule that fired is
   in `reasons`. It is a heuristic, not advice.
