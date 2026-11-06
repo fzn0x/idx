@@ -140,7 +140,10 @@ Other markets: the Yahoo-backed commands (`stocks quote`, `history`,
 or a bare one with `IDX_EXCHANGE` set. In every payload an IDX ticker stays
 bare (`BBCA`) and another market's keeps its suffix (`D05.SI`); `currency` is
 what Yahoo reports (`SGD`), and times are still given in WIB (`+07:00`): the
-instant is right, the wall clock is Jakarta's, not the exchange's.
+instant is right, the wall clock is Jakarta's, not the exchange's. Dates that
+name a trading session (the chart fallback's `previous_close`, and `price_date`
+and the dividend dates in `idx.dividends.v1`) are taken on the exchange's own
+clock, so a Toronto close at 16:00 EST counts for that day, not the next.
 
 ## `idx.history.v1` (`stocks history`)
 

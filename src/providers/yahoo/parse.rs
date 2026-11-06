@@ -1,11 +1,12 @@
 //! Pure parsers for Yahoo responses. No I/O here, so every function is unit
 //! tested against the recorded fixtures in `tests/fixtures/yahoo/`.
 
+use chrono::{FixedOffset, NaiveDate};
 use serde_json::Value;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    wib_from_unix, Candle, DividendEvent, DividendHistory, History, Interval, Period, Quote,
+    wib, wib_from_unix, Candle, DividendEvent, DividendHistory, History, Interval, Period, Quote,
     SplitEvent, Symbol,
 };
 
@@ -149,14 +150,32 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
     })
 }
 
+/// The exchange's UTC offset (`meta.gmtoffset`, WIB when it is missing).
+/// Dates of a session are taken in it: a daily bar is stamped at its local
+/// open and `regularMarketTime` at the last trade, and in WIB a Toronto close
+/// (16:00 EST) already falls on the next day. For IDX it is WIB.
+fn exchange_offset(m: &J) -> FixedOffset {
+    m.i64("gmtoffset")
+        .and_then(|s| i32::try_from(s).ok())
+        .and_then(FixedOffset::east_opt)
+        .unwrap_or_else(wib)
+}
+
+/// The exchange's calendar date of a unix time.
+fn local_date(secs: i64, offset: FixedOffset) -> Option<NaiveDate> {
+    wib_from_unix(secs).map(|t| t.with_timezone(&offset).date_naive())
+}
+
 /// Parses the `events` block of a chart response (`events=div,splits`) into
-/// the raw dividend history; computed fields stay empty.
+/// the raw dividend history; computed fields stay empty. Dates are the
+/// exchange's own (see [`exchange_offset`]).
 pub fn parse_events(body: &str) -> Result<DividendHistory> {
     let r = chart_result(body)?;
     let meta = r.get("meta").cloned().unwrap_or(Value::Null);
     let m = J(&meta);
     let symbol = Symbol::from_yahoo(&m.str("symbol").unwrap_or_default());
-    let day = |secs: Option<i64>| secs.and_then(wib_from_unix).map(|t| t.date_naive());
+    let offset = exchange_offset(&m);
+    let day = |secs: Option<i64>| secs.and_then(|s| local_date(s, offset));
 
     let mut dividends: Vec<DividendEvent> = r
         .pointer("/events/dividends")
@@ -232,6 +251,8 @@ pub fn parse_chart_quote(body: &str) -> Result<Quote> {
     // Previous close and today's open come from the bars themselves. The
     // current session's bar may be incomplete (null close) so we take the last
     // close strictly before the market-time date rather than "second to last".
+    // Both dates are the exchange's own, not WIB's (see `exchange_offset`).
+    let offset = exchange_offset(&m);
     let ts: Vec<Option<i64>> = r
         .get("timestamp")
         .and_then(Value::as_array)
@@ -242,13 +263,13 @@ pub fn parse_chart_quote(body: &str) -> Result<Quote> {
         .and_then(Value::as_array)
         .map(|a| a.iter().map(Value::as_f64).collect())
         .unwrap_or_default();
-    let market_date = q.market_time.map(|t| t.date_naive());
+    let market_date = q.market_time.map(|t| t.with_timezone(&offset).date_naive());
     q.previous_close = match market_date {
         Some(md) => ts
             .iter()
             .zip(closes.iter())
             .filter_map(|(t, c)| Some(((*t)?, (*c)?)))
-            .filter(|(t, _)| wib_from_unix(*t).is_some_and(|d| d.date_naive() < md))
+            .filter(|(t, _)| local_date(*t, offset).is_some_and(|d| d < md))
             .map(|(_, c)| c)
             .next_back(),
         None => {
@@ -407,6 +428,38 @@ mod tests {
             q.market_time.unwrap().to_rfc3339(),
             "2026-10-16T16:14:58+07:00"
         );
+    }
+
+    #[test]
+    fn chart_quote_fallback_dates_sessions_on_the_exchanges_clock() {
+        // RY.TO recorded after Toronto's close on 2026-11-05: the last trade
+        // (16:00 EST) is 04:00 WIB on 2026-11-06, while that session's bar is
+        // stamped 09:30 EST (21:30 WIB on the 5th). In WIB the session's own
+        // bar would count as "before", giving today's close as the previous.
+        let body = include_str!("../../../tests/fixtures/yahoo/chart_ryto_5d_1d.json");
+        let q = parse_chart_quote(body).unwrap();
+        assert_eq!(q.symbol.as_str(), "RY.TO");
+        assert_eq!(q.currency.as_deref(), Some("CAD"));
+        assert_eq!(q.price, Some(285.86));
+        assert_eq!(q.previous_close, Some(292.57000732421875));
+        assert_eq!(q.change, Some(-6.71));
+        // change (from meta) and previous_close (from the bars) agree.
+        let implied = q.price.unwrap() - q.previous_close.unwrap();
+        assert!((implied - q.change.unwrap()).abs() < 1e-4, "{implied}");
+        assert_eq!(
+            q.market_time.unwrap().to_rfc3339(),
+            "2026-11-06T04:00:00+07:00",
+            "the instant stays in WIB"
+        );
+        // Same rule for the dividends' price date.
+        let h = parse_events(body).unwrap();
+        assert_eq!(h.price_date.unwrap().to_string(), "2026-11-05");
+        // IDX is unchanged: WIB is its own clock.
+        let bbca = parse_events(include_str!(
+            "../../../tests/fixtures/yahoo/chart_events_bbca_max.json"
+        ))
+        .unwrap();
+        assert_eq!(bbca.price_date.unwrap().to_string(), "2026-10-16");
     }
 
     #[test]
