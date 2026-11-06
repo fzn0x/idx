@@ -14,6 +14,7 @@ use crate::error::{IdxError, Result};
 pub mod csv;
 pub mod format;
 pub mod json;
+pub mod jsonl;
 pub mod table;
 pub mod table_bandar;
 pub mod table_broker;
@@ -31,8 +32,17 @@ pub enum OutputFormat {
     Table,
     /// Machine-readable JSON envelope.
     Json,
+    /// One compact JSON record per line (JSON Lines); see [`jsonl`].
+    Jsonl,
     /// The main list in the payload as comma-separated rows (spreadsheets, shell pipelines).
     Csv,
+}
+
+impl OutputFormat {
+    /// `json` and `jsonl`: errors go to stderr as one JSON line.
+    pub fn is_json(self) -> bool {
+        matches!(self, OutputFormat::Json | OutputFormat::Jsonl)
+    }
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -40,7 +50,7 @@ impl std::str::FromStr for OutputFormat {
     fn from_str(s: &str) -> Result<Self> {
         <OutputFormat as clap::ValueEnum>::from_str(s, true).map_err(|_| {
             IdxError::Config(format!(
-                "unknown output format {s:?}; use table, json or csv"
+                "unknown output format {s:?}; use table, json, jsonl or csv"
             ))
         })
     }
@@ -51,8 +61,23 @@ impl std::fmt::Display for OutputFormat {
         f.write_str(match self {
             OutputFormat::Table => "table",
             OutputFormat::Json => "json",
+            OutputFormat::Jsonl => "jsonl",
             OutputFormat::Csv => "csv",
         })
+    }
+}
+
+/// Prints a value that has no envelope (`version`, `config get`, ...) in a
+/// machine format: the pretty document for `json`, one line per array item
+/// (or one line) for `jsonl`. Returns `false` for `table` and `csv`, where
+/// the caller prints its own text.
+pub fn print_value<T: Serialize>(format: OutputFormat, v: &T) -> Result<bool> {
+    match format {
+        OutputFormat::Json => print_stdout(&json::to_pretty(v)?).map(|_| true),
+        OutputFormat::Jsonl => {
+            print_stdout(&jsonl::render_value(&serde_json::to_value(v)?)?).map(|_| true)
+        }
+        OutputFormat::Table | OutputFormat::Csv => Ok(false),
     }
 }
 

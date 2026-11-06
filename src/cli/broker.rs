@@ -33,7 +33,7 @@ pub struct BrokerArgs {
     /// Market board to count.
     #[arg(long, value_enum, default_value_t = BrokerBoard::All)]
     pub board: BrokerBoard,
-    /// Rows per side in table mode (JSON and CSV carry all the source published).
+    /// Rows per side in table mode (JSON, JSONL and CSV carry all the source published).
     #[arg(long, short = 'n', default_value_t = 10)]
     pub top: usize,
 }

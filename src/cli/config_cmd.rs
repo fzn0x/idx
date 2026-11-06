@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::config::{self, FileConfig, KEYS, TEMPLATE};
 use crate::error::{IdxError, Result};
-use crate::output::{self, OutputFormat};
+use crate::output;
 
 use super::GlobalOpts;
 
@@ -28,7 +28,7 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
         .config
         .clone()
         .unwrap_or_else(config::default_config_path);
-    let json = global.output == Some(OutputFormat::Json);
+    let format = super::requested_format(global);
     match cmd {
         ConfigCmd::Init { force } => {
             if path.exists() && !force {
@@ -54,16 +54,15 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
         ConfigCmd::Get { key: Some(key) } => {
             let cfg = FileConfig::load(&path)?;
             let v = cfg.get(&key)?;
-            if json {
-                output::print_stdout(&output::json::to_pretty(&serde_json::json!({ key: v }))?)
-            } else {
-                output::print_stdout(&format!("{}\n", v.unwrap_or_else(|| "(unset)".into())))
+            if output::print_value(format, &serde_json::json!({ key: v }))? {
+                return Ok(());
             }
+            output::print_stdout(&format!("{}\n", v.unwrap_or_else(|| "(unset)".into())))
         }
         ConfigCmd::Get { key: None } => {
             let settings = super::resolve_settings(global)?;
-            if json {
-                return output::print_stdout(&output::json::to_pretty(&settings)?);
+            if output::print_value(format, &settings)? {
+                return Ok(());
             }
             let mut s = String::new();
             s.push_str(&format!(

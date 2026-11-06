@@ -72,10 +72,10 @@ pub async fn run(global: &GlobalOpts, args: McpArgs) -> Result<()> {
                         .into(),
                 ));
             }
-            let json = global.output == Some(output::OutputFormat::Json);
+            let format = super::requested_format(global);
             if list {
-                if json {
-                    return output::print_stdout(&output::json::to_pretty(&clients::CLIENTS)?);
+                if output::print_value(format, &clients::CLIENTS)? {
+                    return Ok(());
                 }
                 return output::print_stdout(&clients::list_text());
             }
@@ -91,8 +91,8 @@ pub async fn run(global: &GlobalOpts, args: McpArgs) -> Result<()> {
                 (None, false) => Launcher::Binary(current_binary()),
             };
             let s = clients::setup(c, &launcher);
-            if json {
-                return output::print_stdout(&output::json::to_pretty(&s)?);
+            if output::print_value(format, &s)? {
+                return Ok(());
             }
             output::print_stdout(&clients::render(&s))
         }

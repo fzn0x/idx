@@ -55,7 +55,7 @@ pub enum StocksCmd {
         /// Bar size. Intraday sizes (5m..1h) only work with short periods.
         #[arg(long, short = 'i', value_enum, default_value = "1d")]
         interval: Interval,
-        /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON is never limited.
+        /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON, JSONL and CSV are never limited.
         #[arg(long, short = 'n', default_value_t = 30)]
         limit: usize,
     },
@@ -79,7 +79,7 @@ pub enum StocksCmd {
         /// Reporting series.
         #[arg(long, short = 'p', value_enum, default_value = "annual")]
         period: StatementPeriod,
-        /// Which statement to show in table mode (JSON always carries all three).
+        /// Which statement to show in table mode (JSON, JSONL and CSV carry all three).
         #[arg(long, short = 's', value_enum, default_value = "all")]
         statement: Statement,
     },
@@ -100,7 +100,7 @@ pub enum StocksCmd {
     Dividends {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
-        /// Most recent payments listed in table mode (JSON carries all).
+        /// Most recent payments listed in table mode (JSON, JSONL and CSV carry all).
         #[arg(long, short = 'n', default_value_t = 12)]
         limit: usize,
     },

@@ -86,10 +86,9 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
         StockbitCmd::Status => status_cmd(ctx),
         StockbitCmd::Logout => {
             let removed = store(ctx).clear()?;
-            if ctx.json() {
-                output::print_stdout(&output::json::to_pretty(
-                    &serde_json::json!({ "logged_out": removed }),
-                )?)
+            let v = serde_json::json!({ "logged_out": removed });
+            if output::print_value(ctx.settings.output, &v)? {
+                Ok(())
             } else if removed {
                 output::print_stdout("Logged out; the stored Stockbit session was deleted.\n")
             } else {
@@ -109,8 +108,8 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
 
 fn status_cmd(ctx: &Context) -> Result<()> {
     let status = store(ctx).status(chrono::Utc::now().timestamp());
-    if ctx.json() {
-        return output::print_stdout(&output::json::to_pretty(&status)?);
+    if output::print_value(ctx.settings.output, &status)? {
+        return Ok(());
     }
     let dur = |secs: Option<i64>| match secs {
         Some(s) if s <= 0 => "expired".to_string(),

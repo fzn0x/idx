@@ -79,7 +79,7 @@ pub struct Cli {
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct GlobalOpts {
-    /// Output format: table for people, json for scripts and agents, csv for spreadsheets.
+    /// Output format: table for people, json for scripts and agents, jsonl for one record per line, csv for spreadsheets.
     #[arg(short = 'o', long, global = true, value_enum, value_name = "FORMAT")]
     pub output: Option<OutputFormat>,
 
@@ -207,8 +207,8 @@ impl Context {
     }
 }
 
-/// Prints warnings and the stale notice to stderr (table and csv modes;
-/// JSON carries them in the envelope).
+/// Prints warnings and the stale notice to stderr (table, csv and jsonl
+/// modes; JSON carries them in the envelope).
 pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
     if ctx.json() {
         return;
@@ -221,8 +221,9 @@ pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
     }
 }
 
-/// Writes a result in the chosen format: the JSON envelope, CSV rows of the
-/// payload's main list, or the given table.
+/// Writes a result in the chosen format: the JSON envelope, one JSON line per
+/// record (the schema's row rule), CSV rows of the payload's main list, or the
+/// given table.
 pub fn emit<T: serde::Serialize>(
     ctx: &Context,
     schema: &str,
@@ -233,6 +234,11 @@ pub fn emit<T: serde::Serialize>(
         OutputFormat::Json => {
             let env = output::json::Envelope::from_sourced(schema, s);
             output::print_stdout(&output::json::to_pretty(&env)?)
+        }
+        OutputFormat::Jsonl => {
+            notices(ctx, &s);
+            let v = serde_json::to_value(&s.data)?;
+            output::print_stdout(&output::jsonl::render(schema, &v)?)
         }
         OutputFormat::Csv => {
             notices(ctx, &s);
@@ -356,21 +362,24 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Config(cmd) => config_cmd::run(&cli.global, cmd),
         Command::Cache(cmd) => cache_cmd::run(&cli.global, cmd),
         Command::Schema { name } => {
+            let format = requested_format(&cli.global);
             let names = output::json::schema_names();
             match name {
                 None => {
-                    let json = cli.global.output == Some(OutputFormat::Json);
-                    if json {
-                        output::print_stdout(&output::json::to_pretty(&names)?)
-                    } else {
-                        output::print_stdout(&format!(
-                            "Available schemas: {}\nUsage: idx schema <name>\n",
-                            names.join(", ")
-                        ))
+                    if output::print_value(format, &names)? {
+                        return Ok(());
                     }
+                    output::print_stdout(&format!(
+                        "Available schemas: {}\nUsage: idx schema <name>\n",
+                        names.join(", ")
+                    ))
                 }
                 Some(n) => {
                     let schema = output::json::schema_for(&n)?;
+                    // A JSON Schema is JSON in every format; jsonl makes it one line.
+                    if output::print_value(format, &schema)? {
+                        return Ok(());
+                    }
                     output::print_stdout(&output::json::to_pretty(&schema)?)
                 }
             }
@@ -382,10 +391,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             output::print_stdout(&String::from_utf8_lossy(&buf))
         }
         Command::Version => {
-            let json = cli.global.output == Some(OutputFormat::Json);
             let info = VersionInfo::current();
-            if json {
-                output::print_stdout(&output::json::to_pretty(&info)?)
+            if output::print_value(requested_format(&cli.global), &info)? {
+                Ok(())
             } else {
                 output::print_stdout(&format!(
                     "idx {} ({} {})\nproviders: {}\nconfig: {}\ncache:  {}\n",
@@ -424,12 +432,19 @@ impl VersionInfo {
     }
 }
 
-/// Prints an error the way the chosen output format expects.
+/// The output format of commands that build no [`Context`] (`version`,
+/// `schema`, `config`, `mcp setup`) and of error reports.
+pub fn requested_format(global: &GlobalOpts) -> OutputFormat {
+    global.output.unwrap_or(OutputFormat::Table)
+}
+
+/// Prints an error the way the chosen output format expects: one JSON line
+/// in json and jsonl modes, `error:` (and a `hint:`) otherwise.
 pub fn report_error(global: Option<&GlobalOpts>, err: &IdxError) {
-    let json = global
-        .map(|g| g.output == Some(OutputFormat::Json))
-        .unwrap_or(false)
-        || std::env::var("IDX_OUTPUT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let json = global.is_some_and(|g| requested_format(g).is_json())
+        || std::env::var("IDX_OUTPUT").is_ok_and(|v| {
+            v.trim().eq_ignore_ascii_case("json") || v.trim().eq_ignore_ascii_case("jsonl")
+        });
     if json {
         let env = output::json::ErrorEnvelope::from(err);
         output::print_stderr(&serde_json::to_string(&env).unwrap_or_default());

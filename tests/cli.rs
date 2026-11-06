@@ -1142,3 +1142,160 @@ fn completions_generate() {
         .success()
         .stdout(predicate::str::contains("Register-ArgumentCompleter"));
 }
+
+// ---- output formats, stdin symbols, --quiet, exchange suffix ----------------
+
+const YAHOO_QUOTE_3: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK";
+const YAHOO_QUOTE_PARTIAL: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK";
+const YAHOO_CHART_BBCA_1MO: &str =
+    "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1mo&interval=1d&includePrePost=false";
+
+/// A sandbox whose cache holds Yahoo's quotes for BBCA, BBRI and TLKM, the
+/// partial BBCA + ZZZZ answer and BBCA's one-month daily chart.
+fn seeded() -> Sandbox {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        YAHOO_QUOTE_3,
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
+    seed(
+        &sb.cache,
+        YAHOO_QUOTE_PARTIAL,
+        "yahoo/quote_v7_partial_bbca_zzzz.json",
+    );
+    seed(
+        &sb.cache,
+        YAHOO_CHART_BBCA_1MO,
+        "yahoo/chart_bbca_1mo_1d.json",
+    );
+    sb
+}
+
+/// Every stdout line parsed as JSON; fails on a line that is not.
+fn json_lines(stdout: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8(stdout.to_vec())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l:?}: {e}")))
+        .collect()
+}
+
+#[test]
+fn jsonl_streams_one_record_per_line() {
+    let sb = seeded();
+    // Holidays: one line per holiday of the year.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    assert_eq!(rows.len(), 22);
+    assert!(rows.iter().all(|r| r["date"].is_string()));
+    assert!(out.stderr.is_empty());
+    // IDX_OUTPUT=jsonl is the same as the flag.
+    let env = idx(&sb.cache, &sb.config)
+        .env("IDX_OUTPUT", "jsonl")
+        .args(["market", "holidays", "--year", "2026"])
+        .output()
+        .unwrap();
+    assert_eq!(env.stdout, out.stdout);
+
+    // Quotes: one per line, the same objects -o json carries.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    let syms: Vec<&str> = rows.iter().map(|r| r["symbol"].as_str().unwrap()).collect();
+    assert_eq!(syms, ["BBCA", "BBRI", "TLKM"]);
+    let json = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    let env: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(env["data"][1], rows[1]);
+
+    // History: one candle per line.
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "jsonl", "stocks", "history", "BBCA", "--period", "1mo",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    assert!(rows.len() > 10, "{}", rows.len());
+    assert!(rows
+        .iter()
+        .all(|r| r["close"].is_number() && r["time"].is_string()));
+
+    // A partial answer: the rows on stdout, the warning on stderr.
+    idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stdout(predicate::function(|s: &str| s.lines().count() == 1))
+        .stderr(predicate::str::contains("warning: no data for ZZZZ"));
+
+    // Values without an envelope: one line.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "version"])
+        .output()
+        .unwrap();
+    let rows = json_lines(&out.stdout);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["version"], env!("CARGO_PKG_VERSION"));
+
+    // An error: nothing on stdout, one JSON line on stderr, exit 5.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "ASII"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    assert!(out.stdout.is_empty());
+    let err = json_lines(&out.stderr);
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0]["error"]["code"], "offline_miss");
+    assert_eq!(err[0]["exit_code"], 5);
+}
+
+#[test]
+fn jsonl_streams_ownership_changes() {
+    let sb = sandbox();
+    let db = sb.cache.join("own.sqlite");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ownership/");
+    for f in [
+        "above1_20260731_synthetic.xlsx",
+        "above1_20260831_excerpt.xlsx",
+    ] {
+        idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(["ownership", "import", "--file", &format!("{dir}{f}")])
+            .assert()
+            .success();
+    }
+    let range = ["--from", "2026-07-31", "--to", "2026-08-31"];
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "jsonl", "ownership", "changes"])
+        .args(range)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows = json_lines(&out.stdout);
+    let json = idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args(["-o", "json", "ownership", "changes"])
+        .args(range)
+        .output()
+        .unwrap();
+    let env: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let changes = env["data"]["changes"].as_array().unwrap();
+    assert!(!changes.is_empty());
+    assert_eq!(&rows, changes);
+}
