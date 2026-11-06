@@ -795,8 +795,18 @@ function pick(c) {
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 }
+// The rail is narrow: each command gets a label of a few words here; help prints the full text.
+const RAIL = {
+  quote: "quotes and chart", history: "OHLCV candles", profile: "company profile", financials: "statements",
+  earnings: "EPS vs estimates", fundamental: "ratios, verdict", technical: "indicators, signal", compare: "side by side",
+  screen: "filter the market", news: "headlines", dividends: "payments, yield", returns: "returns vs IHSG",
+  brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", bandar: "bandarmology",
+  actions: "corporate actions", market: "IHSG and movers", holidays: "trading holidays", list: "listed stocks",
+  members: "broker codes", tools: "MCP tools", ownership: "KSEI holders", json: "raw JSON envelope",
+  help: "every command", clear: "clear the sheet",
+};
 document.getElementById("rail-cmds").append(...COMMANDS.map((c) => el("li", {}, [
-  el("button", { type: "button", title: c.usage, onclick: () => pick(c) }, [el("span", { class: "c", text: c.name }), el("span", { class: "d", text: c.help })]),
+  el("button", { type: "button", title: `${c.usage}: ${c.help}`, onclick: () => pick(c) }, [el("span", { class: "c", text: c.name }), el("span", { class: "d", text: RAIL[c.name] || c.help })]),
 ])));
 paintHistory();
 
@@ -852,7 +862,7 @@ async function board() {
     const m = await api("market");
     const at = new Date(m.data.refreshed_at);
     const s = session(new Date(), holidays);
-    if (!s.open) lamp("closed", "Market closed");
+    if (!s.open) lamp("closed", "Closed");
     else if ((Date.now() - at) / 1000 > 180) lamp("stale", "Stale");
     else lamp("live", "Live");
     document.getElementById("st-age").replaceChildren("Board ", el("b", { text: `${hhmm(wib(at).secs)} WIB` }), ` · ${fmt.int(m.data.quoted)} quoted${s.phase ? ` · ${s.phase.name}` : s.holiday ? ` · ${s.holiday}` : ""}`);

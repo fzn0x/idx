@@ -82,7 +82,7 @@
 <form class="gate" id="gate" role="search" autocomplete="off">
   <label class="gate-l" for="cmd">Perintah</label>
   <div class="gate-field">
-    <input id="cmd" name="cmd" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="gate-list" aria-describedby="gate-help" placeholder="Command or ticker: quote BBCA" spellcheck="false" autocapitalize="off" autocorrect="off">
+    <input id="cmd" name="cmd" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="gate-list" aria-describedby="gate-help" placeholder="Command or ticker: quote BBCA" data-short-placeholder="Ticker or command" spellcheck="false" autocapitalize="off" autocorrect="off">
     <ul class="gate-list" id="gate-list" role="listbox" aria-label="Suggestions" hidden></ul>
   </div>
   <button class="gate-go" type="submit">Run</button>
@@ -117,8 +117,9 @@
   </div>
   <div class="cell tape-cell">
     <p class="lbl">Tape</p>
-    <div id="tape"></div>
-    <p class="tape-ends" id="tape-ends"></p>
+    <p class="tape-k" id="tape-start">IHSG minute closes</p>
+    <div class="tape-plot" id="tape"></div>
+    <p class="tape-k" id="tape-last"></p>
   </div>
 </section>
 

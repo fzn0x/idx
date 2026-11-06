@@ -56,6 +56,15 @@ export function mountGate({ form, input, list, status, suggest, onRun, history =
   let items = [], active = -1, recall = null, draft = "";
   const optId = (i) => `${list.id}-o${i}`;
 
+  // A phone gets the short placeholder (data-short-placeholder) so the first control reads whole.
+  const long = input.placeholder, short = input.dataset.shortPlaceholder;
+  if (short) {
+    const narrow = matchMedia("(max-width: 46rem)");
+    const fit = () => { input.placeholder = narrow.matches ? short : long; };
+    fit();
+    narrow.addEventListener("change", fit);
+  }
+
   function paint() {
     list.replaceChildren(...items.map((s, i) => {
       const key = el("span", { class: "key" });

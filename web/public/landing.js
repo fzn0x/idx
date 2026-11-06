@@ -54,16 +54,22 @@ function fillCell(td, c, r, text) {
 /**
  * Writes rows into a tbody keyed by symbol. The same symbols in the same order
  * are patched cell by cell and each changed cell flips; a new order is rebuilt,
- * flipping the cells of symbols whose values moved.
+ * flipping the cells of symbols whose values moved. With `lamp`, a row whose
+ * values changed in this refresh carries a lit lamp until the next one.
  */
-function liveRows(tbody, cols, rows) {
+function liveRows(tbody, cols, rows, { lamp = false } = {}) {
   const keys = rows.map((r) => r.symbol).join(",");
   if (tbody.dataset.keys === keys) {
-    rows.forEach((r, i) => cols.forEach((c, j) => {
-      const td = tbody.rows[i].cells[j], text = c.f(r, i), cls = cellClass(c, r, text);
-      if (td.className !== cls) td.className = cls;
-      if (td.textContent !== text) { fillCell(td, c, r, text); flip(td); }
-    }));
+    rows.forEach((r, i) => {
+      const tr = tbody.rows[i];
+      let moved = false;
+      cols.forEach((c, j) => {
+        const td = tr.cells[j], text = c.f(r, i), cls = cellClass(c, r, text);
+        if (td.className !== cls) td.className = cls;
+        if (td.textContent !== text) { fillCell(td, c, r, text); flip(td); moved = true; }
+      });
+      if (lamp) setMoved(tr, moved);
+    });
     return;
   }
   const was = new Map([...tbody.rows].map((tr) => [tr.dataset.key, [...tr.cells].map((td) => td.textContent)]));
@@ -71,17 +77,27 @@ function liveRows(tbody, cols, rows) {
   tbody.replaceChildren(...rows.map((r, i) => {
     const tr = el("tr");
     tr.dataset.key = r.symbol;
+    let moved = false;
     cols.forEach((c, j) => {
       const text = c.f(r, i);
       const td = el("td", { class: cellClass(c, r, text) });
       fillCell(td, c, r, text);
       tr.append(td);
       const old = was.get(r.symbol);
-      if (!fresh && old && old[j] !== text) flip(td);
+      if (!fresh && old && old[j] !== text && j > 0) { flip(td); moved = true; }
     });
+    if (lamp) setMoved(tr, moved);
     return tr;
   }));
   tbody.dataset.keys = keys;
+}
+
+/** The row lamp: lit while the row holds a value that changed in the latest refresh. */
+function setMoved(tr, moved) {
+  tr.classList.toggle("moved", moved);
+  const rk = tr.cells[0];
+  if (moved) rk.setAttribute("aria-label", `${rk.textContent}, changed in the latest refresh`);
+  else rk.removeAttribute("aria-label");
 }
 
 function moverTable(id, spec) {
@@ -111,7 +127,15 @@ function drawTape(points) {
   });
   tape.dataset.key = key;
   $("tape").replaceChildren(tape);
-  $("tape-ends").textContent = points.length > 1 ? `${stamp(new Date(first[0] * 1000))} to ${stamp(new Date(last[0] * 1000))} WIB` : "no ticks yet";
+  // Name both traces in words: the dotted row is the level at the start, the lit line ends at the last close.
+  const start = $("tape-start"), end = $("tape-last");
+  if (points.length > 1) {
+    start.replaceChildren(el("span", { class: "sw ref", "aria-hidden": "true" }), "start ", el("b", { text: fmt.price(first[1]) }), ` ${stamp(new Date(first[0] * 1000))}`);
+    end.replaceChildren(el("span", { class: `sw lit ${last[1] >= first[1] ? "rise" : "fall"}`, "aria-hidden": "true" }), "last ", el("b", { class: last[1] >= first[1] ? "up" : "dn", text: fmt.price(last[1]) }), ` ${stamp(new Date(last[0] * 1000))} WIB`);
+  } else {
+    start.textContent = "no ticks yet";
+    end.textContent = "";
+  }
 }
 
 function renderBand(m) {
@@ -132,7 +156,7 @@ function renderBand(m) {
 function render(envl) {
   const m = envl.data;
   renderBand(m);
-  liveRows($("board-rows"), BOARD, m.heavyweights);
+  liveRows($("board-rows"), BOARD, m.heavyweights, { lamp: true });
   for (const [id, spec] of Object.entries(MOVERS)) liveRows(moverTable(id, spec), spec.cols, spec.rows(m));
   const when = envl.fetched_at;
   machineLine($("board-m"), [envl.schema, envl.provider, `${m.heavyweights.length} rows`, "by mcap", when, envl.cached ? "cached" : "live", envl.stale ? "stale" : null],
@@ -186,12 +210,12 @@ function status(now, s) {
     n.parentElement.classList.toggle("stale", stale);
   }
   if (refreshedAt) {
-    $("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(refreshedAt).secs)} WIB` }), ` · ${fmt.age(age)} ago · next read in ${countdown(Math.max(0, (nextRefresh - Date.now()) / 1000)).slice(3)}`);
+    $("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(refreshedAt).secs)} WIB` }), ` · ${fmt.age(age)} ago`, el("span", { class: "st-next", text: ` · next read in ${countdown(Math.max(0, (nextRefresh - Date.now()) / 1000)).slice(3)}` }));
   }
   if (failed) return lamp("offline", market ? "Offline, last board shown" : "Offline");
   if (!market) return lamp("idle", "Connecting");
   if (stale) return lamp("stale", "Stale");
-  return s.open ? lamp("live", "Live") : lamp("closed", "Market closed");
+  return s.open ? lamp("live", "Live") : lamp("closed", "Closed");
 }
 
 async function refresh() {
@@ -298,5 +322,14 @@ machineLine($("tools-m"), ["idx mcp", `${TOOLS.length} tools`, `${webTools} web`
 tabs();
 gate();
 for (const w of document.querySelectorAll("#perintah .tbl-wrap")) scrollCue(w);
+// On a phone the command table restacks its rows as blocks; explicit roles keep it a table to assistive technology.
+const toolsTable = document.querySelector("#perintah table");
+if (toolsTable) {
+  toolsTable.setAttribute("role", "table");
+  for (const g of toolsTable.querySelectorAll("thead, tbody")) g.setAttribute("role", "rowgroup");
+  for (const tr of toolsTable.rows) tr.setAttribute("role", "row");
+  for (const th of toolsTable.querySelectorAll("th")) th.setAttribute("role", "columnheader");
+  for (const td of toolsTable.querySelectorAll("td")) td.setAttribute("role", "cell");
+}
 loadHolidays();
 tick();
