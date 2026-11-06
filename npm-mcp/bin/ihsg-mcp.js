@@ -12,6 +12,7 @@
 // is the MCP channel, so every line this launcher prints goes to stderr.
 "use strict";
 const { spawn } = require("child_process");
+const os = require("os");
 const binary = require("../lib/binary");
 
 /** `idx mcp <args>`. A bare `setup` would print the path of the binary in
@@ -52,9 +53,16 @@ async function main() {
   });
   child.on("exit", (code, signal) => {
     if (signal) {
-      // End the way the child did, so the caller sees the same signal.
+      const status = 128 + (os.constants.signals[signal] || 0);
+      // Node keeps SIGUSR1 (it opens the inspector) and SIGPIPE for itself,
+      // so raising those would not end it: exit 128 + n, as a shell reports
+      // a death by signal.
+      if (signal === "SIGUSR1" || signal === "SIGPIPE") process.exit(status);
+      // End the way the child did, so the caller sees the same signal; the
+      // timer covers any other signal node turns out to handle.
       process.removeAllListeners(signal);
       process.kill(process.pid, signal);
+      setTimeout(() => process.exit(status), 1000);
       return;
     }
     process.exit(code === null ? 1 : code);

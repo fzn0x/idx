@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs, { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -112,6 +112,14 @@ test("a supervisor's SIGTERM reaches the server, and the server's signal ends th
   const r = spawnSync(process.execPath, [stage("npm-mcp", "ihsg-mcp.js")], { env, encoding: "utf8" });
   assert.equal(r.signal, "SIGTERM");
   assert.equal(r.stdout, "");
+
+  // Node keeps SIGUSR1 (inspector) and SIGPIPE: 128 + n, never a clean 0.
+  for (const sig of ["USR1", "PIPE"]) {
+    env.IDX_NPM_CACHE = fakeCache(`kill -${sig} $$\n`);
+    const s = spawnSync(process.execPath, [stage("npm-mcp", "ihsg-mcp.js")], { env, encoding: "utf8" });
+    assert.equal(s.status, 128 + constants.signals[`SIG${sig}`], sig);
+    assert.equal(s.stderr, "", `${sig}: no inspector, no message`);
+  }
 });
 
 test("a first run that loses the install race keeps the binary already in place", (t) => {
