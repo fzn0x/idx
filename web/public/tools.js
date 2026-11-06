@@ -1,9 +1,9 @@
-// The 44 MCP tools, each with its CLI command and, where the web terminal can
+// The 46 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
 // composition one (its archive is imported into the CLI's local database), the
 // ownership snapshot tool (it acts on the machine's own SQLite file), the
-// Stockbit realtime ones (they carry a personal account session) and the ones
+// Stockbit ones (they carry a personal account session) and the ones
 // whose source has not been checked from this site's host yet (`unchecked`
 // names that source). `why`, when set, is the tool's own reason;
 // cliOnlyReason() says which.
@@ -54,12 +54,14 @@ export const TOOLS = [
   { tool: "idx_ownership_institutions", cli: "idx ownership institutions BBCA", web: null, unchecked: "MSN Money", what: "institutions and funds holding it: buying, selling, new, exited (MSN)" },
   { tool: "idx_orderbook", cli: "idx stockbit orderbook BBCA", web: null, what: "realtime order book: full depth ladder and foreign flow (your Stockbit session)" },
   { tool: "idx_stockbit_status", cli: "idx stockbit status", web: null, what: "is a Stockbit session stored, and when its tokens expire" },
-  { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in your browser, once" },
+  { tool: "idx_stockbit_login", cli: "idx stockbit login", web: null, what: "sign in to Stockbit in a browser or through a local page, once" },
+  { tool: "idx_stockbit_actions", cli: "idx stockbit actions BBCA", web: null, what: "a stock's corporate actions since listing, or the market's calendar, by kind (your Stockbit session)" },
+  { tool: "idx_stockbit_movements", cli: "idx stockbit movements BBCA", web: null, what: "insider and 5 % holder movements: who bought or sold, how many shares, at what price (your Stockbit session)" },
 ];
 
 export const CLI_ONLY_REASON = "idx.co.id refuses requests from this site's host (a Cloudflare Worker), so this tool runs in the CLI and the MCP server only.";
 
-const STOCKBIT_REASON = "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page.";
+const STOCKBIT_REASON = "The Stockbit tools carry your own account session (captured once by `idx stockbit login`), so they run in the CLI and the MCP server only, never this public page.";
 
 /** Why a tool with `web: null` runs in the CLI and MCP only. */
 export function cliOnlyReason(t) {

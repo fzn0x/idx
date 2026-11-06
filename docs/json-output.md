@@ -21,7 +21,8 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `ownership-resolve-candidates`, `ownership-resolution`,
 `ownership-resolutions`, `ownership-composition`, `ownership-snapshot-sync`,
 `ownership-status`, `ownership-snapshot`, `ownership-institutions`,
-`watchlist`, `error`, `quote`, `candle`.
+`watchlist`, `stockbit-actions`, `stockbit-movements`, `stockbit-status`,
+`error`, `quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -1071,6 +1072,67 @@ missing). Funds overlap their managers: never add the two lists. A stock MSN
 lists no holders for has empty `holders` and a warning. `-o csv` prints one
 row per holder; with no holders it prints the holder header alone, so files
 for several symbols share one layout. See [ownership.md](ownership.md#institutional-and-fund-holders-msn).
+
+## `idx.stockbit.actions.v1` (`stockbit actions`, `stockbit calendar`)
+
+From the user's own Stockbit session; `provider` is `stockbit`. `data`:
+`symbol` (the stock asked for; `null` for the calendar), `name` (from the
+bundled issuer list), `from` / `to` (the range idx applied; `null` when open),
+`kinds` (each one request), `total` (rows Stockbit returned for these kinds
+before the range), and `actions[]`, newest first for a stock and oldest first
+for the calendar. Each action: `symbol` (a structured warrant's own code for
+those), `name` (IPOs, tender offers), `kind` (`dividend`, `stock_dividend`,
+`bonus`, `rights`, `warrant`, `split`, `reverse_split`, `rups`,
+`public_expose`, `ipo`, `tender_offer`), `date` (the cum date for
+entitlements, the ex date without one, else the event's first day),
+`cum_date`, `ex_date`, `recording_date` (for a RUPS, the date that decides who
+may attend), `distribution_date` (payment; a tender offer's settlement),
+`dividend_per_share` and `currency` (ISO code), `ratio_old` / `ratio_new` (as
+published), `factor` (Stockbit's price adjustment factor), `price` (IDR per
+share: rights or warrant exercise, tender offer, final IPO price),
+`trading_start` / `trading_end` (rights and warrants), `exercise_start` /
+`exercise_end` (warrants), `offer_start` / `offer_end` (IPO offering, tender
+offer), `listing_date`, `shares` and `shares_pct` (offered or sought),
+`time` (RUPS or expose time as published, WIB), `venue`, `note`, `id`
+(Stockbit's row id). Placeholders (empty strings, zeros, `0001-01-01`) are
+`null`. A kind that fails is a `warnings` entry.
+
+## `idx.stockbit.movements.v1` (`stockbit movements`)
+
+From the user's own Stockbit session; `provider` is `stockbit`. `data`: the
+filters asked for (`symbol`, `from`, `to`, `holder_id`, `action` as `buy`,
+`sell`, `transfer`, `cross` or `corporate_action`, `source` as `idx` or
+`ksei`; `null` when not given), `pages_read`, `more` (rows remain past the
+pages read, or a later page failed, which `warnings` names), and
+`movements[]`, newest first: `date`, `symbol`, `holder`, `holder_id` (the
+source's id for the holder, the same on all of that holder's rows), `roles`
+(`director`, `commissioner`, or another role lowercased), `foreign` (`true`,
+`false`, `null`), `action` (the source's label, lowercased: `buy`, `sell`,
+`transfer`, `cross`, `right_issue`, `private_placement`, `tender_offer`, ...),
+`source` (`idx` insider disclosure, `ksei` holder at 5 % and above),
+`shares_from`, `shares_to`, `shares_change` (exact, signed), `pct_from`,
+`pct_to`, `pct_change` (percent of the company as the source rounds it),
+`price` and `value` (IDR, as filed; `null` when the source only estimates),
+`estimated_price` and `estimated_value` (the source's estimate when no price
+was filed; `null` otherwise), `purpose` (as filed), `broker` and
+`broker_group` (seen on KSEI rows).
+
+## `stockbit status` (`idx schema stockbit-status`)
+
+A bare object, not an envelope, and never a token value (the MCP tool
+`idx_stockbit_status` returns the same): `logged_in` (`true` when a refresh
+token is stored, live or not), `access` and `refresh` (each `present`,
+`expires_at` in Unix seconds and `expires_in_secs`, negative once expired;
+both `null` when the token is absent or not a JWT), and `session_file` (the
+absolute path). `sign_in` is MCP only: the reply of `idx_stockbit_login`, and
+in `idx_stockbit_status` the latest page sign-in that tool started in the same
+server; it is absent otherwise (the CLI never sets it). Its fields: `state` (`waiting`, `signed_in`, `failed` or
+`already_signed_in`), `method` (`page`, `browser` or `none`), `url` and `port`
+(the page on 127.0.0.1 while `waiting`), `ssh_forward` (an `ssh -N -L` command
+when the server is reached over SSH), `expires_in_secs` (until the page stops
+listening), `already_open` (an earlier page was still open and is returned),
+`warning` (the latest note, such as why Stockbit refused a pasted session) and
+`error` (why it `failed`).
 
 ## Errors
 

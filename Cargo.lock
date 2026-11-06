@@ -1345,6 +1345,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "getrandom 0.3.4",
  "hex",
  "http-body-util",
  "pdf-extract",

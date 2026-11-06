@@ -12,7 +12,17 @@
 //!   volume, value, foreign flow) and the full depth ladder.
 //! - `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE`
 //!   — OHLCV candles; Stockbit picks the granularity from the window.
+//! - `GET /corpaction/{type}[?symbol=SYM]` (`corpaction.rs`): corporate
+//!   actions, one kind per request; paced a second apart, cached 6 h.
+//! - `GET /insider/company/majorholder?page=N&..` (`movement.rs`): insider
+//!   and 5 % holder movements, 50 rows a page; paced, cached 1 h.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
+//!
+//! Only GETs under a short allowlist of read-only paths ([`READ_PREFIXES`])
+//! ever leave with the bearer: the same API places orders and moves cash. A
+//! 401, or a 403 with a JSON body, is a refused token (one refresh, one
+//! retry); an HTML 403 is Stockbit's CDN refusing this client, which no
+//! refresh changes, so it is reported and never retried.
 //!
 //! The order book's foreign flow is kept only while Stockbit marks it current
 //! (`has_foreign_bs: true`); otherwise it is left empty and the envelope says
@@ -32,13 +42,20 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::{Fetched, Fetcher};
-use crate::model::{History, Interval, OrderBook, Period, Quote, Symbol};
+use crate::model::{
+    CorporateEvent, CorporateEventKind, History, HolderMovement, Interval, OrderBook, Period,
+    Quote, Symbol,
+};
 
 use super::{Provider, Sourced, Ttls};
 
 pub mod auth;
+pub mod corpaction;
 pub mod login;
+pub mod movement;
+pub mod page;
 mod parse;
+pub mod signin;
 
 pub use auth::{Session, SessionStore, Status};
 
@@ -95,10 +112,62 @@ pub fn stockbit_code(symbol: &Symbol) -> String {
     }
 }
 
+/// Paths idx may GET on the session API. The same API places orders and
+/// moves cash; anything else fails before a token is read. A feature that
+/// reads a new endpoint adds its prefix here.
+const READ_PREFIXES: &[&str] = &[
+    "/company-price-feed/",
+    "/charts/",
+    "/corpaction/",
+    "/insider/company/majorholder?",
+];
+
+/// `true` for an exodus URL under one of [`READ_PREFIXES`].
+fn is_read_url(url: &str) -> bool {
+    url.strip_prefix(EXODUS).is_some_and(|p| {
+        READ_PREFIXES.iter().any(|x| p.starts_with(x))
+            && !p.contains("..")
+            && !p.contains('%')
+            && !p.contains('#')
+    })
+}
+
+/// Stockbit refusing the bearer: 401, or a 403 with a JSON body. An HTML 403
+/// is CloudFront refusing this client, which a refresh cannot change.
+pub(crate) fn rejected(status: u16, body: &str) -> bool {
+    status == 401 || (status == 403 && serde_json::from_str::<serde_json::Value>(body).is_ok())
+}
+
+/// The error for an HTML 403 from Stockbit's CDN.
+const CDN_BLOCKED: &str = "exodus.stockbit.com refused this client (HTTP 403 from its CDN); idx does not retry a block, try later or from another network";
+
+/// Errors that no other Stockbit request in the same command can get past
+/// (no session, a refused session, a CDN block), so a command that reads
+/// several lists stops at the first one instead of repeating it.
+pub fn is_fatal(e: &IdxError) -> bool {
+    match e {
+        IdxError::Usage(_) => true,
+        IdxError::Provider { provider, message } if *provider == NAME => {
+            message == auth::REFRESH_REJECTED
+                || message == CDN_BLOCKED
+                || message.starts_with("Stockbit rejected the session")
+        }
+        _ => false,
+    }
+}
+
+/// Pause between live requests of the commands that read several lists.
+pub const PACE: Duration = Duration::from_secs(1);
+/// Corporate actions change a few times a day at most.
+const CORPACTION_TTL: Duration = Duration::from_secs(6 * 3600);
+/// Filings arrive through the day; an hour keeps paging consistent.
+const MOVEMENTS_TTL: Duration = Duration::from_secs(3600);
+
 pub struct Stockbit {
     fetcher: Arc<Fetcher>,
     ttls: Ttls,
     store: Arc<SessionStore>,
+    pace: Duration,
 }
 
 impl Stockbit {
@@ -107,21 +176,39 @@ impl Stockbit {
             fetcher,
             ttls,
             store,
+            pace: PACE,
         }
+    }
+
+    /// The same provider with another pause between paced requests (tests
+    /// use zero).
+    pub fn with_pace(mut self, pace: Duration) -> Self {
+        self.pace = pace;
+        self
     }
 
     pub fn store(&self) -> &Arc<SessionStore> {
         &self.store
     }
 
+    pub fn fetcher(&self) -> &Arc<Fetcher> {
+        &self.fetcher
+    }
+
     /// GET an exodus URL with a valid bearer, refreshing the access token once
-    /// if the first attempt is rejected. `url` doubles as the cache key — it
-    /// carries no token, so no secret enters the cache (rule 6).
+    /// if the first attempt is rejected. `url` doubles as the cache key; it
+    /// carries no token, so no secret enters the cache (rule 6). Only
+    /// [`READ_PREFIXES`] paths are ever requested.
     async fn get(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        if !is_read_url(url) {
+            return Err(IdxError::Other(format!(
+                "idx does not call {url} on Stockbit's session API"
+            )));
+        }
         let now = chrono::Utc::now().timestamp();
+        let mut session = self.store.valid_session(&self.fetcher, now).await?;
         for attempt in 0..2 {
-            let token = self.store.valid_access(&self.fetcher, now).await?;
-            let headers = request_headers(&token);
+            let headers = request_headers(&session.access);
             let fetched = match self.fetcher.get(url, &headers, ttl, Some(url)).await {
                 Ok(f) => f,
                 Err(IdxError::OfflineMiss(_)) => {
@@ -129,24 +216,49 @@ impl Stockbit {
                 }
                 Err(e) => return Err(e),
             };
-            if (fetched.status == 401 || fetched.status == 403)
-                && attempt == 0
-                && !self.fetcher.is_offline()
-                && !fetched.cached
-            {
+            if fetched.status == 403 && !rejected(fetched.status, &fetched.body) {
+                return Err(IdxError::provider(NAME, CDN_BLOCKED));
+            }
+            if rejected(fetched.status, &fetched.body) {
+                if attempt == 1 || self.fetcher.is_offline() || fetched.cached {
+                    return Err(IdxError::provider(
+                        NAME,
+                        format!(
+                            "Stockbit rejected the session (HTTP {}) after a refresh; run `idx stockbit login` again",
+                            fetched.status
+                        ),
+                    ));
+                }
                 tracing::info!("stockbit rejected the token; refreshing once");
-                // Force the next loop to refresh by expiring the cached access.
-                let session = self.store.load();
-                let _ = self
-                    .store
-                    .refresh(&self.fetcher, &session)
-                    .await
-                    .map(|s| self.store.save(&s));
+                session = self.store.rotate(&self.fetcher, &session, now).await?;
                 continue;
             }
             return Ok(fetched);
         }
         unreachable!("loop returns on the second attempt")
+    }
+
+    /// [`get`](Self::get) a second after the previous paced live request on
+    /// the same session in this process, from any provider or MCP tool call
+    /// (cached answers cost no pause), for the commands that read several
+    /// Stockbit lists in a row: a human-ish request rate.
+    async fn get_paced(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        let cached = self.fetcher.mode() != crate::http::CacheMode::Bypass
+            && self.fetcher.cache().get(url, ttl).is_some_and(|h| h.fresh);
+        let mut last = self.store.pacer().lock().await;
+        if !cached && !self.fetcher.is_offline() {
+            if let Some(t) = *last {
+                let wait = self.pace.saturating_sub(t.elapsed());
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+            }
+        }
+        let f = self.get(url, ttl, what).await;
+        if matches!(&f, Ok(f) if !f.cached) {
+            *last = Some(tokio::time::Instant::now());
+        }
+        f
     }
 
     fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
@@ -185,6 +297,92 @@ impl Stockbit {
             out.warnings.push(foreign_not_current(&flag));
         }
         Ok(out)
+    }
+
+    /// One kind of corporate action: one stock's whole history with
+    /// `symbol`, the market's recent and announced actions without it.
+    /// Paced and cached 6 h. Stockbit answering "not found" is an empty list
+    /// with a warning.
+    pub async fn corporate_actions(
+        &self,
+        kind: CorporateEventKind,
+        symbol: Option<&Symbol>,
+    ) -> Result<Sourced<Vec<CorporateEvent>>> {
+        let code = symbol.map(stockbit_code);
+        let url = corpaction::url(kind, code.as_deref());
+        let f = self
+            .get_paced(&url, CORPACTION_TTL, "corporate actions")
+            .await?;
+        if f.status == 404 || parse::is_not_found(&f.body) {
+            let mut out = Self::sourced(Vec::new(), &f);
+            out.warnings.push(match symbol {
+                Some(s) => format!("Stockbit lists no {kind} for {s}"),
+                None => format!("Stockbit lists no {kind}"),
+            });
+            return Ok(out);
+        }
+        if !f.is_success() {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "corporate actions ({kind}) HTTP {}: {}",
+                    f.status,
+                    parse::error_message(&f.body)
+                ),
+            ));
+        }
+        Ok(Self::sourced(corpaction::parse(kind, &f.body)?, &f))
+    }
+
+    /// One page (from 1) of insider and 5 % holder movements, newest first:
+    /// its rows and whether more follow. Paced and cached 1 h. Stockbit
+    /// answering "not found" is an empty last page with a warning.
+    pub async fn movements_page(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        self.movements_page_within(q, page, MOVEMENTS_TTL).await
+    }
+
+    /// [`movements_page`](Self::movements_page) read live, past a cached
+    /// copy (offline, or when the request fails, that copy is served stale).
+    pub async fn movements_page_live(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        self.movements_page_within(q, page, Duration::ZERO).await
+    }
+
+    async fn movements_page_within(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+        ttl: Duration,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        q.validate()?;
+        let url = movement::url(q, page);
+        let f = self.get_paced(&url, ttl, "shareholder movements").await?;
+        if f.status == 404 || parse::is_not_found(&f.body) {
+            let mut out = Self::sourced((Vec::new(), false), &f);
+            out.warnings.push(match &q.symbol {
+                Some(s) => format!("Stockbit lists no holder movements for {s}"),
+                None => "Stockbit lists no holder movements for these filters".into(),
+            });
+            return Ok(out);
+        }
+        if !f.is_success() {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "shareholder movements HTTP {}: {}",
+                    f.status,
+                    parse::error_message(&f.body)
+                ),
+            ));
+        }
+        Ok(Self::sourced(movement::parse_page(&f.body)?, &f))
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {
@@ -378,7 +576,7 @@ pub fn granularity_warning(period: Period, interval: Interval) -> Option<String>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
@@ -561,5 +759,142 @@ mod tests {
                 }
             }
         }
+    }
+
+    const BLOCKED: &str = include_str!("../../../tests/fixtures/stockbit/blocked_403.html");
+    const UNAUTHORIZED: &str = include_str!("../../../tests/fixtures/stockbit/unauthorized.json");
+    const REFRESHED: &str =
+        include_str!("../../../tests/fixtures/stockbit/login_refresh_constructed.json");
+
+    /// A provider over `be` whose session holds the dummy access token and a
+    /// dummy refresh token.
+    pub(crate) fn with_backend(
+        be: FixtureBackend,
+    ) -> (Stockbit, Arc<FixtureBackend>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let be = Arc::new(be);
+        let fetcher = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let store = Arc::new(SessionStore::new(
+            dir.path().join("session.json"),
+            Some(DUMMY_ACCESS.into()),
+            Some("eyJ0.eyJleHAiOjF9.dummy".into()),
+        ));
+        (Stockbit::new(fetcher, Ttls::default(), store), be, dir)
+    }
+
+    #[test]
+    fn only_read_paths_are_allowed() {
+        for ok in [
+            "https://exodus.stockbit.com/company-price-feed/v2/orderbook/companies/BBCA",
+            "https://exodus.stockbit.com/company-price-feed/market-time/session",
+            "https://exodus.stockbit.com/charts/BBCA/daily?timeframe=1m",
+            "https://exodus.stockbit.com/corpaction/dividend?symbol=BBCA",
+            "https://exodus.stockbit.com/insider/company/majorholder?page=1",
+        ] {
+            assert!(is_read_url(ok), "{ok}");
+        }
+        for no in [
+            "https://exodus.stockbit.com/order/buy",
+            "https://exodus.stockbit.com/login/refresh",
+            "https://exodus.stockbit.com/corpaction/../order/buy",
+            "https://exodus.stockbit.com/corpaction/%2e%2e/order/buy",
+            "https://exodus.stockbit.com/insider/company/majorholder/../../order",
+            "https://evil.test/corpaction/dividend",
+            "https://exodus.stockbit.com.evil.test/corpaction/dividend",
+            "http://exodus.stockbit.com/corpaction/dividend",
+        ] {
+            assert!(!is_read_url(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_json_403_is_a_refused_token_an_html_one_a_block() {
+        assert!(rejected(401, UNAUTHORIZED));
+        assert!(rejected(401, "<html>"));
+        assert!(rejected(403, UNAUTHORIZED));
+        assert!(!rejected(403, BLOCKED));
+        assert!(!rejected(200, "{}"));
+        assert!(!rejected(404, UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn pacing_is_shared_by_every_provider_on_a_session() {
+        let pace = Duration::from_millis(300);
+        let (a, be, _d) =
+            with_backend(FixtureBackend::new().route("corpaction/", 404, r#"{"message":"x"}"#));
+        let a = a.with_pace(pace);
+        // A second provider over the same store, as MCP builds per tool call.
+        let b =
+            Stockbit::new(a.fetcher().clone(), Ttls::default(), a.store().clone()).with_pace(pace);
+        let start = tokio::time::Instant::now();
+        let (ra, rb) = tokio::join!(
+            a.corporate_actions(CorporateEventKind::Dividend, None),
+            b.corporate_actions(CorporateEventKind::Rups, None),
+        );
+        ra.unwrap();
+        rb.unwrap();
+        assert_eq!(be.calls_matching("corpaction/"), 2);
+        assert!(start.elapsed() >= pace, "{:?}", start.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_path_off_the_allowlist_fails_before_any_request() {
+        let (sb, be, _d) = with_backend(FixtureBackend::new());
+        let e = sb
+            .get("https://exodus.stockbit.com/order/buy", REALTIME_TTL, "x")
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("does not call"), "{e}");
+        assert_eq!(be.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cdn_block_is_not_retried_and_spends_no_refresh() {
+        let (sb, be, _d) =
+            with_backend(FixtureBackend::new().route("orderbook/companies/BBCA", 403, BLOCKED));
+        let e = sb
+            .orderbook(&Symbol::parse("BBCA").unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        assert!(e.to_string().contains("HTTP 403 from its CDN"), "{e}");
+        assert!(is_fatal(&e));
+        assert_eq!(be.calls_matching("orderbook/companies/BBCA"), 1);
+        assert_eq!(be.calls_matching("login/refresh"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_refreshed_once_then_reported() {
+        let (sb, be, _d) = with_backend(
+            FixtureBackend::new()
+                .route("orderbook/companies/BBCA", 401, UNAUTHORIZED)
+                .route("login/refresh", 200, REFRESHED),
+        );
+        let e = sb
+            .orderbook(&Symbol::parse("BBCA").unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("run `idx stockbit login` again"),
+            "{e}"
+        );
+        assert!(is_fatal(&e));
+        assert_eq!(be.calls_matching("orderbook/companies/BBCA"), 2);
+        assert_eq!(be.calls_matching("login/refresh"), 1);
+        // The retry carried the refreshed access token, not the rejected one.
+        let headers = be.headers.lock().unwrap();
+        let bearer = |i: usize| {
+            headers[i]
+                .iter()
+                .find(|(k, _)| k == "authorization")
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(bearer(0), format!("Bearer {DUMMY_ACCESS}"));
+        assert_ne!(bearer(2), bearer(0));
     }
 }

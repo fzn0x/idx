@@ -576,6 +576,23 @@ fn build_selected(
 mod tests {
     use super::*;
 
+    #[test]
+    fn one_session_store_per_file_per_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = |p: &str, seed: Option<&str>| StockbitOptions {
+            session_path: dir.path().join(p),
+            access_seed: None,
+            refresh_seed: seed.map(String::from),
+        };
+        let a = opts("a.json", None).store();
+        assert!(Arc::ptr_eq(&a, &opts("a.json", None).store()));
+        assert!(!Arc::ptr_eq(&a, &opts("b.json", None).store()));
+        // Other env seeds for the same file: a store that carries them.
+        let seeded = opts("a.json", Some("eyJ0.x.y")).store();
+        assert!(!Arc::ptr_eq(&a, &seeded));
+        assert_eq!(seeded.load().refresh, "eyJ0.x.y");
+    }
+
     struct Failing(&'static str, fn() -> IdxError);
     struct Ok1;
 

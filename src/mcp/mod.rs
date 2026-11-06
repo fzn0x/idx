@@ -24,8 +24,9 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, EarningsFilter, ForeignSource,
-    HolderOrigin, Interval, Lens, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
+    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, CorporateEventKind,
+    EarningsFilter, ForeignSource, HolderOrigin, Interval, Lens, MovementFilter, MovementSource,
+    Period, StatementPeriod, Symbol, IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -44,10 +45,12 @@ use crate::output::json::{
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
     SCHEMA_INSIGHTS, SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_SCREEN,
-    SCHEMA_SENTIMENT,
+    SCHEMA_SENTIMENT, SCHEMA_STOCKBIT_ACTIONS, SCHEMA_STOCKBIT_MOVEMENTS,
 };
 use crate::ownership::{self, snapshot, OwnershipDb};
-use crate::providers::stockbit::{login, SessionStore, Stockbit};
+use crate::providers::stockbit::auth::{SignInProgress, Status};
+use crate::providers::stockbit::movement::MovementQuery;
+use crate::providers::stockbit::{login, page, SessionStore, Stockbit};
 use crate::providers::{Provider, Sourced, StockbitOptions, Ttls};
 use crate::service;
 use crate::universe;
@@ -83,6 +86,8 @@ holders by issuers held or issuers by concentration; idx_ownership_graph walks t
 idx_ownership_composition reads KSEI's monthly composition archive (local vs foreign by
 investor type, every holder, none named) and downloads the newest month on first use.
 idx_ownership_institutions is the exception: it asks MSN live and needs no import.
+Stockbit tools (idx_orderbook, idx_stockbit_*) use the user's own Stockbit login: check
+idx_stockbit_status first, and never ask for passwords, cookies or tokens in the chat.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 // Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
@@ -122,6 +127,59 @@ pub struct StockbitLoginArgs {
     /// Seconds to wait for the sign-in (default 300, clamped to 30..900).
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// "page": return at once with a URL on 127.0.0.1 (and an ssh -L command when this server is reached over SSH) for the user's own browser. "browser": open a browser on this server's machine and wait. Default "auto": browser where this machine has a display and a Chromium-family browser and is not reached over SSH, else page.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Port for the page (default 7878, or a free one when it is taken; 0 for any).
+    #[serde(default)]
+    pub port: Option<u32>,
+    /// Sign in even when the stored session still works.
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StockbitActionsArgs {
+    /// One IDX ticker, e.g. "BBCA": that stock's whole history, newest first. Omit it for the market calendar: every stock's actions in a date range, oldest first.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Kinds, comma separated: dividend, stock_dividend, bonus, rights, warrant, split, reverse_split, rups, public_expose, ipo, tender_offer, or "all". Default: every kind but ipo for a stock, every kind but warrant for the calendar. Each kind is one request to Stockbit.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// First day, YYYY-MM-DD. A stock: only actions dated from it. The calendar: default today.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Last day, YYYY-MM-DD. A stock: only actions dated up to it. The calendar: default from plus days.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Calendar only: days after from when to is not given (default 14; the range covers at most 366 days).
+    #[serde(default)]
+    pub days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StockbitMovementsArgs {
+    /// One IDX ticker, e.g. "BBCA"; omit it for the whole market.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Only changes from this day, YYYY-MM-DD.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Only changes up to this day, YYYY-MM-DD.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// One holder: the holder_id of a row (digits).
+    #[serde(default)]
+    pub holder: Option<String>,
+    /// buy, sell, transfer, cross, or corporate_action (rights issues, private placements, tender offers and the like).
+    #[serde(default)]
+    pub action: Option<String>,
+    /// idx (insider disclosures, any size, with the trade price) or ksei (holders at 5% and above, no price filed).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Pages of 50 rows to read, 1 to 10 (default 1); each page is one request to Stockbit.
+    #[serde(default)]
+    pub pages: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1957,12 +2015,13 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_status",
-        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook or before using the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal."
+        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask). While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
     )]
     async fn stockbit_status(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let status = self.stockbit_store().status(chrono::Utc::now().timestamp());
+                let mut status = self.stockbit_store().status(chrono::Utc::now().timestamp());
+                status.sign_in = page::progress();
                 Ok(CallToolResult::success(vec![ContentBlock::text(
                     json::to_pretty(&status)?,
                 )]))
@@ -1973,7 +2032,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_login",
-        description = "Opens a browser ON THE MACHINE RUNNING THIS SERVER for the user to sign in to Stockbit, then captures and stores the session. Only useful for a local (stdio) server the user is sitting at; it cannot work for a remote HTTP server. Blocks until the user signs in or it times out. Prefer telling the user to run `idx stockbit login` themselves; use this only when they ask you to start it."
+        description = "Starts a Stockbit sign-in for the machine running this server; use it only when the user asks (otherwise tell them to run `idx stockbit login` in a terminal). method 'page' returns at once with sign_in.url, a page on 127.0.0.1 (plus sign_in.ssh_forward, an ssh -L command, when this server is reached over SSH): give the user the URL; they sign in to stockbit.com in their own browser, ideally a private window, and send the session with the page's bookmark or by pasting the cookie there; then poll idx_stockbit_status until sign_in.state is signed_in or failed. method 'browser' opens Chrome, Edge or Brave on Stockbit's sign-in page on this machine and waits until the user signs in or the timeout; it suits a local stdio server the user sits at. Default 'auto' picks page over SSH, without a display or without a browser. Either way idx checks the session with Stockbit before storing it, and a session that already works is reported (sign_in.state already_signed_in) without opening anything unless force is true. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
     )]
     async fn stockbit_login(
         &self,
@@ -1990,17 +2049,196 @@ impl IdxServer {
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join("stockbit-chrome-profile");
                 let secs = a.timeout.unwrap_or(300).clamp(30, 900);
+                let timeout = std::time::Duration::from_secs(secs);
+                let sb = Arc::new(self.stockbit_provider());
+                let now = chrono::Utc::now().timestamp();
+                let env = |k: &str| std::env::var(k).ok();
+                let method = a
+                    .method
+                    .as_deref()
+                    .map(|m| m.trim().to_ascii_lowercase())
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| "auto".into());
+                let use_page = match method.as_str() {
+                    "page" => true,
+                    "browser" => false,
+                    "auto" => {
+                        let set = |k: &str| env(k).is_some_and(|v| !v.trim().is_empty());
+                        page::over_ssh(&env)
+                            || (cfg!(all(unix, not(target_os = "macos")))
+                                && !set("DISPLAY")
+                                && !set("WAYLAND_DISPLAY"))
+                            || login::find_browser().is_none()
+                    }
+                    other => {
+                        return Err(IdxError::Usage(format!(
+                            "unknown method {other:?}; use page, browser or auto"
+                        )))
+                    }
+                };
+                let port = a
+                    .port
+                    .map(u16::try_from)
+                    .transpose()
+                    .map_err(|_| IdxError::Usage("port must be 0 to 65535".into()))?;
+                let reply = |status: &Status| -> Result<CallToolResult> {
+                    Ok(CallToolResult::success(vec![ContentBlock::text(
+                        json::to_pretty(status)?,
+                    )]))
+                };
+                // A session that already works is reported, not replaced.
+                if !a.force.unwrap_or(false)
+                    && sb.store().status(now).logged_in
+                    && sb.verify().await.is_ok()
+                {
+                    let mut status = sb.store().status(now);
+                    status.sign_in = Some(SignInProgress {
+                        state: "already_signed_in".into(),
+                        method: "none".into(),
+                        ..Default::default()
+                    });
+                    return reply(&status);
+                }
+                if use_page {
+                    let progress = page::start_in_background(
+                        sb.clone(),
+                        page::PageOptions { port, timeout },
+                        &env,
+                    )
+                    .await?;
+                    let mut status = sb.store().status(now);
+                    status.sign_in = Some(progress);
+                    return reply(&status);
+                }
                 let opts = login::LoginOptions {
                     browser: None,
                     profile_dir,
-                    timeout: std::time::Duration::from_secs(secs),
+                    timeout,
                 };
-                let (session, _how) = login::capture(&opts).await?;
-                self.stockbit_store().save(&session)?;
-                let status = self.stockbit_store().status(chrono::Utc::now().timestamp());
-                Ok(CallToolResult::success(vec![ContentBlock::text(
-                    json::to_pretty(&status)?,
-                )]))
+                // Progress goes to the server's log (stderr), never stdout.
+                let say = |s: &str| tracing::info!("{s}");
+                let acc = login::capture(
+                    &opts,
+                    |v: String| {
+                        let sb = sb.clone();
+                        async move { sb.accept_session(&v).await }
+                    },
+                    &say,
+                )
+                .await?;
+                let mut status = acc.status;
+                status.sign_in = Some(SignInProgress {
+                    state: "signed_in".into(),
+                    method: "browser".into(),
+                    warning: acc.warning,
+                    ..Default::default()
+                });
+                reply(&status)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_stockbit_actions",
+        description = "Corporate actions from the user's own Stockbit session, one structured row each. With symbol: that stock's whole history, newest first, as far back as Stockbit keeps it (BBCA's cash dividends go back to 2009). Without symbol: the market calendar, oldest first, dated from `from` to `to` (default today and the next 14 days, at most 366), plus rights trading, tender offers and IPO offers still open in the range. kind filters: dividend, stock_dividend, bonus, rights, warrant, split, reverse_split, rups, public_expose, ipo, tender_offer, or all (default: all but ipo for a stock, all but warrant for the calendar, as structured warrants list dozens a month). Each row: kind, date (cum date for entitlements, else the event's first day), cum/ex/recording/distribution dates, dividend_per_share and currency, ratio_old:ratio_new, factor, price (rights or warrant exercise, tender or IPO price, IDR), trading/exercise/offer windows, listing_date, shares and shares_pct, meeting time and venue; null where Stockbit has nothing. One request per kind, a second apart, cached 6 h; a failing kind leaves a warning. Needs a Stockbit login (idx_stockbit_status); IPOT's free view with announcement texts is idx_corporate_actions, the exchange's calendar idx_calendar. Returns the idx.stockbit.actions.v1 envelope."
+    )]
+    async fn stockbit_actions(
+        &self,
+        Parameters(a): Parameters<StockbitActionsArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let from = parse_date(&a.from)?;
+                let to = parse_date(&a.to)?;
+                let symbol = match a.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(s) => Some(Symbol::parse(s)?),
+                    None => None,
+                };
+                let sb = self.stockbit_provider();
+                let s = match symbol {
+                    Some(sym) => {
+                        if a.days.is_some() {
+                            return Err(IdxError::Usage(
+                                "days is for the market calendar (no symbol); give from/to to narrow a stock's history".into(),
+                            ));
+                        }
+                        let kinds = CorporateEventKind::parse_list(
+                            a.kind.as_deref(),
+                            &CorporateEventKind::STOCK_DEFAULT,
+                        )?;
+                        let list = universe::load(None).unwrap_or_default();
+                        service::stockbit_actions(&sb, &list, &sym, &kinds, from, to).await?
+                    }
+                    None => {
+                        let q = service::StockbitCalendarQuery {
+                            from,
+                            to,
+                            days: a.days,
+                            kinds: CorporateEventKind::parse_list(
+                                a.kind.as_deref(),
+                                &CorporateEventKind::CALENDAR_DEFAULT,
+                            )?,
+                        };
+                        service::stockbit_calendar(&sb, &q, service::today_wib()).await?
+                    }
+                };
+                ok(SCHEMA_STOCKBIT_ACTIONS, s)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_stockbit_movements",
+        description = "Reported changes in insiders' and major holders' stakes in IDX stocks, from the user's own Stockbit session, newest first: IDX insider disclosures (directors, commissioners and other insiders, any size, with the trade price) and KSEI's daily changes of holders at 5% and above (no price filed: Stockbit's estimate is in estimated_price and estimated_value, never in price or value). One stock's with symbol, the whole market's without; filter by from/to, holder (a row's holder_id, digits), action (buy, sell, transfer, cross, corporate_action) and source (idx, ksei). shares_from/to/change are exact and signed; pct_from/to/change are percent of the company as Stockbit rounds them; roles say director or commissioner. 50 rows a page, pages 1 to 10 (default 1; one request each, a second apart, cached 1 h); more says rows remain. Filings, not signals: many insiders buying at one price on one day is usually a share plan, and rows appear days after the change. Needs a Stockbit login (idx_stockbit_status). Returns the idx.stockbit.movements.v1 envelope."
+    )]
+    async fn stockbit_movements(
+        &self,
+        Parameters(a): Parameters<StockbitMovementsArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let trimmed = |v: &Option<String>| -> Option<String> {
+                    v.as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                };
+                let action = match trimmed(&a.action) {
+                    Some(s) => Some(
+                        <MovementFilter as clap::ValueEnum>::from_str(&s, true).map_err(|_| {
+                            IdxError::Usage(format!(
+                                "unknown action {s:?}; use buy, sell, transfer, cross or corporate_action"
+                            ))
+                        })?,
+                    ),
+                    None => None,
+                };
+                let source = match trimmed(&a.source) {
+                    Some(s) => Some(
+                        <MovementSource as clap::ValueEnum>::from_str(&s, true).map_err(|_| {
+                            IdxError::Usage(format!("unknown source {s:?}; use idx or ksei"))
+                        })?,
+                    ),
+                    None => None,
+                };
+                let q = MovementQuery {
+                    symbol: trimmed(&a.symbol)
+                        .map(|s| Symbol::parse(&s))
+                        .transpose()?,
+                    from: parse_date(&a.from)?,
+                    to: parse_date(&a.to)?,
+                    holder_id: trimmed(&a.holder),
+                    action,
+                    source,
+                };
+                q.validate()?;
+                let pages = a.pages.unwrap_or(1);
+                ok(
+                    SCHEMA_STOCKBIT_MOVEMENTS,
+                    service::stockbit_movements(&self.stockbit_provider(), &q, pages).await?,
+                )
             }
             .await,
         )
@@ -2115,7 +2353,7 @@ mod tests {
         let mut names = s.tool_names();
         names.sort();
         // The count `idx mcp setup` prints (clients::tool_count reads the router).
-        assert_eq!(names.len(), 44);
+        assert_eq!(names.len(), 46);
         assert_eq!(
             names,
             [
@@ -2160,7 +2398,9 @@ mod tests {
                 "idx_returns",
                 "idx_screen",
                 "idx_sentiment",
+                "idx_stockbit_actions",
                 "idx_stockbit_login",
+                "idx_stockbit_movements",
                 "idx_stockbit_status",
                 "idx_technical",
             ]

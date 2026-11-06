@@ -7,12 +7,12 @@ use serde::Serialize;
 use crate::error::{IdxError, Result};
 use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
-    CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
-    ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens, History, HoldersReport, Holidays,
-    ImportReport, IndexBoard, Insights, InstitutionalOwnership, InstrumentList, Intraday,
-    MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote, Release,
-    RiskLens, ScreenReport, SentimentReport, SnapshotManifest, StaleReason, StatusReport,
-    SyncReport, Technical, ValuationLens, Watchlist,
+    CorporateActions, CorporateEvents, DiscoveredFile, DividendHistory, Earnings, EntityReport,
+    Financials, ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens, History,
+    HolderMovements, HoldersReport, Holidays, ImportReport, IndexBoard, Insights,
+    InstitutionalOwnership, InstrumentList, Intraday, MarketOverview, MemberList, NewsReport,
+    OrderBook, Performance, Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport,
+    SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, ValuationLens, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign};
 use crate::model::{
@@ -93,6 +93,8 @@ pub const SCHEMA_MARKET_FOREIGN: &str = "idx.market.foreign.v1";
 pub const SCHEMA_MARKET_BROKERS: &str = "idx.market.brokers.v1";
 pub const SCHEMA_TECHNICAL: &str = "idx.technical.v1";
 pub const SCHEMA_ORDERBOOK: &str = "idx.orderbook.v1";
+pub const SCHEMA_STOCKBIT_ACTIONS: &str = "idx.stockbit.actions.v1";
+pub const SCHEMA_STOCKBIT_MOVEMENTS: &str = "idx.stockbit.movements.v1";
 pub const SCHEMA_SCREEN: &str = "idx.screen.v1";
 pub const SCHEMA_NEWS: &str = "idx.news.v1";
 pub const SCHEMA_SENTIMENT: &str = "idx.sentiment.v1";
@@ -154,6 +156,8 @@ pub type MarketForeignEnvelope = Envelope<MarketForeign>;
 pub type MarketBrokersEnvelope = Envelope<BrokerRanking>;
 pub type TechnicalEnvelope = Envelope<Technical>;
 pub type OrderBookEnvelope = Envelope<OrderBook>;
+pub type StockbitActionsEnvelope = Envelope<CorporateEvents>;
+pub type StockbitMovementsEnvelope = Envelope<HolderMovements>;
 pub type ScreenEnvelope = Envelope<ScreenReport>;
 pub type NewsEnvelope = Envelope<NewsReport>;
 pub type SentimentEnvelope = Envelope<SentimentReport>;
@@ -247,6 +251,8 @@ pub fn schema_names() -> &'static [&'static str] {
         "market-brokers",
         "technical",
         "orderbook",
+        "stockbit-actions",
+        "stockbit-movements",
         "screen",
         "news",
         "sentiment",
@@ -271,6 +277,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-status",
         "ownership-snapshot",
         "ownership-institutions",
+        "stockbit-status",
         "error",
         "quote",
         "candle",
@@ -311,6 +318,8 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "market-brokers" => schemars::schema_for!(MarketBrokersEnvelope),
         "technical" => schemars::schema_for!(TechnicalEnvelope),
         "orderbook" => schemars::schema_for!(OrderBookEnvelope),
+        "stockbit-actions" => schemars::schema_for!(StockbitActionsEnvelope),
+        "stockbit-movements" => schemars::schema_for!(StockbitMovementsEnvelope),
         "screen" => schemars::schema_for!(ScreenEnvelope),
         "news" => schemars::schema_for!(NewsEnvelope),
         "sentiment" => schemars::schema_for!(SentimentEnvelope),
@@ -337,6 +346,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-status" => schemars::schema_for!(OwnershipStatusEnvelope),
         "ownership-snapshot" => schemars::schema_for!(OwnershipSnapshotEnvelope),
         "ownership-institutions" => schemars::schema_for!(OwnershipInstitutionsEnvelope),
+        "stockbit-status" => schemars::schema_for!(crate::providers::stockbit::Status),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),

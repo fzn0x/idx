@@ -171,9 +171,9 @@ sessions the foreign net is rebuilt from single sessions (the source counts the 
     #[command(subcommand)]
     Bandar(bandar::BandarCmd),
 
-    /// Realtime via your own Stockbit session: `login` in the browser, `status`, `logout`, live `orderbook`.
+    /// Your own Stockbit session: `login` (in a browser, or through a local page), `status`, `logout`; live `orderbook`; corporate `actions` and `calendar`; holder `movements`.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
+        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit login --page          # over SSH or with Google sign-in: a page on 127.0.0.1\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx stockbit actions BBCA          # a stock's corporate actions since listing\n  idx stockbit calendar --kind dividend --days 30\n  idx stockbit movements BBCA        # insider and 5 % holder movements\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
     )]
     #[command(subcommand)]
     Stockbit(stockbit::StockbitCmd),
@@ -194,14 +194,14 @@ sessions the foreign net is rebuilt from single sessions (the source counts the 
 
     /// MCP server over stdio (default) or HTTP; `mcp setup <client>` prints the registration recipe for any agent.
     #[command(
-        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n44 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_intraday, idx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_insights, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
-idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|composition|snapshot|institutions,\nand the realtime Stockbit tools idx_orderbook, idx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
+        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n46 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_intraday, idx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_insights, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
+idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|composition|snapshot|institutions,\nand the Stockbit tools on your own session: idx_orderbook, idx_stockbit_actions, idx_stockbit_movements,\nidx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
     )]
     Mcp(mcp_cmd::McpArgs),
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
+        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
         name: Option<String>,
     },
 
@@ -407,8 +407,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             bandar::run(&ctx, cmd).await
         }
         Command::Stockbit(cmd) => {
-            // No spinner: `login` drives a browser and prints its own prompts.
+            // The data commands show the loading line; `login` prints its
+            // own prompts and `status`/`logout` are instant.
             let ctx = build_context(&cli.global)?;
+            let _spinner = cmd
+                .shows_progress()
+                .then(|| spinner(&ctx, &cli.global))
+                .flatten();
             stockbit::run(&ctx, cmd).await
         }
         Command::Watch(args) => {

@@ -638,7 +638,7 @@ const R = {
   },
   tools() {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool, the local ownership database tool, MSN's institutional holders and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
+    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool, the local ownership database tool, MSN's institutional holders and the Stockbit tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
     frag.append(wrapScroll(table([
       { h: "Tool", k: "tool", l: true, cls: "sym" }, { h: "CLI", k: "cli", l: true },
       { h: "Web terminal", f: (t) => t.web || "CLI and MCP only", l: true }, { h: "What", k: "what", l: true, cls: "name" },

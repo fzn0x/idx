@@ -44,9 +44,17 @@ src/
                      403 becomes a provider error
     stockbit/        OPT-IN realtime (exodus.stockbit.com), the one provider that carries a credential
                      (the user's own session) and the one not in the Auto chain: orderbook endpoint ->
-                     quote + full depth ladder (model/orderbook.rs), charts/daily -> candles; auth.rs is
-                     the rotating-token session store (file 0600 + env seed, POST /login/refresh), login.rs
-                     captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
+                     quote + full depth ladder (model/orderbook.rs), charts/daily -> candles,
+                     corpaction.rs: /corpaction/{type} -> corporate actions (model/corporate.rs), read by
+                     field suffix; movement.rs: /insider/company/majorholder -> insider and 5 % holder
+                     movements (model/movements.rs); only allow-listed read paths carry the bearer; auth.rs is
+                     the rotating-token session store (file 0600 + env seed, POST /login/refresh; one
+                     store per session file per process, refreshes under a lock file), signin.rs the one
+                     accept step every sign-in ends in (store, check with one GET, restore when refused),
+                     login.rs the browser sign-in: polls only the credentialStorage cookie over the Chrome
+                     DevTools Protocol (ws, no TLS; no request interception), then deletes it from its profile;
+                     page.rs the local sign-in page (axum on 127.0.0.1, secret path, Host/Origin checks, a
+                     bookmarklet or paste for the cookie) and the background page sign-in behind MCP
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL,
                      presets), sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility, beta
                      against a benchmark on shared dates), lens.rs (growth, valuation and risk lenses),
@@ -63,7 +71,9 @@ src/
                      bandar_screen, bandar_broker, intraday); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers;
                      service/lenses.rs: growth, valuation and risk lenses (fundamentals, statements,
-                     a year of candles for the stock and IHSG)
+                     a year of candles for the stock and IHSG);
+                     service/stockbit.rs: Stockbit reads over several requests (actions, calendar,
+                     movement pages)
   ownership/         KSEI >1% register: discover.rs (idx.co.id page and its families, Cloudflare strategy,
                      `discover --family`), mirror.rs (GitHub mirror fallback), ingest.rs (XLSX/PDF, text
                      numbers, controller column), normalize.rs (entity keys), db.rs (SQLite schema with
@@ -117,8 +127,8 @@ foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
 `ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
 composition, institutions, releases, sync, status, discover, path; hidden build-snapshot),
-`broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in
-realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
+`broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook, actions,
+calendar, movements; opt-in, your own session), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 
 ## Rules that keep the tool trustworthy
 

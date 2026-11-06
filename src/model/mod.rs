@@ -14,6 +14,7 @@ pub mod brief;
 pub mod broker;
 pub mod calendar;
 pub mod composition;
+pub mod corporate;
 pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
@@ -23,6 +24,7 @@ pub mod instruments;
 pub mod intraday;
 pub mod lenses;
 pub mod market;
+pub mod movements;
 pub mod news;
 pub mod orderbook;
 pub mod ownership;
@@ -44,6 +46,7 @@ pub use brief::{Brief, DividendSummary, NewsSummary, OwnershipSummary};
 pub use broker::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary};
 pub use calendar::{Calendar, CalendarCategory, CalendarEvent, Holiday, Holidays};
 pub use composition::{CompositionPoint, CompositionReport, CompositionType};
+pub use corporate::{CorporateEvent, CorporateEventKind, CorporateEvents};
 pub use dividends::{DividendEvent, DividendHistory, DividendYear, SplitEvent};
 pub use flow::{
     BrokerActivity, BrokerDayRow, BrokerRanking, BrokerSort, BrokerStockRow, ForeignDay,
@@ -68,6 +71,7 @@ pub use lenses::{
     ValuationLabel, ValuationLens,
 };
 pub use market::{MarketOverview, MarketRow};
+pub use movements::{HolderMovement, HolderMovements, MovementFilter, MovementSource};
 pub use news::{NewsItem, NewsReport, SentimentLabel, SentimentReport};
 pub use orderbook::{BookLevel, OrderBook};
 pub use ownership::{

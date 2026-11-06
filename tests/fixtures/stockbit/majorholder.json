@@ -1,0 +1,416 @@
+{
+  "message": "Successfully majorholder data",
+  "data": {
+    "is_more": true,
+    "movement": [
+      {
+        "id": "1000006115",
+        "name": "OPTIMUS VISION GLOBAL",
+        "symbol": "PEGE",
+        "date": "02 Nov 26",
+        "previous": {
+          "value": "249,112,774",
+          "percentage": "6.59",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "251,612,774",
+          "percentage": "6.66",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+2,500,000",
+          "percentage": "+0.07",
+          "formatted_value": "2,500,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_FOREIGN",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "120",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "120"
+          },
+          "formatted": "120"
+        },
+        "value": {
+          "raw": {
+            "value": "300000000"
+          },
+          "formatted": "300.00M"
+        },
+        "is_estimated_price": false,
+        "purpose": "Pembelian",
+        "icon_url": "https://assets.stockbit.com/logos/companies/PEGE.png"
+      },
+      {
+        "id": "1000006115",
+        "name": "OPTIMUS VISION GLOBAL",
+        "symbol": "PEGE",
+        "date": "02 Nov 26",
+        "previous": {
+          "value": "246,212,774",
+          "percentage": "6.52",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "249,112,774",
+          "percentage": "6.59",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+2,900,000",
+          "percentage": "+0.08",
+          "formatted_value": "2,900,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_FOREIGN",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "122",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "122"
+          },
+          "formatted": "122"
+        },
+        "value": {
+          "raw": {
+            "value": "353800000"
+          },
+          "formatted": "353.80M"
+        },
+        "is_estimated_price": false,
+        "purpose": "Pembelian",
+        "icon_url": "https://assets.stockbit.com/logos/companies/PEGE.png"
+      },
+      {
+        "id": "1000006115",
+        "name": "OPTIMUS VISION GLOBAL",
+        "symbol": "PEGE",
+        "date": "02 Nov 26",
+        "previous": {
+          "value": "242,512,774",
+          "percentage": "6.42",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "243,712,774",
+          "percentage": "6.45",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+1,200,000",
+          "percentage": "+0.03",
+          "formatted_value": "1,200,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_FOREIGN",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "123",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "123"
+          },
+          "formatted": "123"
+        },
+        "value": {
+          "raw": {
+            "value": "147600000"
+          },
+          "formatted": "147.60M"
+        },
+        "is_estimated_price": false,
+        "purpose": "Pembelian",
+        "icon_url": "https://assets.stockbit.com/logos/companies/PEGE.png"
+      },
+      {
+        "id": "1000006115",
+        "name": "OPTIMUS VISION GLOBAL",
+        "symbol": "PEGE",
+        "date": "02 Nov 26",
+        "previous": {
+          "value": "241,674,474",
+          "percentage": "6.40",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "242,512,774",
+          "percentage": "6.42",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+838,300",
+          "percentage": "+0.02",
+          "formatted_value": "838,300"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_FOREIGN",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "119",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "119"
+          },
+          "formatted": "119"
+        },
+        "value": {
+          "raw": {
+            "value": "99757700"
+          },
+          "formatted": "99.76M"
+        },
+        "is_estimated_price": false,
+        "purpose": "Pembelian",
+        "icon_url": "https://assets.stockbit.com/logos/companies/PEGE.png"
+      },
+      {
+        "id": "1000006115",
+        "name": "OPTIMUS VISION GLOBAL",
+        "symbol": "PEGE",
+        "date": "02 Nov 26",
+        "previous": {
+          "value": "241,650,974",
+          "percentage": "6.40",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "241,674,474",
+          "percentage": "6.40",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+23,500",
+          "percentage": "+0.0006",
+          "formatted_value": "23,500"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_FOREIGN",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "118",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "118"
+          },
+          "formatted": "118"
+        },
+        "value": {
+          "raw": {
+            "value": "2773000"
+          },
+          "formatted": "2.77M"
+        },
+        "is_estimated_price": false,
+        "purpose": "Pembelian",
+        "icon_url": "https://assets.stockbit.com/logos/companies/PEGE.png"
+      },
+      {
+        "id": "1000004481",
+        "name": "RUDI R. SUTANTRA",
+        "symbol": "ATLA",
+        "date": "30 Oct 26",
+        "previous": {
+          "value": "2,530,254,200",
+          "percentage": "40.81",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "2,520,254,200",
+          "percentage": "40.65",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "-10,000,000",
+          "percentage": "-0.16",
+          "formatted_value": "10,000,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_SELL",
+        "data_source": {
+          "label": "Sumber: KSEI",
+          "type": "SOURCE_TYPE_KSEI"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "AG",
+          "group": "BROKER_GROUP_FOREIGN"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "21"
+          },
+          "formatted": "21"
+        },
+        "value": {
+          "raw": {
+            "value": "210000000"
+          },
+          "formatted": "210.00M"
+        },
+        "is_estimated_price": true,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/ATLA.png"
+      },
+      {
+        "id": "12606",
+        "name": "NUSANTARA UTAMA INVESTAMA",
+        "symbol": "BUVA",
+        "date": "30 Oct 26",
+        "previous": {
+          "value": "18,508,539,715",
+          "percentage": "62.51",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "18,508,539,715",
+          "percentage": "61.54",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "0",
+          "percentage": "-0.97",
+          "formatted_value": "0"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_RIGHT_ISSUE",
+        "data_source": {
+          "label": "Sumber: KSEI",
+          "type": "SOURCE_TYPE_KSEI"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "YU",
+          "group": "BROKER_GROUP_FOREIGN"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "353"
+          },
+          "formatted": "353"
+        },
+        "value": {
+          "raw": {
+            "value": "0"
+          },
+          "formatted": "-"
+        },
+        "is_estimated_price": true,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BUVA.png?version=1785918174174738481"
+      },
+      {
+        "id": "14074",
+        "name": "WELLY THOMAS",
+        "symbol": "SGER",
+        "date": "30 Oct 26",
+        "previous": {
+          "value": "1,285,644,762",
+          "percentage": "8.25",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "1,341,269,756",
+          "percentage": "8.61",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+55,624,994",
+          "percentage": "+0.36",
+          "formatted_value": "55,624,994"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_TRANSFER",
+        "data_source": {
+          "label": "Sumber: KSEI",
+          "type": "SOURCE_TYPE_KSEI"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "OD",
+          "group": "BROKER_GROUP_GOVERNMENT"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "794"
+          },
+          "formatted": "794"
+        },
+        "value": {
+          "raw": {
+            "value": "44166245236"
+          },
+          "formatted": "44.17B"
+        },
+        "is_estimated_price": true,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/SGER.png"
+      }
+    ]
+  }
+}

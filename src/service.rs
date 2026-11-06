@@ -29,8 +29,10 @@ use crate::universe::Issuer;
 
 mod exchange;
 mod lenses;
+mod stockbit;
 pub use exchange::*;
 pub use lenses::*;
+pub use stockbit::*;
 
 /// Earnings with the rows `filter` leaves out dropped (and `data.scope` set
 /// when it drops any).

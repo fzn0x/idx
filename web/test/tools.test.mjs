@@ -16,7 +16,7 @@ const read = (...p) => readFileSync(join(root, ...p), "utf8");
 
 test("the tool list matches docs/mcp.md", () => {
   const documented = [...read("docs", "mcp.md").matchAll(/^\| `(idx_[a-z_]+)` \|/gm)].map((m) => m[1]);
-  assert.equal(documented.length, 44);
+  assert.equal(documented.length, 46);
   assert.deepEqual(TOOLS.map((t) => t.tool).sort(), [...documented].sort());
   assert.equal(new Set(TOOLS.map((t) => t.tool)).size, TOOLS.length);
   for (const t of TOOLS) {
@@ -28,15 +28,16 @@ test("the tool list matches docs/mcp.md", () => {
 });
 
 test("only the idx.co.id, KSEI composition, local-database, Stockbit and unchecked-source tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_login", "idx_stockbit_status"]);
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
   // A tool with its own reason gives it; the rest share CLI_ONLY_REASON, the Stockbit one or the unchecked-source one.
   for (const t of TOOLS.filter((x) => x.why)) assert.ok(!t.web && t.why.length > 40, t.tool);
   assert.match(byName("idx_ownership_snapshot").why, /own machine/);
   assert.equal(cliOnlyReason(byName("idx_ownership_snapshot")), byName("idx_ownership_snapshot").why);
   // Each CLI-only tool says why, by its source.
   assert.equal(cliOnlyReason(byName("idx_calendar")), CLI_ONLY_REASON);
-  assert.match(cliOnlyReason(byName("idx_orderbook")), /^Stockbit realtime carries your own account session/);
-  assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^Stockbit realtime/);
+  assert.match(cliOnlyReason(byName("idx_orderbook")), /^The Stockbit tools carry your own account session/);
+  assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^The Stockbit tools/);
+  assert.match(cliOnlyReason(byName("idx_stockbit_movements")), /^The Stockbit tools/);
   assert.match(cliOnlyReason(byName("idx_ownership_institutions")), /^MSN Money has not been checked from this site's host/);
   for (const t of TOOLS.filter((x) => x.unchecked)) assert.equal(t.web, null, t.tool);
   const terminal = read("web", "public", "terminal.js");
@@ -59,7 +60,7 @@ test("the landing page lists every tool with its commands", () => {
     if (t.web) assert.ok(web.includes(`href="/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /CLI and MCP only/, tool);
   }
-  assert.match(html, /idx mcp · 44 tools/);
+  assert.match(html, /idx mcp · 46 tools/);
 });
 
 test("/api/instruments and /api/members serve the bundled lists", () => {

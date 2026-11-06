@@ -25,6 +25,9 @@ fn spawn_server_with(dir: &std::path::Path, env: &[(&str, &str)]) -> std::proces
         .env("IDX_CACHE_DIR", dir.join("cache"))
         .env("IDX_CONFIG", dir.join("config.toml"))
         .env("IDX_OWNERSHIP_DB", dir.join("ownership.sqlite"))
+        // The default session path sits beside the default config file, not
+        // IDX_CONFIG's; keep the Stockbit tools off the developer's real login.
+        .env("IDX_STOCKBIT_SESSION", dir.join("stockbit-session.json"))
         .envs(env.iter().copied())
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
@@ -147,10 +150,12 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 44, "{names:?}");
+    assert_eq!(names.len(), 46, "{names:?}");
     assert!(names.contains(&"idx_ownership_institutions"), "{names:?}");
     assert!(names.contains(&"idx_insights"), "{names:?}");
     assert!(names.contains(&"idx_intraday"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_actions"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_movements"), "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -168,6 +173,8 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     assert!(names.contains(&"idx_orderbook"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_login"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_actions"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_movements"), "{names:?}");
     let quote = tools.iter().find(|t| t["name"] == "idx_quote").unwrap();
     assert_eq!(
         quote["inputSchema"]["properties"]["symbols"]["type"],
@@ -491,6 +498,137 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let warnings = body["warnings"].to_string();
     assert!(warnings.contains("no quote for BBCA"), "{warnings}");
     assert!(warnings.contains("truncated to the last 30"), "{warnings}");
+
+    // A Stockbit tool without a session: a usage error naming the login,
+    // before any request (the sandbox has no session file).
+    for (id, args) in [
+        (19, serde_json::json!({"symbol": "BBCA"})),
+        (20, serde_json::json!({"kind": "dividend", "days": 30})),
+        (
+            22,
+            serde_json::json!({"symbol": "BBCA", "pages": 2, "source": "ksei"}),
+        ),
+    ] {
+        let tool = if id == 22 {
+            "idx_stockbit_movements"
+        } else {
+            "idx_stockbit_actions"
+        };
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true);
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("idx stockbit login"),
+            "{body}"
+        );
+    }
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+        "params": {"name": "idx_stockbit_actions", "arguments": {"symbol": "BBCA", "kind": "nope"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unknown corporate action kind"));
+    // Bad filters are usage errors before the session is even looked at.
+    for (id, args, needle) in [
+        (23, serde_json::json!({"holder": "RUDI"}), "HOLDER ID"),
+        (24, serde_json::json!({"action": "short"}), "unknown action"),
+        (
+            25,
+            serde_json::json!({"pages": 11}),
+            "pages must be 1 to 10",
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_stockbit_movements", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("\"usage\"") && text.contains(needle),
+            "{text}"
+        );
+    }
+    // A calendar end past the last date chrono holds is a usage error, not
+    // a panic that would take the server down.
+    for (id, args, needle) in [
+        (
+            28,
+            serde_json::json!({"days": 4_000_000_000u32}),
+            "at most 366 days",
+        ),
+        (
+            29,
+            serde_json::json!({"from": "+262142-12-31"}),
+            "out of range",
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_stockbit_actions", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+        assert!(
+            body["error"]["message"].as_str().unwrap().contains(needle),
+            "{body}"
+        );
+    }
+
+    // The sign-in tool refuses an unknown method before opening anything;
+    // status carries no sign_in while none was started.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 26, "method": "tools/call",
+        "params": {"name": "idx_stockbit_login", "arguments": {"method": "carrier-pigeon"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unknown method"));
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 27, "method": "tools/call",
+        "params": {"name": "idx_stockbit_status", "arguments": {}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["logged_in"], false);
+    assert!(body.get("sign_in").is_none(), "{body}");
+    let login = tools
+        .iter()
+        .find(|t| t["name"] == "idx_stockbit_login")
+        .unwrap();
+    for arg in ["method", "port", "force", "timeout"] {
+        assert!(login["inputSchema"]["properties"][arg].is_object(), "{arg}");
+    }
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

@@ -306,6 +306,338 @@ fn stockbit_surface_and_session_commands() {
         .stdout(predicate::str::contains("\"logged_in\": true"));
 }
 
+/// A session file holding a dummy access token fresh until 2100
+/// ({"alg":"none"}.{"exp":4102444800}), so no refresh is attempted; the
+/// harness is offline, nothing is sent.
+fn dummy_session(sb: &Sandbox) {
+    let session = sb.config.parent().unwrap().join("stockbit-session.json");
+    std::fs::write(
+        &session,
+        r#"{"access":"eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig","refresh":"d.e.f"}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn stockbit_corporate_actions_and_calendar() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "actions", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--kind"))
+        .stdout(predicate::str::contains("tender_offer"))
+        .stdout(predicate::str::contains("idx stocks actions"));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "calendar", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--days"))
+        .stdout(predicate::str::contains("366"));
+    // No session: a usage error naming the login, before any request.
+    for args in [
+        &["stockbit", "actions", "BBCA"][..],
+        &["stockbit", "calendar"][..],
+        &["stockbit", "calendar", "--kind", "all", "--days", "30"][..],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("stockbit login"));
+    }
+    for args in [
+        &["stockbit", "actions", "BBCA", "--kind", "nope"][..],
+        &["stockbit", "calendar", "--to", "2026-12-01", "--days", "3"][..],
+        &[
+            "stockbit",
+            "calendar",
+            "--from",
+            "2026-01-01",
+            "--to",
+            "2027-06-01",
+        ][..],
+        &["stockbit", "actions", "^JKSE"][..],
+        // Past the last date chrono holds: a usage error, not a panic.
+        &["stockbit", "calendar", "--days", "4000000000"][..],
+        &["stockbit", "calendar", "--from", "+262142-12-31"][..],
+    ] {
+        idx(&sb.cache, &sb.config).args(args).assert().code(2);
+    }
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "stockbit-actions"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    for field in [
+        "dividend_per_share",
+        "ratio_old",
+        "trading_start",
+        "listing_date",
+    ] {
+        assert!(text.contains(field), "{field}");
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "stockbit-status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sign_in"));
+
+    // With a session and the answers in the cache (offline harness).
+    dummy_session(&sb);
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/corpaction/dividend?symbol=BBCA",
+        "stockbit/corpaction_dividend_bbca.json",
+    );
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/corpaction/stocksplit?symbol=BBCA",
+        "stockbit/corpaction_stocksplit_bbca.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "json",
+            "stockbit",
+            "actions",
+            "bbca",
+            "--kind",
+            "split,dividend",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "idx.stockbit.actions.v1");
+    assert_eq!(v["provider"], "stockbit");
+    assert_eq!(v["data"]["symbol"], "BBCA");
+    assert_eq!(v["data"]["kinds"], serde_json::json!(["split", "dividend"]));
+    assert_eq!(v["data"]["total"], 40);
+    let first = &v["data"]["actions"][0];
+    assert_eq!(first["kind"], "dividend");
+    assert_eq!(first["cum_date"], "2026-08-28");
+    assert_eq!(first["dividend_per_share"], 25.0);
+    assert_eq!(first["currency"], "IDR");
+    assert!(first["price"].is_null());
+    idx(&sb.cache, &sb.config)
+        .args([
+            "stockbit",
+            "actions",
+            "BBCA",
+            "--kind",
+            "split",
+            "--from",
+            "2021-01-01",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stockbit corporate actions"))
+        .stdout(predicate::str::contains("1:5, factor 5"))
+        .stdout(predicate::str::contains("2008-01-25").not());
+    // A kind that is not cached leaves a warning; the others still show.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "actions", "BBCA", "--kind", "dividend,rups"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("IDR 25 per share"))
+        .stderr(predicate::str::contains("warning: rups: "));
+
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/corpaction/tenderoffer",
+        "stockbit/corpaction_tenderoffer.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "csv",
+            "stockbit",
+            "calendar",
+            "--kind",
+            "tender",
+            "--from",
+            "2026-11-05",
+            "--to",
+            "2026-11-12",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let csv = String::from_utf8(out).unwrap();
+    assert!(csv.lines().next().unwrap().contains("symbol"), "{csv}");
+    assert!(csv.contains("AUTO"), "{csv}");
+}
+
+#[test]
+fn stockbit_login_takes_a_paste_and_checks_it_first() {
+    let sb = sandbox();
+    let session = sb.config.parent().unwrap().join("stockbit-session.json");
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains("--page"))
+        .stdout(predicate::str::contains("ssh -N -L 7878:127.0.0.1:7878"))
+        .stdout(predicate::str::contains(
+            "never asks for your Stockbit password",
+        ));
+    // stdin is a pipe here, so login reads the paste from it.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login"])
+        .write_stdin("")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("nothing on stdin"));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--manual"])
+        .write_stdin("my password is hunter2\n")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not a Stockbit session"))
+        .stderr(predicate::str::contains("hunter2").not());
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login", "--manual", "--browser", "/x/chrome"])
+        .write_stdin("")
+        .assert()
+        .code(2);
+    // A real-looking cookie, but the harness is offline: the check cannot be
+    // made, so nothing is stored (exit 5) and the token is never printed.
+    let cookie = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/stockbit/credential_storage_cookie_constructed.txt"),
+    )
+    .unwrap();
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "login"])
+        .write_stdin(cookie)
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("eyJ").not());
+    assert!(!session.exists(), "nothing stored");
+    // Offline, the browser and page sign-ins stop before opening anything.
+    for args in [
+        &["stockbit", "login", "--browser", "/no/such/chrome"][..],
+        &["stockbit", "login", "--page"][..],
+        &["stockbit", "login", "--port", "0"][..],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .write_stdin("")
+            .assert()
+            .code(5)
+            .stderr(predicate::str::contains("needs the network"));
+    }
+    for args in [
+        &["stockbit", "login", "--manual", "--page"][..],
+        &["stockbit", "login", "--page", "--browser", "/x"][..],
+        &["stockbit", "login", "--port", "70000"][..],
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .write_stdin("")
+            .assert()
+            .code(2);
+    }
+}
+
+#[test]
+fn stockbit_holder_movements() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--holder"))
+        .stdout(predicate::str::contains("corporate-action"))
+        .stdout(predicate::str::contains("estimated_price"));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("stockbit login"));
+    for (args, needle) in [
+        (
+            &["stockbit", "movements", "--holder", "RUDI"][..],
+            "HOLDER ID",
+        ),
+        (&["stockbit", "movements", "--pages", "11"][..], "11"),
+        (&["stockbit", "movements", "--action", "short"][..], "short"),
+        (
+            &[
+                "stockbit",
+                "movements",
+                "--from",
+                "2026-11-02",
+                "--to",
+                "2026-11-01",
+            ][..],
+            "after it ends",
+        ),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(needle));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "stockbit-movements"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("estimated_price"))
+        .stdout(predicate::str::contains("pct_change"));
+
+    dummy_session(&sb);
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/insider/company/majorholder?page=1&source_type=SOURCE_TYPE_KSEI",
+        "stockbit/majorholder.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stockbit", "movements", "--source", "ksei"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "idx.stockbit.movements.v1");
+    assert_eq!(v["data"]["source"], "ksei");
+    assert_eq!(v["data"]["pages_read"], 1);
+    assert_eq!(v["data"]["more"], true);
+    let rudi = v["data"]["movements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["holder"] == "RUDI R. SUTANTRA")
+        .unwrap();
+    assert_eq!(rudi["shares_change"], -10_000_000);
+    assert!(rudi["price"].is_null() && rudi["value"].is_null());
+    assert_eq!(rudi["estimated_price"], 21.0);
+    assert_eq!(rudi["holder_id"], "1000004481");
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--source", "ksei"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("~21"))
+        .stdout(predicate::str::contains("40.65% (-0.16)"))
+        .stdout(predicate::str::contains("1 page, more remain"));
+    // A second page that is not cached: the first page's rows and a warning.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--source", "ksei", "--pages", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RUDI R. SUTANTRA"))
+        .stderr(predicate::str::contains("page 2 failed"));
+}
+
 #[test]
 fn orderbook_leaves_out_foreign_flow_stockbit_marks_stale() {
     let sb = sandbox();

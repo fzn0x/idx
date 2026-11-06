@@ -206,7 +206,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For agents<small>idx mcp · 44 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 46 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
@@ -223,10 +223,10 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividends, rights, RUPS, holidays</td></tr>
             <tr><td>idx_instruments · idx_members</td><td>listed stocks, broker codes</td></tr>
             <tr><td>idx_ownership_*</td><td>holders, search, rankings, networks, changes, foreign flow, composition, snapshot sync, institutions</td></tr>
-            <tr><td>idx_orderbook · idx_stockbit_*</td><td>realtime book, Stockbit login (opt-in)</td></tr>
+            <tr><td>idx_orderbook · idx_stockbit_*</td><td>Stockbit, your login (opt-in): book, corporate actions, holder movements</td></tr>
           </tbody>
         </table>
-        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 44 tools with their CLI and web commands</a></p>
+        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 46 tools with their CLI and web commands</a></p>
       </div>
     </div>
     <p class="mline"><span class="sr-only">One envelope behind the table, the JSON and the MCP tool.</span><span aria-hidden="true">TABLE&lt;&lt;JSON&lt;&lt;MCP&lt;&lt;ONE&lt;ENVELOPE&lt;&lt;2026-10-16</span></p>
@@ -246,7 +246,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 44 MCP tools, the CLI command behind each, and 34 that run in the web terminal</p><p class="age">Static</p></header>
+    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 46 MCP tools, the CLI command behind each, and 34 that run in the web terminal</p><p class="age">Static</p></header>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -294,11 +294,13 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_ownership_institutions</td><td><code>idx ownership institutions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">institutions and funds holding it: buying, selling, new, exited (MSN)</td></tr>
             <tr><td>idx_orderbook</td><td><code>idx stockbit orderbook BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">realtime order book: full depth ladder and foreign flow (your Stockbit session)</td></tr>
             <tr><td>idx_stockbit_status</td><td><code>idx stockbit status</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">is a Stockbit session stored, and when its tokens expire</td></tr>
-            <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in your browser, once</td></tr>
+            <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in a browser or through a local page, once</td></tr>
+            <tr><td>idx_stockbit_actions</td><td><code>idx stockbit actions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">a stock's corporate actions since listing, or the market's calendar, by kind (your Stockbit session)</td></tr>
+            <tr><td>idx_stockbit_movements</td><td><code>idx stockbit movements BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">insider and 5 % holder movements: who bought or sold, how many shares, at what price (your Stockbit session)</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="tools-foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
+    <p class="tools-foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 5 Stockbit tools (live order book, corporate actions and calendar, holder movements, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
     <p class="mline" id="tools-m"><span class="sr-only">The MCP tools, the CLI command behind each and the web terminal command.</span><span aria-hidden="true">IDX&lt;MCP&lt;&lt;TOOLS&lt;&lt;CLI&lt;&lt;WEB</span></p>
   </section>
 </div>
