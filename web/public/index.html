@@ -206,7 +206,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For agents<small>idx mcp · 42 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 43 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
@@ -215,6 +215,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_fundamental · idx_technical</td><td>verdict, signal</td></tr>
             <tr><td>idx_returns · idx_dividends</td><td>vs IHSG, TTM yield</td></tr>
             <tr><td>idx_screen · idx_news · idx_sentiment</td><td>filter, headlines, lexicon</td></tr>
+            <tr><td>idx_insights</td><td>MSN's rated statements</td></tr>
             <tr><td>idx_broker</td><td>who bought and sold</td></tr>
             <tr><td>idx_bandar · idx_bandar_screen · idx_bandar_broker</td><td>bandarmology, screener, one broker</td></tr>
             <tr><td>idx_foreign · idx_market_foreign</td><td>foreign buying and selling</td></tr>
@@ -225,7 +226,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_orderbook · idx_stockbit_*</td><td>realtime book, Stockbit login (opt-in)</td></tr>
           </tbody>
         </table>
-        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 42 tools with their CLI and web commands</a></p>
+        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 43 tools with their CLI and web commands</a></p>
       </div>
     </div>
     <p class="mline"><span class="sr-only">One envelope behind the table, the JSON and the MCP tool.</span><span aria-hidden="true">TABLE&lt;&lt;JSON&lt;&lt;MCP&lt;&lt;ONE&lt;ENVELOPE&lt;&lt;2026-10-16</span></p>
@@ -245,7 +246,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 42 MCP tools, the CLI command behind each, and 31 that run in the web terminal</p><p class="age">Static</p></header>
+    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 43 MCP tools, the CLI command behind each, and 32 that run in the web terminal</p><p class="age">Static</p></header>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -265,6 +266,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_screen</td><td><code>idx stocks screen -f 'pe&lt;10,div&gt;5,mcap&gt;5T'</code></td><td><a href="/terminal?cmd=screen%20pe%3C10%2Cdiv%3E5%2Cmcap%3E5T%20--sort%20div">screen pe&lt;10,div&gt;5,mcap&gt;5T --sort div</a></td><td class="muted">screener over ~950 tickers</td></tr>
             <tr><td>idx_news</td><td><code>idx stocks news TLKM</code></td><td><a href="/terminal?cmd=news%20TLKM">news TLKM</a></td><td class="muted">Kontan and CNBC Indonesia headlines</td></tr>
             <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">lexicon sentiment over the headlines</td></tr>
+            <tr><td>idx_insights</td><td><code>idx stocks insights BBCA</code></td><td><a href="/terminal?cmd=insights%20BBCA">insights BBCA</a></td><td class="muted">MSN Money's rated statements vs peers and industry</td></tr>
             <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividends, splits, bonus, rights, RUPS, warrants</td></tr>
             <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">foreign buying and selling per session</td></tr>
             <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">listed stocks (the web lists codes and names)</td></tr>

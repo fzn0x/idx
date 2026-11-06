@@ -9,8 +9,8 @@ use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
     CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
     ForeignFlowReport, ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport,
-    IndexBoard, InstitutionalOwnership, InstrumentList, MarketOverview, MemberList, NewsReport,
-    OrderBook, Performance, Profile, Quote, Release, ScreenReport, SentimentReport,
+    IndexBoard, Insights, InstitutionalOwnership, InstrumentList, MarketOverview, MemberList,
+    NewsReport, OrderBook, Performance, Profile, Quote, Release, ScreenReport, SentimentReport,
     SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
@@ -90,6 +90,7 @@ pub const SCHEMA_ORDERBOOK: &str = "idx.orderbook.v1";
 pub const SCHEMA_SCREEN: &str = "idx.screen.v1";
 pub const SCHEMA_NEWS: &str = "idx.news.v1";
 pub const SCHEMA_SENTIMENT: &str = "idx.sentiment.v1";
+pub const SCHEMA_INSIGHTS: &str = "idx.insights.v1";
 pub const SCHEMA_OWNERSHIP_HOLDERS: &str = "idx.ownership.holders.v1";
 pub const SCHEMA_OWNERSHIP_ENTITY: &str = "idx.ownership.entity.v1";
 pub const SCHEMA_OWNERSHIP_CHANGES: &str = "idx.ownership.changes.v1";
@@ -145,6 +146,7 @@ pub type OrderBookEnvelope = Envelope<OrderBook>;
 pub type ScreenEnvelope = Envelope<ScreenReport>;
 pub type NewsEnvelope = Envelope<NewsReport>;
 pub type SentimentEnvelope = Envelope<SentimentReport>;
+pub type InsightsEnvelope = Envelope<Insights>;
 pub type OwnershipHoldersEnvelope = Envelope<HoldersReport>;
 pub type OwnershipEntityEnvelope = Envelope<EntityReport>;
 pub type OwnershipChangesEnvelope = Envelope<ChangesReport>;
@@ -232,6 +234,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "screen",
         "news",
         "sentiment",
+        "insights",
         "ownership-holders",
         "ownership-entity",
         "ownership-changes",
@@ -290,6 +293,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "screen" => schemars::schema_for!(ScreenEnvelope),
         "news" => schemars::schema_for!(NewsEnvelope),
         "sentiment" => schemars::schema_for!(SentimentEnvelope),
+        "insights" => schemars::schema_for!(InsightsEnvelope),
         "ownership-holders" => schemars::schema_for!(OwnershipHoldersEnvelope),
         "ownership-entity" => schemars::schema_for!(OwnershipEntityEnvelope),
         "ownership-changes" => schemars::schema_for!(OwnershipChangesEnvelope),

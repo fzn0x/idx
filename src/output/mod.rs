@@ -21,6 +21,7 @@ pub mod table_bandar;
 pub mod table_broker;
 pub mod table_composition;
 pub mod table_exchange;
+pub mod table_insights;
 pub mod table_institutions;
 pub mod table_news;
 pub mod table_ownership;

@@ -391,6 +391,20 @@ fn screen_news_sentiment_surface() {
         .assert()
         .code(2);
     idx(&sb.cache, &sb.config)
+        .args(["stocks", "screen", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Presets: top-performers"))
+        .stdout(predicate::str::contains("ret1y"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "screen", "--preset", "nope"])
+        .assert()
+        .code(2);
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "screen", "--asc", "--desc"])
+        .assert()
+        .code(2);
+    idx(&sb.cache, &sb.config)
         .args(["stocks", "news", "--source", "detik"])
         .assert()
         .code(2);
@@ -1396,6 +1410,340 @@ fn ownership_institutions_reads_msn_offline() {
     let schema = String::from_utf8_lossy(&out.stdout);
     assert!(schema.contains("pct_outstanding_change"), "{schema}");
     assert!(schema.contains("unchanged"), "{schema}");
+}
+
+#[test]
+fn screen_presets_offline() {
+    let sb = sandbox();
+    let dir = sb.config.parent().unwrap();
+    let universe = dir.join("u.csv");
+    std::fs::write(&universe, "symbol,name\nBBCA,\nBBRI,\nTLKM,\n").unwrap();
+    let u = universe.to_str().unwrap();
+    // Keep the developer's own ownership database out of the universe.
+    let db = dir.join("none.sqlite");
+    let run = |args: &[&str]| {
+        let out = idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    let json = |args: &[&str]| -> serde_json::Value { serde_json::from_slice(&run(args)).unwrap() };
+    let symbols = |v: &serde_json::Value| -> Vec<String> {
+        v["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["symbol"].as_str().unwrap().to_string())
+            .collect()
+    };
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK",
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
+
+    // Presets that need no return windows run on the quotes alone.
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "--preset",
+        "low-pe",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(v["data"]["preset"], "low-pe");
+    assert_eq!(v["data"]["filters"], serde_json::json!(["pe>0"]));
+    assert_eq!(v["data"]["sort"], "pe");
+    assert_eq!(v["data"]["descending"], false);
+    assert!(v["data"]["returns_source"].is_null());
+    assert_eq!(symbols(&v), ["BBRI", "BBCA", "TLKM"]);
+    // TLKM closed at its 52-week low.
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "--preset",
+        "52w-low",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(symbols(&v), ["TLKM"]);
+    assert_eq!(v["data"]["rows"][0]["range_52w_pct"], 0.0);
+    // No preset and no filter: the largest companies.
+    let v = json(&["-o", "json", "stocks", "screen", "--universe", u]);
+    assert_eq!(symbols(&v), ["BBCA", "BBRI", "TLKM"]);
+    assert_eq!(v["data"]["sort"], "mcap");
+
+    // A return key without the market list cached: an offline miss.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args([
+            "stocks",
+            "screen",
+            "--preset",
+            "top-performers",
+            "--universe",
+            u,
+        ])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("MSN market list"));
+    // --returns is optional: a warning, the rows stay.
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "--returns",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(symbols(&v).len(), 3);
+    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w
+        .as_str()
+        .unwrap()
+        .starts_with("return windows unavailable")));
+
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Screener?region=id&values=quote",
+        "msn/screener_region_id_limit12.json",
+    );
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "--preset",
+        "top-performers",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(v["data"]["preset"], "top-performers");
+    assert_eq!(v["data"]["returns_source"], "msn:screener");
+    assert_eq!(v["data"]["sort"], "ret1y");
+    assert_eq!(symbols(&v), ["BBRI", "BBCA", "TLKM"]);
+    let y1: Vec<f64> = v["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["return_1y_pct"].as_f64().unwrap())
+        .collect();
+    assert_eq!(y1, [-31.9095, -41.092, -43.7853]);
+    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w
+        .as_str()
+        .unwrap()
+        .starts_with("MSN listed 12 of 887 stocks")));
+
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "--preset",
+        "top-performers",
+        "--sort",
+        "ret3m",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(symbols(&v), ["BBRI", "BBCA", "TLKM"]);
+    assert_eq!(v["data"]["rows"][2]["return_3m_pct"], -26.5683);
+    let v = json(&[
+        "-o",
+        "json",
+        "stocks",
+        "screen",
+        "-f",
+        "ret1y<-40",
+        "--asc",
+        "--sort",
+        "ytd",
+        "--universe",
+        u,
+    ]);
+    assert_eq!(symbols(&v), ["TLKM", "BBCA"]);
+    assert_eq!(v["data"]["descending"], false);
+
+    let table = String::from_utf8(run(&[
+        "stocks",
+        "screen",
+        "--preset",
+        "top-performers",
+        "--sort",
+        "ret3m",
+        "--universe",
+        u,
+    ]))
+    .unwrap();
+    assert!(table.contains("Screen top-performers"), "{table}");
+    assert!(table.contains("3M %"), "{table}");
+    assert!(table.contains("-10.26%"), "{table}");
+    assert!(table.contains("as reported by msn:screener"), "{table}");
+    let table = String::from_utf8(run(&[
+        "stocks",
+        "screen",
+        "--preset",
+        "52w-low",
+        "--universe",
+        u,
+    ]))
+    .unwrap();
+    assert!(table.contains("Screen 52w-low: range<=5"), "{table}");
+    assert!(table.contains("52w pos"), "{table}");
+
+    // Yahoo alone has no market-wide return windows: unsupported, exit 6.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &db)
+        .args([
+            "--provider",
+            "yahoo",
+            "stocks",
+            "screen",
+            "--preset",
+            "top-performers",
+            "--universe",
+            u,
+        ])
+        .assert()
+        .code(6);
+}
+
+#[test]
+fn insights_offline() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MSN Money"))
+        .stdout(predicate::str::contains("compared_with"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "sentiment", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("crowd sentiment is not used"));
+    // Nothing cached yet: an offline miss naming the ticker.
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("BBCA"));
+
+    seed(
+        &sb.cache,
+        "https://services.bingapis.com/contentservices-finance.csautosuggest/api/v1/Query?query=BBCA&market=en-id",
+        "msn/autosuggest_bbca.json",
+    );
+    seed(
+        &sb.cache,
+        "https://api.msn.com/msn/v0/pages/finance/insights?ids=bn91jc",
+        "msn/insights_bbca.json",
+    );
+    // Peers not cached: the report still comes, with a warning and no peers.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["peers"].as_array().unwrap().len(), 0);
+    assert!(v["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("could not resolve MSN's peer list"));
+
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Quotes?ids=bkfmar,bkfgqh,cj53lh,bkgttc",
+        "msn/quotes_bbca_insight_peers.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "insights", "bbca"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.insights.v1");
+    assert_eq!(v["provider"], "msn");
+    assert!(v.get("warnings").is_none(), "{v}");
+    let d = &v["data"];
+    assert_eq!(d["symbol"], "BBCA");
+    assert_eq!(d["good"], 17);
+    assert_eq!(d["bad"], 4);
+    assert_eq!(d["not_rated"], 9);
+    assert_eq!(d["updated"], "2026-11-05T17:51:31Z");
+    assert_eq!(
+        d["peers"],
+        serde_json::json!(["BBKP", "BABP", "SUPA", "INPC"])
+    );
+    assert_eq!(d["insights"].as_array().unwrap().len(), 30);
+    let pb = &d["insights"][2];
+    assert_eq!(pb["name"], "P/B ratio");
+    assert_eq!(pb["status"], "bad");
+    assert_eq!(pb["criteria"], "lower_is_better");
+    assert_eq!(pb["compared_with"], "peers");
+
+    let table = idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(table.stdout).unwrap();
+    assert!(text.contains("VALUATION"), "{text}");
+    assert!(text.contains("peers BBKP, BABP, SUPA, INPC"), "{text}");
+    assert!(
+        text.contains("9 statements MSN could not rate are hidden"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Unable to compare with industry average"),
+        "{text}"
+    );
+    let all = idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA", "--all"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(all.stdout).unwrap();
+    assert!(
+        text.contains("Unable to compare with industry average"),
+        "{text}"
+    );
+    let csv = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(csv.stdout).unwrap();
+    assert!(csv.starts_with("category,name,statement"), "{csv}");
+
+    // Stockbit serves no insights: exit 6.
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "stockbit", "stocks", "insights", "BBCA"])
+        .assert()
+        .code(6);
+    let schema = idx(&sb.cache, &sb.config)
+        .args(["schema", "insights"])
+        .output()
+        .unwrap();
+    assert!(schema.status.success());
+    let s = String::from_utf8_lossy(&schema.stdout);
+    assert!(
+        s.contains("compared_with") && s.contains("not_rated"),
+        "{s}"
+    );
 }
 
 #[test]

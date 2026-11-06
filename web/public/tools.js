@@ -1,4 +1,4 @@
-// The 42 MCP tools, each with its CLI command and, where the web terminal can
+// The 43 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
 // composition one (its archive is imported into the CLI's local database), the
@@ -26,6 +26,7 @@ export const TOOLS = [
   { tool: "idx_screen", cli: "idx stocks screen -f 'pe<10,div>5,mcap>5T'", web: "screen pe<10,div>5,mcap>5T --sort div", what: "screener over ~950 tickers" },
   { tool: "idx_news", cli: "idx stocks news TLKM", web: "news TLKM", what: "Kontan and CNBC Indonesia headlines" },
   { tool: "idx_sentiment", cli: "idx stocks sentiment BBRI", web: "sentiment BBRI", what: "lexicon sentiment over the headlines" },
+  { tool: "idx_insights", cli: "idx stocks insights BBCA", web: "insights BBCA", what: "MSN Money's rated statements vs peers and industry" },
   { tool: "idx_corporate_actions", cli: "idx stocks actions BBCA", web: "actions BBCA", what: "dividends, splits, bonus, rights, RUPS, warrants" },
   { tool: "idx_foreign", cli: "idx stocks foreign BBCA", web: null, what: "foreign buying and selling per session" },
   { tool: "idx_instruments", cli: "idx stocks list --search bank", web: "list --search bank", what: "listed stocks (the web lists codes and names)" },

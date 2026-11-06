@@ -197,6 +197,38 @@ test("screener DSL", () => {
   assert.deepEqual(rows.map((r) => r.symbol), ["Y", "X", "Z"]);
 });
 
+test("screener presets, return windows and 52-week range like analysis::screen", () => {
+  for (const [k, field] of [["range", "range_52w_pct"], ["pos52", "range_52w_pct"], ["52W", "range_52w_pct"], ["ret1w", "return_1w_pct"], ["ret1m", "return_1m_pct"], ["ret3m", "return_3m_pct"], ["ret6m", "return_6m_pct"], ["retytd", "return_ytd_pct"], ["ytd", "return_ytd_pct"], ["RET1Y", "return_1y_pct"]]) {
+    assert.equal(an.sortField(k), field, k);
+    assert.ok(!an.FUNDAMENTAL_FIELDS.has(field), k);
+  }
+  assert.ok(an.RETURN_FIELDS.has("return_1y_pct") && !an.RETURN_FIELDS.has("range_52w_pct"));
+  assert.equal(an.keyName("ytd"), "retytd");
+  assert.equal(an.keyName("PBV"), "pb");
+  assert.equal(an.KEY_NAMES.split(", ").length, 27);
+  // Same table as ScreenPreset (src/analysis/screen.rs).
+  assert.deepEqual(an.PRESETS, {
+    "top-performers": { filter: "", sort: "ret1y", descending: true },
+    "worst-performers": { filter: "", sort: "ret1y", descending: false },
+    "high-dividend": { filter: "div>0", sort: "div", descending: true },
+    "low-pe": { filter: "pe>0", sort: "pe", descending: false },
+    "52w-high": { filter: "range>=95", sort: "range", descending: true },
+    "52w-low": { filter: "range<=5", sort: "range", descending: false },
+    "high-volume": { filter: "", sort: "volume", descending: true },
+    "large-cap": { filter: "", sort: "mcap", descending: true },
+  });
+  for (const p of Object.values(an.PRESETS)) { an.parseFilters(p.filter); assert.ok(an.sortField(p.sort)); }
+  assert.equal(an.parsePreset(" 52W_HIGH "), "52w-high");
+  assert.throws(() => an.parsePreset("nope"), (e) => e.code === "usage" && /52w-low/.test(e.message));
+  assert.ok(Math.abs(an.rangePosition(5125, 4740, 8700) - 9.722222) < 1e-5);
+  assert.equal(an.rangePosition(10, 10, 10), null);
+  assert.equal(an.rangePosition(null, 1, 2), null);
+  assert.equal(an.rangePosition(3, 1, 2), 200);
+  const row = { symbol: "BBCA", range_52w_pct: 9.7, return_1y_pct: -41.092, return_1m_pct: null };
+  assert.ok(an.matches(row, an.parseFilters("ret1y<-40,range<10")));
+  assert.ok(!an.matches(row, an.parseFilters("ret1m>0")), "missing never matches");
+});
+
 test("sentiment lexicon", () => {
   assert.ok(an.scoreText("Saham BBCA melonjak, laba naik 12%").score > 0);
   assert.ok(an.scoreText("IHSG anjlok, investor asing jual bersih").score < 0);

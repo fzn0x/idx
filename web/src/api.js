@@ -10,6 +10,8 @@ import * as own from "./ownership.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
+import * as msn from "./msn-insights.js";
+import * as msnScreen from "./msn-screen.js";
 import { fetchWithin, redactUrls } from "./net.js";
 import { scanRows, scanStatus } from "./bandar-scan.js";
 import { syncStatus } from "./ownership-sync.js";
@@ -353,25 +355,109 @@ export async function compare(env, symbolsRaw) {
   return envelope("idx.compare.v1", data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFundamentals = 20, descending = true, now = new Date()) {
-  const filters = an.parseFilters(filterSpec || "");
-  const sortField = an.sortField(sort);
+// ---- MSN (insights, whole-market return windows) -------------------------
+
+const msnFail = (e) => (e instanceof ApiError ? e : provider(`msn: ${e.message}`));
+
+/** MSN security id of an IDX ticker, cached 30 days (same key as the CLI's lookup TTL). */
+async function msnId(env, symbol) {
+  const r = await cached(env, `msn:id:${symbol}`, 30 * 86400, async () => {
+    const id = msn.parseAutosuggest(await msn.getJson(msn.autosuggestUrl(symbol)), symbol);
+    if (!id) throw notFound(`${symbol} is not listed on IDX per MSN`);
+    return id;
+  });
+  return r.value;
+}
+
+export async function insights(env, raw) {
+  const symbol = parseSymbol(raw);
+  try {
+    const id = await msnId(env, symbol);
+    // The parsed report and MSN's peer ids, not the raw 24 KB body, go to D1.
+    // The peers resolve under their own key, like the CLI's separate Quotes
+    // cache entry, so a failed peer lookup is a warning that is never stored.
+    const r = await cached(env, `msn:insights:${symbol}`, 6 * 3600, async () => {
+      const body = await msn.getJson(msn.insightsUrl(id));
+      const parsed = body && msn.parseInsights(body, symbol);
+      if (!parsed) throw notFound(`MSN has no insights for ${symbol}`);
+      return parsed;
+    });
+    const report = { ...r.value.report, peers: [] };
+    const warnings = [...r.value.warnings];
+    if (r.warning) warnings.push(r.warning);
+    let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at;
+    const ids = r.value.peerIds || [];
+    if (ids.length) {
+      try {
+        const p = await cached(env, `msn:peers:${ids.join(",")}`, 6 * 3600, async () => {
+          const body = await msn.getJson(msn.quotesUrl(ids));
+          if (!body) throw new Error("Quotes returned HTTP 404");
+          return msn.parsePeers(body, ids);
+        });
+        report.peers = p.value;
+        cachedAll &&= p.cached; stale ||= p.stale; fetchedAt = Math.min(fetchedAt, p.fetched_at);
+        if (p.warning) warnings.push(`MSN's peer list: ${p.warning}`);
+      } catch (e) { warnings.push(`could not resolve MSN's peer list: ${e.message}`); }
+    }
+    return envelope("idx.insights.v1", report, { provider: msn.NAME, cached: cachedAll, stale, fetched_at: fetchedAt, warnings });
+  } catch (e) { throw msnFail(e); }
+}
+
+/** Every Indonesian stock's return windows, one POST cached 15 minutes. */
+async function marketReturns(env) {
+  try {
+    return await cached(env, "msn:returns:id", 15 * 60, async () => {
+      const body = await msn.getJson(msnScreen.screenerUrl(), { method: "POST", headers: { "Content-Type": "application/json" }, body: msnScreen.MARKET_LIST_BODY });
+      const list = msnScreen.parseMarketList(body);
+      if (!Object.keys(list.returns).length) throw notFound("MSN returned no Indonesian stocks");
+      return list;
+    });
+  } catch (e) { throw msnFail(e); }
+}
+
+export async function screen(env, filterSpec, sort = null, limit = 25, maxFundamentals = 20, descending = null, presetRaw = null, withReturns = false, now = new Date()) {
+  const preset = presetRaw ? an.parsePreset(presetRaw) : null;
+  const pr = preset ? an.PRESETS[preset] : null;
+  const filters = [...(pr ? an.parseFilters(pr.filter) : []), ...an.parseFilters(filterSpec || "")];
+  const sortName = String(sort || pr?.sort || "mcap").toLowerCase();
+  const sortField = an.sortField(sortName);
   if (!sortField) throw usage(`unknown sort key "${sort}"; use one of ${an.KEY_NAMES}`);
+  descending ??= pr ? pr.descending : true;
   const b = await board(env);
   let rows = b.value.quotes.map((q) => ({
     symbol: q.symbol, name: q.name || NAME_BY_SYMBOL.get(q.symbol) || null, price: q.price, change_pct: q.change_pct, market_cap: q.market_cap,
     pe_trailing: q.pe_trailing, pe_forward: q.pe_forward, price_to_book: q.price_to_book, dividend_yield_pct: q.dividend_yield_pct,
-    eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low, fundamentals_checked: false,
+    eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low,
+    range_52w_pct: an.rangePosition(q.price, q.week52_low, q.week52_high),
+    return_1w_pct: null, return_1m_pct: null, return_3m_pct: null, return_6m_pct: null, return_ytd_pct: null, return_1y_pct: null,
+    fundamentals_checked: false,
     sector: null, industry: null, roe_pct: null, roa_pct: null, net_margin_pct: null, operating_margin_pct: null, debt_to_equity: null,
     revenue_growth_pct: null, earnings_growth_pct: null, peg: null, price_to_sales: null,
   }));
   const quoted = rows.length;
+  const warnings = [];
+  // Return windows: when a filter or the sort needs them a failure is an
+  // error, not a silently empty screen.
+  const returnsRequired = filters.some((f) => an.RETURN_FIELDS.has(f.field)) || an.RETURN_FIELDS.has(sortField);
+  let returnsSource = null, cachedAll = true, staleAny = false, fetchedAt = b.value.ts;
+  if (returnsRequired || withReturns) {
+    try {
+      const m = await marketReturns(env);
+      for (const r of rows) msnScreen.applyReturns(r, m.value.returns[r.symbol]);
+      returnsSource = msnScreen.SOURCE;
+      cachedAll = m.cached; staleAny = m.stale; fetchedAt = Math.min(fetchedAt, m.fetched_at);
+      if (m.warning) warnings.push(m.warning);
+      if (m.value.count != null && m.value.count > m.value.listed) warnings.push(`MSN listed ${m.value.listed} of ${m.value.count} stocks; the rest have no return windows`);
+    } catch (e) {
+      if (returnsRequired) throw e;
+      warnings.push(`return windows unavailable: ${e.message}`);
+    }
+  }
   const quoteFilters = filters.filter((f) => !an.FUNDAMENTAL_FIELDS.has(f.field));
   const fundFilters = filters.filter((f) => an.FUNDAMENTAL_FIELDS.has(f.field));
   rows = rows.filter((r) => an.matches(r, quoteFilters));
   const matchedQuote = rows.length;
-  let checked = 0, capped = false, cachedAll = true, staleFund = 0, cause = null;
-  const warnings = [];
+  let checked = 0, capped = false, staleFund = 0, cause = null;
   if (fundFilters.length || an.FUNDAMENTAL_FIELDS.has(sortField)) {
     an.sortRows(rows, "market_cap", true);
     const cap = Math.max(1, Math.min(maxFundamentals, 40));
@@ -400,9 +486,12 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
   an.sortRows(rows, sortField, descending);
   const total = rows.length;
   if (limit > 0) rows = rows.slice(0, limit);
-  const data = { filters: filters.map((f) => f.raw), sort: sort.toLowerCase(), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote, fundamentals_checked: checked, fundamentals_capped: capped, total_matches: total, rows };
+  const data = {
+    preset, filters: filters.map((f) => f.raw), sort: an.keyName(sortName), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote,
+    fundamentals_checked: checked, fundamentals_capped: capped, returns_source: returnsSource, total_matches: total, rows,
+  };
   const fresh = boardFreshness(b.value.ts, now);
-  return envelope("idx.screen.v1", data, { cached: cachedAll, stale: fresh.stale || staleFund > 0, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
+  return envelope("idx.screen.v1", data, { cached: cachedAll, stale: fresh.stale || staleAny || staleFund > 0, fetched_at: fetchedAt, warnings: [...fresh.warnings, ...warnings] });
 }
 
 // ---- news ---------------------------------------------------------------
@@ -1098,7 +1187,13 @@ export async function route(env, url) {
     case "/financials": return financials(env, q.get("symbol"), q.get("period") || "annual");
     case "/technical": return technical(env, q.get("symbol"), q.get("period") || "1y");
     case "/compare": return compare(env, q.get("symbols"));
-    case "/screen": return screen(env, q.get("filter") || "", q.get("sort") || "mcap", num(q.get("limit"), 25), num(q.get("max_fundamentals"), 20), q.get("asc") == null);
+    case "/screen": {
+      const asc = q.get("asc"), desc = q.get("desc");
+      const on = (v) => v === "1" || v === "true";
+      const descending = asc != null && asc !== "" ? !on(asc) : desc != null && desc !== "" ? on(desc) : null;
+      return screen(env, q.get("filter") || "", q.get("sort"), num(q.get("limit"), 25), num(q.get("max_fundamentals"), 20), descending, q.get("preset"), on(q.get("returns")));
+    }
+    case "/insights": return insights(env, q.get("symbol"));
     case "/news": return (await news(env, q.get("symbol"), num(q.get("limit"), 20), q.get("company_only") === "1" || q.get("company_only") === "true")).env;
     case "/dividends": return dividends(env, q.get("symbol"));
     case "/returns": return returns(env, q.get("symbols") || q.get("symbol"), q.get("benchmark") || "^JKSE");

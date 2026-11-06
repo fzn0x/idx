@@ -44,8 +44,9 @@ impl RawResponse {
 pub trait Backend: Send + Sync {
     async fn get(&self, url: &str, headers: &[(String, String)]) -> Result<RawResponse>;
 
-    /// POST with a JSON body. Only session endpoints use it (token refresh);
-    /// responses are never cached.
+    /// POST with a JSON body: session endpoints (token refresh, never cached)
+    /// and read-only query endpoints that take their parameters in the body
+    /// (cached by [`Fetcher::post`] under an explicit key).
     async fn post(
         &self,
         url: &str,
@@ -325,7 +326,23 @@ impl Fetcher {
         ttl: Duration,
         cache_key: Option<&str>,
     ) -> Result<Fetched> {
-        self.fetch(url, headers, ttl, cache_key, None).await
+        self.fetch(url, headers, ttl, cache_key, None, None).await
+    }
+
+    /// Cached POST for read-only query endpoints that take their parameters in
+    /// the body (MSN's screener). `cache_key` is required: it names the request
+    /// (the URL without secrets plus a label for the body), because the URL
+    /// alone does not.
+    pub async fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        ttl: Duration,
+        cache_key: &str,
+    ) -> Result<Fetched> {
+        self.fetch(url, headers, ttl, Some(cache_key), None, Some(body))
+            .await
     }
 
     /// Like [`get`](Self::get), but a network failure is remembered for
@@ -341,10 +358,12 @@ impl Fetcher {
         cache_key: Option<&str>,
         retry_after: Duration,
     ) -> Result<Fetched> {
-        self.fetch(url, headers, ttl, cache_key, Some(retry_after))
+        self.fetch(url, headers, ttl, cache_key, Some(retry_after), None)
             .await
     }
 
+    /// The shared path: cache, offline, backoff and stale fallback. `body`
+    /// makes the live request a POST.
     async fn fetch(
         &self,
         url: &str,
@@ -352,6 +371,7 @@ impl Fetcher {
         ttl: Duration,
         cache_key: Option<&str>,
         retry_after: Option<Duration>,
+        body: Option<&str>,
     ) -> Result<Fetched> {
         let key = cache_key.unwrap_or(url);
         let hit = if self.mode == CacheMode::Bypass {
@@ -406,7 +426,10 @@ impl Fetcher {
 
         let live = {
             let _wait = crate::progress::request(url);
-            self.backend.get(url, headers).await
+            match body {
+                Some(b) => self.backend.post(url, headers, b).await,
+                None => self.backend.get(url, headers).await,
+            }
         };
         match live {
             Ok(resp) => {
@@ -709,6 +732,91 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got.body, "new");
+    }
+
+    #[tokio::test]
+    async fn post_is_cached_under_its_key() {
+        let be = Arc::new(FixtureBackend::new().route("POST https://q.test/screen", 200, "[1]"));
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fetcher::new(be.clone(), Cache::new(dir.path()), CacheMode::Normal);
+        let ttl = Duration::from_secs(60);
+        let key = "https://q.test/screen?body=all";
+        let a = f
+            .post("https://q.test/screen?apikey=secret", &[], "{}", ttl, key)
+            .await
+            .unwrap();
+        assert!(!a.cached);
+        let b = f
+            .post("https://q.test/screen?apikey=other", &[], "{}", ttl, key)
+            .await
+            .unwrap();
+        assert!(b.cached && !b.stale);
+        assert_eq!(b.body, "[1]");
+        assert_eq!(be.calls_matching("POST "), 1);
+        assert_eq!(be.call_count(), 1);
+        // The key, not the URL with its secret, is what the cache stores.
+        assert!(f.cache().get(key, ttl).is_some());
+        assert!(f
+            .cache()
+            .get("https://q.test/screen?apikey=secret", ttl)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_serves_a_cached_post() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache.put("screen:all", 200, "old").unwrap();
+        let be = Arc::new(FixtureBackend::new());
+        let f = Fetcher::new(be.clone(), cache, CacheMode::Offline);
+        let got = f
+            .post(
+                "https://q.test/screen",
+                &[],
+                "{}",
+                Duration::ZERO,
+                "screen:all",
+            )
+            .await
+            .unwrap();
+        assert!(got.cached && got.stale);
+        assert_eq!(got.body, "old");
+        let err = f
+            .post(
+                "https://q.test/screen",
+                &[],
+                "{}",
+                Duration::ZERO,
+                "screen:none",
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 5);
+        assert_eq!(be.call_count(), 0, "offline never reaches the backend");
+    }
+
+    #[tokio::test]
+    async fn failed_post_serves_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache.put("screen:all", 200, "old").unwrap();
+        // No route: the live POST fails like a network error.
+        let be = Arc::new(FixtureBackend::new());
+        let f = Fetcher::new(be.clone(), cache, CacheMode::Normal);
+        let got = f
+            .post(
+                "https://q.test/screen",
+                &[],
+                "{}",
+                Duration::ZERO,
+                "screen:all",
+            )
+            .await
+            .unwrap();
+        assert!(got.stale);
+        assert_eq!(got.body, "old");
+        assert!(got.failure.unwrap().contains("no route"));
+        assert_eq!(be.calls_matching("POST https://q.test/screen"), 1);
     }
 
     #[test]

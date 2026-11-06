@@ -249,13 +249,41 @@ const KEYS = {
   pe: "pe_trailing", "p/e": "pe_trailing", per: "pe_trailing", fpe: "pe_forward", forwardpe: "pe_forward",
   pb: "price_to_book", pbv: "price_to_book", "p/b": "price_to_book", mcap: "market_cap", marketcap: "market_cap", cap: "market_cap",
   price: "price", close: "price", div: "dividend_yield_pct", yield: "dividend_yield_pct", dividend: "dividend_yield_pct",
-  eps: "eps_ttm", volume: "avg_volume_3m", vol: "avg_volume_3m", chg: "change_pct", change: "change_pct",
+  eps: "eps_ttm", volume: "avg_volume_3m", vol: "avg_volume_3m", avgvolume: "avg_volume_3m", chg: "change_pct", change: "change_pct",
+  range: "range_52w_pct", pos52: "range_52w_pct", "52w": "range_52w_pct",
+  ret1w: "return_1w_pct", ret1m: "return_1m_pct", ret3m: "return_3m_pct", ret6m: "return_6m_pct",
+  retytd: "return_ytd_pct", ytd: "return_ytd_pct", ret1y: "return_1y_pct",
   roe: "roe_pct", roa: "roa_pct", margin: "net_margin_pct", npm: "net_margin_pct", opmargin: "operating_margin_pct", opm: "operating_margin_pct",
   de: "debt_to_equity", der: "debt_to_equity", debt: "debt_to_equity", growth: "revenue_growth_pct", revgrowth: "revenue_growth_pct",
   epsgrowth: "earnings_growth_pct", peg: "peg", ps: "price_to_sales", "p/s": "price_to_sales", sector: "sector", industry: "industry",
 };
 export const FUNDAMENTAL_FIELDS = new Set(["roe_pct","roa_pct","net_margin_pct","operating_margin_pct","debt_to_equity","revenue_growth_pct","earnings_growth_pct","peg","price_to_sales","sector","industry"]);
-export const KEY_NAMES = "pe, fpe, pb, ps, peg, mcap, price, div, eps, volume, chg, roe, roa, margin, opmargin, de, growth, epsgrowth, sector, industry";
+// The return windows: joined from MSN's whole-market list (one request).
+export const RETURN_FIELDS = new Set(["return_1w_pct","return_1m_pct","return_3m_pct","return_6m_pct","return_ytd_pct","return_1y_pct"]);
+export const KEY_NAMES = "pe, fpe, pb, ps, peg, mcap, price, div, eps, volume, chg, range, ret1w, ret1m, ret3m, ret6m, retytd, ret1y, roe, roa, margin, opmargin, de, growth, epsgrowth, sector, industry";
+
+// idx's ready-made screens, the same table as analysis::screen::ScreenPreset.
+export const PRESETS = {
+  "top-performers": { filter: "", sort: "ret1y", descending: true },
+  "worst-performers": { filter: "", sort: "ret1y", descending: false },
+  "high-dividend": { filter: "div>0", sort: "div", descending: true },
+  "low-pe": { filter: "pe>0", sort: "pe", descending: false },
+  "52w-high": { filter: "range>=95", sort: "range", descending: true },
+  "52w-low": { filter: "range<=5", sort: "range", descending: false },
+  "high-volume": { filter: "", sort: "volume", descending: true },
+  "large-cap": { filter: "", sort: "mcap", descending: true },
+};
+export const PRESET_NAMES = Object.keys(PRESETS).join(", ");
+/** Preset name (case and _ forgiven) to its canonical name, or a usage error. */
+export function parsePreset(raw) {
+  const name = String(raw).trim().toLowerCase().replace(/_/g, "-");
+  if (!PRESETS[name]) throw new UsageError(`unknown preset "${raw}"; use ${PRESET_NAMES}`);
+  return name;
+}
+/** Where the price sits in its 52-week range, 0 at the low, 100 at the high (not clamped). */
+export function rangePosition(price, low, high) {
+  return price != null && low != null && high != null && high > low ? ((price - low) / (high - low)) * 100 : null;
+}
 
 export function parseNumber(s) {
   let t = String(s).trim().replace(/%$/, "").trim().replace(/[_,]/g, "");
@@ -287,6 +315,9 @@ export function parseFilters(spec) {
   return out;
 }
 export function sortField(name) { return KEYS[String(name || "mcap").toLowerCase()] || null; }
+const NAME_BY_FIELD = Object.fromEntries(KEY_NAMES.split(", ").map((k) => [KEYS[k], k]));
+/** Canonical key name, as the CLI reports it (`ytd` -> `retytd`, `pbv` -> `pb`). */
+export function keyName(name) { const k = String(name).toLowerCase(); return NAME_BY_FIELD[KEYS[k]] || k; }
 export function matches(row, filters) {
   return filters.every((f) => {
     const v = row[f.field];

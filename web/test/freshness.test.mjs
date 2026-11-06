@@ -251,7 +251,7 @@ test("a screen on stale fundamentals is stale and names the failure once", async
       // BBCA's fundamentals are an expired copy; WIKA and KAEF have none.
       cache: { [`summary:BBCA:${y.FUNDAMENTAL_MODULES}`]: { v: JSON.stringify(body), expires_at: 0, fetched_at: ts - 7 * 3600 } },
     }) };
-    const s = await screen(env, "", "roe", 25, 20, true, now);
+    const s = await screen(env, "", "roe", 25, 20, true, null, false, now);
     assert.ok(asked.some((u) => u.includes("crumb=SECRETCRUMB")), "the session was used");
     assert.equal(s.data.fundamentals_checked, 1);
     assert.equal(s.data.rows.find((r) => r.symbol === "BBCA").fundamentals_checked, true);
@@ -267,7 +267,7 @@ test("a screen on stale fundamentals is stale and names the failure once", async
 
     // Fresh fundamentals leave the board's freshness alone.
     env.DB.rows.get(`summary:BBCA:${y.FUNDAMENTAL_MODULES}`).expires_at = ts + 3600;
-    const ok = await screen(env, "", "roe", 25, 20, true, now);
+    const ok = await screen(env, "", "roe", 25, 20, true, null, false, now);
     assert.equal(ok.stale, false);
     assert.ok(!("stale_reason" in ok));
     assert.ok(!(ok.warnings || []).some((w) => w.startsWith("fundamentals for")));

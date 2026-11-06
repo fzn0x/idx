@@ -17,6 +17,7 @@ pub mod composition;
 pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
+pub mod insights;
 pub mod institutions;
 pub mod instruments;
 pub mod market;
@@ -52,6 +53,7 @@ pub use fundamentals::{
     PerShare, Profile, Profitability, RevenueEarnings, StatementPeriod, Valuation, Verdict,
     VerdictLabel,
 };
+pub use insights::{Insight, InsightBenchmark, InsightStatus, Insights};
 pub use institutions::{
     HolderFlow, HolderKind, HolderSignal, InstitutionalFlow, InstitutionalHolder,
     InstitutionalOwnership,
@@ -77,7 +79,7 @@ pub use ownership_sync::{
     StatusReport, SyncAction, SyncNeeded, SyncReport,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};
-pub use screen::{ScreenReport, ScreenRow};
+pub use screen::{MarketReturns, ScreenReport, ScreenRow};
 pub use technical::{
     Bollinger, Levels, Macd, MovingAverages, Signal, SignalLabel, Technical, Trend, VolumeStats,
 };
