@@ -15,6 +15,8 @@ crumb session (`providers/yahoo/session.rs`); `v8/finance/chart` and
 | quote_v7_bbca_bbri_tlkm.json | `v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK` | full quote rows |
 | quote_v7_partial_bbca_zzzz.json | `v7/finance/quote?symbols=BBCA.JK,ZZZZ.JK` | unknown symbol silently omitted |
 | quote_v7_unauthorized.json | `v7/finance/quote` without crumb | HTTP 401 |
+| quote_v7_wika_suspended_kaef_bbca.json | `v7/finance/quote?symbols=WIKA.JK,WSKT.JK,SRIL.JK,KAEF.JK,ARMY.JK,BBCA.JK` | recorded 2026-11-06 06:58 WIB (before the open); WIKA, suspended since February 2025, still answers with `regularMarketTime` 2025-02-17 16:14:58 WIB; KAEF and BBCA carry the 2026-11-05 close; WSKT, SRIL and ARMY are omitted (unknown to Yahoo) |
+| quote_v7_bbca_gspc.json | `v7/finance/quote?symbols=BBCA.JK,^GSPC` | recorded 2026-11-06 06:52 WIB; `^GSPC` is exchange SNP, America/New_York, stamped 2026-11-06 04:34 WIB: not an IDX instrument, so never behind the IDX session |
 | quote_summary_bbca.json | `quoteSummary/BBCA.JK?modules=assetProfile,summaryDetail,defaultKeyStatistics,financialData` | profile + ratios (recorded 2026-10-16) |
 | quote_summary_statements_bbca.json | `quoteSummary/BBCA.JK?modules=incomeStatementHistory,...,earnings,earningsHistory,earningsTrend,calendarEvents,price,recommendationTrend` | statement modules are gutted (only `endDate`); earnings modules are populated (2026-10-17) |
 | quote_summary_fundamentals_bbca.json | `quoteSummary/BBCA.JK?modules=assetProfile,summaryDetail,defaultKeyStatistics,financialData,price` | bank: no EBITDA, no current ratio, `grossMargins` 0 |

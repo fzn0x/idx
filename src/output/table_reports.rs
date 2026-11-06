@@ -771,7 +771,7 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
     let mut out = String::new();
     match &m.index {
         Some(ix) => out.push_str(&format!(
-            "{} {} · {} ({}) · {}{}\n",
+            "{} {} · {} ({}) · {}{}{}\n",
             ix.name.clone().unwrap_or_else(|| ix.symbol.to_string()),
             f::price(ix.price),
             f::change(ix.change),
@@ -781,7 +781,12 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
                 .unwrap_or_else(|| "state unknown".into()),
             m.as_of
                 .map(|t| format!(" · last trade {}", t.format("%Y-%m-%d %H:%M WIB")))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            if m.behind_session == Some(true) {
+                " · behind the latest IDX session"
+            } else {
+                ""
+            }
         )),
         None => out.push_str("Index quote unavailable\n"),
     }
@@ -1198,6 +1203,44 @@ mod tests {
         assert!(s.contains("21.80%"));
         assert!(s.contains("insufficient data"));
         assert!(s.contains(f::DASH));
+    }
+
+    #[test]
+    fn market_line_says_when_the_board_lags_the_session() {
+        let ix = crate::model::MarketRow {
+            symbol: Symbol::parse("^JKSE").unwrap(),
+            name: Some("IDX COMPOSITE".into()),
+            price: Some(8_000.0),
+            change: Some(10.0),
+            change_pct: Some(0.13),
+            volume: None,
+            value: None,
+            market_cap: None,
+        };
+        let mut m = MarketOverview {
+            as_of: Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T16:14:59+07:00").unwrap()),
+            market_state: Some("PREPRE".into()),
+            behind_session: Some(true),
+            index: Some(ix),
+            universe: 1,
+            quoted: 0,
+            advancing: 0,
+            declining: 0,
+            unchanged: 0,
+            turnover: 0.0,
+            liquid_min_market_cap: 1e12,
+            gainers: vec![],
+            losers: vec![],
+            most_active: vec![],
+            heavyweights: vec![],
+        };
+        let s = market(&m, false);
+        assert!(
+            s.contains("last trade 2026-11-05 16:14 WIB · behind the latest IDX session\n"),
+            "{s}"
+        );
+        m.behind_session = Some(false);
+        assert!(!market(&m, false).contains("behind the latest"));
     }
 
     #[test]

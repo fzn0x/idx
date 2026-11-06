@@ -548,7 +548,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_quote",
-        description = "Delayed quotes for one or more IDX tickers: price, change, previous close, OHLC, volume, market cap, P/E, dividend yield, 52-week range. Returns the idx.quotes.v1 envelope; unknown tickers are listed in warnings."
+        description = "Delayed quotes for one or more IDX tickers: price, change, previous close, OHLC, volume, market cap, P/E, dividend yield, 52-week range and market_time (last trade, WIB). behind_session is true when that last trade is dated before the latest IDX session that has ended (IDX holidays are not counted): the stock is suspended or did not trade, or the source lags the close; null when the time is unknown or the symbol does not trade on IDX. Returns the idx.quotes.v1 envelope; unknown tickers are listed in warnings."
     )]
     async fn quote(
         &self,
@@ -557,7 +557,10 @@ impl IdxServer {
         finish(
             async {
                 let symbols = Symbol::parse_list([a.symbols.as_str()])?;
-                ok(SCHEMA_QUOTES, self.provider.quotes(&symbols).await?)
+                ok(
+                    SCHEMA_QUOTES,
+                    service::quotes(self.provider.as_ref(), &symbols).await?,
+                )
             }
             .await,
         )

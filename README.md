@@ -172,6 +172,7 @@ idx -o json stocks history TLKM --period 1y --interval 1wk \
 - stdout carries exactly one JSON document; everything else goes to stderr.
 - The envelope records `provider`, `fetched_at`, `cached`, `stale`, `stale_reason` (`offline` or `fetch_failed`, only when stale) and `warnings`.
 - Fields the source did not return are `null`. Nothing is estimated.
+- Quotes carry `behind_session`: `true` when the last trade is dated before the latest IDX session that has ended (a suspended stock, one that did not trade, or a source that lags the close), using the bundled holiday calendar.
 - Exit codes: `0` ok · `2` usage · `3` network/provider · `4` not found · `5` offline cache miss · `6` config.
 
 Full field reference: [docs/json-output.md](docs/json-output.md).

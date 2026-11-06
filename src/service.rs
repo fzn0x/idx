@@ -13,6 +13,7 @@ use crate::analysis::bandar::{self as bd, Preset};
 use crate::analysis::screen::{self as scr, Filter, Key};
 use crate::brokers;
 use crate::error::{IdxError, Result};
+use crate::holidays;
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
@@ -231,6 +232,22 @@ pub async fn screen(
     }))
 }
 
+/// Quotes with `behind_session` set against the latest IDX session that has
+/// ended. The flag is computed on every call, never cached.
+pub async fn quotes(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+    let mut s = p.quotes(symbols).await?;
+    mark_behind(&mut s.data, holidays::latest_session(chrono::Utc::now()));
+    Ok(s)
+}
+
+/// Sets each quote's `behind_session` against `latest`, the latest IDX
+/// session that has ended ([`holidays::latest_session`]).
+pub fn mark_behind(quotes: &mut [Quote], latest: NaiveDate) {
+    for q in quotes {
+        q.behind_session = q.behind(latest);
+    }
+}
+
 /// Quotes for a whole universe in batches. Batches that fail with NotFound
 /// are skipped; any other failure is fatal because the quotes are the base
 /// data. Returns the quotes and the number of symbols that answered.
@@ -337,6 +354,10 @@ pub async fn market_overview(
     let data = MarketOverview {
         as_of,
         market_state,
+        behind_session: crate::model::behind_session(
+            as_of,
+            holidays::latest_session(chrono::Utc::now()),
+        ),
         index: index_row,
         universe: symbols.len(),
         quoted: rows.len(),
@@ -470,7 +491,7 @@ pub async fn brief(
 ) -> Result<Sourced<Brief>> {
     let bench = Symbol::parse("^JKSE")?;
     let (quote, fund, tech, rets, divs, headlines) = futures::join!(
-        p.quotes(std::slice::from_ref(symbol)),
+        quotes(p, std::slice::from_ref(symbol)),
         fundamentals(p, symbol),
         technical(p, symbol, Period::Y1),
         returns(p, std::slice::from_ref(symbol), Some(&bench)),
@@ -569,6 +590,12 @@ pub async fn brief(
                 q.market_cap
                     .map(|m| format!(", market cap {}", crate::output::format::compact(Some(m))))
                     .unwrap_or_default()
+            ));
+        }
+        if let (Some(true), Some(t)) = (q.behind_session, q.market_time) {
+            key_points.push(format!(
+                "Last trade {}, before the latest IDX session: suspended, not traded since, or the source lags",
+                t.with_timezone(&crate::model::wib()).format("%Y-%m-%d")
             ));
         }
     }
@@ -1791,6 +1818,49 @@ mod tests {
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
+    /// Quotes with fixed last-trade times, whatever is asked.
+    struct Stamped;
+
+    #[async_trait]
+    impl Provider for Stamped {
+        fn name(&self) -> &'static str {
+            "stamped"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let q = |sym: &str, at: Option<&str>| {
+                let mut q = Quote::empty(Symbol::from_yahoo(sym), "stamped");
+                q.market_time = at.map(|t| chrono::DateTime::parse_from_rfc3339(t).unwrap());
+                q
+            };
+            Ok(Sourced::fresh(
+                vec![
+                    q("WIKA.JK", Some("2025-02-17T16:14:58+07:00")),
+                    q("^GSPC", Some("2025-02-17T04:00:00+07:00")),
+                    q("BBCA.JK", None),
+                    q("BBRI.JK", Some("2099-01-02T16:00:00+07:00")),
+                ],
+                "stamped",
+            ))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn quotes_mark_the_session() {
+        // Holds on any run date: 2025-02-17 is past, 2099 is not.
+        let got = quotes(&Stamped, &syms(&["WIKA"])).await.unwrap();
+        let flags: Vec<Option<bool>> = got.data.iter().map(|q| q.behind_session).collect();
+        assert_eq!(flags, [Some(true), None, None, Some(false)]);
+        // Against a fixed session: the WIB date decides, not the instant.
+        let mut rows = got.data;
+        rows[3].market_time =
+            Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T17:30:00Z").unwrap());
+        mark_behind(&mut rows, NaiveDate::from_ymd_opt(2026, 11, 6).unwrap());
+        assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
+    }
+
     #[tokio::test]
     async fn cached_news_keeps_the_original_fetch_time() {
         use crate::cache::Cache;

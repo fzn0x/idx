@@ -68,6 +68,7 @@ with exit code 4.
 | `market_state` | string? | `REGULAR`, `CLOSED`, ... |
 | `market_time` | RFC 3339? | Last trade time in WIB (`+07:00`) |
 | `source` | string | Endpoint that produced the row: `yahoo:quote` (full) or `yahoo:chart` (reduced fallback) |
+| `behind_session` | bool? | `true` when `market_time` is dated (WIB) before the latest IDX session that has ended (16:15 WIB, the end of post-closing; weekends and the bundled IDX holidays are skipped): the stock is suspended or did not trade, or the source lags the close. `false` when the last trade is from that session or later. `null` when `market_time` is unknown (Stockbit, MSN rows without a trade) or the symbol does not trade on IDX (`^GSPC`, `^N225`). Computed on every call, never cached. For years the holiday list does not cover only weekends are skipped, and unscheduled closures read as behind. |
 
 `?` means the value is `null` when the source did not return it. Nothing is
 estimated. When `source` is `yahoo:chart`, expect `market_cap`, P/E, dividend
@@ -304,7 +305,9 @@ from five years of daily closes; dividends are excluded.
 
 ## `idx.market.v1` (`market overview`)
 
-`as_of`, `market_state`, `index` (a `MarketRow` for `^JKSE`), `universe`,
+`as_of`, `market_state`, `behind_session` (`true` when even the newest quote,
+`as_of`, is dated before the latest IDX session that has ended; same rule as
+the quote field), `index` (a `MarketRow` for `^JKSE`), `universe`,
 `quoted`, `advancing`, `declining`, `unchanged`, `turnover`,
 `liquid_min_market_cap`, and the lists `gainers`, `losers`, `most_active`,
 `heavyweights` of `MarketRow` (`symbol`, `name`, `price`, `change`,
@@ -315,7 +318,8 @@ same shape plus `index_tape` and `refreshed_at`.
 
 `symbol`, `name`, `generated_at`, `key_points[]` (plain-language lines), then
 one section per topic, each either `null` or the dedicated command's object:
-`quote` (one `Quote`), `fundamentals` (`idx.fundamentals.v1` data),
+`quote` (one `Quote`, with `behind_session`; a key point names the last trade
+date when it is `true`), `fundamentals` (`idx.fundamentals.v1` data),
 `technical`, `returns` (one `Performance`), `dividends` (`ttm_total`,
 `ttm_payments`, `ttm_yield_pct`, `consecutive_years`, `last`,
 `payments_on_record`), `ownership` (`as_of`, `listed_pct`, `foreign_pct`,

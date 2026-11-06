@@ -52,6 +52,11 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK",
         "yahoo/quote_v7_bbca_bbri_tlkm.json",
     );
+    seed(
+        dir.path(),
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=WIKA.JK,KAEF.JK,BBCA.JK",
+        "yahoo/quote_v7_wika_suspended_kaef_bbca.json",
+    );
     let mut child = spawn_server(dir.path());
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -192,6 +197,22 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     assert_eq!(body["stale"], true);
     assert_eq!(body["stale_reason"], "offline");
     assert_eq!(body["data"].as_array().unwrap().len(), 3);
+
+    // WIKA, suspended since February 2025, is behind the latest session.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "idx_quote", "arguments": {"symbols": "WIKA,KAEF,BBCA"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let body = tool_body(&next());
+    let rows = body["data"].as_array().unwrap();
+    assert_eq!(rows[0]["symbol"], "WIKA");
+    assert_eq!(rows[0]["behind_session"], true);
+    assert!(rows.iter().all(|r| r["behind_session"].is_boolean()));
+    assert!(quote["description"]
+        .as_str()
+        .unwrap()
+        .contains("behind_session"));
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

@@ -672,6 +672,86 @@ fn stale_copies_say_why() {
 }
 
 #[test]
+fn quotes_flag_the_latest_session() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=WIKA.JK,KAEF.JK,BBCA.JK",
+        "yahoo/quote_v7_wika_suspended_kaef_bbca.json",
+    );
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,^GSPC",
+        "yahoo/quote_v7_bbca_gspc.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "WIKA,KAEF,BBCA"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    // WIKA last traded on 2025-02-17; KAEF and BBCA on 2026-11-05, which is
+    // behind or not depending on the day the test runs.
+    assert_eq!(rows[0]["symbol"], "WIKA");
+    assert_eq!(rows[0]["behind_session"], true);
+    assert!(rows.iter().all(|r| r["behind_session"].is_boolean()), "{v}");
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "WIKA,KAEF,BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Behind the latest IDX session: WIKA (last trade 2025-02-17)",
+        ))
+        .stdout(predicate::str::contains(
+            "suspended, not traded since, or the source lags",
+        ));
+
+    // Not an IDX instrument: no flag either way.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA,^GSPC"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"][1]["symbol"], "^GSPC");
+    assert!(v["data"][1]["behind_session"].is_null(), "{v}");
+    assert!(v["data"][0]["behind_session"].is_boolean());
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "quote", "WIKA,KAEF,BBCA"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let header = csv.lines().next().unwrap();
+    assert!(
+        header.ends_with(",market_time,source,behind_session"),
+        "{header}"
+    );
+    assert!(
+        csv.lines().nth(1).unwrap().ends_with(",yahoo:quote,true"),
+        "{csv}"
+    );
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "quote"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("behind_session"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("behind_session"));
+}
+
+#[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();
     seed(

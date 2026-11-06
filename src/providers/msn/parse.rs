@@ -282,6 +282,7 @@ mod tests {
     const Q1: &str = include_str!("../../../tests/fixtures/msn/quotes_bbca.json");
     const Q3: &str = include_str!("../../../tests/fixtures/msn/quotes_bbca_bbri_tlkm.json");
     const QB: &str = include_str!("../../../tests/fixtures/msn/quotes_bbca_with_bogus_ids.json");
+    const QW: &str = include_str!("../../../tests/fixtures/msn/quotes_bbca_wika_kaef.json");
     const EQ_BBCA: &str = include_str!("../../../tests/fixtures/msn/equities_bbca.json");
     const EQ_TLKM: &str = include_str!("../../../tests/fixtures/msn/equities_tlkm.json");
     const EQ_404: &str = include_str!("../../../tests/fixtures/msn/equities_bogus_404.json");
@@ -302,6 +303,25 @@ mod tests {
             "XIDX row is not first for GOTO"
         );
         assert_eq!(parse_autosuggest(AS_ZZZZ, &sym("ZZZZ")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_suspended_stock_has_no_last_trade_so_no_session_flag() {
+        let q = parse_quotes(QW).unwrap();
+        let by = |s: &str| q.iter().find(|x| x.symbol.as_str() == s).unwrap();
+        let wika = by("WIKA");
+        assert_eq!((wika.price, wika.market_time), (None, None));
+        // Recorded before the 2026-11-06 open: the latest session is the 5th.
+        let fifth = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let sixth = fifth.succ_opt().unwrap();
+        assert_eq!(wika.behind(fifth), None, "unknown, not false");
+        assert_eq!(by("BBCA").behind(fifth), Some(false));
+        assert_eq!(
+            by("KAEF").market_time.unwrap().to_rfc3339(),
+            "2026-11-05T16:15:00+07:00"
+        );
+        // The same row read after the 6th's close is behind.
+        assert_eq!(by("KAEF").behind(sixth), Some(true));
     }
 
     #[test]

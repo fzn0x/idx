@@ -123,6 +123,17 @@ impl Symbol {
         self.0.starts_with('^')
     }
 
+    /// `true` when the symbol trades on IDX and so follows its sessions:
+    /// every plain code (a `.JK` listing such as `BBCA` or `IDX30`) and the
+    /// exchange's own indices (`^JKSE`, `^JKLQ45`). Other indices (`^GSPC`,
+    /// `^N225`) and Yahoo's currency or futures codes (`USDIDR=X`) do not.
+    pub fn trades_on_idx(&self) -> bool {
+        match self.0.strip_prefix('^') {
+            Some(index) => index.starts_with("JK"),
+            None => !self.0.contains('='),
+        }
+    }
+
     /// Parses `BBCA,BBRI TLKM` into unique symbols, preserving order.
     pub fn parse_list<I, S>(items: I) -> Result<Vec<Symbol>>
     where
@@ -212,6 +223,22 @@ pub struct Quote {
     pub market_time: Option<DateTime<FixedOffset>>,
     /// Which endpoint produced this row, e.g. `yahoo:quote` or `yahoo:chart`.
     pub source: String,
+    /// `true` when the last trade (`market_time`) is dated before the latest
+    /// IDX session that has ended (16:15 WIB; weekends and IDX holidays are
+    /// skipped): the stock is suspended or did not trade, or the source lags
+    /// the close. `null` when `market_time` is unknown or the symbol does not
+    /// trade on IDX (`^GSPC`). Computed when the quote is returned.
+    #[serde(default)]
+    pub behind_session: Option<bool>,
+}
+
+/// Whether a last trade at `last_trade` is dated (in WIB) before `latest`,
+/// the latest IDX session that has ended; `None` when the time is unknown.
+pub fn behind_session(
+    last_trade: Option<DateTime<FixedOffset>>,
+    latest: NaiveDate,
+) -> Option<bool> {
+    last_trade.map(|t| t.with_timezone(&wib()).date_naive() < latest)
 }
 
 impl Quote {
@@ -243,7 +270,16 @@ impl Quote {
             market_state: None,
             market_time: None,
             source: source.to_string(),
+            behind_session: None,
         }
+    }
+
+    /// [`behind_session`] for this quote; `None` off IDX.
+    pub fn behind(&self, latest: NaiveDate) -> Option<bool> {
+        if !self.symbol.trades_on_idx() {
+            return None;
+        }
+        behind_session(self.market_time, latest)
     }
 }
 
@@ -480,6 +516,38 @@ mod tests {
         assert_eq!(Symbol::from_yahoo("^JKSE").as_str(), "^JKSE");
         assert!(Symbol::parse("^").is_err());
         assert!(!Symbol::parse("BBCA").unwrap().is_index());
+    }
+
+    #[test]
+    fn behind_session_rule() {
+        let latest = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
+        let t = |s: &str| Some(DateTime::parse_from_rfc3339(s).unwrap());
+        let quote = |sym: &str, at: Option<DateTime<FixedOffset>>| {
+            let mut q = Quote::empty(Symbol::from_yahoo(sym), "t");
+            q.market_time = at;
+            q.behind(latest)
+        };
+        // BBCA's last close, read the next morning after the next close.
+        assert_eq!(quote("BBCA", t("2026-11-05T16:14:43+07:00")), Some(true));
+        assert_eq!(quote("BBCA", t("2026-11-06T16:14:43+07:00")), Some(false));
+        // UTC stamps compare by their WIB date.
+        assert_eq!(quote("BBCA", t("2026-11-06T09:15:00Z")), Some(false));
+        assert_eq!(quote("BBCA", t("2026-11-05T17:30:00Z")), Some(false));
+        assert_eq!(quote("BBCA", t("2026-11-05T16:59:59Z")), Some(true));
+        // WIKA, suspended since February 2025.
+        assert_eq!(quote("WIKA", t("2025-02-17T16:14:58+07:00")), Some(true));
+        assert_eq!(quote("BBCA", None), None, "no last trade time");
+        assert_eq!(quote("^JKSE", t("2026-11-05T16:00:04+07:00")), Some(true));
+        assert_eq!(
+            quote("IDX30.JK", t("2026-11-06T16:00:04+07:00")),
+            Some(false)
+        );
+        assert_eq!(quote("^GSPC", t("2025-01-02T04:00:00+07:00")), None);
+        assert_eq!(quote("^N225", t("2025-01-02T13:45:00+07:00")), None);
+        assert_eq!(quote("USDIDR=X", t("2025-01-02T13:45:00+07:00")), None);
+        assert!(Symbol::parse("^jklq45").unwrap().trades_on_idx());
+        assert!(!Symbol::from_yahoo("^STI").trades_on_idx());
+        assert_eq!(behind_session(None, latest), None);
     }
 
     #[test]
