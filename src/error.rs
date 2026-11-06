@@ -91,11 +91,12 @@ impl From<serde_json::Error> for IdxError {
 impl From<reqwest::Error> for IdxError {
     /// reqwest's own message ("error sending request for url (...)") hides
     /// the cause; name a timeout as such and append the innermost cause.
+    /// URLs lose their query string: it can hold a session crumb or a key.
     fn from(e: reqwest::Error) -> Self {
         let url = e.url().map(|u| u.as_str().to_string());
         if e.is_timeout() {
             return IdxError::Network(match url {
-                Some(u) => format!("timed out waiting for {u}"),
+                Some(u) => format!("timed out waiting for {}", crate::http::redact_urls(&u)),
                 None => "timed out".into(),
             });
         }
@@ -105,12 +106,40 @@ impl From<reqwest::Error> for IdxError {
         }
         let msg = e.to_string();
         let root = cause.to_string();
-        if msg.contains(&root) {
-            IdxError::Network(msg)
+        let text = if msg.contains(&root) {
+            msg
         } else {
-            IdxError::Network(format!("{msg}: {root}"))
-        }
+            format!("{msg}: {root}")
+        };
+        IdxError::Network(crate::http::redact_urls(&text))
     }
 }
 
 pub type Result<T, E = IdxError> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn network_errors_leave_the_query_string_out() {
+        // An https-only client refuses an http URL before any connection.
+        let e = reqwest::Client::builder()
+            .https_only(true)
+            .build()
+            .unwrap()
+            .get("http://x.test/v7/finance/quote?symbols=BBCA.JK&crumb=SECRET")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("crumb=SECRET"), "{e}");
+        let ours = IdxError::from(e);
+        assert_eq!(ours.exit_code(), 3);
+        let text = ours.to_string();
+        assert!(text.contains("http://x.test/v7/finance/quote"), "{text}");
+        assert!(
+            !text.contains("SECRET") && !text.contains("crumb"),
+            "{text}"
+        );
+    }
+}

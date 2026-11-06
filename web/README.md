@@ -55,8 +55,10 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   (headless Chrome, Node 22+); re-run it after editing either source.
   `test/seo.test.mjs` checks the tags against the files.
 - The cron (`* * * * *`) refreshes the whole quote board as one JSON row and
-  the IHSG tape every minute in IDX hours, every 15 minutes otherwise, which
-  keeps writes far inside D1's free tier.
+  the IHSG tape every minute in IDX hours, every 15 minutes otherwise (IDX
+  holidays count as closed), which keeps writes far inside D1's free tier. A
+  board older than that cadence allows (10 minutes open, 35 closed) is served
+  as `stale` with a warning giving its time.
 - Secrets: `ADMIN_TOKEN` (`wrangler secret put`) lets a maintainer force a
   refresh with `/api/refresh?token=…`.
 - Ownership on the web: `src/ownership-sync.js` loads the KSEI register from

@@ -88,11 +88,7 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
 }
 
 fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
-    let mut s = Sourced::fresh(data, NAME);
-    s.cached = f.cached;
-    s.stale = f.stale;
-    s.fetched_at = f.fetched_at;
-    s
+    Sourced::from_fetched(data, NAME, f)
 }
 
 fn ymd(d: NaiveDate) -> String {

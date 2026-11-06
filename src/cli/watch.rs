@@ -150,7 +150,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
         }
         None => {
             let symbols = non_empty(symbols, &file)?;
-            let result = ctx.provider.quotes(&symbols).await?;
+            let result = service::quotes(ctx.provider.as_ref(), &symbols).await?;
             emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
         }
     }

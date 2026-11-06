@@ -208,7 +208,8 @@ impl Context {
 }
 
 /// Prints warnings and the stale notice to stderr (table and csv modes;
-/// JSON carries them in the envelope).
+/// JSON carries them in the envelope). The notice says when the copy was
+/// fetched; after a failed fetch the cause is in the warnings above it.
 pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
     if ctx.json() {
         return;
@@ -216,9 +217,26 @@ pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
     for w in &s.warnings {
         output::print_stderr(&format!("warning: {w}"));
     }
-    if s.stale {
-        output::print_stderr("warning: showing stale cached data");
+    if let Some(line) = stale_notice(s) {
+        output::print_stderr(&line);
     }
+}
+
+fn stale_notice<T>(s: &Sourced<T>) -> Option<String> {
+    if !s.stale {
+        return None;
+    }
+    let when = s
+        .fetched_at
+        .with_timezone(&crate::model::wib())
+        .format("%Y-%m-%d %H:%M WIB");
+    let why = match s.stale_reason {
+        Some(crate::model::StaleReason::Offline) => " (--offline)",
+        _ => "",
+    };
+    Some(format!(
+        "warning: showing stale cached data from {when}{why}"
+    ))
 }
 
 /// Writes a result in the chosen format: the JSON envelope, CSV rows of the

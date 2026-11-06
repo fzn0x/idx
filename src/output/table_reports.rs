@@ -857,9 +857,16 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
                 .unwrap_or_else(|| "state unknown".into()),
             m.as_of
                 .map(|t| format!(" · last trade {}", t.format("%Y-%m-%d %H:%M WIB")))
-                .unwrap_or_default()
+                .unwrap_or_default(),
         )),
         None => out.push_str("Index quote unavailable\n"),
+    }
+    // The board's own flag, so it shows even without the index quote.
+    if let (Some(true), Some(t)) = (m.behind_session, m.as_of) {
+        out.push_str(&format!(
+            "Behind the latest IDX session: the newest quote is from {}\n",
+            t.format("%Y-%m-%d")
+        ));
     }
     out.push_str(&format!(
         "Breadth · {} advancing · {} declining · {} unchanged · {} of {} quoted · turnover {}\n",
@@ -1303,6 +1310,55 @@ mod tests {
         let s = fundamentals(&fd, false);
         assert!(!s.contains('*'), "{s}");
         assert!(!s.contains("USD"), "{s}");
+    }
+
+    #[test]
+    fn market_line_says_when_the_board_lags_the_session() {
+        let ix = crate::model::MarketRow {
+            symbol: Symbol::parse("^JKSE").unwrap(),
+            name: Some("IDX COMPOSITE".into()),
+            price: Some(8_000.0),
+            change: Some(10.0),
+            change_pct: Some(0.13),
+            volume: None,
+            value: None,
+            market_cap: None,
+        };
+        let mut m = MarketOverview {
+            as_of: Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T16:14:59+07:00").unwrap()),
+            market_state: Some("PREPRE".into()),
+            behind_session: Some(true),
+            index: Some(ix),
+            universe: 1,
+            quoted: 0,
+            advancing: 0,
+            declining: 0,
+            unchanged: 0,
+            turnover: 0.0,
+            liquid_min_market_cap: 1e12,
+            gainers: vec![],
+            losers: vec![],
+            most_active: vec![],
+            heavyweights: vec![],
+        };
+        let s = market(&m, false);
+        assert!(
+            s.contains(
+                "PREPRE · last trade 2026-11-05 16:14 WIB\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
+            "{s}"
+        );
+        // Without the index quote the board still says it lags.
+        m.index = None;
+        let s = market(&m, false);
+        assert!(
+            s.starts_with(
+                "Index quote unavailable\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
+            "{s}"
+        );
+        m.behind_session = Some(false);
+        assert!(!market(&m, false).contains("Behind the latest"));
     }
 
     #[test]

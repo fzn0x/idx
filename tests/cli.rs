@@ -669,6 +669,243 @@ fn seed(cache: &std::path::Path, url: &str, fixture: &str) {
     idx::cache::Cache::new(cache).put(url, 200, &body).unwrap();
 }
 
+const V7_BBCA_BBRI_TLKM: &str =
+    "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK";
+
+#[test]
+fn stale_copies_say_why() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        V7_BBCA_BBRI_TLKM,
+        "yahoo/quote_v7_bbca_bbri_tlkm.json",
+    );
+    // Fresh: no reason, no notice.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["stale"], false);
+    assert!(v.get("stale_reason").is_none(), "{v}");
+
+    // Older than the TTL and offline: stale, and why.
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_QUOTE_TTL_SECS", "0")
+        .args(["-o", "json", "stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "JSON mode keeps notices in the envelope"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["cached"], true);
+    assert_eq!(v["stale"], true);
+    assert_eq!(v["stale_reason"], "offline");
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUOTE_TTL_SECS", "0")
+        .args(["stocks", "quote", "BBCA,BBRI,TLKM"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: showing stale cached data from 20",
+        ))
+        .stderr(predicate::str::contains(" WIB (--offline)"));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "quotes"])
+        .output()
+        .unwrap();
+    let schema = String::from_utf8(out.stdout).unwrap();
+    assert!(schema.contains("stale_reason") && schema.contains("fetch_failed"));
+}
+
+/// A loopback proxy address that refuses connections: a port that was just
+/// free. Pointing HTTPS_PROXY at it makes every live fetch fail at once,
+/// without anything leaving the machine.
+fn refused_proxy() -> String {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A Yahoo session with a recognisable crumb and an hour-old v7 copy for
+/// BBCA,BBRI,TLKM, so a failed live fetch has to fall back to the copy.
+fn seed_failed_fetch(cache: &std::path::Path) {
+    let c = idx::cache::Cache::new(cache);
+    c.put_json(
+        "yahoo:session",
+        &serde_json::json!({
+            "cookie": "A3=SECRETCOOKIE",
+            "crumb": "SECRETCRUMB",
+            "created_at": chrono::Utc::now(),
+        }),
+    )
+    .unwrap();
+    let body = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/yahoo/quote_v7_bbca_bbri_tlkm.json"),
+    )
+    .unwrap();
+    c.put_at(
+        V7_BBCA_BBRI_TLKM,
+        200,
+        &body,
+        chrono::Utc::now() - chrono::Duration::hours(1),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_failed_fetch_serves_the_copy_and_says_why_without_the_crumb() {
+    let sb = sandbox();
+    seed_failed_fetch(&sb.cache);
+    let proxy = refused_proxy();
+    // Online, but every request goes to a proxy that refuses it.
+    let online = || {
+        let mut cmd = idx(&sb.cache, &sb.config);
+        cmd.env_remove("IDX_OFFLINE")
+            .env("HTTPS_PROXY", &proxy)
+            .env("HTTP_PROXY", &proxy)
+            .env("ALL_PROXY", &proxy);
+        cmd
+    };
+    let leaks = |text: &str| text.contains("crumb") || text.contains("SECRET");
+
+    let out = online()
+        .args(["-o", "json", "stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.is_empty(), "no default-level log line: {stderr}");
+    assert!(!leaks(&stdout), "{stdout}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["cached"], true);
+    assert_eq!(v["stale"], true);
+    assert_eq!(v["stale_reason"], "fetch_failed");
+    assert_eq!(v["data"].as_array().unwrap().len(), 3);
+    let warnings = v["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{v}");
+    let w = warnings[0].as_str().unwrap();
+    assert!(
+        w.starts_with(
+            "live fetch failed (error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote): "
+        ) && w.ends_with("); showing cached copy"),
+        "{w}"
+    );
+
+    // Table mode: the cause and the stale notice on stderr, no crumb.
+    let out = online()
+        .args(["stocks", "quote", "BBCA,BBRI,TLKM"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("BBCA"), "{stdout}");
+    assert!(
+        stderr.contains("warning: live fetch failed (error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote): "),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: showing stale cached data from 20") && stderr.contains(" WIB\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("--offline"), "{stderr}");
+    assert!(!leaks(&stdout) && !leaks(&stderr), "{stdout}\n{stderr}");
+}
+
+#[test]
+fn quotes_flag_the_latest_session() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=WIKA.JK,KAEF.JK,BBCA.JK",
+        "yahoo/quote_v7_wika_suspended_kaef_bbca.json",
+    );
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,^GSPC",
+        "yahoo/quote_v7_bbca_gspc.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "WIKA,KAEF,BBCA"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    // WIKA last traded on 2025-02-17; KAEF and BBCA on 2026-11-05, which is
+    // behind or not depending on the day the test runs.
+    assert_eq!(rows[0]["symbol"], "WIKA");
+    assert_eq!(rows[0]["behind_session"], true);
+    assert!(rows.iter().all(|r| r["behind_session"].is_boolean()), "{v}");
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "WIKA,KAEF,BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Behind the latest IDX session: WIKA (last trade 2025-02-17)",
+        ))
+        .stdout(predicate::str::contains(
+            "suspended, not traded since, or the source lags",
+        ));
+
+    // Not an IDX instrument: no flag either way.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA,^GSPC"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"][1]["symbol"], "^GSPC");
+    assert!(v["data"][1]["behind_session"].is_null(), "{v}");
+    assert!(v["data"][0]["behind_session"].is_boolean());
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "quote", "WIKA,KAEF,BBCA"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let header = csv.lines().next().unwrap();
+    assert!(
+        header.ends_with(",market_time,source,behind_session"),
+        "{header}"
+    );
+    assert!(
+        csv.lines().nth(1).unwrap().ends_with(",yahoo:quote,true"),
+        "{csv}"
+    );
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "quote"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("behind_session"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("behind_session"));
+}
+
 #[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();

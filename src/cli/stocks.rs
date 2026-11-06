@@ -33,7 +33,7 @@ pub enum Statement {
 pub enum StocksCmd {
     /// Delayed quote for one or more tickers (comma or space separated).
     #[command(
-        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri"
+        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n\nRows carry behind_session: true when the last trade is dated before the latest IDX session that has ended (16:15 WIB; holidays skipped): suspended, not traded since, or the source lags. The table lists such rows under it."
     )]
     Quote {
         /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional.
@@ -376,7 +376,7 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
 
 async fn quote(ctx: &Context, raw: &[String]) -> Result<()> {
     let symbols = Symbol::parse_list(raw)?;
-    let result = ctx.provider.quotes(&symbols).await?;
+    let result = service::quotes(ctx.provider.as_ref(), &symbols).await?;
     emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
 }
 

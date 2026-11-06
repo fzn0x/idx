@@ -72,8 +72,17 @@ a TTL applies immediately.
 
 - `--offline`: serve whatever is cached, fresh or stale; exit 5 on a miss.
 - `--no-cache`: always fetch; the result is still written for later.
-- Network failure with a stale entry present: the stale entry is served and
-  `stale: true` is set (table mode prints a warning to stderr).
+- `--offline` with an entry older than its TTL: the entry is served with
+  `stale: true` and `stale_reason: "offline"`.
+- Network failure with a stale entry present: the stale entry is served with
+  `stale: true`, `stale_reason: "fetch_failed"` and a warning naming the
+  failure (`live fetch failed (...); showing cached copy`). Table mode prints
+  the warnings and `warning: showing stale cached data from <fetch time> WIB`
+  to stderr.
+- Network error text and warnings never include a URL's query string, and
+  cache keys never hold a session token, so the Yahoo crumb and the MSN key
+  stay out of every message; `-vv` debug logging still prints full request
+  URLs.
 - News feeds: a feed that times out or refuses the connection is not asked
   again for five minutes. Until then its cached copy is served with a warning
   naming the failure, or the warning alone when nothing is cached, so one

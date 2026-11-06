@@ -303,7 +303,7 @@ local agents can share one process and one cache this way.
 | `idx_calendar` | `date?` or `from?`/`to?`, `days?` (default 14), `symbol?`, `types?` (`all`, or `dividend,rights,...`) | `idx.calendar.v1`: dividend and rights dates, RUPS, public exposes, listings (bonds and buybacks with `all`) |
 | `idx_holidays` | `year?` (0 = every year), `upcoming?` | `idx.holidays.v1`: trading holidays, trading days, today and the next trading day (bundled, offline) |
 | `idx_members` | `search?` | `idx.members.v1`: exchange members (broker codes) with licences |
-| `idx_quote` | `symbols` ("BBCA,BBRI"; `^JKSE` is IHSG) | `idx.quotes.v1` |
+| `idx_quote` | `symbols` ("BBCA,BBRI"; `^JKSE` is IHSG) | `idx.quotes.v1`; each row's `behind_session` flags a last trade dated before the latest IDX session (suspended, not traded, or the source lags) |
 | `idx_history` | `symbol`, `period?`, `interval?`, `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
 | `idx_profile` | `symbol` | `idx.profile.v1` |
 | `idx_financials` | `symbol`, `period?` (`annual` \| `quarterly` \| `ttm`) | `idx.financials.v1` |
@@ -369,6 +369,10 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
   carries only protocol frames.
 - Responses are cached exactly like the CLI, so an agent calling
   `idx_quote` twice within the quote TTL hits the network once.
+- A cached copy older than its TTL is served when the source fails (or the
+  server runs with `--offline`): the envelope then has `stale: true`,
+  `stale_reason` (`fetch_failed` or `offline`) and, after a failure, a warning
+  naming it.
 - The server exits cleanly when the client closes stdin.
 - Verdicts and signals are heuristics; the tool descriptions and the server
   instructions say so, and so should any agent that repeats them.

@@ -49,7 +49,8 @@ src/
   universe.rs        bundled data/universe.csv (IDX issuers) + ownership-db issuers; IDX_UNIVERSE override
   brokers.rs         bundled data/brokers.csv (IDX exchange members: code -> name)
   holidays.rs        bundled data/holidays.csv (trading holidays, transcribed from IDX's yearly image);
-                     is_trading_day / next / last; IDX_HOLIDAYS override
+                     is_trading_day / next / last / latest_session (16:15 WIB close, behind_session);
+                     IDX_HOLIDAYS override
     news/            Kontan + CNBC Indonesia RSS feeds through the Fetcher (rss crate)
   service.rs         provider call + analysis, shared by cli/ and mcp/ (fundamentals, technical, compare,
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,

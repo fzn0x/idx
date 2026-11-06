@@ -105,14 +105,11 @@ pub async fn broker_summary(
         }
         parse::Page::Summary(p) => p,
     };
-    let mut s = Sourced::fresh(
+    Ok(Sourced::from_fetched(
         p.into_summary(symbol.clone(), from, to, investor, board),
         NAME,
-    );
-    s.cached = f.cached;
-    s.stale = f.stale;
-    s.fetched_at = f.fetched_at;
-    Ok(s)
+        &f,
+    ))
 }
 
 /// One HTML fragment, retrying the spurious 404 stretches; any other
@@ -177,7 +174,7 @@ pub async fn corporate_actions(
         }
         actions::Page::Actions(p) => p,
     };
-    let mut s = Sourced::fresh(
+    Ok(Sourced::from_fetched(
         crate::model::CorporateActions {
             symbol: symbol.clone(),
             name: None,
@@ -187,11 +184,8 @@ pub async fn corporate_actions(
             warrants_rights: p.warrants_rights,
         },
         NAME,
-    );
-    s.cached = f.cached;
-    s.stale = f.stale;
-    s.fetched_at = f.fetched_at;
-    Ok(s)
+        &f,
+    ))
 }
 
 #[cfg(test)]

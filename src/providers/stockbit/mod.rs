@@ -141,14 +141,7 @@ impl Stockbit {
     }
 
     fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
-        Sourced {
-            data,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        }
+        Sourced::from_fetched(data, NAME, f)
     }
 
     fn orderbook_url(symbol: &Symbol) -> String {

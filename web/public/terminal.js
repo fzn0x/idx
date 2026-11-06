@@ -118,6 +118,8 @@ const R = {
       { h: "High", f: (r) => fmt.price(r.day_high) }, { h: "Low", f: (r) => fmt.price(r.day_low) }, { h: "Volume", f: (r) => fmt.int(r.volume) },
       { h: "Mkt Cap", f: (r) => fmt.compact(r.market_cap) }, { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
     ], d)));
+    const behind = d.filter((r) => r.behind_session === true).map((r) => (r.market_time ? `${r.symbol} (last trade ${r.market_time.slice(0, 10)})` : r.symbol));
+    if (behind.length) frag.append(el("p", { class: "warn", text: `Behind the latest IDX session: ${behind.join(", ")} · suspended, not traded since, or the source lags` }));
     if (d.length === 1) frag.append(priceChart(d[0]));
     return frag;
   },
@@ -522,6 +524,7 @@ const R = {
   market(m) {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wibAt(m.refreshed_at)} · ${boardWords(m)}` }));
+    if (m.behind_session) frag.append(el("p", { class: "warn", text: `Behind the latest IDX session: the newest quote on the board is from ${m.as_of.slice(0, 10)}` }));
     if (m.index_tape.length > 1) frag.append(sparkline(m.index_tape, { cls: "spark" }));
     const grid = el("div", { class: "three" });
     const mk = (title, rows, valueCol) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Price", f: (r) => fmt.price(r.price) }, valueCol], rows))]);

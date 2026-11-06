@@ -13,13 +13,14 @@ use crate::analysis::bandar::{self as bd, Preset};
 use crate::analysis::screen::{self as scr, Filter, Key};
 use crate::brokers;
 use crate::error::{IdxError, Result};
+use crate::holidays;
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
     BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Fundamentals,
     History, Interval, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
-    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport, Symbol,
-    Technical,
+    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport,
+    StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
@@ -46,14 +47,7 @@ pub async fn technical(
     let Some(report) = analysis::technical::analyse(&hist.data) else {
         return Err(IdxError::NotFound(format!("no daily candles for {symbol}")));
     };
-    Ok(Sourced {
-        data: report,
-        provider: hist.provider,
-        cached: hist.cached,
-        stale: hist.stale,
-        fetched_at: hist.fetched_at,
-        warnings: hist.warnings,
-    })
+    Ok(hist.map(|_| report))
 }
 
 /// Fundamentals for several symbols, fetched concurrently. Symbols that fail
@@ -171,6 +165,8 @@ pub async fn screen(
     let need_fund =
         opts.with_fundamentals || !fund_filters.is_empty() || opts.sort.needs_fundamentals();
     let mut checked = 0usize;
+    let mut failed_live = 0usize;
+    let mut cause: Option<String> = None;
     let mut capped = false;
     if need_fund && !rows.is_empty() {
         scr::sort_rows(&mut rows, Key::Mcap, true);
@@ -192,8 +188,19 @@ pub async fn screen(
             match r {
                 Ok(f) => {
                     checked += 1;
-                    out.cached &= f.cached;
-                    out.stale |= f.stale;
+                    // Freshness only: one summary line below instead of a
+                    // failure warning per company.
+                    out.absorb_freshness(&f);
+                    if f.stale_reason == Some(StaleReason::FetchFailed) {
+                        failed_live += 1;
+                        if cause.is_none() {
+                            cause = f
+                                .warnings
+                                .iter()
+                                .find_map(|w| crate::providers::fetch_failed_cause(w))
+                                .map(str::to_string);
+                        }
+                    }
                     if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
                         scr::apply_fundamentals(row, &f.data);
                     }
@@ -202,6 +209,12 @@ pub async fn screen(
             }
         }
         rows.retain(|r| scr::matches(r, &fund_filters));
+        if failed_live > 0 {
+            out.warnings.push(format!(
+                "fundamentals for {failed_live} of {checked} companies are stale cached copies: the live fetch failed{}",
+                cause.map(|c| format!(" ({c})")).unwrap_or_default()
+            ));
+        }
         if capped {
             out.warnings.push(format!(
                 "fundamentals were fetched for the {cap} largest companies that passed the quote filters; raise --max-fundamentals to widen"
@@ -226,6 +239,22 @@ pub async fn screen(
         total_matches: total,
         rows,
     }))
+}
+
+/// Quotes with `behind_session` set against the latest IDX session that has
+/// ended. The flag is computed on every call, never cached.
+pub async fn quotes(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+    let mut s = p.quotes(symbols).await?;
+    mark_behind(&mut s.data, holidays::latest_session(chrono::Utc::now()));
+    Ok(s)
+}
+
+/// Sets each quote's `behind_session` against `latest`, the latest IDX
+/// session that has ended ([`holidays::latest_session`]).
+pub fn mark_behind(quotes: &mut [Quote], latest: NaiveDate) {
+    for q in quotes {
+        q.behind_session = q.behind(latest);
+    }
 }
 
 /// Quotes for a whole universe in batches. Batches that fail with NotFound
@@ -334,6 +363,10 @@ pub async fn market_overview(
     let data = MarketOverview {
         as_of,
         market_state,
+        behind_session: crate::model::behind_session(
+            as_of,
+            holidays::latest_session(chrono::Utc::now()),
+        ),
         index: index_row,
         universe: symbols.len(),
         quoted: rows.len(),
@@ -487,7 +520,7 @@ pub async fn brief(
 ) -> Result<Sourced<Brief>> {
     let bench = Symbol::parse("^JKSE")?;
     let (quote, fund, tech, rets, divs, headlines) = futures::join!(
-        p.quotes(std::slice::from_ref(symbol)),
+        quotes(p, std::slice::from_ref(symbol)),
         fundamentals(p, symbol),
         technical(p, symbol, Period::Y1),
         returns(p, std::slice::from_ref(symbol), Some(&bench)),
@@ -603,6 +636,12 @@ pub async fn brief(
                 q.market_cap
                     .map(|m| format!(", market cap {}", crate::output::format::compact(Some(m))))
                     .unwrap_or_default()
+            ));
+        }
+        if let (Some(true), Some(t)) = (q.behind_session, q.market_time) {
+            key_points.push(format!(
+                "Last trade {}, before the latest IDX session: suspended, not traded since, or the source lags",
+                t.with_timezone(&crate::model::wib()).format("%Y-%m-%d")
             ));
         }
     }
@@ -751,7 +790,8 @@ pub async fn news(
     company_only: bool,
 ) -> Result<Sourced<NewsReport>> {
     let feeds = newsfeed::select(sources)?;
-    let (items, warnings, cached, stale) = newsfeed::fetch(fetcher, &feeds).await?;
+    let batch = newsfeed::fetch(fetcher, &feeds).await?;
+    let items = batch.items;
     let scanned = items.len();
     let matched_name = symbol.and_then(|s| {
         universe
@@ -778,9 +818,11 @@ pub async fn news(
         },
         newsfeed::NAME,
     );
-    s.cached = cached;
-    s.stale = stale;
-    s.warnings = warnings;
+    s.cached = batch.cached;
+    s.stale = batch.stale_reason.is_some();
+    s.stale_reason = batch.stale_reason;
+    s.fetched_at = batch.fetched_at;
+    s.warnings = batch.warnings;
     Ok(s)
 }
 
@@ -1840,6 +1882,136 @@ mod tests {
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
+
+    /// Fresh quotes; fundamentals only as stale copies after a failed fetch.
+    struct StaleFundamentals;
+
+    #[async_trait]
+    impl Provider for StaleFundamentals {
+        fn name(&self) -> &'static str {
+            "stale"
+        }
+        async fn quotes(&self, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let rows = symbols
+                .iter()
+                .map(|s| {
+                    let mut q = Quote::empty(s.clone(), "stale");
+                    q.price = Some(1_000.0);
+                    q.market_cap = Some(1e13);
+                    q
+                })
+                .collect();
+            Ok(Sourced::fresh(rows, "stale"))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+        async fn fundamentals(&self, s: &Symbol) -> Result<Sourced<Fundamentals>> {
+            let mut out = Sourced::fresh(Fundamentals::empty(s.clone(), "stale"), "stale");
+            out.cached = true;
+            out.stale = true;
+            out.stale_reason = Some(StaleReason::FetchFailed);
+            out.warnings = vec![crate::providers::fetch_failed_warning(
+                "error sending request for url (https://x.test/q): refused",
+            )];
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn screen_on_stale_fundamentals_names_the_failure_once() {
+        let universe: Vec<Issuer> = syms(&["BBCA", "BBRI"])
+            .into_iter()
+            .map(|symbol| Issuer { symbol, name: None })
+            .collect();
+        let opts = ScreenOptions {
+            filters: vec![],
+            sort: Key::Mcap,
+            descending: true,
+            limit: 0,
+            max_fundamentals: 10,
+            with_fundamentals: true,
+        };
+        let got = screen(&StaleFundamentals, &universe, &opts).await.unwrap();
+        assert_eq!(got.data.fundamentals_checked, 2);
+        // Live quotes, cached fundamentals: not all cached, but stale.
+        assert!(got.stale && !got.cached);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            got.warnings,
+            ["fundamentals for 2 of 2 companies are stale cached copies: the live fetch failed (error sending request for url (https://x.test/q): refused)"]
+        );
+    }
+    /// Quotes with fixed last-trade times, whatever is asked.
+    struct Stamped;
+
+    #[async_trait]
+    impl Provider for Stamped {
+        fn name(&self) -> &'static str {
+            "stamped"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let q = |sym: &str, at: Option<&str>| {
+                let mut q = Quote::empty(Symbol::from_yahoo(sym), "stamped");
+                q.market_time = at.map(|t| chrono::DateTime::parse_from_rfc3339(t).unwrap());
+                q
+            };
+            Ok(Sourced::fresh(
+                vec![
+                    q("WIKA.JK", Some("2025-02-17T16:14:58+07:00")),
+                    q("^GSPC", Some("2025-02-17T04:00:00+07:00")),
+                    q("BBCA.JK", None),
+                    q("BBRI.JK", Some("2099-01-02T16:00:00+07:00")),
+                ],
+                "stamped",
+            ))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn quotes_mark_the_session() {
+        // Holds on any run date: 2025-02-17 is past, 2099 is not.
+        let got = quotes(&Stamped, &syms(&["WIKA"])).await.unwrap();
+        let flags: Vec<Option<bool>> = got.data.iter().map(|q| q.behind_session).collect();
+        assert_eq!(flags, [Some(true), None, None, Some(false)]);
+        // Against a fixed session: the WIB date decides, not the instant.
+        let mut rows = got.data;
+        rows[3].market_time =
+            Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T17:30:00Z").unwrap());
+        mark_behind(&mut rows, NaiveDate::from_ymd_opt(2026, 11, 6).unwrap());
+        assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
+    }
+
+    #[tokio::test]
+    async fn cached_news_keeps_the_original_fetch_time() {
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let at = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let kontan = include_str!("../tests/fixtures/news/kontan_investasi.xml");
+        let cnbc = include_str!("../tests/fixtures/news/cnbc_market_excerpt.xml");
+        for f in newsfeed::select(&[]).unwrap() {
+            let body = if f.url.contains("kontan") {
+                kontan
+            } else {
+                cnbc
+            };
+            cache.put_at(f.url, 200, body, at).unwrap();
+        }
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache,
+            CacheMode::Normal,
+        ));
+        let n = news(&fetcher, &[], None, &[], 0, false).await.unwrap();
+        assert!(n.cached && !n.stale && n.stale_reason.is_none());
+        assert_eq!(n.fetched_at, at, "not the time of this call");
+    }
+
     mod broker {
         use super::super::*;
         use crate::cache::Cache;

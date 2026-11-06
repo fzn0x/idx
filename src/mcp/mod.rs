@@ -55,8 +55,11 @@ const INSTRUCTIONS: &str = "\
 idx: Indonesian stock market (IDX / IHSG) data and analysis from free public sources.
 Tickers are IDX codes such as BBCA, BBRI, TLKM (no .JK suffix needed).
 Every tool returns the same JSON envelope as the `idx -o json` CLI:
-{schema, provider, fetched_at, cached, stale, warnings?, data}. Fields the source did
-not return are null; nothing is estimated. Prices are delayed as published.
+{schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data}. Fields the
+source did not return are null; nothing is estimated. Prices are delayed as published.
+stale=true means a cached copy older than its TTL was served: stale_reason is offline
+(the server runs with --offline) or fetch_failed (the source failed; a warning names
+the failure).
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
 means the ticker is unknown, offline_miss means --offline with nothing cached.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
@@ -545,7 +548,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_quote",
-        description = "Delayed quotes for one or more IDX tickers: price, change, previous close, OHLC, volume, market cap, P/E, dividend yield, 52-week range. Returns the idx.quotes.v1 envelope; unknown tickers are listed in warnings."
+        description = "Delayed quotes for one or more IDX tickers: price, change, previous close, OHLC, volume, market cap, P/E, dividend yield, 52-week range and market_time (last trade, WIB). behind_session is true when that last trade is dated before the latest IDX session that has ended (IDX holidays are not counted): the stock is suspended or did not trade, or the source lags the close; null when the time is unknown or the symbol does not trade on IDX. Returns the idx.quotes.v1 envelope; unknown tickers are listed in warnings."
     )]
     async fn quote(
         &self,
@@ -554,7 +557,10 @@ impl IdxServer {
         finish(
             async {
                 let symbols = Symbol::parse_list([a.symbols.as_str()])?;
-                ok(SCHEMA_QUOTES, self.provider.quotes(&symbols).await?)
+                ok(
+                    SCHEMA_QUOTES,
+                    service::quotes(self.provider.as_ref(), &symbols).await?,
+                )
             }
             .await,
         )

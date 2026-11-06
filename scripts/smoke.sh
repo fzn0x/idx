@@ -50,6 +50,14 @@ expect "$TMP/e.txt" "not found" "unknown symbol message"
 
 "$IDX" --offline -o json stocks quote BBCA >"$TMP/off.json" || fail "offline cached quote"
 expect "$TMP/off.json" '"cached": true' "offline served from cache"
+expect "$TMP/q.json" '"behind_session": ' "quote json flags the session"
+IDX_QUOTE_TTL_SECS=0 "$IDX" --offline -o json stocks quote BBCA >"$TMP/old.json" || fail "offline stale quote"
+expect "$TMP/old.json" '"stale_reason": "offline"' "offline stale copy says why"
+# A refused connection (closed local port as proxy): the stale copy names the failure, never the crumb.
+HTTPS_PROXY=http://127.0.0.1:9 IDX_QUOTE_TTL_SECS=0 "$IDX" -o json stocks quote BBCA >"$TMP/down.json" 2>"$TMP/down.err" || fail "stale quote after a failed fetch"
+expect "$TMP/down.json" '"stale_reason": "fetch_failed"' "failed fetch says why"
+expect "$TMP/down.json" 'live fetch failed (' "failed fetch names the failure"
+grep -q 'crumb=' "$TMP/down.json" "$TMP/down.err" && fail "the Yahoo crumb leaked" || pass "no crumb in output or logs"
 
 "$IDX" -o json stocks quote BBCA,ZZZZ >"$TMP/p.json" || fail "partial quote"
 expect "$TMP/p.json" 'no data for ZZZZ' "partial quote lists the unknown symbol in warnings"

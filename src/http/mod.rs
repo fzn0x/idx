@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cache::Cache;
 use crate::error::{IdxError, Result};
+use crate::model::StaleReason;
 
 pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -242,9 +243,13 @@ pub struct Fetched {
     pub body: String,
     pub headers: Vec<(String, String)>,
     pub cached: bool,
+    /// `true` when a cached copy older than the TTL is served.
     pub stale: bool,
+    /// Why a stale copy is served; `None` exactly when `stale` is false.
+    pub stale_reason: Option<StaleReason>,
     pub fetched_at: DateTime<Utc>,
-    /// Why the live fetch failed when a stale copy is served instead.
+    /// Why the live fetch failed when a stale copy is served instead (URL
+    /// query strings removed).
     pub failure: Option<String>,
 }
 
@@ -356,7 +361,7 @@ impl Fetcher {
         if let Some(h) = &hit {
             if h.fresh {
                 tracing::debug!(key, age_secs = h.age.as_secs(), "cache hit");
-                return Ok(from_hit(h, false));
+                return Ok(from_hit(h, None));
             }
         }
 
@@ -368,7 +373,7 @@ impl Fetcher {
                         age_secs = h.age.as_secs(),
                         "offline: serving stale cache"
                     );
-                    Ok(from_hit(&h, true))
+                    Ok(from_hit(&h, Some(StaleReason::Offline)))
                 }
                 None => Err(IdxError::OfflineMiss(format!("no cached copy of {key}"))),
             };
@@ -382,13 +387,13 @@ impl Fetcher {
             if let Some(m) = self.cache.get(mark, *retry).filter(|m| m.fresh) {
                 let why = format!(
                     "{}; next try in {}s",
-                    m.stored.body,
+                    redact_urls(&m.stored.body),
                     retry.saturating_sub(m.age).as_secs()
                 );
                 return match hit {
                     Some(h) => {
                         tracing::info!(key, %why, "source failed recently: serving stale cache");
-                        let mut f = from_hit(&h, true);
+                        let mut f = from_hit(&h, Some(StaleReason::FetchFailed));
                         f.failure = Some(why);
                         Ok(f)
                     }
@@ -414,16 +419,18 @@ impl Fetcher {
                     headers: resp.headers,
                     cached: false,
                     stale: false,
+                    stale_reason: None,
                     fetched_at: Utc::now(),
                     failure: None,
                 })
             }
             Err(e) => {
-                // The bare message: it is wrapped again when replayed.
-                let why = match &e {
+                // The bare message: it is wrapped again when replayed. Query
+                // strings are cut so a crumb or key never reaches a warning.
+                let why = redact_urls(&match &e {
                     IdxError::Network(m) => m.clone(),
                     other => other.to_string(),
-                };
+                });
                 if let Some((mark, _)) = &mark {
                     if let Err(w) = self.cache.put(mark, 0, &why) {
                         tracing::warn!(error = %w, "could not write cache");
@@ -431,8 +438,10 @@ impl Fetcher {
                 }
                 match hit {
                     Some(h) => {
-                        tracing::warn!(error = %e, key, "network failed: serving stale cache");
-                        let mut f = from_hit(&h, true);
+                        // The caller reports the cause (a warning and
+                        // `stale_reason`); `-v` shows it here as well.
+                        tracing::info!(error = %why, key, "network failed: serving stale cache");
+                        let mut f = from_hit(&h, Some(StaleReason::FetchFailed));
                         f.failure = Some(why);
                         Ok(f)
                     }
@@ -443,16 +452,45 @@ impl Fetcher {
     }
 }
 
-fn from_hit(h: &crate::cache::Hit, stale: bool) -> Fetched {
+/// A cache hit, stale when `reason` says why it is served anyway.
+fn from_hit(h: &crate::cache::Hit, reason: Option<StaleReason>) -> Fetched {
     Fetched {
         status: h.stored.status,
         body: h.stored.body.clone(),
         headers: vec![],
         cached: true,
-        stale,
+        stale: reason.is_some(),
+        stale_reason: reason,
         fetched_at: h.stored.fetched_at,
         failure: None,
     }
+}
+
+/// Cuts the query string and fragment from every `http://` or `https://` URL
+/// inside `text`, so error messages, warnings and logs never carry a session
+/// token (Yahoo's `crumb`) or a key (MSN's `apikey`). A URL ends at
+/// whitespace, a quote, `)`, `<`, `>` or the end of the text. Only `-vv`
+/// debug logging still shows full request URLs.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let start = match (rest.find("http://"), rest.find("https://")) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => break,
+        };
+        out.push_str(&rest[..start]);
+        let url = &rest[start..];
+        let end = url
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>'))
+            .unwrap_or(url.len());
+        let cut = url[..end].find(['?', '#']).unwrap_or(end);
+        out.push_str(&url[..cut]);
+        rest = &url[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Helper for building `Cookie:` headers from `set-cookie` responses.
@@ -503,6 +541,7 @@ mod tests {
             .await
             .unwrap();
         assert!(b.cached && !b.stale);
+        assert_eq!(b.stale_reason, None);
         assert_eq!(b.body, "{\"x\":1}");
     }
 
@@ -530,6 +569,9 @@ mod tests {
             .await
             .unwrap();
         assert!(got.cached && got.body == "old");
+        assert!(got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::Offline));
+        assert!(got.failure.is_none(), "offline names no failure");
         let err = f
             .get("https://example.test/missing", &[], Duration::ZERO, None)
             .await
@@ -555,6 +597,8 @@ mod tests {
             .await
             .unwrap();
         assert!(got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert!(got.failure.unwrap().contains("no route"));
     }
 
     #[tokio::test]
@@ -607,10 +651,43 @@ mod tests {
                 .await
                 .unwrap();
             assert!(got.stale);
+            assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
             assert_eq!(got.body, "old");
             assert!(got.failure.unwrap().contains("no route"));
         }
         assert_eq!(backend.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failure_text_drops_query_strings() {
+        let url = "https://x.test/q?symbols=A.JK,B.JK&crumb=SECRET";
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache.put(url, 200, "old").unwrap();
+        let f = Fetcher::new(Arc::new(FixtureBackend::new()), cache, CacheMode::Normal);
+        let got = f.get(url, &[], Duration::ZERO, None).await.unwrap();
+        let why = got.failure.unwrap();
+        assert!(why.contains("no route for https://x.test/q"), "{why}");
+        assert!(!why.contains("SECRET") && !why.contains("crumb"), "{why}");
+    }
+
+    #[test]
+    fn redact_urls_cuts_queries_and_fragments() {
+        assert_eq!(
+            redact_urls("error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,^JKSE&crumb=abc): connection refused"),
+            "error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote): connection refused"
+        );
+        assert_eq!(
+            redact_urls("timed out waiting for https://assets.msn.com/service/Finance/Quotes?ids=x&apikey=K"),
+            "timed out waiting for https://assets.msn.com/service/Finance/Quotes"
+        );
+        assert_eq!(
+            redact_urls("a http://a.test/p#frag and \"https://b.test/?k=v\" end"),
+            "a http://a.test/p and \"https://b.test/\" end"
+        );
+        let plain = "https alone, no URL: connection refused (os error 10061)";
+        assert_eq!(redact_urls(plain), plain);
+        assert_eq!(redact_urls(""), "");
     }
 
     #[tokio::test]

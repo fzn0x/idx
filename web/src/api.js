@@ -1,6 +1,7 @@
 // JSON API behind the web terminal. Every response is the CLI envelope:
-// { schema, provider, fetched_at, cached, stale, warnings?, data } and errors
-// are { error: { code, message }, exit_code } with a matching HTTP status.
+// { schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data }
+// and errors are { error: { code, message }, exit_code } with a matching HTTP
+// status.
 
 import * as y from "./yahoo.js";
 import * as an from "./analysis.js";
@@ -8,7 +9,7 @@ import * as ex from "./extras.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
-import { fetchWithin } from "./net.js";
+import { fetchWithin, redactUrls } from "./net.js";
 import { scanRows, scanStatus } from "./bandar-scan.js";
 import { syncStatus } from "./ownership-sync.js";
 import UNIVERSE from "./universe.json" with { type: "json" };
@@ -24,9 +25,13 @@ const notFound = (m) => new ApiError("not_found", m, 404, 4);
 const usage = (m) => new ApiError("usage", m, 400, 2);
 const provider = (m) => new ApiError("provider", m, 502, 3);
 
-export function envelope(schema, data, { provider: p = "yahoo", fetched_at = new Date(), cached = false, stale = false, warnings = [] } = {}) {
+// `stale_reason` says why a stale copy was served, as in the CLI. The Worker
+// has no offline mode: every stale copy follows a failed fetch or a board the
+// minute refresh stopped updating, so the reason defaults to fetch_failed.
+export function envelope(schema, data, { provider: p = "yahoo", fetched_at = new Date(), cached = false, stale = false, stale_reason = null, warnings = [] } = {}) {
   const at = fetched_at instanceof Date ? fetched_at : new Date(fetched_at * 1000);
   const env = { schema, provider: p, fetched_at: at.toISOString().replace(/\.\d{3}Z$/, "Z"), cached, stale };
+  if (stale) env.stale_reason = stale_reason || "fetch_failed";
   if (warnings.length) env.warnings = warnings;
   env.data = data;
   return env;
@@ -56,7 +61,7 @@ async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(key).first();
   if (row && row.expires_at > now) return { value: JSON.parse(row.v), cached: true, stale: false, fetched_at: row.fetched_at };
-  const staleCopy = (why) => ({ value: JSON.parse(row.v), cached: true, stale: true, fetched_at: row.fetched_at, warning: `live fetch failed (${why}); showing cached copy` });
+  const staleCopy = (why) => ({ value: JSON.parse(row.v), cached: true, stale: true, fetched_at: row.fetched_at, warning: `live fetch failed (${redactUrls(why)}); showing cached copy` });
   if (retryAfter) {
     const fail = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(`fail:${key}`).first();
     if (fail && fail.expires_at > now) {
@@ -73,7 +78,7 @@ async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   } catch (e) {
     if (retryAfter) {
       await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
-        .bind(`fail:${key}`, JSON.stringify(e.message), now + retryAfter, now).run();
+        .bind(`fail:${key}`, JSON.stringify(redactUrls(e.message)), now + retryAfter, now).run();
     }
     if (row) return staleCopy(e.message);
     throw e;
@@ -91,10 +96,10 @@ export async function kvPut(env, k, value) {
 // ---- snapshot (cron) ---------------------------------------------------
 
 const WIB_OFFSET_MIN = 7 * 60;
+/** Trading hours with a margin for the delayed close, on IDX trading days only (weekends and holidays closed). */
 export function marketIsOpen(now = new Date()) {
   const wib = new Date(now.getTime() + WIB_OFFSET_MIN * 60000);
-  const day = wib.getUTCDay();
-  if (day === 0 || day === 6) return false;
+  if (!hol.isTradingDay(wib.toISOString().slice(0, 10))) return false;
   const mins = wib.getUTCHours() * 60 + wib.getUTCMinutes();
   return mins >= 8 * 60 + 45 && mins <= 16 * 60 + 30;
 }
@@ -137,9 +142,23 @@ async function board(env) {
   return b;
 }
 
+const wibText = (unixSecs) => `${y.wibIso(unixSecs).slice(0, 16).replace("T", " ")} WIB`;
+
+/**
+ * Whether the board (refreshed at `ts`, unix seconds) is older than the cron
+ * allows: every minute in trading hours, every 15 minutes outside them. So
+ * stale past 10 minutes once the market has been open that long, past 35
+ * otherwise; the warning says how old it is.
+ */
+export function boardFreshness(ts, now = new Date()) {
+  const open = marketIsOpen(now) && marketIsOpen(new Date(now.getTime() - 10 * 60e3));
+  if (now.getTime() / 1000 - ts <= (open ? 10 : 35) * 60) return { stale: false, warnings: [] };
+  return { stale: true, warnings: [`the market snapshot is from ${wibText(ts)}; its refresh has failed since`] };
+}
+
 // ---- endpoints ---------------------------------------------------------
 
-export async function market(env) {
+export async function market(env, now = new Date()) {
   const b = await board(env);
   const quotes = b.value.quotes.filter((q) => q.price != null && q.change_pct != null);
   const byChg = [...quotes].sort((a, c) => c.change_pct - a.change_pct);
@@ -149,10 +168,11 @@ export async function market(env) {
   const ticks = await env.DB.prepare("SELECT ts, price FROM ticks WHERE symbol = '^JKSE' AND ts >= ?1 ORDER BY ts")
     .bind(Math.floor(Date.now() / 1000) - 2 * 86400).all();
   const trim = (q) => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, change_pct: q.change_pct, volume: q.volume, value: q.price != null && q.volume != null ? q.price * q.volume : null, market_cap: q.market_cap });
+  const asOf = b.value.quotes.map((q) => q.market_time).filter(Boolean).sort().pop() || null;
   const data = {
-    as_of: b.value.quotes.map((q) => q.market_time).filter(Boolean).sort().pop() || null,
+    as_of: asOf,
     refreshed_at: new Date(b.value.ts * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
-    market_open: marketIsOpen(),
+    market_open: marketIsOpen(now),
     index: b.value.index ? trim(b.value.index) : null,
     index_tape: (ticks.results || []).map((t) => [t.ts, t.price]),
     quoted: quotes.length,
@@ -161,6 +181,7 @@ export async function market(env) {
     unchanged: quotes.filter((q) => q.change_pct === 0).length,
     turnover: quotes.reduce((s, q) => s + (q.volume || 0) * (q.price || 0), 0),
     market_state: b.value.index?.market_state || null,
+    behind_session: hol.behindDate(asOf, hol.latestSession(now)),
     liquid_min_market_cap: 1e12,
     gainers: liquidByChg.slice(0, 10).map(trim),
     losers: liquidByChg.slice(-10).reverse().map(trim),
@@ -168,12 +189,16 @@ export async function market(env) {
     heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 16).map(trim),
     universe: SYMBOLS.length,
   };
-  return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, warnings: b.value.warnings || [] });
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, stale: fresh.stale, warnings: [...fresh.warnings, ...(b.value.warnings || [])] });
 }
 
-export async function quote(env, symbolsRaw) {
+export async function quote(env, symbolsRaw, now = new Date()) {
   const symbols = parseSymbols(symbolsRaw);
   const b = await board(env);
+  // behind_session is set on copies, never on the board's own rows.
+  const latest = hol.latestSession(now);
+  const flag = (q) => ({ ...q, behind_session: hol.behindSession(q, latest) });
   const bySym = new Map(b.value.quotes.map((q) => [q.symbol, q]));
   const found = symbols.map((s) => bySym.get(s)).filter(Boolean);
   const warnings = symbols.filter((s) => !bySym.has(s)).map((s) => `no data for ${s}`);
@@ -181,9 +206,11 @@ export async function quote(env, symbolsRaw) {
     // Not in the universe: try live once, cached briefly.
     const live = await cached(env, `quote:${symbols.join(",")}`, 60, async () => (await y.fetchQuotes(env, symbols)).map(y.parseV7Quote));
     if (!live.value.length) throw notFound(`no quotes for ${symbols.join(", ")}`);
-    return envelope("idx.quotes.v1", live.value, { cached: live.cached, stale: live.stale, fetched_at: live.fetched_at, warnings: symbols.filter((s) => !live.value.some((q) => q.symbol === s)).map((s) => `no data for ${s}`) });
+    const missing = symbols.filter((s) => !live.value.some((q) => q.symbol === s)).map((s) => `no data for ${s}`);
+    return envelope("idx.quotes.v1", live.value.map(flag), { cached: live.cached, stale: live.stale, fetched_at: live.fetched_at, warnings: [...(live.warning ? [live.warning] : []), ...missing] });
   }
-  return envelope("idx.quotes.v1", found, { cached: true, fetched_at: b.value.ts, warnings });
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.quotes.v1", found.map(flag), { cached: true, stale: fresh.stale, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
 }
 
 const PERIODS = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","ytd","max"];
@@ -271,25 +298,39 @@ export async function dividends(env, symbolRaw) {
   return envelope("idx.dividends.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
 }
 
+/** Adds each warning once, keeping order. */
+const addWarnings = (list, more) => { for (const w of more || []) if (!list.includes(w)) list.push(w); };
+
+/** The cause inside a `live fetch failed (...); showing cached copy` warning, or null. */
+const failureCause = (warnings) => {
+  for (const w of warnings || []) {
+    const m = /^live fetch failed \((.*)\); showing cached copy$/s.exec(w);
+    if (m) return m[1];
+  }
+  return null;
+};
+
 export async function returns(env, symbolsRaw, benchmark = "^JKSE") {
   const symbols = parseSymbols(symbolsRaw);
   const bench = benchmark && benchmark.toLowerCase() !== "none" ? parseSymbol(benchmark) : null;
   const fetchOne = (s) => history(env, s, "5y", "1d", 0).then((e) => ({ ok: e })).catch((e) => ({ err: e }));
   const [results, b] = await Promise.all([Promise.all(symbols.map(fetchOne)), bench ? fetchOne(bench) : null]);
   const warnings = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
+  // A benchmark that is used counts toward the freshness, as in the CLI.
+  const fold = (e) => { cachedAll &&= e.cached; stale ||= e.stale; fetched = Math.min(fetched, Date.parse(e.fetched_at) / 1000); addWarnings(warnings, e.warnings); };
   let benchPerf = null;
   if (bench) {
-    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); }
+    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); else fold(b.ok); }
     else warnings.push(`benchmark ${bench} unavailable: ${b.err.message}`);
   }
   const data = [];
-  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
   results.forEach((r, i) => {
     if (r.err) { warnings.push(r.err.code === "not_found" ? `no data for ${symbols[i]}` : `${symbols[i]}: ${r.err.message}`); firstErr ||= r.err; return; }
     const p = ex.performance(r.ok.data);
     if (!p) { warnings.push(`${symbols[i]}: no candles`); return; }
     if (benchPerf) p.benchmark = { symbol: benchPerf.symbol, name: benchPerf.name, returns: benchPerf.returns, excess: ex.minusWindows(p.returns, benchPerf.returns) };
-    cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000);
+    fold(r.ok);
     data.push(p);
   });
   if (!data.length) throw firstErr || notFound("no data");
@@ -303,14 +344,14 @@ export async function compare(env, symbolsRaw) {
   const data = [], warnings = [];
   let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000);
   for (const r of results) {
-    if (r.ok) { data.push(r.ok.data); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000); }
+    if (r.ok) { data.push(r.ok.data); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000); addWarnings(warnings, r.ok.warnings); }
     else warnings.push(r.err.code === "not_found" ? `no data for ${r.s}` : `${r.s}: ${r.err.message}`);
   }
   if (!data.length) throw results[0].err;
   return envelope("idx.compare.v1", data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFundamentals = 20, descending = true) {
+export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFundamentals = 20, descending = true, now = new Date()) {
   const filters = an.parseFilters(filterSpec || "");
   const sortField = an.sortField(sort);
   if (!sortField) throw usage(`unknown sort key "${sort}"; use one of ${an.KEY_NAMES}`);
@@ -327,17 +368,22 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
   const fundFilters = filters.filter((f) => an.FUNDAMENTAL_FIELDS.has(f.field));
   rows = rows.filter((r) => an.matches(r, quoteFilters));
   const matchedQuote = rows.length;
-  let checked = 0, capped = false;
+  let checked = 0, capped = false, cachedAll = true, staleFund = 0, cause = null;
   const warnings = [];
   if (fundFilters.length || an.FUNDAMENTAL_FIELDS.has(sortField)) {
     an.sortRows(rows, "market_cap", true);
     const cap = Math.max(1, Math.min(maxFundamentals, 40));
     if (rows.length > cap) { capped = true; rows = rows.slice(0, cap); }
-    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).then((e) => e.data).catch(() => null)));
+    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).catch(() => null)));
     rows.forEach((r, i) => {
-      const f = results[i];
-      if (!f) return;
+      const e = results[i];
+      if (!e) return;
+      const f = e.data;
       checked++;
+      // Freshness only: one summary line below instead of a failure
+      // warning per company, as in the CLI.
+      cachedAll &&= e.cached;
+      if (e.stale) { staleFund++; cause ??= failureCause(e.warnings); }
       Object.assign(r, {
         fundamentals_checked: true, sector: f.sector, industry: f.industry, roe_pct: f.profitability.roe_pct, roa_pct: f.profitability.roa_pct,
         net_margin_pct: f.profitability.net_margin_pct, operating_margin_pct: f.profitability.operating_margin_pct, debt_to_equity: f.health.debt_to_equity,
@@ -346,13 +392,15 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
       r.pe_trailing ??= f.valuation.pe_trailing; r.price_to_book ??= f.valuation.price_to_book; r.dividend_yield_pct ??= f.dividend.yield_pct;
     });
     rows = rows.filter((r) => an.matches(r, fundFilters));
+    if (staleFund) warnings.push(`fundamentals for ${staleFund} of ${checked} companies are stale cached copies: the live fetch failed${cause ? ` (${cause})` : ""}`);
     if (capped) warnings.push(`fundamentals were fetched for the ${cap} largest companies that passed the quote filters; the web terminal caps this at 40`);
   }
   an.sortRows(rows, sortField, descending);
   const total = rows.length;
   if (limit > 0) rows = rows.slice(0, limit);
   const data = { filters: filters.map((f) => f.raw), sort: sort.toLowerCase(), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote, fundamentals_checked: checked, fundamentals_capped: capped, total_matches: total, rows };
-  return envelope("idx.screen.v1", data, { cached: true, fetched_at: b.value.ts, warnings });
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.screen.v1", data, { cached: cachedAll, stale: fresh.stale || staleFund > 0, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
 }
 
 // ---- news ---------------------------------------------------------------
@@ -895,6 +943,7 @@ export async function brief(env, symbolRaw) {
   const pct = (v, dp = 1) => `${v >= 0 ? "+" : ""}${v.toFixed(dp)}%`;
   const key_points = [];
   if (q && q.price != null && q.change_pct != null) key_points.push(`Price ${q.price.toLocaleString("en-US")} (${pct(q.change_pct, 2)} today)${q.market_cap ? `, market cap ${(q.market_cap / 1e12).toFixed(1)}T` : ""}`);
+  if (q?.behind_session === true && q.market_time) key_points.push(`Last trade ${hol.wibDate(q.market_time)}, before the latest IDX session: suspended, not traded since, or the source lags`);
   const valuation = valuationKeyPoint(f);
   if (valuation) key_points.push(valuation);
   if (t) key_points.push(`Technical signal: ${t.signal.label} (score ${t.signal.score >= 0 ? "+" : ""}${t.signal.score}), trend ${t.trend}${t.rsi14 != null ? `, RSI ${t.rsi14.toFixed(0)}` : ""}`);
