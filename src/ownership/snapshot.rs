@@ -63,6 +63,8 @@ pub const PAGE_SIZE: i64 = 4096;
 pub const MIN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Table the builder adds to the snapshot; `OwnershipDb` never reads it.
 const INFO_TABLE: &str = "snapshot_info";
+/// Its definition, the one schema object a snapshot has beyond this idx's.
+const INFO_DDL: &str = "CREATE TABLE snapshot_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 const SNAPSHOT_PROVIDER: &str = "github-mirror";
 
 /// `snapshot-v{V}.json`.
@@ -823,8 +825,32 @@ fn decompress(gz: &[u8], dest: &Path, m: &SnapshotManifest) -> Result<()> {
     Ok(())
 }
 
+/// One schema object: type, name, table, SQL.
+type SchemaRow = (String, String, String, Option<String>);
+
+fn schema_rows(conn: &Connection) -> rusqlite::Result<Vec<SchemaRow>> {
+    let mut st =
+        conn.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")?;
+    let rows = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The schema a snapshot must have: what this idx creates plus
+/// `snapshot_info`, nothing else.
+fn expected_schema() -> Result<Vec<SchemaRow>> {
+    let db = OwnershipDb::in_memory()?;
+    let conn = db.connection();
+    let err = |e: rusqlite::Error| IdxError::Other(format!("ownership schema: {e}"));
+    conn.execute_batch(INFO_DDL).map_err(err)?;
+    schema_rows(conn).map_err(err)
+}
+
 /// Checks a decompressed snapshot against its manifest, read-only: SQLite's
 /// own integrity check, the schema version, page size and journal mode, the
+/// schema itself (exactly this idx's tables and indexes: no views, no
+/// triggers, nothing that would run in the user's database later), the
 /// releases (date, format, file SHA-256, lines), the positions stored per
 /// release, the rows per table and the content digest it recorded.
 pub fn validate(path: &Path, m: &SnapshotManifest) -> Result<()> {
@@ -844,6 +870,8 @@ pub fn validate(path: &Path, m: &SnapshotManifest) -> Result<()> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(bad)?;
+    conn.execute_batch("PRAGMA trusted_schema = OFF;")
+        .map_err(bad)?;
     let check: String = conn
         .query_row("PRAGMA quick_check", [], |r| r.get(0))
         .map_err(bad)?;
@@ -869,6 +897,27 @@ pub fn validate(path: &Path, m: &SnapshotManifest) -> Result<()> {
         return Err(invalid(
             m,
             format!("page size {page}, expected {PAGE_SIZE}"),
+        ));
+    }
+    let schema = schema_rows(&conn).map_err(bad)?;
+    if let Some((kind, name, ..)) = schema.iter().find(|(t, ..)| t == "trigger" || t == "view") {
+        return Err(invalid(m, format!("it carries a {kind} ({name})")));
+    }
+    let expected = expected_schema()?;
+    if schema != expected {
+        let names = |rows: &[SchemaRow], other: &[SchemaRow]| -> Vec<String> {
+            rows.iter()
+                .filter(|r| !other.contains(r))
+                .map(|(t, n, ..)| format!("{t} {n}"))
+                .collect()
+        };
+        return Err(invalid(
+            m,
+            format!(
+                "its schema differs from this idx's (unexpected or changed: [{}]; missing or changed: [{}])",
+                names(&schema, &expected).join(", "),
+                names(&expected, &schema).join(", ")
+            ),
         ));
     }
     let tables = table_counts(&conn).map_err(bad)?;
@@ -1347,11 +1396,8 @@ pub fn build(
                 sha256: r.sha256.clone(),
             })
             .collect();
-        conn.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {INFO_TABLE};
-             CREATE TABLE {INFO_TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-        ))
-        .map_err(&terr)?;
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {INFO_TABLE}; {INFO_DDL};"))
+            .map_err(&terr)?;
         for (k, v) in [
             ("schema", MANIFEST_SCHEMA.to_string()),
             ("generated_at", stamp.clone()),
@@ -2128,5 +2174,38 @@ mod tests {
         assert!(other.execute_batch("BEGIN EXCLUSIVE").is_err());
         drop(held);
         other.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
+    }
+
+    #[test]
+    fn validate_refuses_schema_objects_idx_does_not_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.sqlite");
+        imported_db(&src, &[JULY]);
+        let m = build(&src, &dir.path().join("m"), None, t0()).unwrap();
+        let gz = std::fs::read(dir.path().join("m").join(&m.file)).unwrap();
+        let clean = dir.path().join("clean.sqlite");
+        decompress(&gz, &clean, &m).unwrap();
+        validate(&clean, &m).unwrap();
+        for (name, sql) in [
+            (
+                "trigger",
+                "CREATE TRIGGER t AFTER INSERT ON releases BEGIN DELETE FROM holdings; END",
+            ),
+            (
+                "trigger on snapshot_info",
+                "CREATE TRIGGER t AFTER UPDATE ON snapshot_info BEGIN SELECT 1; END",
+            ),
+            ("view", "CREATE VIEW v AS SELECT * FROM releases"),
+            ("index", "CREATE INDEX extra ON holdings (pct)"),
+            ("column", "ALTER TABLE releases ADD COLUMN note TEXT"),
+            ("table", "CREATE TABLE extra (x)"),
+        ] {
+            let copy = dir.path().join("copy.sqlite");
+            std::fs::copy(&clean, &copy).unwrap();
+            Connection::open(&copy).unwrap().execute_batch(sql).unwrap();
+            let e = validate(&copy, &m).unwrap_err();
+            assert_eq!(e.exit_code(), 3, "{name}: {e}");
+            std::fs::remove_file(&copy).unwrap();
+        }
     }
 }

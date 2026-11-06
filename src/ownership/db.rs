@@ -441,6 +441,11 @@ impl OwnershipDb {
         &self.path
     }
 
+    /// The open connection (the snapshot check compares schemas with it).
+    pub(super) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     /// `PRAGMA user_version` of the open file ([`SCHEMA_VERSION`] once open).
     pub fn schema_version(&self) -> Result<i64> {
         user_version(&self.conn)

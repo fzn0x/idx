@@ -214,8 +214,10 @@ Safety:
   `bytes`, then size and SHA-256), the decompressed file (size, SHA-256,
   `PRAGMA quick_check`, schema version, page size, rows per table, each
   release's date, file hash, lines and positions, and the recorded content
-  digest). A failed check is a provider error (exit 3) and leaves the
-  database untouched.
+  digest). Its schema must be exactly this idx's tables and indexes plus
+  `snapshot_info`: a view, a trigger or any other object is refused, so
+  nothing in a download runs in the database later. A failed check is a
+  provider error (exit 3) and leaves the database untouched.
 - The download URL is always the mirror's base plus the manifest's `file`, a
   bare asset name: a manifest cannot point anywhere else.
 - Replacing a database first copies it to `<database>.bak` (overwriting an
