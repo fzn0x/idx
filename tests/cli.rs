@@ -53,7 +53,8 @@ fn help_lists_commands_and_exit_codes() {
         .assert()
         .success()
         .stdout(predicate::str::contains("stocks"))
-        .stdout(predicate::str::contains("Exit codes"));
+        .stdout(predicate::str::contains("Exit codes"))
+        .stdout(predicate::str::contains("JSON code blocked"));
     idx(&sb.cache, &sb.config)
         .args(["stocks", "quote", "--help"])
         .assert()
@@ -1337,4 +1338,99 @@ fn completions_generate() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Register-ArgumentCompleter"));
+}
+
+/// A one-shot HTTP server on 127.0.0.1 answering every request with the
+/// response for its path: Cloudflare's challenge and block pages and an
+/// ordinary outage, without leaving the machine.
+fn refusal_stub() -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let challenge = include_str!("fixtures/idx/cloudflare_challenge_synthetic.html");
+    let block = include_str!("fixtures/idx/cloudflare_blocked.html");
+    let handle = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let req = String::from_utf8_lossy(&buf);
+            let (status, headers, body) = if req.starts_with("GET /challenge") {
+                (
+                    "403 Forbidden",
+                    "cf-mitigated: challenge\r\nserver: cloudflare\r\n",
+                    challenge,
+                )
+            } else if req.starts_with("GET /block") {
+                ("403 Forbidden", "server: cloudflare\r\n", block)
+            } else {
+                (
+                    "503 Service Unavailable",
+                    "server: nginx\r\n",
+                    "<html><head><title>503 Service Temporarily Unavailable</title></head></html>",
+                )
+            };
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\n{headers}content-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, handle)
+}
+
+#[test]
+fn a_cloudflare_refusal_is_blocked_and_an_outage_is_not() {
+    let sb = sandbox();
+    let (base, server) = refusal_stub();
+    let discover = |path: &str| {
+        let mut c = idx(&sb.cache, &sb.config);
+        // Loopback only: the page is the stub above, the mirror is never
+        // asked (an explicit page is not second-guessed).
+        c.env_remove("IDX_OFFLINE")
+            .env("IDX_OWNERSHIP_PAGE_URL", format!("{base}{path}"))
+            .env("IDX_OWNERSHIP_MIRROR", "off")
+            .env("IDX_CURL_IMPERSONATE", "idx-test-no-such-curl-impersonate")
+            .args(["-o", "json", "ownership", "discover"]);
+        let out = c.output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stderr)
+            .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+        (out.status.code(), v)
+    };
+    let (code, v) = discover("/challenge");
+    assert_eq!(code, Some(3));
+    assert_eq!(v["error"]["code"], "blocked", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)"),
+        "{msg}"
+    );
+    assert!(msg.contains("no curl-impersonate binary"), "{msg}");
+    let (code, v) = discover("/block");
+    assert_eq!(
+        (code, &v["error"]["code"]),
+        (Some(3), &serde_json::json!("blocked"))
+    );
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("a Cloudflare block page (HTTP 403)"));
+    let (code, v) = discover("/maintenance");
+    assert_eq!(code, Some(3));
+    assert_eq!(v["error"]["code"], "network", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("HTTP 503") && !msg.contains("Cloudflare"),
+        "{msg}"
+    );
+    server.join().unwrap();
 }

@@ -56,7 +56,7 @@ Examples:
   idx schema quotes                      # JSON Schema of the quote envelope";
 
 const AFTER_HELP: &str = "\
-Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider · 4 not found · 5 offline cache miss · 6 config
+Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider (JSON code blocked: bot protection refused this network) · 4 not found · 5 offline cache miss · 6 config
 Env: IDX_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
 Docs: https://github.com/fzn0x/idx";
 

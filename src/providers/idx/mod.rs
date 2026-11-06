@@ -17,8 +17,11 @@
 //! A day without trading answers an empty list; an unknown code an empty
 //! history. The site sits behind Cloudflare: ordinary connections pass,
 //! while data-centre addresses (CI runners, Cloudflare Workers) are often
-//! refused with a 403 "Attention Required" page, which becomes a provider
-//! error naming the cause. Fetched responses are cached like any other.
+//! refused with a 403 "Attention Required" block page or a "Just a moment"
+//! challenge, which becomes a `blocked` error (exit 3) naming the cause
+//! ([`http::cloudflare`](crate::http::cloudflare)). Any other failure keeps
+//! its HTTP status as a `provider` error. Fetched responses are cached like
+//! any other.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +29,7 @@ use std::time::Duration;
 use chrono::{Datelike, NaiveDate};
 
 use crate::error::{IdxError, Result};
+use crate::http::cloudflare::{self, Refusal};
 use crate::http::{Fetched, Fetcher};
 use crate::model::{CalendarEvent, IndexRow, Instrument, Member, Symbol};
 
@@ -49,7 +53,7 @@ const TTL_CALENDAR: Duration = Duration::from_secs(3 * 3600);
 /// A stock's recent history, which gains a row after each close.
 const TTL_HISTORY: Duration = Duration::from_secs(30 * 60);
 
-pub const BLOCKED_HINT: &str = "idx.co.id refused the request (Cloudflare bot protection). It usually passes from an ordinary home or office connection; data centres, VPNs and CI runners are often blocked. Cached copies are still served (try --offline)";
+pub const BLOCKED_HINT: &str = "idx.co.id refused the request (Cloudflare bot protection). It usually passes later or from an ordinary home or office connection; data centres, VPNs and CI runners are often blocked. Cached copies are still served (try --offline)";
 
 fn headers() -> Vec<(String, String)> {
     vec![
@@ -61,22 +65,26 @@ fn headers() -> Vec<(String, String)> {
     ]
 }
 
-/// Cloudflare's block and challenge pages.
-fn blocked(f: &Fetched) -> bool {
-    if f.status == 403 || f.status == 503 {
-        return true;
-    }
-    let head = &f.body[..f.body.len().min(2048)];
-    head.contains("Attention Required! | Cloudflare")
-        || head.contains("Just a moment...")
-        || head.contains("cf-error-details")
+/// Cloudflare's block and challenge pages. Every idx.co.id response passes
+/// through Cloudflare and the origin never answers 403 itself, so a bare 403
+/// counts as a block too.
+fn refused(f: &Fetched) -> Option<Refusal> {
+    cloudflare::refusal(f.status, &f.headers, f.body.as_bytes())
+        .or((f.status == 403).then_some(Refusal::Block))
 }
 
 async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
     let url = format!("{BASE}/{path}");
     let f = fetcher.get(&url, &headers(), ttl, None).await?;
-    if blocked(&f) {
-        return Err(IdxError::provider(NAME, BLOCKED_HINT));
+    if let Some(r) = refused(&f) {
+        return Err(IdxError::blocked(
+            NAME,
+            r,
+            format!(
+                "idx.co.id answered with {}. {BLOCKED_HINT}",
+                cloudflare::describe(r, f.status, &f.headers)
+            ),
+        ));
     }
     if !f.is_success() {
         return Err(IdxError::provider(
@@ -229,6 +237,8 @@ mod tests {
 
     const BROKERS: &str = include_str!("../../../tests/fixtures/idx/brokersummary_20261016.json");
     const BLOCKED: &str = include_str!("../../../tests/fixtures/idx/cloudflare_blocked.html");
+    const CHALLENGE: &str =
+        include_str!("../../../tests/fixtures/idx/cloudflare_challenge_synthetic.html");
     const HISTORY_EMPTY: &str =
         include_str!("../../../tests/fixtures/idx/tradinginfoss_zzzz_empty.json");
 
@@ -279,7 +289,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.exit_code(), 3);
-        assert!(err.to_string().contains("Cloudflare"), "{err}");
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string().contains("Cloudflare block page (HTTP 403)"),
+            "{err}"
+        );
         let err = trading_history(&f, &Symbol::parse("ZZZZ").unwrap(), 20)
             .await
             .unwrap_err();
@@ -288,6 +302,50 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("HTTP 500"), "{err}");
+        assert_eq!(err.code(), "provider");
+    }
+
+    #[tokio::test]
+    async fn a_challenge_is_blocked_and_an_outage_is_not_cloudflare() {
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers(
+                    "GetBrokerSummary",
+                    403,
+                    CHALLENGE,
+                    &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+                )
+                .route("GetIndexSummary", 503, "oops")
+                .route("GetStockSummary", 403, ""),
+        );
+        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        assert!(
+            err.to_string()
+                .contains("a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)"),
+            "{err}"
+        );
+        assert!(matches!(
+            err,
+            IdxError::Blocked {
+                refusal: Refusal::Challenge,
+                ..
+            }
+        ));
+        // A 503 without Cloudflare's pages is an outage: its status, no Cloudflare.
+        let err = index_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert!(err.to_string().contains("HTTP 503"), "{err}");
+        assert!(!err.to_string().contains("Cloudflare"), "{err}");
+        // idx.co.id never answers 403 itself: a bare one is a block.
+        let err = stock_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
     }
 
     #[tokio::test]

@@ -136,7 +136,8 @@ pub struct ErrorEnvelope {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ErrorBody {
-    /// `usage` | `config` | `network` | `provider` | `not_found` | `offline_miss` | `io` | `internal`
+    /// `usage` | `config` | `network` | `provider` | `blocked` | `not_found` | `offline_miss` | `unsupported` | `io` | `internal`.
+    /// `blocked` (exit 3): the source's bot protection (Cloudflare) refused this network.
     pub code: String,
     pub message: String,
 }
@@ -295,5 +296,12 @@ mod tests {
         let env = ErrorEnvelope::from(&e);
         assert_eq!(env.exit_code, 4);
         assert_eq!(env.error.code, "not_found");
+        let e = IdxError::blocked(
+            "idx",
+            crate::http::cloudflare::Refusal::Block,
+            "www.idx.co.id answered with a Cloudflare block page (HTTP 403)",
+        );
+        let env = ErrorEnvelope::from(&e);
+        assert_eq!((env.error.code.as_str(), env.exit_code), ("blocked", 3));
     }
 }

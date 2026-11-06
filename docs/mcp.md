@@ -361,7 +361,10 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
 {"error":{"code":"not_found","message":"not found: ZZZZ: Quote not found for symbol: ZZZZ.JK"},"exit_code":4}
 ```
 
-`code` values and their meaning are listed in json-output.md.
+`code` values and their meaning are listed in json-output.md. `blocked`
+(exit 3) means the source's bot protection (Cloudflare, idx.co.id) refused
+this network: retry later, rely on cached data, or for the ownership register
+let the GitHub mirror serve it.
 
 ## Behaviour notes
 

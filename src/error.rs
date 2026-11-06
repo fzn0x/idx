@@ -7,7 +7,7 @@
 //! | 0    | success                                   |
 //! | 1    | internal / unexpected error               |
 //! | 2    | usage error (bad flags, bad symbol)       |
-//! | 3    | network or provider failure               |
+//! | 3    | network or provider failure (JSON code `network`, `provider`, or `blocked` when the source's bot protection refused this network) |
 //! | 4    | symbol or record not found                |
 //! | 5    | `--offline` and nothing usable in cache   |
 //! | 6    | configuration error                       |
@@ -25,6 +25,17 @@ pub enum IdxError {
     #[error("{provider}: {message}")]
     Provider {
         provider: &'static str,
+        message: String,
+    },
+    /// The source's bot protection (Cloudflare) refused this client: a
+    /// challenge only a browser can pass, or a block page. Nothing is wrong
+    /// with the request; a later run, another network, a mirror or a manual
+    /// download can work. Exit 3 like any network failure, JSON code
+    /// `blocked`.
+    #[error("{provider}: {message}")]
+    Blocked {
+        provider: &'static str,
+        refusal: crate::http::cloudflare::Refusal,
         message: String,
     },
     #[error("not found: {0}")]
@@ -47,7 +58,7 @@ impl IdxError {
     pub fn exit_code(&self) -> i32 {
         match self {
             IdxError::Usage(_) => 2,
-            IdxError::Network(_) | IdxError::Provider { .. } => 3,
+            IdxError::Network(_) | IdxError::Provider { .. } | IdxError::Blocked { .. } => 3,
             IdxError::NotFound(_) => 4,
             IdxError::OfflineMiss(_) => 5,
             IdxError::Config(_) | IdxError::Unsupported { .. } => 6,
@@ -62,6 +73,7 @@ impl IdxError {
             IdxError::Config(_) => "config",
             IdxError::Network(_) => "network",
             IdxError::Provider { .. } => "provider",
+            IdxError::Blocked { .. } => "blocked",
             IdxError::NotFound(_) => "not_found",
             IdxError::OfflineMiss(_) => "offline_miss",
             IdxError::Unsupported { .. } => "unsupported",
@@ -77,6 +89,18 @@ impl IdxError {
     pub fn provider(provider: &'static str, message: impl fmt::Display) -> Self {
         IdxError::Provider {
             provider,
+            message: message.to_string(),
+        }
+    }
+
+    pub fn blocked(
+        provider: &'static str,
+        refusal: crate::http::cloudflare::Refusal,
+        message: impl fmt::Display,
+    ) -> Self {
+        IdxError::Blocked {
+            provider,
+            refusal,
             message: message.to_string(),
         }
     }
@@ -114,3 +138,24 @@ impl From<reqwest::Error> for IdxError {
 }
 
 pub type Result<T, E = IdxError> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::cloudflare::Refusal;
+
+    #[test]
+    fn blocked_is_exit_3_with_its_own_code() {
+        let e = IdxError::blocked(
+            "idx",
+            Refusal::Challenge,
+            "www.idx.co.id answered with a Cloudflare challenge",
+        );
+        assert_eq!(e.exit_code(), 3);
+        assert_eq!(e.code(), "blocked");
+        assert_eq!(
+            e.to_string(),
+            "idx: www.idx.co.id answered with a Cloudflare challenge"
+        );
+    }
+}

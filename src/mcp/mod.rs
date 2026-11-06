@@ -58,7 +58,9 @@ Every tool returns the same JSON envelope as the `idx -o json` CLI:
 {schema, provider, fetched_at, cached, stale, warnings?, data}. Fields the source did
 not return are null; nothing is estimated. Prices are delayed as published.
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
-means the ticker is unknown, offline_miss means --offline with nothing cached.
+means the ticker is unknown, offline_miss means --offline with nothing cached, blocked
+means the source's bot protection (Cloudflare, idx.co.id) refused this network: retry
+later, rely on cached data or, for the ownership register, the GitHub mirror.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
@@ -1842,6 +1844,47 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_cloudflare_refusal_is_a_blocked_tool_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let challenge =
+            include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html");
+        let backend = crate::http::FixtureBackend::new()
+            .route_with_headers(
+                "GetTradingInfoSS",
+                403,
+                challenge,
+                &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+            )
+            .route("GetStockSummary", 503, "maintenance");
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(backend),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let r = s
+            .foreign(Parameters(ForeignArgs {
+                symbol: "BBCA".into(),
+                days: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "blocked", "{v}");
+        assert_eq!(v["exit_code"], 3);
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Cloudflare challenge"));
     }
 
     #[tokio::test]

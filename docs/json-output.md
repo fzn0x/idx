@@ -468,7 +468,7 @@ Written to stderr, exit code non-zero:
 | --- | --- | --- |
 | 1 | `internal`, `io` | unexpected failure |
 | 2 | `usage` | bad flags or symbol |
-| 3 | `network`, `provider` | network failure or the source returned an error |
+| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused this network with a challenge or a block page. Retry later or from another network, use cached data (`--offline`), or for the ownership register the GitHub mirror |
 | 4 | `not_found` | symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` and nothing cached |
 | 6 | `config`, `unsupported` | bad config file or env value; or the selected provider cannot serve this command (`--provider auto` can) |

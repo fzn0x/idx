@@ -5,12 +5,15 @@
 //! Prospectus:"https://www.idx.co.id/Media/...xlsx", ...}`
 //! entries. We parse those pairs out of the HTML without a JS engine.
 //!
-//! idx.co.id sits behind Cloudflare bot management: plain HTTP clients get a
-//! 403 challenge page. `fetch_browser` tries a browser-shaped request first,
-//! then shells out to a `curl-impersonate` binary when one is installed.
-//! When both fail, `discover` falls back to the GitHub mirror that CI keeps
-//! in sync (see `mirror.rs`), so `idx ownership import --latest` works
-//! without any extra tooling. `file://` URLs read a saved page or file.
+//! idx.co.id sits behind Cloudflare bot management: some networks get a
+//! challenge or a block page instead of the file ([`crate::http::cloudflare`]).
+//! `fetch_browser` tries a browser-shaped request first, then, only when
+//! Cloudflare refused it, shells out to a `curl-impersonate` binary when one
+//! is installed. A refusal that remains is a `blocked` error (exit 3); any
+//! other failure keeps its HTTP status. When idx.co.id fails, `discover`
+//! falls back to the GitHub mirror that CI keeps in sync (see `mirror.rs`),
+//! so `idx ownership import --latest` works without any extra tooling.
+//! `file://` URLs read a saved page or file.
 
 use std::path::Path;
 use std::time::Duration;
@@ -18,6 +21,7 @@ use std::time::Duration;
 use chrono::NaiveDate;
 
 use crate::error::{IdxError, Result};
+use crate::http::cloudflare::{self, Refusal};
 use crate::model::DiscoveredFile;
 
 use super::ingest::parse_indonesian_date;
@@ -33,7 +37,8 @@ const IMPERSONATE_BINARIES: &[&str] = &[
     "curl-impersonate",
 ];
 
-pub const MANUAL_HINT: &str = "idx.co.id is behind Cloudflare bot protection. Options: install curl-impersonate (https://github.com/lexiforest/curl-impersonate) and put curl_chrome131 on PATH, or open https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/ in a browser, download the \"Pemegang Saham di Atas 1%\" workbook and run `idx ownership import --file <path>`";
+/// What to do when Cloudflare refuses idx.co.id.
+pub const MANUAL_HINT: &str = "Ways out: retry later or from another network; let `idx ownership import --latest` use the GitHub mirror (the default, or IDX_OWNERSHIP_SOURCE=mirror); install curl-impersonate (https://github.com/lexiforest/curl-impersonate) and put curl_chrome131 on PATH; or open https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/ in a browser, download the workbook and run `idx ownership import --file <path>`";
 
 fn unescape_js(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -145,15 +150,9 @@ pub fn parse_page(html: &str) -> Vec<DiscoveredFile> {
     out
 }
 
-fn looks_like_challenge(status: u16, body: &[u8]) -> bool {
-    if status == 403 || status == 503 {
-        return true;
-    }
-    let head = String::from_utf8_lossy(&body[..body.len().min(4096)]).to_lowercase();
-    head.contains("just a moment") || head.contains("cf-chl") || head.contains("challenge-platform")
-}
+type Response = (u16, Vec<(String, String)>, Vec<u8>);
 
-async fn fetch_plain(url: &str, timeout: Duration) -> Result<(u16, Vec<u8>)> {
+async fn fetch_plain(url: &str, timeout: Duration) -> Result<Response> {
     let _wait = crate::progress::request(url);
     let client = reqwest::Client::builder()
         .user_agent(UA)
@@ -176,8 +175,18 @@ async fn fetch_plain(url: &str, timeout: Duration) -> Result<(u16, Vec<u8>)> {
         .send()
         .await?;
     let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_str().to_ascii_lowercase(),
+                v.to_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
     let bytes = resp.bytes().await?.to_vec();
-    Ok((status, bytes))
+    Ok((status, headers, bytes))
 }
 
 fn impersonate_candidates() -> Vec<String> {
@@ -230,6 +239,46 @@ fn fetch_impersonated(url: &str, timeout: Duration) -> Option<Result<(u16, Vec<u
     None
 }
 
+/// The provider named in a `blocked` error for `host`.
+fn provider_for(host: &str) -> &'static str {
+    let h = host
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if h == "idx.co.id" || h.ends_with(".idx.co.id") {
+        "idx"
+    } else if h == "ksei.co.id" || h.ends_with(".ksei.co.id") {
+        "ksei"
+    } else {
+        "ownership"
+    }
+}
+
+/// The `blocked` error for a refusal of `url`: `what` is the described
+/// refusal, `tail` what was tried.
+pub fn blocked_error(url: &str, refusal: Refusal, what: &str, tail: &str) -> IdxError {
+    let host = cloudflare::host(url);
+    IdxError::blocked(
+        provider_for(host),
+        refusal,
+        format!(
+            "{host} answered with {what}{tail}. It usually passes later or from an ordinary home or office connection (data centres, VPNs and CI runners are often refused). {MANUAL_HINT}"
+        ),
+    )
+}
+
+/// A non-2xx answer that is not a Cloudflare refusal.
+fn http_error(url: &str, status: u16, tail: &str) -> IdxError {
+    if status == 404 {
+        return IdxError::NotFound(format!("{url}: HTTP 404{tail}"));
+    }
+    IdxError::Network(format!(
+        "{} answered HTTP {status}{tail}",
+        cloudflare::host(url)
+    ))
+}
+
 /// Downloads `url` as a browser would. See the module docs for the strategy.
 pub async fn fetch_browser(url: &str, timeout: Duration) -> Result<Vec<u8>> {
     if let Some(path) = url.strip_prefix("file://") {
@@ -241,71 +290,104 @@ pub async fn fetch_browser(url: &str, timeout: Duration) -> Result<Vec<u8>> {
         return std::fs::read(path)
             .map_err(|e| IdxError::Usage(format!("cannot read {path}: {e}")));
     }
-    let (status, body) = fetch_plain(url, timeout).await?;
-    if (200..300).contains(&status) && !looks_like_challenge(status, &body) {
-        return Ok(body);
-    }
-    tracing::info!(status, "plain request was blocked, trying curl-impersonate");
+    let (status, headers, body) = fetch_plain(url, timeout).await?;
+    let Some(first) = cloudflare::refusal(status, &headers, &body) else {
+        if (200..300).contains(&status) {
+            return Ok(body);
+        }
+        // Not Cloudflare: curl-impersonate would get the same answer.
+        return Err(http_error(url, status, ""));
+    };
+    tracing::info!(status, refusal = ?first, "plain request was refused, trying curl-impersonate");
     let _wait = crate::progress::request(url);
     match fetch_impersonated(url, timeout) {
-        Some(Ok((code, body))) if (200..300).contains(&code) && !looks_like_challenge(code, &body) => {
-            Ok(body)
+        Some(Ok((code, body))) => {
+            // curl reports no headers here; after a refusal a bare 403 is one too.
+            let again = cloudflare::refusal(code, &[], &body).or((code == 403).then_some(first));
+            match again {
+                None if (200..300).contains(&code) => Ok(body),
+                None => Err(http_error(url, code, " through curl-impersonate")),
+                Some(r) => Err(blocked_error(
+                    url,
+                    r,
+                    &cloudflare::describe(r, code, &[]),
+                    " even through curl-impersonate",
+                )),
+            }
         }
-        Some(Ok((code, _))) => Err(IdxError::Network(format!(
-            "idx.co.id answered HTTP {code} even through curl-impersonate. {MANUAL_HINT}"
-        ))),
         Some(Err(e)) => Err(e),
-        None => Err(IdxError::Network(format!(
-            "idx.co.id answered HTTP {status} to a plain request and no curl-impersonate binary was found. {MANUAL_HINT}"
-        ))),
+        None => Err(blocked_error(
+            url,
+            first,
+            &cloudflare::describe(first, status, &headers),
+            " and no curl-impersonate binary was found",
+        )),
     }
 }
 
-/// Fetches the listing page and returns the above-1 % files, newest first.
-/// Returns the files plus notes (for example that the mirror was used).
-///
-/// `IDX_OWNERSHIP_SOURCE`: `auto` (default: idx.co.id, then the mirror),
-/// `idx` (never the mirror) or `mirror` (skip idx.co.id).
-pub async fn discover(timeout: Duration) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
-    let source = std::env::var("IDX_OWNERSHIP_SOURCE")
+fn source_setting() -> String {
+    std::env::var("IDX_OWNERSHIP_SOURCE")
         .unwrap_or_default()
-        .to_ascii_lowercase();
-    if source == "mirror" {
-        let base = super::mirror::base().ok_or_else(|| {
-            IdxError::Config("IDX_OWNERSHIP_SOURCE=mirror but IDX_OWNERSHIP_MIRROR=off".into())
-        })?;
-        let index = super::mirror::index(&base, timeout).await?;
-        return Ok((
-            super::mirror::to_discovered(&base, &index),
-            vec![format!(
-                "IDX_OWNERSHIP_SOURCE=mirror: listing from {base} (same IDX files, SHA-256 checked on download)"
-            )],
-        ));
-    }
-    let explicit_page = std::env::var("IDX_OWNERSHIP_PAGE_URL").ok();
-    let page_url = explicit_page
-        .clone()
-        .unwrap_or_else(|| PAGE_URL.to_string());
-    let direct = match fetch_browser(&page_url, timeout).await {
-        Ok(bytes) => {
-            let files = parse_page(&String::from_utf8_lossy(&bytes));
-            if files.is_empty() {
-                Err(IdxError::provider(
-                    "idx",
-                    "the Data Kepemilikan Saham page had no \"Pemegang Saham di Atas 1%\" entries; the page layout may have changed",
-                ))
-            } else {
-                Ok(files)
-            }
+        .to_ascii_lowercase()
+}
+
+/// The above-1 % files on the idx.co.id page (or `IDX_OWNERSHIP_PAGE_URL`).
+async fn idx_page(timeout: Duration) -> Result<Vec<DiscoveredFile>> {
+    let page_url = std::env::var("IDX_OWNERSHIP_PAGE_URL").unwrap_or_else(|_| PAGE_URL.to_string());
+    let bytes = fetch_browser(&page_url, timeout).await?;
+    Ok(parse_page(&String::from_utf8_lossy(&bytes)))
+}
+
+/// Why the mirror is used instead, for the note.
+fn fallback_reason(err: &IdxError) -> String {
+    match err {
+        IdxError::Blocked { refusal, .. } => {
+            format!("idx.co.id answered with {}", refusal.noun())
         }
-        Err(e) => Err(e),
-    };
+        e => format!("idx.co.id unavailable ({})", short(&e.to_string())),
+    }
+}
+
+/// `err` with the mirror's failure appended, keeping a `blocked` error
+/// `blocked` so scripts still see why idx.co.id failed.
+fn with_mirror_failure(err: IdxError, mirror: &IdxError) -> IdxError {
+    match err {
+        IdxError::Blocked {
+            provider,
+            refusal,
+            message,
+        } => IdxError::Blocked {
+            provider,
+            refusal,
+            message: format!("{message}. The GitHub mirror also failed: {mirror}"),
+        },
+        e => IdxError::Network(format!("{e}. The GitHub mirror also failed: {mirror}")),
+    }
+}
+
+/// The above-1 % files from the parsed page, or from the mirror when the
+/// page failed or listed none.
+async fn above1_from(
+    page: Result<Vec<DiscoveredFile>>,
+    timeout: Duration,
+) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
+    let direct = page.and_then(|files| {
+        if files.is_empty() {
+            Err(IdxError::provider(
+                "idx",
+                "the Data Kepemilikan Saham page had no \"Pemegang Saham di Atas 1%\" entries; the page layout may have changed",
+            ))
+        } else {
+            Ok(files)
+        }
+    });
     let err = match direct {
         Ok(files) => return Ok((files, vec![])),
         Err(e) => e,
     };
     // A page the caller pointed at explicitly is not second-guessed.
-    let Some(base) = super::mirror::base().filter(|_| explicit_page.is_none() && source != "idx")
+    let explicit_page = std::env::var("IDX_OWNERSHIP_PAGE_URL").is_ok();
+    let Some(base) = super::mirror::base().filter(|_| !explicit_page && source_setting() != "idx")
     else {
         return Err(err);
     };
@@ -316,23 +398,41 @@ pub async fn discover(timeout: Duration) -> Result<(Vec<DiscoveredFile>, Vec<Str
             if files.is_empty() {
                 return Err(err);
             }
-            let reason =
-                if err.to_string().contains("Cloudflare") || err.to_string().contains("HTTP 403") {
-                    "idx.co.id refused this client (Cloudflare)".to_string()
-                } else {
-                    format!("idx.co.id unavailable ({})", short(&err.to_string()))
-                };
             Ok((
                 files,
                 vec![format!(
-                    "{reason}; using the GitHub mirror {base}, which holds the same IDX files (SHA-256 checked on download)"
+                    "{}; using the GitHub mirror {base}, which holds the same IDX files (SHA-256 checked on download)",
+                    fallback_reason(&err)
                 )],
             ))
         }
-        Err(me) => Err(IdxError::Network(format!(
-            "{err}. The GitHub mirror also failed: {me}"
-        ))),
+        Err(me) => Err(with_mirror_failure(err, &me)),
     }
+}
+
+async fn mirror_only(timeout: Duration) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
+    let base = super::mirror::base().ok_or_else(|| {
+        IdxError::Config("IDX_OWNERSHIP_SOURCE=mirror but IDX_OWNERSHIP_MIRROR=off".into())
+    })?;
+    let index = super::mirror::index(&base, timeout).await?;
+    Ok((
+        super::mirror::to_discovered(&base, &index),
+        vec![format!(
+            "IDX_OWNERSHIP_SOURCE=mirror: listing from {base} (same IDX files, SHA-256 checked on download)"
+        )],
+    ))
+}
+
+/// Fetches the listing page and returns the above-1 % files, newest first.
+/// Returns the files plus notes (for example that the mirror was used).
+///
+/// `IDX_OWNERSHIP_SOURCE`: `auto` (default: idx.co.id, then the mirror),
+/// `idx` (never the mirror) or `mirror` (skip idx.co.id).
+pub async fn discover(timeout: Duration) -> Result<(Vec<DiscoveredFile>, Vec<String>)> {
+    if source_setting() == "mirror" {
+        return mirror_only(timeout).await;
+    }
+    above1_from(idx_page(timeout).await, timeout).await
 }
 
 fn short(s: &str) -> String {
@@ -410,12 +510,51 @@ mod tests {
     }
 
     #[test]
-    fn challenge_detection() {
-        assert!(looks_like_challenge(403, b""));
-        assert!(looks_like_challenge(
-            200,
-            b"<title>Just a moment...</title>"
-        ));
-        assert!(!looks_like_challenge(200, b"PK\x03\x04"));
+    fn the_fallback_note_says_which_refusal() {
+        let e = blocked_error(
+            PAGE_URL,
+            Refusal::Challenge,
+            "a Cloudflare challenge (HTTP 403)",
+            "",
+        );
+        assert_eq!((e.code(), e.exit_code()), ("blocked", 3));
+        assert_eq!(
+            fallback_reason(&e),
+            "idx.co.id answered with a Cloudflare challenge"
+        );
+        let e = blocked_error(
+            PAGE_URL,
+            Refusal::Block,
+            "a Cloudflare block page (HTTP 403)",
+            "",
+        );
+        assert_eq!(
+            fallback_reason(&e),
+            "idx.co.id answered with a Cloudflare block page"
+        );
+        assert!(
+            e.to_string()
+                .starts_with("idx: www.idx.co.id answered with a Cloudflare block page"),
+            "{e}"
+        );
+        assert!(e.to_string().contains("IDX_OWNERSHIP_SOURCE=mirror"), "{e}");
+        let outage = http_error("https://www.idx.co.id/x", 503, "");
+        assert_eq!(outage.code(), "network");
+        assert!(fallback_reason(&outage).contains("HTTP 503"));
+        assert!(!outage.to_string().contains("Cloudflare"));
+        assert_eq!(
+            http_error("https://h.example/x.xlsx", 404, "").exit_code(),
+            4
+        );
+        // The mirror failing too keeps the error `blocked`.
+        let both = with_mirror_failure(e, &IdxError::Network("down".into()));
+        assert_eq!(both.code(), "blocked");
+        assert!(
+            both.to_string()
+                .ends_with("The GitHub mirror also failed: network: down"),
+            "{both}"
+        );
+        assert_eq!(provider_for("127.0.0.1:18765"), "ownership");
+        assert_eq!(provider_for("www.ksei.co.id"), "ksei");
     }
 }

@@ -46,6 +46,16 @@ in order:
 accepts `file://` paths. `idx ownership discover` lists what is available,
 where it comes from and which months are already imported.
 
+When Cloudflare refuses idx.co.id, with a challenge ("Just a moment...",
+response header `cf-mitigated: challenge`) or a block page ("Attention
+Required! | Cloudflare"), and no curl-impersonate binary gets through, the
+error has the JSON code `blocked` (exit 3, as any network failure) and names
+the kind of refusal and the ways out: retry later or from another network,
+the mirror, curl-impersonate, or a download in a browser plus
+`import --file`. `--latest`, `--all` and `discover` still fall back to the
+mirror, and the warning says which refusal it was. Any other failure (an
+outage, a 404) keeps its HTTP status and is not called Cloudflare.
+
 ## The mirror
 
 `.github/workflows/ownership.yml` runs `scripts/ownership_mirror.py` at 08:17,

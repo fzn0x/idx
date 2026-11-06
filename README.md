@@ -172,7 +172,7 @@ idx -o json stocks history TLKM --period 1y --interval 1wk \
 - stdout carries exactly one JSON document; everything else goes to stderr.
 - The envelope records `provider`, `fetched_at`, `cached`, `stale` and `warnings`.
 - Fields the source did not return are `null`. Nothing is estimated.
-- Exit codes: `0` ok · `2` usage · `3` network/provider · `4` not found · `5` offline cache miss · `6` config.
+- Exit codes: `0` ok · `2` usage · `3` network/provider (JSON code `blocked` when the source's bot protection, Cloudflare, refused this network) · `4` not found · `5` offline cache miss · `6` config.
 
 Full field reference: [docs/json-output.md](docs/json-output.md).
 Configuration and cache: [docs/configuration.md](docs/configuration.md).
@@ -268,7 +268,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 | Yahoo Finance `v7/finance/quote` | quotes | anonymous cookie + crumb, cached 6 h | Falls back to the chart endpoint (fewer fields) if rejected |
 | Yahoo Finance `v10/finance/quoteSummary` | profile, fundamentals, earnings | same session | Statement modules are empty at the source, so they are not used |
 | Yahoo Finance `fundamentals-timeseries` | financials | none | Annual, quarterly and TTM statement items |
-| idx.co.id "Data Kepemilikan Saham" page + `Media/*.xlsx` | ownership (KSEI monthly register) | none, but Cloudflare bot protection | Mirrored three times a day by GitHub Actions to the [`ownership-data`](https://github.com/fzn0x/idx/releases/tag/ownership-data) release (byte-identical files, SHA-256 in `index.json`). The CLI tries idx.co.id first, then the mirror. See [docs/ownership.md](docs/ownership.md) |
+| idx.co.id "Data Kepemilikan Saham" page + `Media/*.xlsx` | ownership (KSEI monthly register) | none, but Cloudflare bot protection | Mirrored three times a day by GitHub Actions to the [`ownership-data`](https://github.com/fzn0x/idx/releases/tag/ownership-data) release (byte-identical files, SHA-256 in `index.json`). The CLI tries idx.co.id first, then the mirror; a Cloudflare refusal is the JSON error code `blocked`. See [docs/ownership.md](docs/ownership.md) |
 | Indo Premier (IPOT) `module/saham/include/data-brokersummary.php` | broker summary | none | Top 10 buyers and sellers per range, ranked by lots; figures of a million and more are rounded to one decimal by the source (`rounded: true`). Its nginx answers spurious 404s in bursts, so a 404 is retried with backoff. Broker names come from IDX's member list, bundled as `data/brokers.csv`; `bandar` computes its readings from these summaries |
 | idx.co.id JSON endpoints behind its pages (`primary/TradingSummary/GetStockSummary`, `GetBrokerSummary`, `GetIndexSummary`, `ListedCompany/GetTradingInfoSS`, `Home/GetCalendar`, `StockData/GetSecuritiesStock`, `ExchangeMember/GetBrokerSearch`) | foreign flow, member activity, indices, the exchange calendar, listed stocks, members | none, but Cloudflare bot protection | Foreign trading is published in shares only; `foreign_net_value_at_close` (net shares × close) is a rupiah scale, not the traded value. Ordinary connections pass; data centres and CI runners are often refused, and the error says so. Closed sessions are cached for 30 days |
 | Indo Premier (IPOT) `module/saham/include/corporateaction.php` | corporate actions, RUPS, warrants and rights | none | Same module and spurious-404 retry as the broker summary; repeated rows are dropped |
