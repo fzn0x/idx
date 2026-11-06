@@ -28,6 +28,6 @@ FORM: Grounded candidate 6 of my ordered list (KRL and MRT Jakarta dot-matrix de
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
 ## Unresolved
-- The session timetable and countdown need IDX's published trading hours from a primary source; without a verified schedule the band shows open or closed only.
+- Settled 2026-11-06: the timetable and countdown follow IDX's regular-market hours from its "Trading Hours and Mechanism" page (Decree Kep-00158/BEI/10-2026, Rule II-A), checked against the live page; web/public/clock.js holds them.
 - Ownership data on the web: only what the register mirror syncs; the terminal states the limitation.
 - Screenshots for the README come from this build once reviewed.

@@ -1,323 +1,324 @@
 ---
 name: idx web surface
-description: The published financial statement page. Ink-ruled tables on cool newsprint, one committed band of idx green, red only for what fell.
+description: Papan Stasiun. The IDX session as a station departure board on black glass, flush panels split by 1px rules, one live circuit in idx mint.
 colors:
-  paper: "#f1f1ee"
-  paper-deep: "#e6e6e1"
-  ink: "#111312"
-  ink-2: "#3b413d"
-  ink-3: "#5e665f"
-  rule: "#1b1e1c"
-  rule-soft: "#b9bcb5"
-  green: "#16a34a"
-  green-deep: "#0f6b31"
-  green-ink: "#0b4d24"
-  green-tint: "#dcefe2"
-  red: "#b3122f"
-  band-text: "#ffffff"
-  band-text-soft: "#e9f6ee"
+  ground: "#0b0f14"
+  rule: "#1b242d"
+  ghost: "#17202a"
+  raise: "#121a22"
+  fill: "#34404c"
+  edge: "#56636f"
+  dim: "#8b98a5"
+  lit: "#e6edf3"
+  mint: "#4ade80"
+  rose: "#f43f5e"
+  amber: "#e3b341"
 typography:
-  masthead:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "clamp(1.3rem, 2.2vw, 1.6rem)"
-    fontWeight: 900
-    lineHeight: 1.35
-    letterSpacing: "0.04em"
-    fontVariation: "'wdth' 75"
-  strip:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "1.05rem"
-    fontWeight: 800
-    lineHeight: 1.05
-    letterSpacing: "0.04em"
-    fontVariation: "'wdth' 75"
-  figure-display:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "clamp(1.6rem, 3vw, 2.2rem)"
+  led-index:
+    fontFamily: "Doto, Martian Mono, ui-monospace, monospace"
+    fontSize: "56px"
     fontWeight: 800
     lineHeight: 1
-    letterSpacing: "-0.02em"
-    fontFeature: "tabular-nums lining-nums"
-  symbol:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "1.02rem"
-    fontWeight: 800
-    letterSpacing: "-0.01em"
-  body:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "0.95rem"
-    fontWeight: 400
-    lineHeight: 1.45
-  table:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "0.9rem"
-    fontWeight: 400
-    fontFeature: "tabular-nums lining-nums"
-  label:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "0.76rem"
-    fontWeight: 700
     letterSpacing: "0.04em"
-  caption:
-    fontFamily: "Archivo, Helvetica Neue, Arial, sans-serif"
-    fontSize: "0.8rem"
-    fontWeight: 500
-    lineHeight: 1.45
-  mono:
-    fontFamily: "ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
-    fontSize: "0.78rem"
-    lineHeight: 1.45
+    fontFeature: "'tnum'"
+  led-clock:
+    fontFamily: "Doto, Martian Mono, ui-monospace, monospace"
+    fontSize: "28px"
+    fontWeight: 800
+    lineHeight: 1
+    letterSpacing: "0.04em"
+    fontFeature: "'tnum'"
+  led-change:
+    fontFamily: "Doto, Martian Mono, ui-monospace, monospace"
+    fontSize: "22px"
+    fontWeight: 800
+    lineHeight: 1
+    letterSpacing: "0.04em"
+    fontFeature: "'tnum'"
+  wordmark:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "16px"
+    fontWeight: 700
+    letterSpacing: "-0.03em"
+  command:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "15px"
+    fontWeight: 400
+  body:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "13px"
+    fontWeight: 400
+    lineHeight: 1.55
+    fontFeature: "'tnum'"
+  panel-title:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "12px"
+    fontWeight: 700
+    letterSpacing: "0.14em"
+  label:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "12px"
+    fontWeight: 600
+    letterSpacing: "0.1em"
+    fontVariation: "'wdth' 87.5"
+  data:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "12px"
+    fontWeight: 400
+    lineHeight: "16px"
+    fontFeature: "'tnum'"
+    fontVariation: "'wdth' 75"
+  machine-line:
+    fontFamily: "Martian Mono, ui-monospace, Cascadia Mono, Menlo, Consolas, monospace"
+    fontSize: "12px"
+    fontWeight: 400
+    letterSpacing: "0.16em"
+    fontVariation: "'wdth' 75"
 rounded:
   none: "0px"
-  mark: "7px"
 spacing:
-  hair: "0.25rem"
-  row: "0.34rem"
-  cell: "0.4rem"
-  xs: "0.5rem"
-  sm: "0.75rem"
-  md: "1rem"
-  lg: "1.5rem"
-  xl: "2rem"
-  col: "2.5rem"
-  section: "3rem"
-  gutter: "clamp(1rem, 3vw, 2.5rem)"
+  gutter: "16px"
+  gutter-narrow: "12px"
+  top-bar: "40px"
+  gate: "44px"
+  status-bar: "28px"
+  cell-x: "10px"
+  row-y: "4px"
+  board-row-y: "7px"
+  panel-body: "12px 16px 14px"
+  panel-head: "9px 16px 8px"
 components:
-  masthead-band:
-    backgroundColor: "{colors.green-deep}"
-    textColor: "{colors.band-text}"
-    padding: "0.7rem 0"
-  strip:
+  button-outline:
     backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.strip}"
-    padding: "0.35rem 0"
-  strip-green:
-    backgroundColor: "{colors.green-deep}"
-    textColor: "{colors.band-text}"
-    typography: "{typography.strip}"
-    padding: "0.4rem 0.6rem"
-  stamp:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "0.7rem 1.1rem"
-  stamp-hover:
-    backgroundColor: "{colors.ink}"
-    textColor: "{colors.paper}"
-  stamp-active:
-    backgroundColor: "{colors.green-deep}"
-    textColor: "{colors.band-text}"
-  button-run:
-    backgroundColor: "{colors.ink}"
-    textColor: "{colors.paper}"
+    textColor: "{colors.lit}"
     typography: "{typography.label}"
     rounded: "{rounded.none}"
-    padding: "0.45rem 0.8rem"
-  button-run-hover:
-    backgroundColor: "{colors.green-deep}"
-  button-copy:
+    padding: "0 14px"
+    height: "28px"
+  button-outline-hover:
+    backgroundColor: "{colors.lit}"
+    textColor: "{colors.ground}"
+  button-go:
+    backgroundColor: "{colors.lit}"
+    textColor: "{colors.ground}"
+    typography: "{typography.panel-title}"
+    rounded: "{rounded.none}"
+    padding: "8px 12px"
+  button-go-hover:
+    backgroundColor: "{colors.ground}"
+    textColor: "{colors.lit}"
+  gate-input:
     backgroundColor: "transparent"
-    textColor: "{colors.ink}"
+    textColor: "{colors.lit}"
+    typography: "{typography.command}"
+    rounded: "{rounded.none}"
+    height: "{spacing.gate}"
+  nav-link:
+    backgroundColor: "transparent"
+    textColor: "{colors.dim}"
     typography: "{typography.label}"
-    rounded: "{rounded.none}"
-    padding: "0.2rem 0.5rem"
-  button-copy-hover:
-    backgroundColor: "{colors.ink}"
-    textColor: "{colors.paper}"
-  hint-chip:
+    padding: "0 12px"
+    height: "{spacing.top-bar}"
+  nav-link-current:
+    textColor: "{colors.lit}"
+  tab:
     backgroundColor: "transparent"
-    textColor: "{colors.ink-2}"
-    typography: "{typography.mono}"
-    rounded: "{rounded.none}"
-    padding: "0.15rem 0.5rem"
-  hint-chip-hover:
-    textColor: "{colors.ink}"
-  ruled-box:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "0.6rem 0.75rem"
-  prompt-input:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.mono}"
-    rounded: "{rounded.none}"
-    padding: "0.3rem 0"
-  table-header:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink-2}"
+    textColor: "{colors.dim}"
     typography: "{typography.label}"
-    padding: "0.45rem 0.4rem 0.3rem"
-  table-cell:
+    padding: "6px 6px 5px"
+  tab-selected:
+    textColor: "{colors.lit}"
+  panel-header:
+    backgroundColor: "{colors.ground}"
+    textColor: "{colors.lit}"
+    typography: "{typography.panel-title}"
+    padding: "{spacing.panel-head}"
+  table-row-hover:
+    backgroundColor: "{colors.raise}"
+  suggestion-selected:
+    backgroundColor: "{colors.lit}"
+    textColor: "{colors.ground}"
+  status-bar:
+    backgroundColor: "{colors.ground}"
+    textColor: "{colors.dim}"
+    typography: "{typography.label}"
+    height: "{spacing.status-bar}"
+  key-cap:
     backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.table}"
-    padding: "0.34rem 0.4rem"
+    textColor: "{colors.lit}"
+    padding: "0 4px"
+    height: "16px"
 ---
 
 # Design System: idx web surface
 
-Scope: this system governs the hosted web surface only (`web/public`: the landing page, the browser terminal and their renderers). The CLI's table output in a shell and the README / `assets/logo.svg` wordmark are separate artifacts and are not styled by it. The web reuses `assets/mark.svg` as its brand mark, unaltered; the mark's own palette (slate `#0b0f14`, mint `#4ade80`, rose `#f43f5e`) is an asset, not a token of this system.
-
 ## Overview
 
-**Creative North Star: "Laporan Keuangan Publikasi"**
+**Creative North Star: "Papan Stasiun"**
 
-The page is the full-page audited statement that Indonesian Tbk companies print in the newspaper. The product's own tables are the page: ruled black ink on cool newsprint, a double rule under every column header, a heavy rule closing every statement, numbered "Catatan" notes, and a signature block with a stamped action. One corporate band of idx green owns the masthead; everything below it is ink. There are no cards, no shadows, no rounded surfaces, no hero copy beside a screenshot. With the content removed the sheet still reads as a printed statement: rules, bands, column grid.
+The site is a Jakarta KRL departure board run as an institutional market terminal. One black glass ground, flush panels split by hairline rules, rows that hold still and flip in place when a value changes, a station clock and session timetable in a dot-matrix LED band, and a command line at the gate. The product proves itself live on a working market screen before it explains anything; explanation sits in the same panels, under the same rules, as the data.
 
-Density is newspaper density. Rows pack at 0.34rem vertical padding with no card padding around them; ticker symbols are set heavier and slightly larger than the row they lead so the board scans like a listings column. Everything is set in one variable face, Archivo: condensed black weights for mastheads and section strips in uppercase, regular weights with tabular lining figures for numbers and prose. Monospace appears only where the content is a literal command, tool name, JSON or the terminal prompt.
+Density is high and even. One working text size carries almost everything, and hierarchy comes from weight, caps tracking, the width axis, the numbered panel strips laid on a ghost-dot ground and the single step up into Doto in the band. Colour is near absent: the ground, five greys for structure and text, and three signal colours whose meanings never overlap. Mint is the live circuit and gains, rose is losses and errors, amber is lateness. Nothing glows, lifts, rounds or tweens.
 
-The one authored motion is the page coming off the press: on load the strip rules wipe in left to right once, and every minute the board refetches and cells whose value changed darken as if freshly inked, then settle. Both are disabled or absent under reduced motion. Visual rejections confirmed by the build: no cream paper, no serif, no gradient, no drop shadow, no border radius on any surface, no feature cards, no icon set.
+The monitor (home), the web terminal and the 404 page share one shell: top bar, gate, content panels, fixed status bar. The terminal is the same board with the gate on top and each result printed as a numbered panel with its own machine line, newest first. The world rejects the dark developer-tool landing (headline and install line beside a terminal screenshot, feature cards) and the neon-on-black terminal costume.
 
 **Key Characteristics:**
-- Cool newsprint ground (`paper`) with near-black ink; rules carry the structure, not boxes
-- One committed band of deep idx green at page scale (masthead, optional green strip); green ink for links and positive figures
-- Red is reserved for negative figures and errors
-- Archivo throughout: condensed 900/800 uppercase for mastheads and strips, tabular lining figures everywhere
-- Ruled tables: 3px double rule under the header, 1px soft rules between rows, 2px heavy rule closing the statement
-- Zero radius, zero shadow; the only rotation on the page is the stamp
-- Motion is print, not UI: a one-time rule wipe and a 1.4s re-ink of changed cells
+- Black glass ground with flush panels and 1px rules; no cards, shadows, radius or glow.
+- One live circuit in idx mint; rose and amber each carry exactly one meaning.
+- Doto dot-matrix for the LED band figures only; Martian Mono for everything else, condensed in tables, tabular figures throughout.
+- Every panel is addressable: numbered Indonesian title, English subtitle, age stamp, closing machine line.
+- Signature interaction: the board flip, a one-frame dot invert with no tween, and none at all under reduced motion.
+- Keyboard first (`/`, number keys, `?`), with every control fully working by mouse and touch.
 
 ## Colors
 
-A two-ink palette on newsprint: black ink does the work, deep green is the single corporate colour, red marks losses.
+A near-monochrome blue-black instrument palette in which colour appears only as signal.
 
 ### Primary
-- **Deep idx green** (`green-deep`): the committed band. Fills the masthead edge to edge and the optional `.strip.green` section head; the active state of the stamp and the hover state of the terminal's Run button; the prompt caret; the focus ring. This is the green the page is built from.
-- **Green ink** (`green-ink`): green pushed dark enough to print as text on paper. Links at rest and every positive figure (`.up`). Also the positive sparkline stroke.
-- **idx green** (`green`): the brand's bright green from `mark.svg`. On the page it appears only as the text-selection highlight; it is not a surface colour here.
-- **Green tint** (`green-tint`): the flash behind a freshly re-inked cell at the start of the `reink` animation, fading to transparent.
+- **idx Mint** (mint): the one live circuit. Focus rings (2px outline, 2px offset), the gate's caret, the gate label and bottom rule while it has focus, the live lamp in the status bar and the session cell, the lamp beside a board row that moved, the typeahead's matched characters, text selection, the busy runner over a pending terminal result, and every gain (prices, changes, rising chart lines, advancing breadth dots). 11:1 on the ground.
+
+### Secondary
+- **Signal Rose** (rose): losses, falling chart lines, declining breadth, and the error and offline states of the status lamp and result meta. 5.3:1 on the ground and still AA on the hover tone.
+
+### Tertiary
+- **Late Amber** (amber): delayed or stale only. A stale age stamp, the stale status lamp, a stale result's meta, the terminal's clock once a request runs slow. 9.9:1 on the ground.
 
 ### Neutral
-- **Paper** (`paper`): the page ground and the text colour of anything printed on ink (stamp hover, Run button, Copy hover). Cool, never cream.
-- **Paper deep** (`paper-deep`): scrollbar track only.
-- **Ink** (`ink`): body text, headings, the stamp border, the 3px masthead underline, inverted hover fills.
-- **Ink 2** (`ink-2`): column headers, company names, row labels, terminal warnings and `dt` keys. The second-pass grey of a halftone.
-- **Ink 3** (`ink-3`): captions, provenance footers, strip subtitles, the disclaimer, scroll cues. Quiet but still AA on paper.
-- **Rule** (`rule`): every structural rule: the 3px strip top, the 3px double header rule, the 2px closing rule, the 1px box border.
-- **Rule soft** (`rule-soft`): the 1px hairline between table rows and note paragraphs, the prompt input underline at rest, the hint chip border, the dashed sparkline baseline.
-- **Band text / band text soft** (`band-text`, `band-text-soft`): white and a pale green-white for text printed on the green band (title, dateline, nav).
-
-### Semantic
-- **Loss red** (`red`): negative figures (`.dn`), the negative sparkline stroke, terminal error lines. The stylesheet's `--stamp` property shares this value and colours the decorative `[PUBLIC]` stamp in the landing footer.
+- **Black Glass** (ground): the page, every panel, the gate, the status bar and the dialog. Taken from the mark's own tile.
+- **Hairline** (rule): the 1px splits between panels, rows, cells and bars.
+- **Ghost Dot** (ghost): unlit LED dots on the band and the stacked panel strips, volume bars in charts.
+- **Raised Row** (raise): the hover tone for table rows, rail entries and suggestions.
+- **Filler** (fill): the `<` run that pads every machine line, scrollbar thumbs.
+- **Control Edge** (edge): the 1px outline of buttons, key caps and the Star control, link underlines, chart axes. 3.1:1 on the ground.
+- **Dim** (dim): subtitles, labels, column heads, secondary values and the placeholder. 6.6:1.
+- **Lit** (lit): primary text and figures, the inverted fill of hovered, pressed and selected controls. 16:1.
 
 ### Named Rules
-**The One Band Rule.** Deep green is applied at page scale exactly once per page, as the masthead band; a second green strip is permitted for a section head but never for a card, a button fill at rest, or a background tint. Below the band, green is ink only (links, gains).
+**The One Live Circuit Rule.** Mint means live, focused, connected or up. It is never decoration, never a background fill, never a brand wash across a panel.
 
-**The Red Means Down Rule.** Red appears on figures that fell and on errors. It is never a highlight, a brand colour, or a call to action.
+**The Amber Means Late Rule.** Amber appears only when something is delayed or stale. It is not a warning colour, a highlight or a second accent.
 
-**The Ink On Paper Rule.** Interactive emphasis is inversion, not tinting: hover prints paper on ink (`stamp-hover`, `button-copy-hover`); there are no translucent, pastel or alpha-blended hover fills.
+**The Lit Inversion Rule.** Hover, pressed, selected and the primary call to action are shown by inverting to a lit fill with ground text. No tints, no coloured hover states.
 
 ## Typography
 
-**Display Font:** Archivo variable (Google Fonts, `wdth` 62–125, `wght` 100–900) with Helvetica Neue, Arial, sans-serif
-**Body Font:** Archivo, same file
-**Label/Mono Font:** ui-monospace, Cascadia Mono, Menlo, Consolas, monospace
+**Display Font:** Doto (with Martian Mono, ui-monospace fallback), dot-matrix, weight 800
+**Body Font:** Martian Mono (with ui-monospace, Cascadia Mono, Menlo, Consolas)
+**Label/Mono Font:** Martian Mono, its width axis set to 87.5% for labels and 75% for tables and machine lines
 
-**Character:** One grotesk doing every job, the way a newspaper's statement page is set in a single family. Condensing to `wdth` 75 at 800–900 gives the black masthead and section heads; the same face at 400–700 with tabular lining figures gives the board. Negative tracking on the large figures and symbols, positive tracking on the uppercase heads.
+**Character:** A departure board's LED figures over a single engineered monospace. Doto is the lamp; Martian Mono is the timetable, and its width axis does the work a second family would do elsewhere. Both load from Google Fonts only (Doto ROND and weights 100 and 700 to 900; Martian Mono wdth 75 to 100, wght 300 to 700), as the CSP requires.
 
 ### Hierarchy
-- **Masthead** (900, condensed `wdth` 75, `clamp(1.3rem, 2.2vw, 1.6rem)`, 1.35, uppercase, +0.04em): the statement title in the green band ("LAPORAN PASAR", "TERMINAL"). Its subtitle is a 500-weight span at `clamp(0.85rem, 1.2vw, 0.95rem)` in `band-text-soft`.
-- **Strip** (800, condensed, 1.05rem, uppercase, +0.04em): section heads set on a 3px-over-1px ruled strip ("PAPAN HARGA", "CATATAN"). A 500-weight 0.8rem subtitle in `ink-3` sits at the right of the strip, baseline-aligned.
-- **Figure display** (800, `clamp(1.6rem, 3vw, 2.2rem)`, 1, -0.02em, tabular): the composite index price on the index line. The only large number on the page.
-- **Symbol** (800, 1.02rem, -0.01em): the four-letter ticker leading each row, set heavier and larger than the row body.
-- **Headline** (800, 1.05 line height): the default for `h1`–`h3`; statement titles (`.stmt-title`, 0.8rem uppercase, 1px rule beneath) are the small case of this.
-- **Body** (400, 0.95rem, 1.45): keterangan lines, notes, terminal prose (max 72ch). Base page size is 16px; body copy inside statements steps down to 0.95rem.
-- **Table** (400, 0.9rem; 0.84rem under 46rem): board cells with tabular lining figures, right-aligned, no wrapping.
-- **Label** (700–800, 0.76rem, uppercase, +0.04em to +0.06em, `ink-2`): column headers, box labels ("INSTALL · LINUX, MACOS"), the index-line row label, the prompt label, Copy and Run buttons.
-- **Caption** (500, 0.8–0.82rem, `ink-3`): strip subtitles, provenance footers, datelines, the disclaimer, terminal entry metadata.
-- **Mono** (0.76–0.85rem): literal commands in `<code>` and `<pre>`, MCP tool names, the terminal command caption (700), the prompt input (1rem), hint chips, JSON output.
+- **LED index** (Doto 800, 56px, line-height 1): the IHSG level in the band. Steps to 48px under 80rem and 44px under 46rem.
+- **LED clock** (Doto 800, 28px): the WIB clock and the session countdown; 26px then 24px on smaller screens.
+- **LED change** (Doto 800, 22px): the index change beside the level; 20px on phones. The 404 status figure uses Doto at 72px.
+- **Wordmark** (Martian Mono 700, 16px, -0.03em): the `idx` beside the mark, nowhere else.
+- **Command** (Martian Mono 400, 15px): the gate input; 16px on phones so iOS does not zoom.
+- **Body** (Martian Mono 400, 13px, line-height 1.55): running text, notes (max 78ch), terminal prose (max 84ch), terminal result titles in sentence case.
+- **Panel title** (Martian Mono 700, 12px, 0.14em, uppercase): the Indonesian panel names.
+- **Label** (Martian Mono 600, 12px, 0.1em to 0.12em, uppercase, 87.5% width): nav, tabs, buttons, column heads, band cell labels, status words.
+- **Data** (Martian Mono 400, 12px, line-height 16px, 75% width, tabular): every table. Symbols set in 700 with 0.04em.
+- **Machine line** (Martian Mono 400, 12px, 0.16em, uppercase, 75% width): the passport string that closes each panel.
 
 ### Named Rules
-**The Literal Mono Rule.** Monospace is used only for text a user could type or paste: commands, tool names, JSON, the prompt. Never for labels, headings or numbers in tables.
+**The Single Size Rule.** 12px is the working size for labels, data, titles and machine lines. Hierarchy comes from weight, caps tracking, the width axis, the numbered panel strips and the Doto step, never from a ladder of Martian Mono sizes. Only running text (13px), the command input (15px) and the wordmark (16px) sit outside it.
 
-**The Tabular Rule.** `font-variant-numeric: tabular-nums lining-nums` is set on `body` and inherited; every figure in every column aligns without per-cell styling.
+**The Dot Matrix Is For Figures Rule.** Doto sets the band's big figures (index, change, clock, countdown) and the 404 status code. Never body text, labels, headings or buttons.
 
-**The Condensed Head Rule.** The condensed axis (`wdth` 75) is reserved for uppercase heads, the stamp and note numerals. Body, table and figure text stay at normal width.
+**The Tabular Rule.** Figures are tabular everywhere (`font-variant-numeric: tabular-nums` on the body), so a flipping value never shifts its column.
 
 ## Layout
 
-The sheet is a single centred column `min(84rem, 100% - 2 * gutter)` with a fluid gutter `clamp(1rem, 3vw, 2.5rem)`. The masthead band runs edge to edge and carries the same `.wrap` inside it as a three-column grid (brand · title · dateline). Below, `.sheet` pads 1.5rem top and 3rem bottom.
+A full-bleed shell of stacked horizontal bands, with no max-width container on the monitor and terminal:
 
-The first viewport is a two-column lead: `minmax(0, 2fr)` for the board, `minmax(17rem, 1fr)` for the keterangan aside, 2.5rem column gap and no row gap, both tracks aligned to start. Lower sections (`.section`) are separated by 2.5rem of air and begin with a strip; the movers and the three-form overview are `repeat(3, minmax(0, 1fr))` grids with a 2rem gap; the notes run as two CSS columns with a 2.5rem gap and a CSS counter. The signature block is `1fr auto`, separated by a 3px rule and 3rem of space.
+1. **Top bar** (40px): mark and wordmark, Monitor / Terminal / Docs nav, the Star control with a live count pushed right.
+2. **Gate** (44px input row): `PERINTAH` label, the command input with typeahead, Run, a key hint. Sticky to the top on the terminal.
+3. **LED band**: a grid of 1.8fr plus three 1fr cells (index, WIB clock, session, breadth) on the ghost-dot ground, with the full-width index tape along its foot.
+4. **Content**: on the monitor, 01 Papan Harga at two thirds beside a right column stacking 02 Saham Teraktif over 03 Keterangan, then a full-width stack (04 Ikhtisar, 05 Catatan, 06 Daftar Perintah) and the signature footer. On the terminal, results run in the left column beside a 300px sticky rail of commands and history.
+5. **Status bar** (28px, fixed to the bottom): live lamp, snapshot age, source, Pause, Keys, key hints.
 
-Vertical rhythm comes from rules rather than margins: rows at 0.34rem padding, strips at 0.35rem, note paragraphs at 0.5rem, box internals at 0.45–0.6rem, statement blocks at 0.6rem. Spacing steps that recur: 0.25, 0.34, 0.4, 0.5, 0.75, 1, 1.5, 2, 2.5, 3rem.
+The gutter is 16px (12px under 46rem) and every text edge in every panel keeps it, while panel edges meet the rule flush. Panel bodies pad 12px top, 14px bottom; headers 9px over 8px (12px over 11px on the stacked panels). Table cells pad 4px by 10px, board rows 7px, movers 3px.
 
-Breakpoints (max-width): at 64rem the lead, the three-up grids and the notes collapse to one column and the aside gains 2rem top margin. At 46rem the board hides its Name and Volume columns so five columns fit without horizontal scroll, the masthead becomes two columns with the title dropping to a full-width third row, the table steps to 0.84rem, the signature stacks, and the terminal prompt puts its label on its own row. Tables that still overflow get `overflow-x: auto`, a right-edge fade mask while more columns remain, and a text scroll cue.
+Breakpoints: under 80rem the band's index cell narrows to 1.3fr and the LED figures step down; under 64rem the monitor and terminal collapse to one column, the index cell spans the band, the three-faces and notes go single column, and the status bar drops the source note; under 46rem the gutter tightens, the gate label and key hint hide, the band goes two columns with breadth spanning, and the board drops rank, name, volume and value. A desktop screen up to 1080px tall shows the movers' top five beside the board; stacked, all ten.
 
-The terminal page is the same sheet as a flex column filling the viewport: output grows, each result is an `.entry` opened by a 3px rule, and the prompt form is sticky to the bottom on paper with a 3px rule above and 1px below.
+**The Flush Panel Rule.** Panels are flush rectangles divided by 1px hairline rules. Wrappers that hold panels and tabs carry no padding of their own; only the text inside them keeps the gutter.
+
+**The One Region Rule.** One region owns the screen: the board on the monitor, the newest result under the gate on the terminal. Everything else is a column or a stack beside or below it.
 
 ## Elevation & Depth
 
-Flat. No `box-shadow` is declared anywhere in the stylesheet and no surface is tinted to suggest lift. Depth is conveyed by rule weight: 3px for the top of a statement, 3px double under a header, 2px to close, 1px soft between rows. The sticky prompt is distinguished from the output only by its rules and the paper background. The single transient tone is the `reink` flash, a green tint that fades over 1.4s behind a changed cell.
+Flat. There are no shadows, no glows and no tonal elevation steps. Depth is expressed only by the 1px rule between regions and by the ghost-dot texture (4px pitch radial dots in the ghost colour) that marks the LED band and the stacked panel strips as the lamp surface. The keys dialog sits on a ground-coloured scrim at 78% opacity, outlined in the control edge, not lifted.
 
-### Named Rules
-**The Rule Weight Rule.** Hierarchy is 3 / 3-double / 2 / 1px in `rule` and `rule-soft`. Add a rule before adding a border, and a border before adding a background.
-
-**The No Shadow Rule.** Nothing casts a shadow. Overlap is not part of the vocabulary; the page is one sheet.
+**The No Lift Rule.** Nothing rises off the glass. State is shown by inversion, colour of the circuit or a rule turning mint, never by a shadow or a raised surface.
 
 ## Shapes
 
-Everything is square. Buttons, boxes, chips, inputs and the stamp have 0 radius. The one exception is the 34px brand mark, whose `7px` radius and 1px 35%-white border follow the rounded square of `mark.svg`. Borders are solid ink at 1px (boxes, copy button), 2px (small stamp, pill, closing rules) or 3px (primary stamp). The stamp is the page's only rotated element: -1.5° for the primary action, +2° for the small red `[PUBLIC]` stamp, -1° for terminal pills. The table scroll fade is a mask, not a shape. Sparklines and the tape are thin SVG polylines (1.6px, non-scaling) over a dashed baseline, inside the column grid.
+Square everything: zero radius on panels, buttons, inputs, key caps, tabs, dialogs and lamps. Status lamps are 7px squares, the moved-row lamp a 5px square, breadth and tape are dots on a 4px grid, the busy runner a 3px dot strip. Outlines are 1px in the control edge; selected nav links and tabs carry a 2px lit bottom rule. Icons are thin stroked SVG (1.5 to 1.6px, mitre joins): the star and the arrow.
+
+The brand mark (a rounded tile with gradient candles) is a fixed identity asset and keeps its own shape; it is the one exemption from the square rule and is never imitated by interface elements.
 
 ## Components
 
 ### Buttons
-- **Shape:** square (0 radius), no shadow.
-- **Stamp (primary action):** transparent fill, 3px `ink` border, `ink` text at 900 condensed uppercase 1.1rem with +0.08em tracking, padding 0.7rem 1.1rem, rotated -1.5°. One per page.
-- **Hover / Focus:** inverts to `ink` fill with `paper` text over 120ms ease-out; `:focus-visible` adds the global 2px `green-deep` outline at 2px offset. `:active` fills `green-deep` with white text.
-- **Run (terminal submit):** `ink` fill, `paper` text, 0.78rem 800 uppercase +0.06em, padding 0.45rem 0.8rem, no border; hover fills `green-deep`.
-- **Copy (inside ruled boxes):** transparent, 1px `rule` border, 0.76rem 700 uppercase label, padding 0.2rem 0.5rem; hover inverts to ink on paper.
-- **Hint chips (terminal):** transparent, 1px `rule-soft` border, mono 0.8rem in `ink-2`; hover darkens border and text to `ink`.
+Engraved, outlined, inverting.
+- **Shape:** square (0px), 1px control-edge outline.
+- **Outline (Run, Copy, Pause, Keys, Close):** transparent fill, lit label in the label style; 28px tall in the gate, 22px for Copy, 20px in the status bar.
+- **Hover:** inverts to a lit fill with ground text and a lit border. No transition.
+- **Go (Open the terminal):** the one filled control, lit fill with ground text, 700 caps, a stroked arrow at the right; hover inverts back to ground.
+- **Focus:** a 2px mint outline at 2px offset, as for every focusable element.
+- **Hints and range buttons:** the terminal's suggested-command chips and chart range buttons share the outline style; pressed range buttons invert; CLI-only hints use a dashed edge and dim text.
 
-### Links
-`green-ink` with a 1px underline at 0.16em offset; hover turns to `ink`. On the band, links are white with no colour change.
-
-### Cards / Containers
-- There are no cards. The container is the **ruled box** (`.box`): 1px `rule` border, 0.6rem 0.75rem padding, a 0.76rem uppercase label, a `pre` at 0.78rem, and a right-aligned Copy button in a 0.45rem grid gap.
-- **Statement** (`.stmt`): a 0.8rem uppercase title over a 1px rule, then a table or `pre` closed by a 2px rule.
-- **Terminal entry** (`.entry`): opened by a 3px rule, a caption row (mono command at 700, meta in `ink-3` pushed right), then a body that may be a table, a `dl` grid of key/values (dt in `ink-2`, dd at 600), a 72ch prose block, a reasons list, or a JSON `pre` capped at 28rem with 1px top and 2px bottom rules.
-
-### Inputs / Fields
-- **Prompt input:** transparent, no border except a 1px `rule-soft` underline, mono 1rem in `ink`, `green-deep` caret, outline suppressed in favour of the underline.
-- **Focus:** underline darkens to `ink`. The form itself is sticky with a 3px rule above.
-- **Label:** "Perintah · command" at 0.78rem 800 uppercase.
+### Gate (command line)
+- **Style:** a full-width row, no box; the input is borderless and transparent, lit text, mint caret, dim placeholder.
+- **Focus:** the row's bottom rule and the `PERINTAH` label turn mint.
+- **Typeahead:** a flush list under the gate, rows split by rules, kind in dim caps, key in lit 600 with matched characters in mint, description dim and condensed; hover raises, the selected row inverts to lit.
 
 ### Navigation
-- The masthead is the only navigation: brand (mark + 1.45rem 800 wordmark "idx" at -0.02em) on the left, statement title centred, dateline right in 0.82rem `band-text-soft` with the time in white 700. Nav links in the band are white at 0.88rem with 1rem left margin. On mobile the title drops below as a full-width left-aligned row. No menu, no hamburger.
+- **Top bar links:** dim caps labels, 12px padding, full bar height; hover lifts to lit; the current page is lit with a 2px lit bottom rule.
+- **Tabs (Saham Teraktif):** equal-width caps labels split by rules, the selected tab lit with a 2px lit bottom rule.
+- **Star control:** outlined, label plus a condensed count cell split by a rule; hover inverts.
 
-### Ruled Table (signature)
-`.tbl` is the page's unit. 100% width, collapsed borders, 0.9rem; header cells 0.76rem 700 uppercase in `ink-2`, right-aligned, padded 0.45rem 0.4rem 0.3rem, under a 3px double `rule`; body cells padded 0.34rem 0.4rem, right-aligned, no wrap, 1px `rule-soft` beneath; the last row closes with a 2px `rule`. First column (and any `.l`) is left-aligned. `.sym` sets the ticker at 1.02rem 800; `.name` is `ink-2` and truncates at 16rem (8rem on mobile); `.up` / `.dn` colour the change columns; `.muted` is `ink-3`. Statement tables inside `.stmt` left-align and wrap. A provenance `.foot` line in 0.8rem `ink-3` follows every live table.
+### Panels
+The addressable unit of the world.
+- **Header strip:** number in dim 600, the Indonesian title in 700 caps at 0.14em, an English subtitle in dim condensed text that truncates, and an age stamp pushed right (`AGE` in dim caps, the value lit, amber when stale). Stacked panels lay the strip on the ghost-dot ground.
+- **Body:** gutter padding, flush to the rules.
+- **Machine line:** the closing strip, a caps passport string such as `IDX.MARKET.V1<<YAHOO<<MINUTE<SNAPSHOT` padded to the edge by a run of `<` in the filler colour. The string is aria-hidden and paired with a normal-case screen-reader sentence.
+- **Focus:** panels are reachable by number keys and take a mint outline inset 2px.
 
-### Index line and tape (signature)
-Above the board: a baseline-aligned flex row with the uppercase 0.76rem row label, the 800-weight figure display price, a 1rem 700 change in `.up`/`.dn`, and breadth counts pushed right in `ink-3`, closed by a 1px soft rule. Beneath it a 44px full-width SVG tape; terminal entries use a 36px sparkline. Strokes are `green-ink` or `red` at 1.6px over a dashed `rule-soft` baseline.
+### Tables
+- **Style:** full width, collapsed, 12px data at 75% width, right-aligned figures, first column left; dim caps column heads; rows split by rules, the last row open.
+- **Hover:** the row takes the raised tone.
+- **Board:** 7px rows, bold symbols, a 5px mint lamp before the rank of any row whose values moved in the last refresh (its rank gains an accessible label saying so).
+- **Overflow:** a horizontally scrolling table fades its right 2.5rem and shows a caps scroll cue.
 
-### Strip (signature)
-The section head: 3px `rule` on top, 1px beneath, 0.35rem padding, condensed uppercase 1.05rem 800 title left and a 500-weight 0.8rem `ink-3` subtitle right, baseline-aligned. `.strip.green` prints the same strip as a `green-deep` band with white text and 0.4rem 0.6rem padding. With `body.draw` and motion allowed, the strip's top rule wipes in from left to right over 900ms (`cubic-bezier(0.16, 1, 0.3, 1)`), once.
+### LED band
+The station clock. Index level, change, WIB clock and session countdown in Doto over a ghost-dot ground; a square session lamp (mint when a session is on); breadth as a 12px bar of mint, rose and dim dots with lit counts; the index tape as a dot line, lit dots mint when rising and rose when falling.
 
-### Pill (terminal verdicts)
-Inline, 2px `currentColor` border, 0.8rem 800 uppercase +0.06em, padding 0.05rem 0.45rem, rotated -1°. Inherits the semantic colour of its text (`.up`, `.dn`, ink).
+### The board flip (signature)
+Each minute refresh patches the board, movers and band cell by cell. A cell whose text changed shows a single 140ms frame of inverted dots (lit ground, ground-coloured 3px dot grid, ground text) through `steps(1, end)`, then its new value. There is no tween, fade or slide. Under `prefers-reduced-motion: reduce` the value swaps with no flash, and the Pause control (or P) stops the refresh, the clocks and the flips together.
+
+### Status bar
+Fixed 28px strip. A square lamp and caps state word: mint for live, amber for stale, rose for offline and error, an outlined square for paused, dim for idle. Then the snapshot age (lit value), the source note (first to give way on narrow screens), and outlined buttons with key caps at the right.
+
+### Key caps
+Outlined 1px in the control edge, 18px minimum width, 16px line, lit 600 at 12px. Used inline in hints, the status bar and the keys dialog.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** start every statement, section or terminal entry with a 3px `rule` and close tables with a 2px `rule`; keep 1px `rule-soft` for rows.
-- **Do** set numbers in Archivo with tabular lining figures, right-aligned, and lead each row with the ticker at 1.02rem 800.
-- **Do** keep the green band to the masthead (and at most one `.strip.green`); use `green-ink` for links and gains below it.
-- **Do** use `red` only for negative figures and errors.
-- **Do** make hover and press states by inverting ink and paper within 120ms; keep `:focus-visible` as the 2px `green-deep` outline.
-- **Do** set uppercase heads in the condensed axis (`wdth` 75) at 800–900 with +0.04em to +0.08em tracking.
-- **Do** reserve monospace for literal commands, tool names, JSON and the prompt.
-- **Do** honour `prefers-reduced-motion`: the rule wipe is gated on `no-preference`; nothing else moves except the 1.4s re-ink of changed cells.
-- **Do** collapse to one column at 64rem and drop the Name and Volume columns at 46rem instead of forcing a horizontal scroll on the board.
+- **Do** split every region with a 1px rule in the hairline colour and let panels meet it flush.
+- **Do** open every content panel with number, Indonesian title, English subtitle and age stamp, and close it with an aria-hidden machine line plus a screen-reader sentence.
+- **Do** keep mint for live state, focus, the caret and gains; rose for losses and errors; amber for delayed or stale only.
+- **Do** show hover, pressed and selected by inverting to a lit fill with ground text.
+- **Do** set figures tabular and tables at the 75% width; set labels at 87.5%.
+- **Do** change live values with the one-frame flip (140ms, `steps(1, end)`) and swap them with no flash under reduced motion.
+- **Do** keep 12px as the working Martian Mono size and build hierarchy from weight, caps tracking and the Doto step.
 
 ### Don't:
-- **Don't** add `box-shadow`, gradients, translucent fills or a border radius to any surface; only the 34px brand mark is rounded.
-- **Don't** introduce cards, feature grids, hero screenshots or an icon set; the table is the component.
-- **Don't** use cream, warm grey or pure white as the page ground; paper is `paper` and the only white is text on the green band.
-- **Don't** use bright `green` as a fill or text colour on the sheet; it exists only in the brand mark and the selection highlight.
-- **Don't** colour a figure or label red for emphasis, warning badges or branding.
-- **Don't** add a second typeface, a serif, or a mono label style; Archivo carries every role.
-- **Don't** add a second rotated or stamped element to a page that already has its primary stamp.
-- **Don't** restyle the CLI's shell tables or the README logo to match this file; they are out of scope.
+- **Don't** use cards, shadows, glows, colour gradients on surfaces (the ghost-dot texture is the only pattern) or any border radius on interface elements.
+- **Don't** set Doto anywhere but the LED band figures and the 404 status code.
+- **Don't** tween, fade or slide a changing value; the board flips or it swaps.
+- **Don't** use mint as a background wash or decoration, or amber as a general highlight.
+- **Don't** add a ladder of Martian Mono sizes to create hierarchy.
+- **Don't** build a headline-and-screenshot developer landing, feature cards, or neon-on-black terminal styling.
+- **Don't** load fonts from anywhere but Google Fonts.
