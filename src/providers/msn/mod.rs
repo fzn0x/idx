@@ -13,7 +13,8 @@
 //! rotates it. MSN's `annualStatements` block has broken units for IDR and is
 //! deliberately not parsed; financial statements come from Yahoo.
 //! History is not served by MSN here (`Unsupported`), so `auto` uses Yahoo.
-//! Insights come from a second host (`api.msn.com`): see `insights.rs`.
+//! Insights come from a second host (`api.msn.com`): see `insights.rs`. The
+//! whole market's return windows come from one screener POST: see `screener.rs`.
 
 use std::sync::Arc;
 
@@ -22,12 +23,15 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
-use crate::model::{Fundamentals, History, Insights, Interval, Period, Profile, Quote, Symbol};
+use crate::model::{
+    Fundamentals, History, Insights, Interval, MarketReturns, Period, Profile, Quote, Symbol,
+};
 
 use super::{Provider, Sourced, Ttls};
 
 pub mod insights;
 pub mod parse;
+pub mod screener;
 
 pub use parse::{parse_autosuggest, parse_quotes};
 
@@ -229,6 +233,10 @@ impl Provider for Msn {
 
     async fn insights(&self, symbol: &Symbol) -> Result<Sourced<Insights>> {
         self.insights_report(symbol).await
+    }
+
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        self.market_list().await
     }
 
     async fn profile(&self, symbol: &Symbol) -> Result<Sourced<Profile>> {

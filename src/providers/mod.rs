@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    DividendHistory, Earnings, Financials, Fundamentals, History, Insights, Interval, Period,
-    Profile, Quote, StatementPeriod, Symbol,
+    DividendHistory, Earnings, Financials, Fundamentals, History, Insights, Interval,
+    MarketReturns, Period, Profile, Quote, StatementPeriod, Symbol,
 };
 
 pub mod idx;
@@ -164,6 +164,15 @@ pub trait Provider: Send + Sync {
     /// Rule-based statements about one company (MSN Money insights).
     async fn insights(&self, _symbol: &Symbol) -> Result<Sourced<Insights>> {
         Err(IdxError::unsupported(self.name(), "insights"))
+    }
+
+    /// Price returns (1w to 1y, YTD) for every listed stock in one call, for
+    /// the screener's return-window keys.
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        Err(IdxError::unsupported(
+            self.name(),
+            "market-wide return windows",
+        ))
     }
 
     async fn financials(
@@ -364,6 +373,10 @@ impl Provider for Chain {
         first_ok!(self, p => p.insights(symbol))
     }
 
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        first_ok!(self, p => p.market_returns())
+    }
+
     async fn financials(
         &self,
         symbol: &Symbol,
@@ -466,6 +479,9 @@ mod tests {
                 "ok",
             ))
         }
+        async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+            Ok(Sourced::fresh(vec![], "ok"))
+        }
     }
 
     struct Ok2;
@@ -535,9 +551,11 @@ mod tests {
             Box::new(Ok1),
         ]);
         assert_eq!(chain.insights(&sym()).await.unwrap().provider, "ok");
+        assert_eq!(chain.market_returns().await.unwrap().provider, "ok");
         // A provider without the capability alone: exit 6.
         let chain = Chain::new(vec![Box::new(Ok2)]);
         assert_eq!(chain.insights(&sym()).await.unwrap_err().exit_code(), 6);
+        assert_eq!(chain.market_returns().await.unwrap_err().exit_code(), 6);
     }
 
     #[tokio::test]

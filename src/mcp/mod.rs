@@ -174,17 +174,27 @@ pub struct OwnershipForeignArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ScreenArgs {
-    /// Comma-separated clauses such as "pe<15,roe>15,sector=financial,mcap>10T". Keys: pe fpe pb ps peg mcap price div eps volume chg roe roa margin opmargin de growth epsgrowth sector industry. Operators < <= > >= = !=; numbers accept K/M/B/T and %.
-    pub filter: String,
-    /// Sort key (any filter key), default mcap, descending.
+    /// Ready-made screen: top-performers (sort ret1y desc), worst-performers (ret1y asc), high-dividend (div>0, div desc), low-pe (pe>0, pe asc), 52w-high (range>=95, range desc), 52w-low (range<=5, range asc), high-volume (volume desc) or large-cap (mcap desc).
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Comma-separated clauses such as "pe<15,roe>15,sector=financial,mcap>10T", combined with the preset. Keys: pe fpe pb ps peg mcap price div eps volume chg range (0 at the 52-week low, 100 at the high) ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it) roe roa margin opmargin de growth epsgrowth sector industry. Operators < <= > >= = !=; numbers accept K/M/B/T and %.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Sort key (any numeric filter key). Default: the preset's, else mcap.
     #[serde(default)]
     pub sort: Option<String>,
+    /// Sort ascending. Default: descending, except for the low-pe, worst-performers and 52w-low presets.
+    #[serde(default)]
+    pub ascending: Option<bool>,
     /// Rows returned (default 25, 0 = all).
     #[serde(default)]
     pub limit: Option<u32>,
     /// Cap on per-company fundamentals fetches when a filter needs them (default 50).
     #[serde(default)]
     pub max_fundamentals: Option<u32>,
+    /// Join the return windows (return_1w_pct..return_1y_pct) even when no filter or the sort needs them (one extra request).
+    #[serde(default)]
+    pub returns: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1045,7 +1055,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_screen",
-        description = "Screens the IDX universe (~950 tickers) with a filter string such as \"pe<15,roe>15,sector=financial,mcap>10T\". Quote-level keys (pe fpe pb mcap price div eps volume chg) come from one batch quote; fundamentals keys (roe roa margin opmargin de growth epsgrowth peg ps sector industry) are fetched per company for the largest max_fundamentals survivors. Returns the idx.screen.v1 envelope with counts explaining how many tickers each stage kept."
+        description = "Screens the IDX universe (~950 tickers) with a filter string such as \"pe<15,roe>15,sector=financial,mcap>10T\" and/or a preset (top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap). Quote-level keys (pe fpe pb mcap price div eps volume chg range) come from one batch quote; ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it) from one request for MSN's whole-market list; fundamentals keys (roe roa margin opmargin de growth epsgrowth peg ps sector industry) are fetched per company for the largest max_fundamentals survivors. Returns the idx.screen.v1 envelope with the preset, every clause applied and counts explaining how many tickers each stage kept."
     )]
     async fn screen(
         &self,
@@ -1053,25 +1063,29 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                let filters = crate::analysis::screen::parse_filters(&a.filter)?;
+                use crate::analysis::screen::{parse_filters, Key, ScreenPreset};
+                let preset = match a.preset.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(p) => Some(p.parse::<ScreenPreset>()?),
+                    None => None,
+                };
+                let filters = parse_filters(a.filter.as_deref().unwrap_or(""))?;
                 let sort = match a.sort.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    None => crate::analysis::screen::Key::Mcap,
-                    Some(s) => crate::analysis::screen::Key::parse(s).ok_or_else(|| {
-                        IdxError::Usage(format!(
-                            "unknown sort key {s:?}; use one of {}",
-                            crate::analysis::screen::Key::ALL
-                        ))
-                    })?,
+                    None => None,
+                    Some(s) => Some(Key::parse(s).ok_or_else(|| {
+                        IdxError::Usage(format!("unknown sort key {s:?}; use one of {}", Key::ALL))
+                    })?),
                 };
                 let mut list = universe::load(None)?;
                 universe::extend_from_ownership(&mut list, &self.ownership_db);
                 let opts = service::ScreenOptions {
+                    preset,
                     filters,
                     sort,
-                    descending: true,
+                    descending: a.ascending.map(|asc| !asc),
                     limit: a.limit.unwrap_or(25) as usize,
                     max_fundamentals: a.max_fundamentals.unwrap_or(50) as usize,
                     with_fundamentals: false,
+                    with_returns: a.returns.unwrap_or(false),
                 };
                 ok(
                     SCHEMA_SCREEN,
@@ -1871,6 +1885,46 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    #[tokio::test]
+    async fn screen_tool_checks_preset_and_keys_before_fetching() {
+        let s = server();
+        let args = |preset: Option<&str>, filter: Option<&str>, sort: Option<&str>| ScreenArgs {
+            preset: preset.map(Into::into),
+            filter: filter.map(Into::into),
+            sort: sort.map(Into::into),
+            ascending: None,
+            limit: None,
+            max_fundamentals: None,
+            returns: None,
+        };
+        for bad in [
+            args(Some("best-ever"), None, None),
+            args(None, Some("ret2y>5"), None),
+            args(Some("low-pe"), None, Some("nope")),
+        ] {
+            let r = s.screen(Parameters(bad)).await.unwrap();
+            assert_eq!(r.is_error, Some(true));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+        // The fake provider has no market-wide return windows: unsupported.
+        let r = s
+            .screen(Parameters(args(Some("top-performers"), None, None)))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["exit_code"], 6, "{v}");
+        // The fake answers quotes; a preset without return keys works.
+        let r = s
+            .screen(Parameters(args(Some("large-cap"), None, None)))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.screen.v1", "{v}");
+        assert_eq!(v["data"]["preset"], "large-cap");
+        assert_eq!(v["data"]["sort"], "mcap");
     }
 
     #[tokio::test]

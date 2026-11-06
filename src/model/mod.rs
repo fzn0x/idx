@@ -59,7 +59,7 @@ pub use ownership::{
     IssuerFlow, IssuerForeign, Release, TypeFlow,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};
-pub use screen::{ScreenReport, ScreenRow};
+pub use screen::{MarketReturns, ScreenReport, ScreenRow};
 pub use technical::{
     Bollinger, Levels, Macd, MovingAverages, Signal, SignalLabel, Technical, Trend, VolumeStats,
 };

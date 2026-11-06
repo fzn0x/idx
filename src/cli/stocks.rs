@@ -2,7 +2,7 @@
 
 use clap::Subcommand;
 
-use crate::analysis::screen::{parse_filters, Key};
+use crate::analysis::screen::{parse_filters, Key, ScreenPreset};
 use crate::error::IdxError;
 use crate::error::Result;
 use crate::model::{Interval, Period, StatementPeriod, Symbol};
@@ -152,19 +152,26 @@ pub enum StocksCmd {
         period: Period,
     },
 
-    /// Screen the IDX universe (~950 tickers) by valuation, size, dividend and, optionally, profitability.
+    /// Screen the IDX universe (~950 tickers) by valuation, size, dividend, returns and, optionally, profitability; or pick a preset.
     #[command(
-        after_help = "Examples:\n  idx stocks screen -f \"pe<10,div>5,mcap>5T\"\n  idx stocks screen -f \"roe>15,pe<15,sector=financial\" --sort roe\n  idx stocks screen -f \"mcap>50T\" --fundamentals --sort margin -n 10\n\nKeys: pe fpe pb ps peg mcap price div eps volume chg (from one batch quote call);\n      roe roa margin opmargin de growth epsgrowth sector industry (per-company fundamentals,\n      fetched for the largest --max-fundamentals companies that pass the quote filters).\nOperators: < <= > >= = !=. Numbers accept K M B T suffixes and a trailing %.\nUniverse: bundled list of IDX issuers plus any seen by `idx ownership import`; override with --universe or IDX_UNIVERSE."
+        after_help = "Examples:\n  idx stocks screen -f \"pe<10,div>5,mcap>5T\"\n  idx stocks screen --preset top-performers -n 20            # best 1-year price return\n  idx stocks screen --preset top-performers --sort ret3m     # best 3-month return instead\n  idx stocks screen --preset low-pe -f \"mcap>10T\"\n  idx stocks screen --preset 52w-high\n  idx stocks screen -f \"ret1y>50,pe<15\" --sort ret1y\n  idx stocks screen -f \"roe>15,pe<15,sector=financial\" --sort roe\n  idx stocks screen -f \"mcap>50T\" --fundamentals --sort margin -n 10\n\nPresets: top-performers (sort ret1y desc), worst-performers (ret1y asc), high-dividend\n(div>0, div desc), low-pe (pe>0, pe asc), 52w-high (range>=95, range desc), 52w-low (range<=5,\nrange asc), high-volume (volume desc), large-cap (mcap desc).\nKeys: pe fpe pb ps peg mcap price div eps volume chg range (from one batch quote call);\n      ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it, from one request\n      for MSN's whole-market list, cached 15 minutes);\n      roe roa margin opmargin de growth epsgrowth sector industry (per-company fundamentals,\n      fetched for the largest --max-fundamentals companies that pass the quote filters).\nrange is the position in the 52-week range: 0 at the low, 100 at the high. volume is the\n3-month average.\nOperators: < <= > >= = !=. Numbers accept K M B T suffixes and a trailing %.\nUniverse: bundled list of IDX issuers plus any seen by `idx ownership import`; override with --universe or IDX_UNIVERSE."
     )]
     Screen {
+        /// Ready-made screen; -f adds clauses, --sort/--asc/--desc override its order.
+        #[arg(long, value_enum)]
+        preset: Option<ScreenPreset>,
         /// Comma-separated clauses, e.g. "pe<15,roe>15,sector=Banking".
-        #[arg(long, short = 'f', value_name = "SPEC", required = true)]
-        filter: String,
-        /// Sort key (any filter key); descending unless --asc.
-        #[arg(long, default_value = "mcap", value_name = "KEY")]
-        sort: String,
-        #[arg(long)]
+        #[arg(long, short = 'f', value_name = "SPEC")]
+        filter: Option<String>,
+        /// Sort key (any numeric filter key). Default: the preset's, else mcap.
+        #[arg(long, value_name = "KEY")]
+        sort: Option<String>,
+        /// Sort ascending (low-pe, worst-performers and 52w-low do by default).
+        #[arg(long, conflicts_with = "desc")]
         asc: bool,
+        /// Sort descending.
+        #[arg(long)]
+        desc: bool,
         /// Rows shown; 0 for all.
         #[arg(long, short = 'n', default_value_t = 25)]
         limit: usize,
@@ -174,6 +181,9 @@ pub enum StocksCmd {
         /// Fetch fundamentals for the results even when no filter needs them.
         #[arg(long)]
         fundamentals: bool,
+        /// Join MSN's return windows (ret1w..ret1y) even when no filter or the sort needs them.
+        #[arg(long)]
+        returns: bool,
         /// CSV of symbol,name to screen instead of the bundled universe.
         #[arg(long, value_name = "PATH")]
         universe: Option<std::path::PathBuf>,
@@ -324,30 +334,41 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             })
         }
         StocksCmd::Screen {
+            preset,
             filter,
             sort,
             asc,
+            desc,
             limit,
             max_fundamentals,
             fundamentals,
+            returns,
             universe,
         } => {
-            let filters = parse_filters(&filter)?;
-            let Some(sort_key) = Key::parse(&sort) else {
-                return Err(IdxError::Usage(format!(
-                    "unknown sort key {sort:?}; use one of {}",
-                    Key::ALL
-                )));
+            let filters = parse_filters(filter.as_deref().unwrap_or(""))?;
+            let sort = match sort.as_deref() {
+                None => None,
+                Some(s) => Some(Key::parse(s).ok_or_else(|| {
+                    IdxError::Usage(format!("unknown sort key {s:?}; use one of {}", Key::ALL))
+                })?),
             };
             let mut list = universe::load(universe.as_deref())?;
             universe::extend_from_ownership(&mut list, &ctx.settings.ownership_db);
             let opts = ScreenOptions {
+                preset,
                 filters,
-                sort: sort_key,
-                descending: !asc,
+                sort,
+                descending: if asc {
+                    Some(false)
+                } else if desc {
+                    Some(true)
+                } else {
+                    None
+                },
                 limit,
                 max_fundamentals,
                 with_fundamentals: fundamentals,
+                with_returns: returns,
             };
             let result = service::screen(ctx.provider.as_ref(), &list, &opts).await?;
             emit(ctx, SCHEMA_SCREEN, result, |d| {

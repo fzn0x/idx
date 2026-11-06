@@ -119,6 +119,25 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     for t in tools {
         walk(t["name"].as_str().unwrap(), &t["inputSchema"]);
     }
+    let screen = tools.iter().find(|t| t["name"] == "idx_screen").unwrap();
+    for arg in ["preset", "filter", "sort", "ascending", "returns", "limit"] {
+        assert!(
+            screen["inputSchema"]["properties"][arg].is_object(),
+            "idx_screen.{arg}"
+        );
+    }
+    assert_eq!(
+        screen["inputSchema"]["properties"]["ascending"]["type"],
+        "boolean"
+    );
+    let required = screen["inputSchema"]["required"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !required.contains(&serde_json::json!("filter")),
+        "filter is optional now: {required:?}"
+    );
     let insights = tools.iter().find(|t| t["name"] == "idx_insights").unwrap();
     assert!(insights["inputSchema"]["required"]
         .as_array()

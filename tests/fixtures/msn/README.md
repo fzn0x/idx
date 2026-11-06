@@ -47,3 +47,32 @@ MSN's crowd sentiment (`assets.msn.com/service/Finance/SentimentBrowser`,
 needs `flightId`) answered `[]` for BBCA and TLKM in the en-us, en-id, id-id,
 en-sg, en-gb and en-ww markets, for DBS on SGX and the TLK ADR; only US names
 such as MSFT had data. It is not used and no fixture is kept.
+
+## Screener (`Finance/Screener`, POST)
+
+Recorded 2026-11-06 06:54-07:01 WIB (Thursday 2026-11-05's close) with curl,
+User-Agent Chrome 130, `Content-Type: application/json`, same public key and
+common query. `POST https://assets.msn.com/service/Finance/Screener?apikey=<key>&cm=en-id&ocid=finance-utils-peregrine&it=web&scn=ANON&wrapodata=false`.
+A GET answers 500 (`Strategy not available ...`), no key 401, a malformed body 500.
+
+idx sends one request, the whole Indonesian market with the quote block only:
+
+```json
+{"filter":[{"key":"st_reg_id","keyGroup":"st_reg_","isRange":false}],"returnValueType":["quote"],"screenerType":"stock","limit":2000,"pageIndex":0}
+```
+
+It answered `count` 887 with 887 quotes (1.27 MB, ordered by market cap; not
+kept as a fixture). `limit` is honoured and `count` stays the full total;
+`pageIndex` is ignored. Each quote carries `return1Week`, `return1Month`,
+`return3Month`, `return6Month`, `returnYTD` and `return1Year` in percent.
+
+| file | request body | notes |
+| --- | --- | --- |
+| screener_region_id_limit12.json | the body above with `"limit":12` | `count` 887, 12 quotes (BBCA, BYAN, DCII, BBRI, BREN, BMRI, AMMN, TLKM, MORA, DSSA, ASII, BRPT): the truncated case |
+| screener_52wkhi_id_complete.json | MSN's `st_list_52wkhi` list for Indonesia, quote block only (exact body not kept) | `count` 38 = 38 quotes, a complete list; IBST lacks 1w..6m, GLOB every window, MTPS all but 1y |
+| screener_lowpe_id_empty.json | MSN's `st_list_lowpe` list for Indonesia (exact body not kept) | `{"count":0,...}`: the low-P/E list is empty for Indonesia; the empty-list case |
+
+MSN's own Indonesian preset lists are not used by idx: `st_list_topperfs` is
+the first 133 rows of a stale ordering (it holds MORA, down 85 % YTD),
+`st_list_lowpe`, `st_list_largecap` and `st_list_mostactive` are empty, and
+`st_list_52wkhi` holds stocks at 0 to 27 % of their 52-week range.

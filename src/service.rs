@@ -10,7 +10,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::analysis;
 use crate::analysis::bandar::{self as bd, Preset};
-use crate::analysis::screen::{self as scr, Filter, Key};
+use crate::analysis::screen::{self as scr, Filter, Key, ScreenPreset};
 use crate::brokers;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
@@ -98,18 +98,28 @@ pub async fn compare(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<Vec
 /// Screener settings.
 #[derive(Debug, Clone)]
 pub struct ScreenOptions {
+    /// Ready-made screen: its clauses come first, its sort and direction are
+    /// the defaults.
+    pub preset: Option<ScreenPreset>,
+    /// Clauses on top of the preset's.
     pub filters: Vec<Filter>,
-    pub sort: Key,
-    pub descending: bool,
+    /// Default: the preset's, else mcap.
+    pub sort: Option<Key>,
+    /// Default: the preset's direction, else descending.
+    pub descending: Option<bool>,
     /// 0 = all rows.
     pub limit: usize,
     /// Upper bound on per-symbol fundamentals calls (largest market caps first).
     pub max_fundamentals: usize,
     /// Fetch fundamentals even when no filter needs them.
     pub with_fundamentals: bool,
+    /// Join the market-wide return windows even when no filter or the sort
+    /// needs them.
+    pub with_returns: bool,
 }
 
-/// Quote-level screen over the universe, then a capped fundamentals pass.
+/// Quote-level screen over the universe (with the market-wide return
+/// windows joined when a key needs them), then a capped fundamentals pass.
 pub async fn screen(
     p: &dyn Provider,
     universe: &[Issuer],
@@ -118,6 +128,18 @@ pub async fn screen(
     if universe.is_empty() {
         return Err(IdxError::Usage("the ticker universe is empty".into()));
     }
+    let mut filters = match opts.preset {
+        Some(pr) => scr::parse_filters(pr.filter())?,
+        None => Vec::new(),
+    };
+    filters.extend(opts.filters.iter().cloned());
+    let sort = opts
+        .sort
+        .or(opts.preset.map(|pr| pr.sort()))
+        .unwrap_or(Key::Mcap);
+    let descending = opts
+        .descending
+        .unwrap_or_else(|| opts.preset.is_none_or(|pr| pr.descending()));
     let names: std::collections::HashMap<&Symbol, Option<&str>> = universe
         .iter()
         .map(|i| (&i.symbol, i.name.as_deref()))
@@ -154,10 +176,32 @@ pub async fn screen(
         ));
     }
 
-    let (quote_filters, fund_filters): (Vec<&Filter>, Vec<&Filter>) = opts
-        .filters
-        .iter()
-        .partition(|f| !f.key.needs_fundamentals());
+    // Return windows: one market-wide request. When a filter or the sort needs
+    // them a failure is fatal (a silently empty screen would mislead).
+    let returns_required = filters.iter().any(|f| f.key.needs_returns()) || sort.needs_returns();
+    let mut returns_source = None;
+    if returns_required || opts.with_returns {
+        match p.market_returns().await {
+            Ok(m) => {
+                let by_symbol: std::collections::HashMap<&Symbol, &crate::model::MarketReturns> =
+                    m.data.iter().map(|r| (&r.symbol, r)).collect();
+                for row in out.data.iter_mut() {
+                    if let Some(r) = by_symbol.get(&row.symbol) {
+                        scr::apply_returns(row, r);
+                    }
+                }
+                returns_source = m.data.first().map(|r| r.source.to_string());
+                out.absorb(&m);
+            }
+            Err(e) if returns_required => return Err(e),
+            Err(e) => out
+                .warnings
+                .push(format!("return windows unavailable: {e}")),
+        }
+    }
+
+    let (quote_filters, fund_filters): (Vec<&Filter>, Vec<&Filter>) =
+        filters.iter().partition(|f| !f.key.needs_fundamentals());
     let quote_filters: Vec<Filter> = quote_filters.into_iter().cloned().collect();
     let fund_filters: Vec<Filter> = fund_filters.into_iter().cloned().collect();
     let mut rows: Vec<ScreenRow> = out
@@ -168,8 +212,7 @@ pub async fn screen(
         .collect();
     let matched_quote_level = rows.len();
 
-    let need_fund =
-        opts.with_fundamentals || !fund_filters.is_empty() || opts.sort.needs_fundamentals();
+    let need_fund = opts.with_fundamentals || !fund_filters.is_empty() || sort.needs_fundamentals();
     let mut checked = 0usize;
     let mut capped = false;
     if need_fund && !rows.is_empty() {
@@ -209,20 +252,22 @@ pub async fn screen(
         }
     }
 
-    scr::sort_rows(&mut rows, opts.sort, opts.descending);
+    scr::sort_rows(&mut rows, sort, descending);
     let total = rows.len();
     if opts.limit > 0 {
         rows.truncate(opts.limit);
     }
     Ok(out.map(|_| ScreenReport {
-        filters: opts.filters.iter().map(|f| f.raw.clone()).collect(),
-        sort: opts.sort.name().to_string(),
-        descending: opts.descending,
+        preset: opts.preset.map(|pr| pr.name().to_string()),
+        filters: filters.iter().map(|f| f.raw.clone()).collect(),
+        sort: sort.name().to_string(),
+        descending,
         universe: symbols.len(),
         quoted,
         matched_quote_level,
         fundamentals_checked: checked,
         fundamentals_capped: capped,
+        returns_source,
         total_matches: total,
         rows,
     }))
@@ -2295,5 +2340,211 @@ mod tests {
                 "sums cover every row"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+    use crate::model::{History, MarketReturns};
+    use async_trait::async_trait;
+
+    /// Quotes for BBCA, BBRI and TLKM, plus return windows unless told to fail.
+    struct Stub {
+        returns: Option<fn() -> IdxError>,
+    }
+
+    fn quote(s: &str, price: f64, low: f64, high: f64, mcap: f64, pe: f64) -> Quote {
+        let mut q = Quote::empty(Symbol::parse(s).unwrap(), "stub");
+        (q.price, q.week52_low, q.week52_high) = (Some(price), Some(low), Some(high));
+        (q.market_cap, q.pe_trailing) = (Some(mcap), Some(pe));
+        q
+    }
+
+    fn ret(s: &str, m3: f64, y1: f64) -> MarketReturns {
+        MarketReturns {
+            symbol: Symbol::parse(s).unwrap(),
+            source: "stub:screener",
+            w1: None,
+            m1: None,
+            m3: Some(m3),
+            m6: None,
+            ytd: None,
+            y1: Some(y1),
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Stub {
+        fn name(&self) -> &'static str {
+            "stub"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            Ok(Sourced::fresh(
+                vec![
+                    quote("BBCA", 5125.0, 4740.0, 8700.0, 6.3e14, 10.9),
+                    quote("BBRI", 2710.0, 2460.0, 4050.0, 4.0e14, 6.5),
+                    quote("TLKM", 1990.0, 1770.0, 3990.0, 1.9e14, 11.0),
+                ],
+                "stub",
+            ))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+        async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+            if let Some(e) = self.returns {
+                return Err(e());
+            }
+            let mut s = Sourced::fresh(
+                vec![
+                    ret("BBCA", -20.5426, -41.092),
+                    ret("BBRI", -10.2649, -31.9095),
+                    ret("TLKM", -26.5683, -43.7853),
+                ],
+                "msn",
+            );
+            s.warnings.push("MSN listed 3 of 887 stocks".into());
+            Ok(s)
+        }
+    }
+
+    fn universe() -> Vec<Issuer> {
+        ["BBCA", "BBRI", "TLKM"]
+            .iter()
+            .map(|s| Issuer {
+                symbol: Symbol::parse(s).unwrap(),
+                name: None,
+            })
+            .collect()
+    }
+
+    fn opts(preset: Option<ScreenPreset>, filter: &str) -> ScreenOptions {
+        ScreenOptions {
+            preset,
+            filters: scr::parse_filters(filter).unwrap(),
+            sort: None,
+            descending: None,
+            limit: 0,
+            max_fundamentals: 10,
+            with_fundamentals: false,
+            with_returns: false,
+        }
+    }
+
+    fn order(r: &ScreenReport) -> Vec<&str> {
+        r.rows.iter().map(|x| x.symbol.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn top_performers_join_the_return_windows() {
+        let ok = Stub { returns: None };
+        let got = screen(
+            &ok,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap();
+        let r = &got.data;
+        assert_eq!(order(r), ["BBRI", "BBCA", "TLKM"]);
+        assert_eq!(r.preset.as_deref(), Some("top-performers"));
+        assert_eq!(r.returns_source.as_deref(), Some("stub:screener"));
+        assert_eq!((r.sort.as_str(), r.descending), ("ret1y", true));
+        assert!(r.filters.is_empty());
+        assert_eq!(r.rows[0].return_1y_pct, Some(-31.9095));
+        assert!(got
+            .warnings
+            .iter()
+            .any(|w| w.contains("MSN listed 3 of 887")));
+
+        let mut o = opts(Some(ScreenPreset::WorstPerformers), "");
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(order(&got.data), ["TLKM", "BBCA", "BBRI"]);
+        assert!(!got.data.descending);
+        o.descending = Some(true);
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(
+            order(&got.data),
+            ["BBRI", "BBCA", "TLKM"],
+            "--desc overrides"
+        );
+
+        // A ret filter alone pulls the windows in too; the sort key can be any window.
+        let mut o = opts(None, "ret1y>-42");
+        o.sort = Some(Key::Ret3m);
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(order(&got.data), ["BBRI", "BBCA"]);
+        assert_eq!(got.data.matched_quote_level, 2);
+    }
+
+    #[tokio::test]
+    async fn presets_combine_with_filters() {
+        let ok = Stub { returns: None };
+        let got = screen(
+            &ok,
+            &universe(),
+            &opts(Some(ScreenPreset::LowPe), "mcap>3T"),
+        )
+        .await
+        .unwrap();
+        let r = &got.data;
+        assert_eq!(r.filters, ["pe>0", "mcap>3T"]);
+        assert_eq!((r.sort.as_str(), r.descending), ("pe", false));
+        assert_eq!(order(r), ["BBRI", "BBCA", "TLKM"]);
+        assert_eq!(r.returns_source, None, "no return key, no MSN request");
+        assert_eq!(r.rows[0].return_1y_pct, None);
+
+        let got = screen(&ok, &universe(), &opts(Some(ScreenPreset::Low52w), ""))
+            .await
+            .unwrap();
+        // BBCA 9.7 %, BBRI 15.7 %, TLKM 9.9 % of their ranges: none at or under 5.
+        assert_eq!(got.data.total_matches, 0);
+        assert_eq!(got.data.filters, ["range<=5"]);
+        let got = screen(&ok, &universe(), &opts(None, "range<10"))
+            .await
+            .unwrap();
+        assert_eq!(order(&got.data), ["BBCA", "TLKM"], "by mcap");
+    }
+
+    #[tokio::test]
+    async fn missing_return_windows_fail_only_when_needed() {
+        let down = Stub {
+            returns: Some(|| IdxError::Network("screener down".into())),
+        };
+        let err = screen(&down, &universe(), &opts(None, "ret1y>0"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        let err = screen(
+            &down,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("screener down"), "{err}");
+
+        let mut o = opts(None, "pe<20");
+        o.with_returns = true;
+        let got = screen(&down, &universe(), &o).await.unwrap();
+        assert_eq!(got.data.rows.len(), 3);
+        assert_eq!(got.data.returns_source, None);
+        assert!(got
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("return windows unavailable")));
+
+        let none = Stub {
+            returns: Some(|| IdxError::unsupported("yahoo", "market-wide return windows")),
+        };
+        let err = screen(
+            &none,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.exit_code(), 6);
     }
 }
