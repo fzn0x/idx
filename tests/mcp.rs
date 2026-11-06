@@ -1,5 +1,6 @@
 //! End-to-end check of `idx mcp` over stdio: JSON-RPC framing, initialize,
-//! tools/list and a tools/call, without any network (IDX_OFFLINE=1).
+//! tools/list and a tools/call, without any network (IDX_OFFLINE=1, or a
+//! loopback proxy that refuses every request).
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
@@ -7,14 +8,23 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 fn spawn_server(dir: &std::path::Path) -> std::process::Child {
+    spawn_server_with(
+        dir,
+        &[
+            ("IDX_OFFLINE", "1"),
+            // Every cached quote is older than its TTL: stale, served offline.
+            ("IDX_QUOTE_TTL_SECS", "0"),
+        ],
+    )
+}
+
+fn spawn_server_with(dir: &std::path::Path, env: &[(&str, &str)]) -> std::process::Child {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("idx"));
     cmd.arg("mcp")
         .env_clear()
         .env("IDX_CACHE_DIR", dir.join("cache"))
         .env("IDX_CONFIG", dir.join("config.toml"))
-        .env("IDX_OFFLINE", "1")
-        // Every cached quote is older than its TTL: stale, served offline.
-        .env("IDX_QUOTE_TTL_SECS", "0")
+        .envs(env.iter().copied())
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -217,4 +227,113 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");
     assert!(status.success(), "exit {status:?}");
+}
+
+#[test]
+fn idx_quote_says_why_a_failed_fetch_served_a_stale_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    // A session with a recognisable crumb and an hour-old v7 copy.
+    let cache = idx::cache::Cache::new(dir.path().join("cache"));
+    cache
+        .put_json(
+            "yahoo:session",
+            &serde_json::json!({
+                "cookie": "A3=SECRETCOOKIE",
+                "crumb": "SECRETCRUMB",
+                "created_at": chrono::Utc::now(),
+            }),
+        )
+        .unwrap();
+    let body = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/yahoo/quote_v7_bbca_bbri_tlkm.json"),
+    )
+    .unwrap();
+    cache
+        .put_at(
+            "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BBRI.JK,TLKM.JK",
+            200,
+            &body,
+            chrono::Utc::now() - chrono::Duration::hours(1),
+        )
+        .unwrap();
+    // Online, but every request goes to a loopback port that was just free
+    // and so refuses it: nothing leaves the machine.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let proxy = format!("http://127.0.0.1:{port}");
+    let mut child = spawn_server_with(
+        dir.path(),
+        &[
+            ("HTTPS_PROXY", &proxy),
+            ("HTTP_PROXY", &proxy),
+            ("ALL_PROXY", &proxy),
+        ],
+    );
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let next = || -> String {
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("server response within 30s")
+    };
+
+    let init = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "idx-test", "version": "0"}
+        }
+    });
+    writeln!(stdin, "{init}").unwrap();
+    next();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+    )
+    .unwrap();
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "idx_quote", "arguments": {"symbols": "BBCA,BBRI,TLKM"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let line = next();
+    assert!(
+        !line.contains("crumb") && !line.contains("SECRET"),
+        "{line}"
+    );
+    let body = tool_body(&serde_json::from_str(&line).unwrap());
+    assert_eq!(body["cached"], true);
+    assert_eq!(body["stale"], true);
+    assert_eq!(body["stale_reason"], "fetch_failed");
+    assert_eq!(body["data"].as_array().unwrap().len(), 3);
+    let warnings = body["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{body}");
+    let w = warnings[0].as_str().unwrap();
+    assert!(
+        w.starts_with(
+            "live fetch failed (error sending request for url (https://query1.finance.yahoo.com/v7/finance/quote): "
+        ) && w.ends_with("); showing cached copy"),
+        "{w}"
+    );
+
+    drop(stdin);
+    let out = child.wait_with_output().expect("server exits");
+    assert!(out.status.success(), "exit {:?}", out.status);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("crumb") && !stderr.contains("SECRET"),
+        "{stderr}"
+    );
 }
