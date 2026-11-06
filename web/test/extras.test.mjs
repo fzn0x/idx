@@ -85,16 +85,129 @@ test("ownership changes summary", () => {
   assert.equal(s.top_decreases[0].holder, "C");
 });
 
-import { plan, sha256Hex } from "../src/ownership-sync.js";
+import { route } from "../src/api.js";
+
+test("ownership entity search key mirrors normalize::entity_key", () => {
+  assert.equal(ex.entitySearchKey("PT Alamtri Resources Indonesia, Tbk."), "ALAMTRI RESOURCES INDONESIA");
+  assert.equal(ex.entitySearchKey("dwimuria"), "DWIMURIA");
+  assert.equal(ex.entitySearchKey("PT"), "PT", "legal forms alone are kept, like the Rust fallback");
+  assert.equal(ex.entitySearchKey("%%%"), "");
+});
+
+test("ownership entity: a name without 3 letters or digits is a usage error (400) before any query", async () => {
+  const env = { DB: { prepare: () => { throw new Error("no query expected"); } } };
+  for (const name of ["___", "%%%", "!!!", "PT", "a.b"]) {
+    await assert.rejects(
+      route(env, new URL(`https://x/api/ownership/entity?name=${encodeURIComponent(name)}`)),
+      (e) => e.code === "usage" && e.status === 400 && /3 letters or digits|3 characters/.test(e.message),
+      name,
+    );
+  }
+});
+
+import { plan, partsKey, sha256Hex } from "../src/ownership-sync.js";
 
 test("ownership sync plan: newest first, prune outside the window, reload on new sha", () => {
   const index = { schema: "idx.ownership.mirror.v1", releases: ["2026-09-30", "2026-08-31", "2026-07-31", "2026-06-30"].map((d, i) => ({ as_of: d, sha256: `s${i}`, parts: [] })) };
+  const h = (sha256, parts_key = null) => ({ sha256, parts_key });
   assert.equal(plan(index, new Map(), 3).load.as_of, "2026-09-30");
-  assert.equal(plan(index, new Map([["2026-09-30", "s0"]]), 3).load.as_of, "2026-08-31");
-  assert.equal(plan(index, new Map([["2026-09-30", "old"], ["2026-08-31", "s1"]]), 3).load.as_of, "2026-09-30", "re-published file is reloaded");
-  assert.deepEqual(plan(index, new Map([["2026-01-30", "x"], ["2026-09-30", "s0"]]), 3), { prune: "2026-01-30" });
-  assert.deepEqual(plan(index, new Map([["2026-09-30", "s0"], ["2026-08-31", "s1"], ["2026-07-31", "s2"]]), 3), { upToDate: 3 });
+  assert.equal(plan(index, new Map([["2026-09-30", h("s0")]]), 3).load.as_of, "2026-08-31");
+  assert.equal(plan(index, new Map([["2026-09-30", h("old")], ["2026-08-31", h("s1")]]), 3).load.as_of, "2026-09-30", "re-published file is reloaded");
+  assert.deepEqual(plan(index, new Map([["2026-01-30", h("x")], ["2026-09-30", h("s0")]]), 3), { prune: "2026-01-30" });
+  assert.deepEqual(plan(index, new Map([["2026-09-30", h("s0")], ["2026-08-31", h("s1")], ["2026-07-31", h("s2")]]), 3), { upToDate: 3 });
   assert.throws(() => plan({ schema: "nope", releases: [] }, new Map(), 3));
+});
+
+test("ownership sync plan: rebuilt parts reload a month once, old indexes never force it", () => {
+  const parts = [{ file: "a.part01.json", sha256: "p1" }, { file: "a.part02.json", sha256: "p2" }];
+  assert.equal(partsKey({ parts }), "p1,p2");
+  assert.equal(partsKey({}), "");
+  // Index from idx 0.8.1 (no positions): only the file hash counts, so a
+  // month loaded before the 0004 migration (parts_key null) stays.
+  const old = { schema: "idx.ownership.mirror.v1", releases: [{ as_of: "2026-09-30", sha256: "s0", rows: 7151, parts }] };
+  assert.deepEqual(plan(old, new Map([["2026-09-30", { sha256: "s0", parts_key: null }]]), 3), { upToDate: 1 });
+  // Index from idx 0.8.2 (positions): the same file with rebuilt parts reloads...
+  const rebuilt = { schema: "idx.ownership.mirror.v1", releases: [{ as_of: "2026-09-30", sha256: "s0", rows: 7151, lines: 7154, positions: 7151, parts: [{ sha256: "q1" }, { sha256: "q2" }] }] };
+  assert.equal(plan(rebuilt, new Map([["2026-09-30", { sha256: "s0", parts_key: null }]]), 3).load.as_of, "2026-09-30");
+  assert.equal(plan(rebuilt, new Map([["2026-09-30", { sha256: "s0", parts_key: "p1,p2" }]]), 3).load.as_of, "2026-09-30");
+  // ...once: after loading it D1 holds the new parts key.
+  assert.deepEqual(plan(rebuilt, new Map([["2026-09-30", { sha256: "s0", parts_key: "q1,q2" }]]), 3), { upToDate: 1 });
+});
+
+// Parts exported by scripts/ownership_mirror.py from a database idx built out of
+// the two accounts excerpts (tests/fixtures/ownership/README.md).
+const part = (d) => JSON.parse(fixture(`ownership/mirror_part_${d}_accounts_constructed.json`));
+
+test("ownership changes pair summed positions like ownership::db::changes", () => {
+  const aug = part("20260831"), sep = part("20260930");
+  const kresna = sep.find((r) => r.symbol === "KREN" && r.entity_key === "KRESNA PRIMA INVEST");
+  assert.equal(kresna.pct, 13.45);
+  assert.equal(kresna.accounts, 2);
+  assert.equal(kresna.controller_or_affiliate, null);
+  const changes = ex.diffPositions(aug, sep).sort((a, b) => Math.abs(b.pct_change) - Math.abs(a.pct_change) || a.symbol.localeCompare(b.symbol));
+  const rows = changes.map((c) => [c.symbol, c.entity_key, c.kind, c.pct_change]);
+  assert.equal(changes.length, 7, JSON.stringify(rows));
+  const find = (sym, key) => changes.find((c) => c.symbol === sym && c.entity_key === key);
+  const k = find("KREN", "KRESNA PRIMA INVEST");
+  assert.deepEqual([k.kind, k.pct_change, k.shares_change, k.accounts_from, k.accounts_to], ["changed", 4.01, 729400000, 1, 2]);
+  const bp = find("PANS", "BANK PAN INDONESIA");
+  assert.deepEqual([bp.kind, bp.pct_change, bp.accounts_from, bp.accounts_to], ["exited", -29, 2, null]);
+  assert.deepEqual([find("PANS", "PANIN BANK").kind, find("PANS", "PANIN BANK").pct_change], ["new", 29]);
+  assert.equal(find("KREN", "KARUNIA PERDANA ISTENIA").pct_change, -5.13);
+  assert.equal(find("ALKA", "WENANTO GUNAWAN").pct_change, 0.03);
+  assert.equal(find("TGUK", "BUDIANTO M KURNIAWAN").pct_change, 0.01);
+  assert.deepEqual([find("PANS", "WIDAYANTI DARMAWAN").pct_change, find("PANS", "WIDAYANTI DARMAWAN").shares_change], [0, 20500]);
+  assert.equal(find("TGUK", "DINASTI KREATIF INDONESIA"), undefined, "same shares, scrip moved to scripless");
+  assert.equal(find("ALKA", "GESIT PERKASA"), undefined, "83.79 -> 83.80 is the rounding of two lines");
+  const s = ex.summariseChanges(changes);
+  assert.deepEqual([s.new_holders, s.exits, s.increased, s.decreased, s.net_pp], [1, 2, 3, 0, -1.08]);
+  // Field order matches the Rust Change struct (CSV and JSON parity).
+  assert.deepEqual(Object.keys(k), ["symbol", "holder", "entity_key", "investor_type", "local_foreign", "kind", "pct_from", "pct_to", "pct_change", "shares_from", "shares_to", "shares_change", "accounts_from", "accounts_to", "controller_or_affiliate"]);
+  // Single lines on both sides keep any move: the issued share count changed.
+  const one = { symbol: "X", entity_key: "A", holder: "A", shares_total: 100, pct: 1.0, accounts: 1 };
+  assert.equal(ex.diffPositions([one], [{ ...one, pct: 1.01 }]).length, 1);
+  assert.equal(ex.diffPositions([one], [{ ...one, pct: 1.01, accounts: 2 }]).length, 0);
+  assert.equal(ex.diffPositions([{ ...one, accounts: null }], [{ ...one, pct: 1.01, accounts: null }]).length, 1, "legacy rows count as one line");
+});
+
+/** A D1 stand-in that answers by the first table named in the SQL. */
+function fakeD1(tables) {
+  const stmt = (sql) => {
+    const t = Object.keys(tables).find((name) => sql.includes(name));
+    const rows = () => (typeof tables[t] === "function" ? tables[t](sql) : tables[t]) || [];
+    const api = { bind: () => api, all: async () => ({ results: rows() }), first: async () => rows()[0] ?? null, run: async () => ({}) };
+    return api;
+  };
+  return { prepare: stmt };
+}
+
+test("ownership releases on the web: lines, positions and legacy copies", async () => {
+  const releases = [
+    { as_of: "2026-08-31", format: "xlsx", source: "a", rows: 7156, synced_at: 1, sha256: "s1", issuers: 961, entities: 5100, lines: null, other_date_rows: null, controller_column: null },
+    { as_of: "2026-09-30", format: "xlsx", source: "b", rows: 7151, synced_at: 2, sha256: "s2", issuers: 961, entities: 5145, lines: 7154, other_date_rows: 0, controller_column: 0 },
+  ];
+  const env = { DB: fakeD1({ own_releases: releases, kv: [] }) };
+  const r = await route(env, new URL("https://x/api/ownership/releases"));
+  assert.equal(r.schema, "idx.ownership.releases.v1");
+  const [legacy, current] = r.data;
+  assert.deepEqual([legacy.rows, legacy.positions, legacy.other_date_rows, legacy.controller_column], [7156, null, null, null]);
+  assert.deepEqual([current.rows, current.positions, current.other_date_rows, current.controller_column], [7154, 7151, 0, false]);
+  assert.ok(r.warnings.some((w) => w.includes("2026-08-31") && w.includes("predates idx 0.8.2")), JSON.stringify(r.warnings));
+  assert.ok(!r.warnings.some((w) => w.includes("2026-09-30")), JSON.stringify(r.warnings));
+});
+
+test("ownership ticker on the web carries accounts and the controller flag", async () => {
+  const holdings = [
+    { as_of: "2026-10-30", symbol: "BBCA", issuer_name: "BANK CENTRAL ASIA Tbk", entity_key: "DWIMURIA INVESTAMA ANDALAN", holder: "PT DWIMURIA INVESTAMA ANDALAN", holder_raw: "PT DWIMURIA INVESTAMA ANDALAN", investor_type: "CORPORATE", local_foreign: "L", nationality: null, domicile: "INDONESIA", shares_scripless: 0, shares_scrip: 67729950000, shares_total: 67729950000, pct: 54.94, accounts: 1, controller_or_affiliate: "CONTROLLER" },
+  ];
+  const release = { as_of: "2026-10-30", lines: 11, other_date_rows: 0, controller_column: 1 };
+  const env = { DB: fakeD1({ own_holdings: holdings, own_releases: [release] }) };
+  const r = await route(env, new URL("https://x/api/ownership/ticker?symbol=BBCA"));
+  assert.equal(r.data.controller_reported, true);
+  assert.equal(r.data.holders[0].controller_or_affiliate, "CONTROLLER");
+  assert.equal(r.data.holders[0].accounts, 1);
+  assert.deepEqual(Object.keys(r.data), ["symbol", "issuer_name", "as_of", "listed_pct", "holders", "controller_reported"]);
+  assert.equal(r.warnings, undefined);
 });
 
 test("sha256Hex matches a known digest", async () => {

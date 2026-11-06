@@ -72,6 +72,13 @@ pub fn local_foreign(raw: &str) -> Option<String> {
     }
 }
 
+/// `CONTROLLER_OR_AFFILIATE` (registers from 30 Oct 2026): single-spaced and
+/// upper-cased as printed, blank -> `None`. Known values: `CONTROLLER`,
+/// `AFFILIATE OF THE CONTROLLER`.
+pub fn controller_or_affiliate(raw: &str) -> Option<String> {
+    opt(raw).map(|t| t.to_uppercase())
+}
+
 /// `None` for blank cells, trimmed text otherwise.
 pub fn opt(raw: &str) -> Option<String> {
     let t = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -117,5 +124,14 @@ mod tests {
         assert_eq!(local_foreign("Asing").as_deref(), Some("A"));
         assert_eq!(local_foreign("l").as_deref(), Some("L"));
         assert_eq!(opt("   "), None);
+        assert_eq!(
+            controller_or_affiliate("  affiliate of  the controller ").as_deref(),
+            Some("AFFILIATE OF THE CONTROLLER")
+        );
+        assert_eq!(
+            controller_or_affiliate("CONTROLLER").as_deref(),
+            Some("CONTROLLER")
+        );
+        assert_eq!(controller_or_affiliate(" \u{a0}"), None);
     }
 }

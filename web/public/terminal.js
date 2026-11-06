@@ -90,6 +90,22 @@ const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} 
 
 const BANDAR_NOTE = "Bandarmology from the IPOT broker summary: the top N buyers against the top N sellers (ranked by lots), net value as a share of the value traded: +15% big accumulation, +5% accumulation, -5% distribution, -15% big distribution. Heuristic, not advice.";
 
+// Ownership columns that only appear when they carry data: Accts when a holder
+// has several register lines, Control when the release has the 30 Oct 2026 flag.
+const CONTROL_COL = { h: "Control", f: (r) => ({ CONTROLLER: "controller", "AFFILIATE OF THE CONTROLLER": "affiliate" })[r.controller_or_affiliate] ?? (r.controller_or_affiliate || "").toLowerCase(), l: true };
+function ownCols(rows, controllerReported) {
+  const cols = [], notes = [];
+  if (controllerReported) { cols.push(CONTROL_COL); notes.push("Control: CONTROLLER_OR_AFFILIATE as the issuer reported it to IDX for the previous month."); }
+  if (rows.some((r) => (r.accounts ?? 1) > 1)) { cols.push({ h: "Accts", f: (r) => (r.accounts == null ? NA : String(r.accounts)) }); notes.push("Accts: register lines summed (KSEI lists a holder once per SID and once per scrip account without one)."); }
+  return { cols, notes };
+}
+const changeKind = (r) => {
+  const a = r.accounts_from, b = r.accounts_to;
+  if (a != null && b != null && a !== b) return `${r.kind} (${a}→${b} accts)`;
+  const n = Math.max(a ?? 0, b ?? 0);
+  return n > 1 ? `${r.kind} (${n} accts)` : r.kind;
+};
+
 const R = {
   quotes(d) {
     const frag = document.createDocumentFragment();
@@ -516,14 +532,18 @@ const R = {
   },
   holders(h) {
     const frag = document.createDocumentFragment();
+    const extra = ownCols(h.holders, h.controller_reported);
     frag.append(el("p", { class: "prose", html: `<b>${h.symbol}</b> · ${h.issuer_name || ""} · holders above 1 % as of ${h.as_of} · ${h.holders.length} listed = ${pct(h.listed_pct)}` }));
-    frag.append(wrapScroll(table([{ h: "#", f: (r, i) => "", l: true }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], h.holders.map((r, i) => ({ ...r, n: i + 1 })))));
+    frag.append(wrapScroll(table([{ h: "#", f: (r, i) => "", l: true }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, ...extra.cols, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], h.holders.map((r, i) => ({ ...r, n: i + 1 })))));
+    for (const n of extra.notes) frag.append(el("p", { class: "warn", text: n }));
     return frag;
   },
   entity(e) {
     const frag = document.createDocumentFragment();
+    const extra = ownCols(e.holdings, e.controller_reported);
     frag.append(el("p", { class: "prose", text: `"${e.query}" · ${e.entities.length} matching holder${e.entities.length === 1 ? "" : "s"} · as of ${e.as_of}: ${e.entities.join("; ")}` }));
-    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "Holder (as printed)", k: "holder_raw", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], e.holdings)));
+    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "Holder (as printed)", k: "holder_raw", l: true }, { h: "Type", k: "investor_type", l: true }, ...extra.cols, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], e.holdings)));
+    for (const n of extra.notes) frag.append(el("p", { class: "warn", text: n }));
     return frag;
   },
   changes(c) {
@@ -537,11 +557,12 @@ const R = {
       if (!c.symbol && s.issuer_flow.length) frag.append(el("p", { class: "prose", text: `Issuer flow · ${s.issuer_flow.slice(0, 8).map((i) => `${i.symbol} ${pp(i.net_pp)} (foreign ${pp(i.foreign_net_pp)})`).join(" · ")}` }));
     }
     if (c.changes.length < c.total_matches) frag.append(el("p", { class: "warn", text: `Rows ${(c.offset || 0) + 1}-${(c.offset || 0) + c.changes.length} of ${c.total_matches} · next page: --offset ${(c.offset || 0) + c.changes.length} · all: --limit 0` }));
-    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "Kind", k: "kind", l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
+    const flagged = c.changes.some((r) => r.controller_or_affiliate);
+    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, ...(flagged ? [CONTROL_COL] : []), { h: "Kind", f: changeKind, l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
     return frag;
   },
   releases(list) {
-    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Source", k: "source", l: true }], list));
+    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Positions", f: (r) => fmt.int(r.positions) }, { h: "Source", k: "source", l: true }], list));
   },
 };
 

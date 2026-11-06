@@ -6,7 +6,8 @@ use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// One holder line as imported (one entity's position in one issuer on one date).
+/// One holder's position in one issuer on one date: the holder's register
+/// lines (one per account) summed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Holding {
     pub as_of: NaiveDate,
@@ -29,6 +30,15 @@ pub struct Holding {
     pub shares_total: i64,
     /// Percentage of issued shares, e.g. `54.94`.
     pub pct: f64,
+    /// Register lines summed into this position: KSEI lists a holder once
+    /// per SID and once per scrip account without an SID, so one holder can
+    /// have several lines in one issuer. `null` for releases imported by idx
+    /// 0.8.1 or older, which kept only one of them.
+    pub accounts: Option<u32>,
+    /// `CONTROLLER` or `AFFILIATE OF THE CONTROLLER` as the issuer reported
+    /// it to IDX (Form E009, previous month); `null` when blank or when the
+    /// release has no such column (see `controller_reported`).
+    pub controller_or_affiliate: Option<String>,
 }
 
 /// `ownership ticker`.
@@ -40,6 +50,11 @@ pub struct HoldersReport {
     /// Sum of `pct` over the listed holders (the rest is below 1 % each).
     pub listed_pct: f64,
     pub holders: Vec<Holding>,
+    /// Whether this release carries CONTROLLER_OR_AFFILIATE (registers from
+    /// 30 Oct 2026 imported by idx 0.8.2 or later). When false every
+    /// `controller_or_affiliate` is null for lack of data.
+    #[serde(default)]
+    pub controller_reported: bool,
 }
 
 /// `ownership entity`.
@@ -50,6 +65,10 @@ pub struct EntityReport {
     /// Distinct entity keys that matched the query.
     pub entities: Vec<String>,
     pub holdings: Vec<Holding>,
+    /// Whether this release carries CONTROLLER_OR_AFFILIATE; see
+    /// `HoldersReport::controller_reported`.
+    #[serde(default)]
+    pub controller_reported: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -80,6 +99,13 @@ pub struct Change {
     pub shares_from: Option<i64>,
     pub shares_to: Option<i64>,
     pub shares_change: i64,
+    /// Register lines summed on each side (`null` when the holder is absent
+    /// there, or the release was imported by idx 0.8.1 or older).
+    pub accounts_from: Option<u32>,
+    pub accounts_to: Option<u32>,
+    /// From the later release (the earlier one for exits), like
+    /// `local_foreign`.
+    pub controller_or_affiliate: Option<String>,
 }
 
 /// A change reduced to what a summary needs.
@@ -229,10 +255,20 @@ pub struct Release {
     /// File path or URL the rows came from.
     pub source: String,
     pub sha256: String,
+    /// Register lines stored (every line of the file that parsed).
     pub rows: u64,
     pub issuers: u64,
     pub entities: u64,
     pub imported_at: String,
+    /// Holder positions after summing each holder's accounts; `null` for
+    /// releases imported by idx 0.8.1 or older (one line kept per holder).
+    pub positions: Option<u64>,
+    /// Lines whose DATE differs from `as_of`: stored, but not part of this
+    /// release's holdings. `null` for releases imported by idx 0.8.1 or older.
+    pub other_date_rows: Option<u64>,
+    /// Whether the file has the CONTROLLER_OR_AFFILIATE column; `null` for
+    /// releases imported by idx 0.8.1 or older.
+    pub controller_column: Option<bool>,
 }
 
 /// `ownership import`.

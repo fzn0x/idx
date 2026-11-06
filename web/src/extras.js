@@ -168,6 +168,44 @@ export function arrangeNews(items, symbol, matchedName, limit, companyOnly, item
 
 // ---- ownership changes summary ---------------------------------------------------
 
+/** The `entity_key` a name search matches (ownership::normalize::entity_key, ASCII). */
+export function entitySearchKey(query) {
+  const toks = String(query ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(" ").filter(Boolean);
+  const kept = toks.filter((t) => !["PT", "TBK", "PERSERO"].includes(t));
+  return (kept.length ? kept : toks).join(" ");
+}
+
+/**
+ * Mirrors the pairing in ownership::db::changes: holders matched by symbol and
+ * entity_key across two releases (each row a holder's accounts already summed),
+ * before the min-change filter and the sort. With the same shares on both sides
+ * a holder is skipped when the percent did not move, or, when a side has
+ * several register lines, moved within their rounding (0.005 pp per line).
+ */
+export function diffPositions(before, after) {
+  const key = (r) => `${r.symbol}|${r.entity_key}`;
+  const was = new Map(before.map((r) => [key(r), r]));
+  const now = new Map(after.map((r) => [key(r), r]));
+  const row = (x, kind, from, to) => ({
+    symbol: x.symbol, holder: x.holder, entity_key: x.entity_key, investor_type: x.investor_type ?? null, local_foreign: x.local_foreign ?? null, kind,
+    pct_from: from ? from.pct : null, pct_to: to ? to.pct : null, pct_change: r4((to ? to.pct : 0) - (from ? from.pct : 0)),
+    shares_from: from ? from.shares_total : null, shares_to: to ? to.shares_total : null, shares_change: (to ? to.shares_total : 0) - (from ? from.shares_total : 0),
+    accounts_from: from ? from.accounts ?? null : null, accounts_to: to ? to.accounts ?? null : null, controller_or_affiliate: x.controller_or_affiliate ?? null,
+  });
+  const out = [];
+  for (const [k, a] of now) {
+    const b = was.get(k);
+    if (!b) { out.push(row(a, "new", null, a)); continue; }
+    if (a.shares_total === b.shares_total) {
+      const d = Math.abs(a.pct - b.pct), lines = (b.accounts ?? 1) + (a.accounts ?? 1);
+      if (d < 1e-9 || (lines > 2 && d <= 0.005 * lines + 1e-9)) continue;
+    }
+    out.push(row(a, "changed", b, a));
+  }
+  for (const [k, b] of was) if (!now.has(k)) out.push(row(b, "exited", b, null));
+  return out;
+}
+
 /** Mirrors ownership::db::summarise over sorted changes (largest |pct_change| first). */
 export function summariseChanges(changes) {
   const brief = (c) => ({ symbol: c.symbol, holder: c.holder, kind: c.kind, pct_from: c.pct_from, pct_to: c.pct_to, pct_change: c.pct_change });

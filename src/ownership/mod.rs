@@ -5,14 +5,24 @@
 //! Unlike the quote providers, this data is not fetched on demand: a monthly
 //! file is imported once and every query runs locally, so the ownership
 //! commands work offline after the first import.
+//!
+//! The query wrappers below (`holders`, `entity`, `changes`, ...) are what
+//! the CLI, the MCP server and `stocks brief` call: each returns the report
+//! with the database's notes about the releases it read (imported by an old
+//! idx, rows dated otherwise) in `warnings`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use sha2::{Digest, Sha256};
 
 use crate::error::{IdxError, Result};
-use crate::model::{DiscoveredFile, ImportReport};
+use crate::model::{
+    ChangesReport, DiscoveredFile, EntityReport, ForeignFlowReport, ForeignReport, HoldersReport,
+    ImportReport, Release,
+};
+use crate::providers::Sourced;
 
 pub mod db;
 pub mod discover;
@@ -20,7 +30,10 @@ pub mod ingest;
 pub mod mirror;
 pub mod normalize;
 
-pub use db::OwnershipDb;
+pub use db::{OwnershipDb, SCHEMA_VERSION};
+
+/// The `provider` of every ownership query envelope.
+pub const PROVIDER: &str = "local-db";
 
 /// Default location of the SQLite file.
 pub fn default_db_path() -> PathBuf {
@@ -48,7 +61,82 @@ pub fn import_bytes(
 ) -> Result<(ImportReport, Vec<String>)> {
     let (parsed, format) = ingest::parse_any(name, bytes)?;
     let report = db.import(&parsed, format, source, &sha256_hex(bytes))?;
-    Ok((report, parsed.skipped))
+    let mut warnings = parsed.skipped.clone();
+    warnings.extend(parsed.other_date_warnings());
+    Ok((report, warnings))
+}
+
+fn sourced<T>(db: &OwnershipDb, data: T, dates: &[NaiveDate]) -> Result<Sourced<T>> {
+    let mut s = Sourced::fresh(data, PROVIDER);
+    s.warnings = db.release_notes(dates)?;
+    Ok(s)
+}
+
+/// `ownership ticker`: holders above 1 % of one issuer.
+pub fn holders(
+    db: &OwnershipDb,
+    symbol: &str,
+    as_of: Option<NaiveDate>,
+) -> Result<Sourced<HoldersReport>> {
+    let r = db.holders(symbol, as_of)?;
+    let date = r.as_of;
+    sourced(db, r, &[date])
+}
+
+/// `ownership entity`: every position of the holders matching `name`.
+pub fn entity(
+    db: &OwnershipDb,
+    name: &str,
+    as_of: Option<NaiveDate>,
+) -> Result<Sourced<EntityReport>> {
+    let r = db.entity(name, as_of)?;
+    let date = r.as_of;
+    sourced(db, r, &[date])
+}
+
+/// `ownership changes` between two releases.
+pub fn changes(
+    db: &OwnershipDb,
+    from: NaiveDate,
+    to: NaiveDate,
+    symbol: Option<&str>,
+    min_pct_change: f64,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<Sourced<ChangesReport>> {
+    let r = db.changes(from, to, symbol, min_pct_change, limit, offset)?;
+    sourced(db, r, &[from, to])
+}
+
+/// `ownership foreign SYMBOL`: one issuer across every release.
+pub fn foreign_trend(db: &OwnershipDb, symbol: &str) -> Result<Sourced<ForeignReport>> {
+    let r = db.foreign_trend(symbol)?;
+    let dates: Vec<NaiveDate> = r.points.iter().map(|p| p.as_of).collect();
+    sourced(db, r, &dates)
+}
+
+/// `ownership foreign`: every issuer between two releases.
+pub fn foreign_flow(
+    db: &OwnershipDb,
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    limit: Option<usize>,
+) -> Result<Sourced<ForeignFlowReport>> {
+    let r = db.foreign_flow(from, to, limit)?;
+    let dates = [r.from, r.to];
+    sourced(db, r, &dates)
+}
+
+/// `ownership releases`.
+pub fn releases(db: &OwnershipDb) -> Result<Sourced<Vec<Release>>> {
+    let list = db.releases()?;
+    let dates: Vec<NaiveDate> = list.iter().map(|r| r.as_of).collect();
+    let mut s = sourced(db, list, &dates)?;
+    if s.data.is_empty() {
+        s.warnings
+            .push("no ownership data imported yet; run `idx ownership import --latest`".into());
+    }
+    Ok(s)
 }
 
 pub fn import_file(db: &mut OwnershipDb, path: &Path) -> Result<(ImportReport, Vec<String>)> {

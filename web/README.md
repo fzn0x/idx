@@ -65,7 +65,18 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   30 minutes, one SHA-256-verified part per minute, newest month first, within
   `OWN_DAILY_WRITE_BUDGET`. No upload endpoint exists. Progress:
   `/api/ownership/status`; a maintainer can force a step with
-  `/api/refresh?token=…&what=ownership`.
+  `/api/refresh?token=…&what=ownership`. Each holding is one holder's
+  register lines summed by idx (`accounts`, plus `controller_or_affiliate`
+  from the 30 Oct 2026 register; `migrations/0004_ownership_accounts.sql`).
+  A month reloads when its IDX file changes or, for an index written by idx
+  0.8.2 or later, when its parts change (`parts_key`): after the mirror is
+  rebuilt every kept month reloads once, newest first. Loading a month is
+  about 21,600 writes and deleting the copy D1 holds costs the same, so a
+  reload is about 43,000 and the budget (counted per UTC day, as D1 counts
+  it) charges both. A reload starts only when it fits in what is left of the
+  day, so its month is hidden for minutes, not until the next reset; with the
+  default 60,000 that is one reload a day, six days for six months, each
+  month readable (as its older copy) until then.
 
 Access is domain-only: `workers_dev = false`, `preview_urls = false`, and the
 Worker returns 404 for any Host other than `PUBLIC_HOST`.
@@ -73,6 +84,6 @@ Worker returns 404 for any Host other than `PUBLIC_HOST`.
 ```sh
 cd web
 npx wrangler dev      # local
-npx wrangler d1 migrations apply idx --remote   # new tables first (0003 adds bandar_scan)
+npx wrangler d1 migrations apply idx --remote   # new tables first (0004 adds ownership accounts)
 npx wrangler deploy   # needs `wrangler login` on the Midori Research account
 ```

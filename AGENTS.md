@@ -56,8 +56,10 @@ src/
                      bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers
   ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
-                     mirror fallback), ingest.rs (XLSX/PDF), normalize.rs (entity keys), db.rs (SQLite schema
-                     + queries). Imported once, queried locally.
+                     mirror fallback), ingest.rs (XLSX/PDF, text numbers, controller column), normalize.rs
+                     (entity keys), db.rs (SQLite schema with `PRAGMA user_version` migrations, register lines
+                     and summed positions, queries); mod.rs query wrappers shared by cli/, mcp/ and the brief.
+                     Imported once, queried locally.
   mcp/               rmcp server; one #[tool] per command, same JSON envelope as -o json;
                      schema.rs rewrites input schemas into the subset every harness accepts;
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the

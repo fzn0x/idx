@@ -340,6 +340,12 @@ the next page with `offset = offset + limit` until `offset + rows >= total_match
 The `summary` block never depends on the page, so one call is enough to
 describe a month.
 
+Ownership rows are positions: a holder's register lines (scrip and scripless
+accounts) are summed, with `accounts` saying how many, and from the 30 Oct
+2026 register each row carries `controller_or_affiliate`
+(`controller_reported` on the report says whether the release has it).
+`idx_ownership_entity` needs at least 3 letters or digits in `name`.
+
 ## Harness compatibility
 
 Input schemas are rewritten before they are advertised: no `$schema`, no

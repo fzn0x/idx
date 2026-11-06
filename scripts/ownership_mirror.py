@@ -7,8 +7,9 @@ Run by .github/workflows/ownership.yml three times a day; safe to run by hand.
    client (curl_cffi). idx.co.id answers 403 to ordinary HTTP clients and
    blocks cloud networks outright (GitHub-hosted runners, Cloudflare Workers),
    so this only succeeds from an ordinary connection: a self-hosted runner or
-   a maintainer's machine. From a blocked network the run leaves the mirror
-   as it is, and fails once the newest register is STALE_AFTER_DAYS old.
+   a maintainer's machine. From a blocked network the run still rebuilds the
+   parts from the files already mirrored (so a newer idx parser reaches the
+   web terminal), and fails once the newest register is STALE_AFTER_DAYS old.
 2. Let `idx ownership discover` parse the saved page, so the CLI and the mirror
    share one parser.
 3. Reuse every file already on the mirror release; download only new or
@@ -17,8 +18,12 @@ Run by .github/workflows/ownership.yml three times a day; safe to run by hand.
    `idx ownership import --file`. Any parse failure fails the run, so a broken
    file never reaches the mirror.
 5. Export each release as JSON parts (what the web terminal loads into D1, one
-   part per minute) and write index.json. Upload only what changed, index.json
-   last, and remove assets the new index no longer references.
+   part per minute): one row per holder and issuer, the holder's register
+   lines summed by idx (`accounts`). Write index.json with each release's
+   register `lines`, `positions`, `other_date_rows` and `controller_column`;
+   `rows` stays the exported row count the Worker checks. Upload only what
+   changed, index.json last, and remove assets the new index no longer
+   references.
 
 The release is a prerelease so it never becomes the repository's "latest"
 release (install.sh resolves that). Requires the gh CLI with GH_TOKEN,
@@ -133,18 +138,27 @@ def download_asset(repo: str, tag: str, name: str, dest: Path) -> Path:
 PART_FIELDS = (
     "symbol", "issuer_name", "entity_key", "holder", "holder_raw", "investor_type", "local_foreign",
     "nationality", "domicile", "shares_scripless", "shares_scrip", "shares_total", "pct",
+    "accounts", "controller_or_affiliate",
 )
 
 
 def export_parts(db: Path, out: Path, part_rows: int) -> dict[str, dict]:
-    """Writes `ksei-above1-<as_of>.partNN.json` files; returns per-as_of stats."""
+    """Writes `ksei-above1-<as_of>.partNN.json` files; returns per-as_of stats.
+
+    Reads the positions table of a database written by idx 0.8.2 or later:
+    one row per (symbol, entity), so a holder's accounts never straddle two
+    parts and D1's (as_of, symbol, entity_key) key cannot collapse them.
+    """
     con = sqlite3.connect(db)
     stats: dict[str, dict] = {}
-    for rid, as_of in con.execute("SELECT id, as_of FROM releases ORDER BY as_of"):
+    releases = con.execute(
+        "SELECT id, as_of, row_count, positions, other_date_rows, controller_column FROM releases ORDER BY as_of"
+    ).fetchall()
+    for rid, as_of, lines, positions, other_date_rows, controller_column in releases:
         rows = con.execute(
             """SELECT h.symbol, h.issuer_name, e.entity_key, e.display_name, h.holder_raw, h.investor_type,
                       h.local_foreign, h.nationality, h.domicile, h.shares_scripless, h.shares_scrip,
-                      h.shares_total, h.pct
+                      h.shares_total, h.pct, h.accounts, h.controller_or_affiliate
                FROM holdings h JOIN entities e ON e.id = h.entity_id
                WHERE h.release_id = ? ORDER BY h.symbol, e.entity_key""",
             (rid,),
@@ -158,7 +172,11 @@ def export_parts(db: Path, out: Path, part_rows: int) -> dict[str, dict]:
             data = json.dumps(chunk, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             (out / name).write_bytes(data)
             parts.append({"file": name, "sha256": sha256(data), "rows": len(chunk)})
-        stats[as_of] = {"rows": len(rows), "issuers": issuers, "entities": entities, "parts": parts}
+        stats[as_of] = {
+            "rows": len(rows), "issuers": issuers, "entities": entities, "parts": parts,
+            "lines": lines, "positions": positions, "other_date_rows": other_date_rows,
+            "controller_column": None if controller_column is None else bool(controller_column),
+        }
     con.close()
     return stats
 
@@ -200,6 +218,7 @@ def main() -> int:
 
     # 1-2. Discover on idx.co.id.
     page_ok = False
+    unreachable = ""
     discovered: list[dict] = []
     try:
         page = work / "page.html"
@@ -211,16 +230,10 @@ def main() -> int:
         if not prev:
             print(f"error: idx.co.id unreachable and no mirror to fall back on: {e}", file=sys.stderr)
             return 1
-        newest = max(prev_by_date)
-        age = (dt.date.today() - dt.date.fromisoformat(newest)).days
-        if age > STALE_AFTER_DAYS:
-            # IDX publishes each month-end register within a few weeks; past this
-            # the mirror is genuinely behind, so make the run fail visibly.
-            print(f"error: idx.co.id unreachable ({e}) and the newest mirrored register ({newest}) is {age} days old. "
-                  "Run scripts/ownership_mirror.py from a connection idx.co.id accepts (see docs/ownership.md).", file=sys.stderr)
-            return 1
-        warn(f"idx.co.id unreachable from this runner ({e}); the mirror is unchanged (newest register {newest}, {age} days old)")
-        return 0
+        # Keep going with the files already mirrored: the parts are rebuilt with
+        # this idx, so a parser fix reaches the web terminal without idx.co.id.
+        unreachable = str(e)
+        warn(f"idx.co.id unreachable from this runner ({e}); rebuilding the parts from the mirrored files only")
 
     # 3. Gather files.
     wanted: dict[str, dict] = {}
@@ -240,7 +253,11 @@ def main() -> int:
                 return 1
         else:
             if not page_ok:
-                continue
+                # Without idx.co.id this month cannot be fetched again; dropping it
+                # would remove its parts here and prune it from the web terminal.
+                print(f"error: {name} is listed in the mirror index but missing from the release, "
+                      "and idx.co.id is unreachable to fetch it again", file=sys.stderr)
+                return 1
             try:
                 data = fetch(w["source_url"], referer=PAGE_URL, timeout=180)
             except Exception as e:
@@ -268,7 +285,7 @@ def main() -> int:
             print(f"error: {path.name} contains as-of {rep['as_of']}, expected {as_of}", file=sys.stderr)
             return 1
         imported[as_of] = rep
-        log(f"{as_of}: {rep['rows']:,} rows, {rep['issuers']} issuers, {rep['entities']:,} holders")
+        log(f"{as_of}: {rep['rows']:,} lines, {rep.get('positions') or 0:,} positions, {rep['issuers']} issuers, {rep['entities']:,} holders")
 
     # 5. Export and index.
     stats = export_parts(db, out_dir, a.part_rows)
@@ -281,7 +298,9 @@ def main() -> int:
         releases.append({
             "as_of": as_of, "title": w["title"], "format": w["format"], "source_url": w["source_url"],
             "file": path.name, "sha256": sha256(data), "bytes": len(data),
-            "rows": st["rows"], "issuers": st["issuers"], "entities": st["entities"], "parts": st["parts"],
+            "rows": st["rows"], "issuers": st["issuers"], "entities": st["entities"],
+            "lines": st["lines"], "positions": st["positions"], "other_date_rows": st["other_date_rows"],
+            "controller_column": st["controller_column"], "parts": st["parts"],
         })
     index = {
         "schema": SCHEMA, "generated_at": now, "source_page": PAGE_URL,
@@ -290,8 +309,8 @@ def main() -> int:
     }
     (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", "utf-8")
 
-    summary = ["| as of | rows | issuers | holders | parts | sha256 |", "| --- | ---: | ---: | ---: | ---: | --- |"]
-    summary += [f"| {r['as_of']} | {r['rows']:,} | {r['issuers']} | {r['entities']:,} | {len(r['parts'])} | `{r['sha256'][:12]}` |" for r in releases]
+    summary = ["| as of | lines | rows | issuers | holders | parts | sha256 |", "| --- | ---: | ---: | ---: | ---: | ---: | --- |"]
+    summary += [f"| {r['as_of']} | {r['lines'] or 0:,} | {r['rows']:,} | {r['issuers']} | {r['entities']:,} | {len(r['parts'])} | `{r['sha256'][:12]}` |" for r in releases]
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(f"### KSEI >1% register mirror\n\nidx.co.id reachable: {'yes' if page_ok else 'no'}\n\n" + "\n".join(summary) + "\n")
@@ -299,10 +318,10 @@ def main() -> int:
 
     if comparable(prev) == comparable(index):
         log("mirror already up to date; nothing to upload")
-        return 0
+        return stale_exit(unreachable, releases)
     if a.dry_run:
         log(f"dry run: would upload to {a.repo}@{a.tag}: {', '.join(sorted(p.name for p in out_dir.iterdir()))}")
-        return 0
+        return stale_exit(unreachable, releases)
 
     if assets is None:
         gh("release", "create", a.tag, "-R", a.repo, "--prerelease", "--latest=false",
@@ -323,6 +342,22 @@ def main() -> int:
     for stale in sorted(set(assets) - keep):
         gh("release", "delete-asset", a.tag, stale, "-R", a.repo, "-y")
     log(f"uploaded {len(upload)} files and index.json; removed {len(set(assets) - keep)} stale assets")
+    return stale_exit(unreachable, releases)
+
+
+def stale_exit(unreachable: str, releases: list[dict]) -> int:
+    """1 when idx.co.id was unreachable and the newest register is too old, else 0."""
+    if not unreachable or not releases:
+        return 0
+    newest = max(r["as_of"] for r in releases)
+    age = (dt.date.today() - dt.date.fromisoformat(newest)).days
+    if age > STALE_AFTER_DAYS:
+        # IDX publishes each month-end register within a few weeks; past this
+        # the mirror is genuinely behind, so make the run fail visibly.
+        print(f"error: idx.co.id unreachable ({unreachable}) and the newest mirrored register ({newest}) is {age} days old. "
+              "Run scripts/ownership_mirror.py from a connection idx.co.id accepts (see docs/ownership.md).", file=sys.stderr)
+        return 1
+    warn(f"idx.co.id unreachable from this runner; newest register {newest} ({age} days old)")
     return 0
 
 

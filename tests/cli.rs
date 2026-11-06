@@ -6,16 +6,14 @@ use predicates::prelude::*;
 
 fn idx(cache: &std::path::Path, config: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("idx").unwrap();
-    // Keep the Stockbit session inside the sandbox so a test never reads or
-    // writes the developer's real login.
-    let session = config
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("stockbit-session.json");
+    // Keep the Stockbit session and the ownership database inside the
+    // sandbox so a test never reads or writes the developer's real files.
+    let dir = config.parent().unwrap_or_else(|| std::path::Path::new("."));
     cmd.env_clear()
         .env("IDX_CACHE_DIR", cache)
         .env("IDX_CONFIG", config)
-        .env("IDX_STOCKBIT_SESSION", session)
+        .env("IDX_STOCKBIT_SESSION", dir.join("stockbit-session.json"))
+        .env("IDX_OWNERSHIP_DB", dir.join("ownership.sqlite"))
         .env("NO_COLOR", "1")
         .env_remove("IDX_STOCKBIT_ACCESS_TOKEN")
         .env_remove("IDX_STOCKBIT_REFRESH_TOKEN")
@@ -1052,6 +1050,11 @@ fn ownership_import_and_queries_work_offline() {
         .assert()
         .code(4)
         .stderr(predicate::str::contains("ownership import"));
+    // ... except for a name that could never match: usage, exit 2.
+    own(&sb)
+        .args(["ownership", "entity", "!!!"])
+        .assert()
+        .code(2);
 
     own(&sb)
         .args(["-o", "json", "ownership", "import", "--file", prev])
@@ -1098,6 +1101,12 @@ fn ownership_import_and_queries_work_offline() {
         .args(["ownership", "entity", "al"])
         .assert()
         .code(2);
+    // No letters or digits: would match every holder, so a usage error.
+    own(&sb)
+        .args(["ownership", "entity", "%%%"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("3 letters or digits"));
     own(&sb)
         .args([
             "-o",
@@ -1178,6 +1187,193 @@ fn ownership_import_and_queries_work_offline() {
         .assert()
         .code(5);
     own(&sb).args(["ownership", "import"]).assert().code(2);
+}
+
+#[test]
+fn ownership_sums_accounts_dates_rows_and_reads_controller_offline() {
+    let sb = sandbox();
+    let db = sb.cache.join("accounts.sqlite");
+    let fx = |name: &str| {
+        format!(
+            "{}/tests/fixtures/ownership/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    };
+    let own = |sb: &Sandbox| {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+    for f in [
+        "above1_20260831_accounts_excerpt.xlsx",
+        "above1_20260930_accounts_excerpt.xlsx",
+    ] {
+        own(&sb)
+            .args(["ownership", "import", "--file", &fx(f)])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("positions"));
+    }
+    // KRESNA PRIMA INVEST: 9.44 % scrip + 4.01 % scripless, one position.
+    own(&sb)
+        .args(["-o", "json", "ownership", "ticker", "KREN"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"accounts\": 2"))
+        .stdout(predicate::str::contains("\"pct\": 13.45"))
+        .stdout(predicate::str::contains("\"controller_reported\": false"));
+    own(&sb)
+        .args(["ownership", "ticker", "TGUK"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("69.33%"))
+        .stdout(predicate::str::contains("Accts"))
+        .stdout(predicate::str::contains("Control").not());
+    // DINASTI moved scrip to scripless with the same shares: no change row.
+    own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "changes",
+            "--from",
+            "2026-08-31",
+            "--to",
+            "2026-09-30",
+            "--symbol",
+            "TGUK",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"total_matches\": 1"))
+        .stdout(predicate::str::contains("BUDIANTO"))
+        .stdout(predicate::str::contains("\"accounts_from\": 1"));
+    own(&sb)
+        .args([
+            "ownership",
+            "changes",
+            "--from",
+            "2026-08-31",
+            "--to",
+            "2026-09-30",
+            "--symbol",
+            "KREN",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("changed (1→2 accts)"))
+        .stdout(predicate::str::contains("+4.01"));
+    own(&sb)
+        .args(["-o", "json", "ownership", "releases"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"rows\": 46"))
+        .stdout(predicate::str::contains("\"positions\": 43"))
+        .stdout(predicate::str::contains("\"other_date_rows\": 0"));
+    // CSV keeps the old columns first and appends the new ones.
+    own(&sb)
+        .args(["-o", "csv", "ownership", "ticker", "KREN"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "as_of,symbol,issuer_name,holder,",
+        ))
+        .stdout(predicate::str::contains(
+            ",shares_total,pct,accounts,controller_or_affiliate\n",
+        ));
+
+    // Rows dated otherwise: kept, left out, warned about.
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--file",
+            &fx("above1_mixed_dates_synthetic.xlsx"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 rows dated otherwise left out"))
+        .stderr(predicate::str::contains(
+            "2 rows dated 2026-01-30 (AAAA, CCCC)",
+        ));
+    own(&sb)
+        .args(["ownership", "ticker", "CCCC", "--as-of", "2026-02-27"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("only on rows dated 2026-01-30"));
+    own(&sb)
+        .args(["ownership", "ticker", "AAAA", "--as-of", "2026-02-27"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 listed = 40.00%"))
+        .stdout(predicate::str::contains("EMPAT JAYA").not())
+        .stderr(predicate::str::contains("2026-01-30"));
+
+    // Numbers stored as text in Indonesian notation.
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--file",
+            &fx("above1_text_numbers_synthetic.xlsx"),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("row 12: PERCENTAGE \"100,5\""))
+        .stderr(predicate::str::contains(
+            "row 13: TOTAL_HOLDING_SHARES \"10,5\"",
+        ));
+    own(&sb)
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "ticker",
+            "TXTA",
+            "--as-of",
+            "2026-03-31",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pct\": 7.19"))
+        .stdout(predicate::str::contains("\"shares_total\": 1234567"));
+
+    // The 30 Oct 2026 register carries CONTROLLER_OR_AFFILIATE.
+    own(&sb)
+        .args([
+            "ownership",
+            "import",
+            "--file",
+            &fx("above1_20261030_excerpt.xlsx"),
+        ])
+        .assert()
+        .success();
+    own(&sb)
+        .args(["-o", "json", "ownership", "ticker", "ZYRX"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"controller_reported\": true"))
+        .stdout(predicate::str::contains(
+            "\"controller_or_affiliate\": \"CONTROLLER\"",
+        ));
+    own(&sb)
+        .args(["ownership", "ticker", "BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Control"))
+        .stdout(predicate::str::contains("affiliate"));
+    own(&sb)
+        .args(["ownership", "entity", "%%%"])
+        .assert()
+        .code(2);
+    // The new fields are part of the published schema.
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "ownership-holders"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("controller_or_affiliate"))
+        .stdout(predicate::str::contains("controller_reported"))
+        .stdout(predicate::str::contains("accounts"));
 }
 
 #[test]
