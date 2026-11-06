@@ -40,6 +40,30 @@ test("session summary and VWAP match the Rust side", () => {
   assert.deepEqual(ex.sessionBars(two_days).map((c) => c.close), [2, 3]);
 });
 
+test("a last-trade snapshot stamped on a whole minute is not a bar (parse.rs does the same)", () => {
+  const hm = (h) => h.candles.map((c) => c.time.slice(11, 16));
+  // After the close, the five-day window's snapshot at 16:14:00 instead of 16:14:43.
+  const five = y.parseChart(JSON.parse(fixture("chart_bbca_5d_1m_open.json").replace(",1793870083]", ",1793870040]")), "5d", "1m");
+  assert.equal(five.candles.length, 1334);
+  assert.deepEqual([five.candles.at(-1).time, five.candles.at(-1).volume], ["2026-11-05T16:14:00+07:00", 20200]);
+  // In session at 1m: a null 09:02 row, then the snapshot at 09:02:00.
+  const session = y.parseChart(JSON.parse(fixture("chart_bbca_1d_1m_session.json").replace(",1793930536]", ",1793930520]")), "1d", "1m");
+  assert.deepEqual(hm(session), ["09:00", "09:01"]);
+  // In session at 5m: the in-progress 09:25 bar, then a snapshot off the grid or repeating 09:25.
+  const body = (rows) => ({ chart: { result: [{ meta: { symbol: "BBCA.JK" }, timestamp: rows.map((r) => r[0]),
+    indicators: { quote: [{ open: rows.map((r) => r[1]), high: rows.map((r) => r[1]), low: rows.map((r) => r[1]), close: rows.map((r) => r[1]), volume: rows.map((r) => r[2]) }] } }] } });
+  const open = 1793930400;
+  for (const snap of [open + 28 * 60, open + 25 * 60, open + 28 * 60 + 41]) {
+    const h = y.parseChart(body([[open + 20 * 60, 5025, 1000], [open + 25 * 60, 5050, 500], [snap, 5050, 0]]), "1d", "5m");
+    assert.deepEqual(hm(h), ["09:20", "09:25"], `snapshot at ${snap}`);
+  }
+  // The grid counts from the window's first row: hourly bars on the half hour stay.
+  const half = open + 1800;
+  assert.deepEqual(hm(y.parseChart(body([[half, 100, 10], [half + 3600, 101, 10], [half + 9000, 101, 0]]), "1d", "1h")), ["09:30", "10:30"]);
+  // Daily bars are left alone.
+  assert.equal(y.parseChart(body([[open, 1, 1], [open + 1234, 2, 1]]), "1mo", "1d").candles.length, 2);
+});
+
 test("1m and 2m keep to the windows Yahoo serves, before any fetch", async () => {
   assert.doesNotThrow(() => checkPeriod("5d", "1m"));
   assert.doesNotThrow(() => checkPeriod("1mo", "2m"));

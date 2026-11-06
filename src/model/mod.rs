@@ -374,6 +374,20 @@ impl Interval {
         )
     }
 
+    /// The bar size in seconds for the intraday sizes; `None` for daily and
+    /// longer bars, whose length varies.
+    pub fn bar_seconds(&self) -> Option<i64> {
+        match self {
+            Interval::Min1 => Some(60),
+            Interval::Min2 => Some(120),
+            Interval::Min5 => Some(300),
+            Interval::Min15 => Some(900),
+            Interval::Min30 => Some(1800),
+            Interval::Hour1 => Some(3600),
+            Interval::Day1 | Interval::Week1 | Interval::Month1 => None,
+        }
+    }
+
     /// Refuses a look-back window the bar size cannot cover. Yahoo serves
     /// one-minute bars for at most 8 days per request (HTTP 422 beyond) and
     /// two-minute bars for 60 days; the larger sizes keep their old behaviour.
@@ -540,6 +554,19 @@ mod tests {
     fn minute_bars_and_their_windows() {
         assert!(Interval::Min1.is_intraday() && Interval::Min2.is_intraday());
         assert!(!Interval::Day1.is_intraday());
+        for i in [
+            Interval::Min1,
+            Interval::Min2,
+            Interval::Min5,
+            Interval::Min15,
+            Interval::Min30,
+            Interval::Hour1,
+        ] {
+            assert!(i.is_intraday() && i.bar_seconds().is_some(), "{i}");
+        }
+        assert_eq!(Interval::Min2.bar_seconds(), Some(120));
+        assert_eq!(Interval::Hour1.bar_seconds(), Some(3600));
+        assert_eq!(Interval::Day1.bar_seconds(), None);
         for p in [Period::D1, Period::D5] {
             assert!(Interval::Min1.check_period(p).is_ok());
             assert!(Interval::Min2.check_period(p).is_ok());

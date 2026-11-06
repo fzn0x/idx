@@ -192,6 +192,9 @@ export function parseV7Quote(q) {
   };
 }
 
+/** Interval::bar_seconds: the intraday bar sizes in seconds. */
+const BAR_SECONDS = { "1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600 };
+
 export function parseChart(body, period, interval) {
   const r = body?.chart?.result?.[0];
   if (!r) throw new Error("chart response has no result");
@@ -200,13 +203,18 @@ export function parseChart(body, period, interval) {
   const q = r.indicators?.quote?.[0] || {};
   const adj = r.indicators?.adjclose?.[0]?.adjclose || [];
   const candles = [];
-  // Multi-day intraday windows end with a row at the last trade time (16:14:43),
-  // a snapshot rather than a bar; bars start on the minute (parse.rs does the same).
-  const intraday = /^\d+[mh]$/.test(String(interval));
+  // In session, and in multi-day windows after the close, an intraday window
+  // ends with a row at the last trade time (09:02:16, 16:14:43): a snapshot, not
+  // a bar. Bars start on the minute and on the interval's grid from the window's
+  // first row, so a row off that grid, or one repeating the time of the row
+  // before it, is the snapshot (parse.rs does the same).
+  const step = BAR_SECONDS[String(interval)];
+  const anchor = ts.find((t) => t != null);
+  const mod = (a, n) => ((a % n) + n) % n;
   for (let i = 0; i < ts.length; i++) {
     const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
-    if ([o, h, l, c].some((v) => v == null)) continue;
-    if (intraday && ts[i] % 60 !== 0) continue;
+    if (ts[i] == null || [o, h, l, c].some((v) => v == null)) continue;
+    if (step && anchor != null && (ts[i] % 60 !== 0 || mod(ts[i] - anchor, step) !== 0 || (i > 0 && ts[i - 1] === ts[i]))) continue;
     candles.push({
       time: wibIso(ts[i]),
       t: ts[i],
