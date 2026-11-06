@@ -343,7 +343,11 @@ added field, and the values now match the documented "one entity's position".
 `discover` (`idx.ownership.discover.v1`) entries add `family` (`above1`,
 `above5`, `investor-type`, `classification` or `composition`) and
 `importable` (`true` for `above1` and `composition`); `origin` can now also be
-`ksei.co.id`. `import` (`idx.ownership.import.v1`) reports add `family`
+`ksei.co.id`. The envelope's `provider` names where the entries came from:
+`idx` (idx.co.id), `github-mirror` (the mirror, when idx.co.id refused),
+`ksei` (ksei.co.id only, as with `--family composition`), or `idx+ksei` and
+`github-mirror+ksei` when the families were listed from both.
+`import` (`idx.ownership.import.v1`) reports add `family`
 (`above1` or `composition`) and `other_securities` (composition only: rows of
 other security types left out). For a composition month `release.rows` and
 `release.issuers` count the stocks stored, `release.entities` is 0 and
