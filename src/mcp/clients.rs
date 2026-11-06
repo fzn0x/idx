@@ -363,7 +363,7 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
                 ));
             }
             notes.push(
-                "Check with `claude mcp list`; inside a session `/mcp` shows the 36 tools.".into(),
+                "Check with `claude mcp list`; inside a session `/mcp` shows the 39 tools.".into(),
             );
         }
         "claude-desktop" => {
@@ -906,7 +906,7 @@ pub fn render(s: &Setup) -> String {
             out.push_str(&format!("Note: {n}\n"));
         }
     }
-    out.push_str("\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists 36 tools; idx_brief is the one-call starting point.\n");
+    out.push_str("\nVerify: ask the agent \"use idx_brief on BBCA\". The server lists 39 tools; idx_brief is the one-call starting point.\n");
     out
 }
 

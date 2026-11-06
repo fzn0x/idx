@@ -244,6 +244,12 @@ expect "$TMP/ot.txt" "ADARO STRATEGIC INVESTMENTS" "ownership ticker lists the t
 expect "$TMP/oa.txt" "43 positions" "ownership import sums a holder's accounts"
 "$IDX" ownership ticker KREN >"$TMP/ok.txt" || fail "ownership ticker KREN"
 expect "$TMP/ok.txt" "13.45%" "ownership ticker shows KRESNA PRIMA INVEST's two accounts summed"
+"$IDX" ownership search kresna >"$TMP/os.txt" || fail "ownership search"
+expect "$TMP/os.txt" "KRESNA PRIMA INVEST" "ownership search finds a holder by name"
+"$IDX" ownership concentration KREN >"$TMP/oc.txt" || fail "ownership concentration"
+expect "$TMP/oc.txt" "lower bound" "ownership concentration explains the HHI"
+"$IDX" ownership graph KREN --dot >"$TMP/og.txt" || fail "ownership graph --dot"
+expect "$TMP/og.txt" "digraph ownership" "ownership graph prints Graphviz"
 set +e
 "$IDX" ownership discover >"$TMP/od.txt" 2>"$TMP/od.err"; code=$?
 set -e

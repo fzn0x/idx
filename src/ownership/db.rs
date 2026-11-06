@@ -10,6 +10,9 @@
 //!   holder's lines dated the release's `as_of` summed (`accounts` counts
 //!   them). [`rebuild_positions`] is the only writer for releases that have
 //!   lines; every query reads positions.
+//! - `resolutions`    the user's rules from `ownership resolve` (merge two
+//!   holders, map one spelling to a holder), applied to every release and
+//!   every later import (`resolve.rs`)
 //!
 //! KSEI lists a holder once per SID and once per scrip account without an
 //! SID, so one holder can have several lines in one issuer (typically a scrip
@@ -20,7 +23,7 @@
 //! Queries never touch the network. Importing the same `as_of` twice replaces
 //! the earlier rows for that release.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -36,11 +39,14 @@ use crate::model::{
 use super::ingest::{self, Parsed};
 use super::normalize;
 
+mod analytics;
+mod resolve;
+
 /// `PRAGMA user_version` this idx writes. 0 is a file created by idx 0.8.1
 /// or older (the pragma was never set) or a brand-new file; 2 adds register
-/// lines and summed positions. A later schema change adds an `if v < 3`
-/// step to `migrate` and bumps this.
-pub const SCHEMA_VERSION: i64 = 2;
+/// lines and summed positions; 3 adds the `resolutions` rules. A later
+/// schema change adds an `if v < 4` step to `migrate` and bumps this.
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// The idx 0.8.1 tables, frozen. Every file is created from them and then
 /// migrated, so new and upgraded files end up identical.
@@ -184,6 +190,9 @@ fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
             for (table, column, ty) in V2_COLUMNS {
                 add_column(&tx, table, column, ty)?;
             }
+        }
+        if v < 3 {
+            tx.execute_batch(resolve::V3_TABLES).map_err(db_err)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(db_err)?;
@@ -489,20 +498,9 @@ impl OwnershipDb {
         .map_err(db_err)?;
         let release_id = tx.last_insert_rowid();
 
-        let mut entity_cache: HashMap<String, i64> = HashMap::new();
         {
-            let mut find_alias = tx
-                .prepare("SELECT entity_id FROM aliases WHERE raw_name = ?1")
-                .map_err(db_err)?;
-            let mut find_entity = tx
-                .prepare("SELECT id FROM entities WHERE entity_key = ?1")
-                .map_err(db_err)?;
-            let mut insert_entity = tx
-                .prepare("INSERT INTO entities (entity_key, display_name) VALUES (?1, ?2)")
-                .map_err(db_err)?;
-            let mut insert_alias = tx
-                .prepare("INSERT OR IGNORE INTO aliases (raw_name, entity_id) VALUES (?1, ?2)")
-                .map_err(db_err)?;
+            // Spelling first, then merge rules, then the key: see `resolve.rs`.
+            let mut resolver = resolve::EntityResolver::new(&tx)?;
             let mut insert_line = tx
                 .prepare(
                     "INSERT INTO holding_lines (release_id, line, report_date, symbol, issuer_name,
@@ -513,42 +511,7 @@ impl OwnershipDb {
                 .map_err(db_err)?;
 
             for r in &parsed.rows {
-                let key = normalize::entity_key(&r.holder_raw);
-                let entity_id = match entity_cache.get(&key) {
-                    Some(id) => *id,
-                    None => {
-                        let by_alias: Option<i64> = find_alias
-                            .query_row([&r.holder_raw], |row| row.get(0))
-                            .optional()
-                            .map_err(db_err)?;
-                        let id = match by_alias {
-                            Some(id) => id,
-                            None => {
-                                let by_key: Option<i64> = find_entity
-                                    .query_row([&key], |row| row.get(0))
-                                    .optional()
-                                    .map_err(db_err)?;
-                                match by_key {
-                                    Some(id) => id,
-                                    None => {
-                                        insert_entity
-                                            .execute(params![
-                                                key,
-                                                normalize::display_name(&r.holder_raw)
-                                            ])
-                                            .map_err(db_err)?;
-                                        tx.last_insert_rowid()
-                                    }
-                                }
-                            }
-                        };
-                        entity_cache.insert(key.clone(), id);
-                        id
-                    }
-                };
-                insert_alias
-                    .execute(params![r.holder_raw, entity_id])
-                    .map_err(db_err)?;
+                let entity_id = resolver.resolve(&r.holder_raw)?;
                 insert_line
                     .execute(params![
                         release_id,
@@ -873,6 +836,17 @@ impl OwnershipDb {
     /// The query needs at least 3 letters or digits once normalised: `%%%` or
     /// `!!!` would otherwise normalise to an empty key and match everyone.
     pub fn entity(&self, query: &str, as_of: Option<NaiveDate>) -> Result<EntityReport> {
+        self.entity_matching(query, as_of, false)
+    }
+
+    /// [`Self::entity`], or with `exact` only the holder whose key is the
+    /// normalised query (a key from `ownership search`).
+    pub fn entity_matching(
+        &self,
+        query: &str,
+        as_of: Option<NaiveDate>,
+        exact: bool,
+    ) -> Result<EntityReport> {
         let key = normalize::entity_key(query);
         if key.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
             return Err(IdxError::Usage(
@@ -880,8 +854,12 @@ impl OwnershipDb {
             ));
         }
         let (release_id, date) = self.release_for(as_of)?;
-        let pattern = format!("%{key}%");
-        let holdings = self.holdings_where(release_id, date, "e.entity_key LIKE ?2", &pattern)?;
+        let holdings = if exact {
+            self.holdings_where(release_id, date, "e.entity_key = ?2", &key)?
+        } else {
+            let pattern = format!("%{key}%");
+            self.holdings_where(release_id, date, "e.entity_key LIKE ?2", &pattern)?
+        };
         if holdings.is_empty() {
             return Err(IdxError::NotFound(format!(
                 "no holder matching {query:?} as of {date}"

@@ -132,7 +132,7 @@ Default path: `%LOCALAPPDATA%\idx\ownership.sqlite` on Windows,
 `$XDG_DATA_HOME/idx/ownership.sqlite` or `~/.local/share/idx/ownership.sqlite`
 elsewhere. Override with `IDX_OWNERSHIP_DB` or `ownership.db` in the config.
 
-Tables (schema version 2, kept in `PRAGMA user_version`):
+Tables (schema version 3, kept in `PRAGMA user_version`):
 
 - `releases` one row per imported month (`as_of` unique; re-importing a month
   replaces it), with the source path/URL and SHA-256 of the file, the register
@@ -153,6 +153,10 @@ Tables (schema version 2, kept in `PRAGMA user_version`):
   lines are summed (shares and percent; `accounts` counts them); the holder's
   spelling is the largest line's, and type, controller flag, local/foreign,
   nationality and domicile come from the largest line that has a value.
+- `resolutions` your spelling rules from `idx ownership resolve` (version 3):
+  `merge` (one holder key folded into another) or `map` (one spelling moved to
+  a holder), the holder it now belongs to, the issuer-months combined with
+  `--fold` and when it was made. Every import applies them.
 
 Why one holder has several lines: KSEI computes holdings per SID, and per
 account for scrip held without an SID (the register's own disclaimer). A
@@ -221,7 +225,159 @@ ownership.
 
 JSON schemas: `idx schema ownership-holders|ownership-entity|ownership-changes|
 ownership-foreign|ownership-foreign-flow|ownership-releases|ownership-import|
-ownership-discover`.
+ownership-discover|ownership-search|ownership-cross-holders|
+ownership-concentration|ownership-graph|ownership-resolve-candidates|
+ownership-resolution|ownership-resolutions`.
+
+## Finding a holder
+
+```sh
+idx ownership search salim                     # case-insensitive, any spelling
+idx ownership search "salim anthoni"           # words in any order
+idx ownership search "uob kay hian" --limit 5
+idx ownership entity --exact "ANTHONI SALIM"   # one holder's positions, by key
+```
+
+`search` matches the normalised name (`entity_key`) and every spelling KSEI
+printed in any imported month. Each match says how it matched: `exact` (the
+query normalises to the key), `spelling` (one of the printed spellings, case
+and spacing ignored), `prefix`, `contains`, or `words` (every query word
+starts a word of the key or a spelling, in any order). Exact and spelling
+matches come first, then holders listed in the selected release (`--as-of`,
+default newest) before those that left the register, then prefix, contains
+and word matches, then the holders with more issuers. A query needs 2 letters
+or digits. `entity --exact` takes the key and lists that one holder, where
+plain `entity` lists every holder whose key contains the name. `entity`
+reads one release (newest by default), so for a holder that left the
+register pass its `last_seen` as `--as-of`; the line under the search table
+prints that command for the first match.
+
+## Holders across issuers
+
+```sh
+idx ownership cross-holders                      # holders above 1 % in at least 2 issuers
+idx ownership cross-holders --type individual    # people only
+idx ownership cross-holders --origin foreign --min-issuers 5
+```
+
+A holder's accounts in one issuer are summed first, so an issuer counts once.
+`total_pct` adds stakes in different companies: it measures breadth and is
+not a share of anything. `--type` is a case-insensitive substring of KSEI's
+investor type (`mutual fund` matches `MUTUAL FUNDS`), `--origin` the `A`/`L`
+flag; a holder without a type or flag never passes those filters. Custodian
+and nominee accounts (securities companies, private banks) lead the ranking
+because the register names the account holder, not the beneficial owner: on
+30 Sep 2026 UOB KAY HIAN PRIVATE LIMITED is listed in 64 issuers. A holder
+printed two ways counts as two until you merge them (below).
+
+## Concentration
+
+```sh
+idx ownership concentration                     # most concentrated first, by HHI
+idx ownership concentration --ascending         # most widely held first
+idx ownership concentration --by top1 --limit 50
+idx ownership concentration BBCA BBRI TLKM
+```
+
+Definition, per issuer and release:
+
+- Holders: those listed above 1 % for the issuer, each holder's accounts
+  summed into one position.
+- `hhi` = the sum of the squared percentages of those holders, on the 0-100
+  scale, so it runs from 0 to 10,000 (10,000 means one holder owns
+  everything). Nothing is rounded before the last step.
+- `top1_pct` and `top_holder` (ties by name), `top3_pct` (the three largest,
+  fewer when fewer are listed), `listed_pct` (their sum), `holders_listed`.
+- `undisclosed_pct` = max(0, 100 - `listed_pct`): what the register does not
+  show. It is left out of the HHI (treated as fully dispersed), so the HHI is
+  a lower bound of the full figure. It is not IDX's free float, a narrower
+  regulatory figure.
+- `controller_pct`: the stakes flagged CONTROLLER or AFFILIATE OF THE
+  CONTROLLER, from the 30 Oct 2026 register on (`null` for earlier releases).
+
+The reference CLI 0xrsydn/idx-cli uses the same definition over register rows;
+idx sums a holder's accounts first (two accounts of 9.44 % and 4.01 % add
+180.9 points, not 105.2), keeps the decimals (BBCA scores 3,021.91 rather than
+3,021 on 30 Sep 2026) and calls the remainder `undisclosed_pct`. No upper
+bound is published: KSEI lists accounts, so a holder below 1 % per account is
+not guaranteed below 1 % in total.
+
+## Network graph
+
+```sh
+idx ownership graph BBCA                       # holders of BBCA and their other holdings
+idx ownership graph "Anthoni Salim" --depth 3
+idx ownership graph AADI --min-pct 5           # major stakes only
+idx ownership graph BBRI --dot | dot -Tsvg -o bbri.svg
+```
+
+The register is a bipartite graph: holders on one side, issuers on the other,
+a link for each holding above 1 %. The walk starts at a ticker (or, when ROOT
+is not a ticker with holders or `--holder` is given, at the holder whose key
+ROOT normalises to, else at the best `search` match, with a warning naming
+it) and goes breadth-first for `--depth` hops (1-6, default 2): from a ticker,
+hop 1 is its holders and hop 2 their other issuers. Within a hop the strongest
+links come first, so `--max-nodes` (default 100, at most 1000) keeps the
+important part; reaching it sets `truncated` and warns. Links are every
+holding between two reached nodes. Node ids are `ticker:<SYMBOL>` and
+`holder:<entity_key>`, the same in every database. `--dot` prints a
+deterministic Graphviz digraph (holders as ellipses, issuers as boxes, the
+percent on each edge, the root in bold) and wins over `-o`; `-o csv` prints
+the links.
+
+Sizes on the 30 Sep 2026 register: BBCA at depth 2 has 13 nodes; DRS LO KHENG
+HONG has 106 at depth 2 and 1,774 at depth 4; the custodian UOB KAY HIAN
+reaches 452 at depth 2 (44 with `--min-pct 5`).
+
+## Spelling changes and merges
+
+KSEI sometimes prints one holder differently from month to month, and
+`changes` then shows an exit plus a new holder. Between 31 Aug and 30 Sep
+2026, SURONO SUBEKTI became DRS SURONO SUBEKTI (18 issuers), UOB KAY HIAN PTE
+LTD became UOB KAY HIAN PRIVATE LIMITED (54 issuers), and in all 232 of the
+1,451 change rows idx 0.8.1 reported were one name leaving an issuer and
+another entering it with exactly the same share count.
+
+```sh
+idx ownership resolve candidates                # suggestions with their evidence
+idx ownership resolve merge "DRS SURONO SUBEKTI" "SURONO SUBEKTI" --dry-run
+idx ownership resolve merge "DRS SURONO SUBEKTI" "SURONO SUBEKTI"
+idx ownership resolve map "IR. T. PERMADI RACHMAT" "T PERMADI RACHMAT"
+idx ownership resolve list
+idx ownership resolve undo 1
+```
+
+`candidates` (also `unresolved`) pairs holders on two kinds of evidence:
+`renamed`, the same share count left one name and reached the other in the
+same issuer between two consecutive imported months; and `similar_name`, the
+same words once legal forms (`PT`, `TBK`, `LTD`, `PTE`, `LIMITED`,
+`CORPORATION`, ...) and titles (`DRS`, `DR`, `IR`, `H`, `HJ`, ...) are dropped,
+in any order (names of one word are left out). Pairs listed in one issuer in
+one month are marked `listed_together`. These are suggestions, and both kinds
+have false positives: an identical share count is also what a real block sale
+looks like (MANDOM CORPORATION to KALON MIDCO HOLDINGS CO LTD in TCID), and
+holders listed together are often different people (CAUDLE GAVIN ARNOLD and
+GAVIN ARNOLD CAUDLE in PALM).
+
+`merge KEEP MERGE...` moves every spelling and register line of each MERGE
+holder to KEEP, in every imported month, and every later import follows (a
+new spelling whose key was merged away joins KEEP too). `map SPELLING HOLDER`
+moves one printed spelling (`--new` makes HOLDER a new holder). Holders are
+named by key or display name, exactly; `search` shows both and every
+spelling. When both are listed in the same issuer in one month the command
+stops unless you pass `--fold`, which adds the stakes up. `--dry-run` reports
+the counts and writes nothing. `undo ID` deletes a rule and moves back what it
+moved; months with register lines are rebuilt from them, so even a fold
+splits again exactly. A merge of a holder that had been merged into earlier
+re-points those rules too, so undo reverts exactly one rule.
+
+The rules live in the ownership database (`resolutions`), so they survive
+re-imports (`import --all --force` re-applies them) but not a new database
+file. Months imported by idx 0.8.1 or older have no register lines: a rule
+edits their positions in place, a fold there cannot be split again, and a
+warning asks to re-import them. The rules are local to the CLI and the MCP
+server reading this file; the GitHub mirror and the web terminal keep the
+automatic grouping.
 
 ## Caveats
 
@@ -229,7 +385,13 @@ ownership-discover`.
 - Entity grouping is heuristic: it merges spelling variants, not legally
   distinct vehicles with similar names. The raw spelling is kept on every
   line. Two different holders whose names normalise alike in one ticker are
-  summed into one position (they used to replace each other).
+  summed into one position (they used to replace each other). Titles
+  (DRS, IR) and word order are not normalised; `resolve` merges those by hand.
+- The register names account holders: custodians and nominees (securities
+  companies, private banks) hold for clients, so cross-holder rankings and
+  graphs show them as hubs.
+- The web terminal's `ownership search` covers the selected month only (its
+  spellings), and it has no `resolve`: your rules stay in your database.
 - Attributes of a summed position come from its largest line that has them:
   a scrip line without an L/A flag counts with its holder's flagged line in
   `ownership foreign`.

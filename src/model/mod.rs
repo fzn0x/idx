@@ -21,6 +21,7 @@ pub mod market;
 pub mod news;
 pub mod orderbook;
 pub mod ownership;
+pub mod ownership_analytics;
 pub mod returns;
 pub mod screen;
 pub mod technical;
@@ -55,6 +56,13 @@ pub use ownership::{
     Change, ChangeBrief, ChangeKind, ChangesReport, ChangesSummary, DiscoveredFile, EntityReport,
     ForeignFlowReport, ForeignPoint, ForeignReport, HoldersReport, Holding, ImportReport,
     IssuerFlow, IssuerForeign, Release, TypeFlow,
+};
+pub use ownership_analytics::{
+    CandidateHolder, CandidateReason, Concentration, ConcentrationReport, ConcentrationSort,
+    CrossHolder, CrossHoldersReport, CrossPosition, GraphHolder, GraphIssuer, GraphLink,
+    GraphReport, HolderOrigin, IssuerMonth, RenameEvidence, Resolution, ResolutionAction,
+    ResolutionKind, ResolutionReport, ResolveCandidate, ResolveCandidates, SearchMatch,
+    SearchMatchKind, SearchReport,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};
 pub use screen::{ScreenReport, ScreenRow};

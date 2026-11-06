@@ -1613,6 +1613,402 @@ fn ownership_sums_accounts_dates_rows_and_reads_controller_offline() {
         .stdout(predicate::str::contains("accounts"));
 }
 
+/// The analytics excerpts (16 issuers, 31 Aug and 30 Sep 2026) imported into
+/// the sandbox's own database.
+fn analytics_db(sb: &Sandbox) -> std::path::PathBuf {
+    let db = sb.cache.join("analytics.sqlite");
+    for month in ["20260831", "20260930"] {
+        let file = format!(
+            "{}/tests/fixtures/ownership/above1_{month}_analytics_excerpt.xlsx",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        idx(&sb.cache, &sb.config)
+            .env("IDX_OWNERSHIP_DB", &db)
+            .args(["ownership", "import", "--file", &file])
+            .assert()
+            .success();
+    }
+    db
+}
+
+#[test]
+fn ownership_analytics_work_offline() {
+    let sb = sandbox();
+    let empty = sb.cache.join("empty.sqlite");
+    idx(&sb.cache, &sb.config)
+        .env("IDX_OWNERSHIP_DB", &empty)
+        .args(["ownership", "search", "salim"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("ownership import"));
+    idx(&sb.cache, &sb.config)
+        .args(["ownership", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("search"))
+        .stdout(predicate::str::contains("cross-holders"))
+        .stdout(predicate::str::contains("concentration"))
+        .stdout(predicate::str::contains("graph"));
+
+    let db = analytics_db(&sb);
+    let own = || {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+
+    // search
+    own()
+        .args(["ownership", "search", "permadi"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("T PERMADI RACHMAT"))
+        .stdout(predicate::str::contains("IR. T. PERMADI RACHMAT"))
+        .stdout(predicate::str::contains(
+            "idx ownership entity --exact \"T PERMADI RACHMAT\" --as-of 2026-09-30",
+        ));
+    // A first match that left the register: the hint names its last month,
+    // and the command it prints works.
+    own()
+        .args(["ownership", "search", "ir. t. permadi rachmat"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "idx ownership entity --exact \"IR T PERMADI RACHMAT\" --as-of 2026-08-31",
+        ));
+    own()
+        .args([
+            "ownership",
+            "entity",
+            "--exact",
+            "IR T PERMADI RACHMAT",
+            "--as-of",
+            "2026-08-31",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("IR. T. PERMADI RACHMAT"));
+    own()
+        .args(["-o", "json", "ownership", "search", "salim", "anthoni"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.search.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"matched\": \"words\""))
+        .stdout(predicate::str::contains(
+            "\"entity_key\": \"ANTHONI SALIM\"",
+        ));
+    own()
+        .args(["ownership", "search", "x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("2 letters or digits"));
+    own()
+        .args(["ownership", "search", "nobody", "at", "all"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no holder matching"));
+    // entity --exact: the substring search finds IR. T. PERMADI RACHMAT in
+    // August, the exact key does not.
+    own()
+        .args([
+            "ownership",
+            "entity",
+            "T PERMADI RACHMAT",
+            "--as-of",
+            "2026-08-31",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("IR. T. PERMADI RACHMAT"));
+    own()
+        .args([
+            "ownership",
+            "entity",
+            "T PERMADI RACHMAT",
+            "--as-of",
+            "2026-08-31",
+            "--exact",
+        ])
+        .assert()
+        .code(4);
+
+    // cross-holders
+    own()
+        .args(["ownership", "cross-holders"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRS SURONO SUBEKTI"))
+        .stdout(predicate::str::contains("8 holders"))
+        .stdout(predicate::str::contains("breadth measure"));
+    let out = own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "cross-holders",
+            "--origin",
+            "foreign",
+            "--min-tickers",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.ownership.cross-holders.v1");
+    assert_eq!(v["data"]["total_matches"], 2);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("\"local_foreign\": \"L\""));
+    own()
+        .args(["ownership", "cross-holders", "--origin", "mars"])
+        .assert()
+        .code(2);
+
+    // concentration
+    own()
+        .args(["-o", "json", "ownership", "concentration", "BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.concentration.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"hhi\": 3021.9114"))
+        .stdout(predicate::str::contains("\"undisclosed_pct\": 41.82"));
+    own()
+        .args(["ownership", "concentration", "--limit", "3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADES"))
+        .stdout(predicate::str::contains("8,345.90"))
+        .stdout(predicate::str::contains("lower bound"));
+    own()
+        .args(["ownership", "concentration", "--by", "nope"])
+        .assert()
+        .code(2);
+    own()
+        .args(["ownership", "concentration", "ZZZZ"])
+        .assert()
+        .code(4);
+
+    // graph
+    own()
+        .args(["ownership", "graph", "AADI"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("T PERMADI RACHMAT"))
+        .stdout(predicate::str::contains("13 links"));
+    own()
+        .args(["ownership", "graph", "AADI", "--dot"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("digraph ownership {"))
+        .stdout(predicate::str::contains(
+            "\"holder:ADARO STRATEGIC INVESTMENTS\" -> \"ticker:AADI\" [label=\"41.10%\"];",
+        ));
+    // --dot wins over -o json.
+    own()
+        .args(["-o", "json", "ownership", "graph", "AADI", "--dot"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("digraph ownership {"));
+    // CSV prints the links.
+    own()
+        .args(["-o", "csv", "ownership", "graph", "AADI"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("from,to,holder,symbol,"));
+    own()
+        .args(["ownership", "graph", "AADI", "--max-nodes", "5"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("truncated"))
+        .stderr(predicate::str::contains("stopped at 5 nodes"));
+    // A root whose stakes are all below --min-pct keeps its names, type and flag.
+    let out = own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "graph",
+            "AADI",
+            "--min-pct",
+            "99",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["data"]["issuers"][0]["issuer_name"],
+        "ADARO ANDALAN INDONESIA Tbk"
+    );
+    assert_eq!(v["data"]["links"].as_array().unwrap().len(), 0);
+    let out = own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "graph",
+            "PT Dwimuria Investama Andalan",
+            "--min-pct",
+            "60",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let root = &v["data"]["holders"][0];
+    assert_eq!(root["holder"], "PT DWIMURIA INVESTAMA ANDALAN");
+    assert_eq!(root["investor_type"], "CORPORATE");
+    assert_eq!(root["local_foreign"], "L");
+    own().args(["ownership", "graph", "ZZZZ"]).assert().code(4);
+    own()
+        .args(["ownership", "graph", "AADI", "--depth", "0"])
+        .assert()
+        .code(2);
+
+    // Every new shape is reachable through `idx schema`.
+    for name in [
+        "ownership-search",
+        "ownership-cross-holders",
+        "ownership-concentration",
+        "ownership-graph",
+    ] {
+        own().args(["schema", name]).assert().success();
+    }
+}
+
+#[test]
+fn ownership_resolve_merges_and_undoes_offline() {
+    let sb = sandbox();
+    let db = analytics_db(&sb);
+    let own = || {
+        let mut c = idx(&sb.cache, &sb.config);
+        c.env("IDX_OWNERSHIP_DB", &db);
+        c
+    };
+    let changes = || {
+        let out = own()
+            .args([
+                "ownership",
+                "changes",
+                "--from",
+                "2026-08-31",
+                "--to",
+                "2026-09-30",
+                "--limit",
+                "0",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    own()
+        .args(["ownership", "resolve", "candidates"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SURONO SUBEKTI"))
+        .stdout(predicate::str::contains("8 pairs"))
+        .stdout(predicate::str::contains("suggestions"));
+    // The reference CLI's name for it still works.
+    own()
+        .args(["-o", "json", "ownership", "resolve", "unresolved"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.resolve-candidates.v1\"",
+        ));
+    assert!(changes().contains("SURONO"));
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "merge",
+            "DRS SURONO SUBEKTI",
+            "SURONO SUBEKTI",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would merge SURONO SUBEKTI"))
+        .stdout(predicate::str::contains("dry run"));
+    assert!(changes().contains("SURONO"), "a dry run writes nothing");
+    own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "resolve",
+            "merge",
+            "DRS SURONO SUBEKTI",
+            "SURONO SUBEKTI",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"idx.ownership.resolution.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"lines_moved\": 3"));
+    assert!(!changes().contains("SURONO"));
+    own()
+        .args(["ownership", "resolve", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#1"))
+        .stdout(predicate::str::contains("merge"));
+    own()
+        .args(["ownership", "resolve", "undo", "#1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Undid merge (#1)"));
+    assert!(changes().contains("SURONO"));
+    own()
+        .args(["ownership", "resolve", "undo", "1"])
+        .assert()
+        .code(4);
+
+    // Listed together in WGSH: refused without --fold.
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "merge",
+            "WALDEN GLOBAL SERVICES",
+            "WALDEN GLOBAL SERVICES PTE LTD",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--fold"));
+    own()
+        .args([
+            "ownership",
+            "resolve",
+            "map",
+            "IR. T. PERMADI RACHMAT",
+            "T PERMADI RACHMAT",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Mapped spelling"));
+    assert!(!changes().contains("PERMADI"));
+    own()
+        .args(["-o", "json", "ownership", "resolve", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"kind\": \"map\""))
+        .stdout(predicate::str::contains("\"id\": 2"));
+    for name in [
+        "ownership-resolve-candidates",
+        "ownership-resolution",
+        "ownership-resolutions",
+    ] {
+        own().args(["schema", name]).assert().success();
+    }
+}
+
 #[test]
 fn mcp_setup_prints_recipes_offline() {
     let sb = sandbox();

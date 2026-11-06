@@ -16,6 +16,9 @@ use crate::output::{self, table_ownership as tbl};
 use crate::ownership::{self, OwnershipDb};
 use crate::providers::Sourced;
 
+use super::ownership_analytics::{
+    self as analytics, ConcentrationArgs, CrossHoldersArgs, GraphArgs, ResolveCmd, SearchArgs,
+};
 use super::{emit, Context};
 
 #[derive(Debug, Subcommand)]
@@ -40,14 +43,49 @@ pub enum OwnershipCmd {
 
     /// Every position of a person or institution (substring match on the normalised name).
     #[command(
-        after_help = "Examples:\n  idx ownership entity \"Dwimuria Investama\"\n  idx ownership entity \"statens pensjonsfond\" --as-of 2026-08-31"
+        after_help = "Examples:\n  idx ownership entity \"Dwimuria Investama\"\n  idx ownership entity \"statens pensjonsfond\" --as-of 2026-08-31\n  idx ownership entity --exact \"T PERMADI RACHMAT\"   # one holder, by a key from `ownership search`"
     )]
     Entity {
         #[arg(value_name = "NAME")]
         name: String,
         #[arg(long, value_name = "YYYY-MM-DD")]
         as_of: Option<NaiveDate>,
+        /// Only the holder whose key is NAME once normalised (a key from `ownership search`).
+        #[arg(long)]
+        exact: bool,
     },
+
+    /// Find holders by name: every spelling KSEI printed, words in any order, every imported month.
+    #[command(
+        after_help = "Examples:\n  idx ownership search salim\n  idx ownership search \"lo kheng hong\"\n  idx ownership search \"uob kay hian\" --limit 5\n  idx -o json ownership search permadi | jq '.data.matches[].entity_key'\n\nMatches the normalised name and every spelling KSEI printed, case-insensitively; words may come\nin any order. Exact and spelling matches come first, then holders listed in the release (issuers\ncounted as of --as-of, default newest), then prefix, contains and word matches. Then\n`idx ownership entity --exact \"<key>\"` lists that holder's positions."
+    )]
+    Search(SearchArgs),
+
+    /// Holders ranked by the number of issuers they own more than 1 % of.
+    #[command(
+        name = "cross-holders",
+        after_help = "Examples:\n  idx ownership cross-holders                      # holders above 1 % in at least 2 issuers\n  idx ownership cross-holders --type individual    # people only\n  idx ownership cross-holders --origin foreign --min-issuers 5\n  idx ownership cross-holders --as-of 2026-08-31 --limit 0\n\nA holder's accounts in one issuer are summed first. Total % adds stakes in different companies:\na breadth measure, not a share of anything. Custodian and nominee accounts (securities companies,\nprivate banks) hold for their clients. A holder printed two ways is counted twice: see\n`idx ownership resolve candidates`."
+    )]
+    CrossHolders(CrossHoldersArgs),
+
+    /// Issuers ranked by ownership concentration: HHI, the largest and the top-3 stakes.
+    #[command(
+        after_help = "Examples:\n  idx ownership concentration                     # most concentrated first, by HHI\n  idx ownership concentration --ascending         # most widely held first\n  idx ownership concentration --by top1 --limit 50\n  idx ownership concentration BBCA BBRI TLKM\n\nHHI is the sum of the squared stakes of the holders listed above 1 % (0 to 10,000; 10,000 means\none holder owns everything), each holder's accounts summed first. Holders at or below 1 % are not\npublished, so HHI covers the listed holders only (a lower bound of the full figure) and\nUndisclosed is what the register does not show (not IDX's free float). From the 30 Oct 2026\nregister, Control % adds the stakes flagged CONTROLLER or AFFILIATE OF THE CONTROLLER."
+    )]
+    Concentration(ConcentrationArgs),
+
+    /// Holder-issuer network around a ticker or a holder, as a table, JSON or Graphviz DOT.
+    #[command(
+        after_help = "Examples:\n  idx ownership graph BBCA                       # holders of BBCA and their other holdings\n  idx ownership graph \"Anthoni Salim\" --depth 3\n  idx ownership graph AADI --min-pct 5           # major stakes only\n  idx ownership graph BBRI --dot | dot -Tsvg -o bbri.svg\n\nROOT is a ticker, or a holder's name or key (--holder forces a name). One hop links a holder to an\nissuer it owns more than 1 % of; the walk follows the strongest links first and stops at --depth\nhops or --max-nodes nodes. Node ids are ticker:<SYMBOL> and holder:<entity_key>."
+    )]
+    Graph(GraphArgs),
+
+    /// Suggest, merge and split holder spellings (writes the local database).
+    #[command(
+        subcommand,
+        after_help = "Examples:\n  idx ownership resolve candidates\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\" --dry-run\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\"\n  idx ownership resolve map \"IR. T. PERMADI RACHMAT\" \"T PERMADI RACHMAT\"\n  idx ownership resolve list\n  idx ownership resolve undo 1\n\nKSEI sometimes prints one holder differently from month to month (DRS SURONO SUBEKTI, SURONO\nSUBEKTI), which shows up in `changes` as an exit plus a new holder. A merge moves every month\nalready imported and every later import; `undo` reverts it. Holders are named by key or display\nname (see `idx ownership search`). If both are listed in the same issuer in one month (often two\ndifferent people, sometimes one holder's two accounts) the merge stops unless you pass --fold.\nThe rules live in the ownership database; the web terminal and the mirror keep the automatic\ngrouping."
+    )]
+    Resolve(ResolveCmd),
 
     /// Month-over-month changes: new holders, exits and position changes, with a summary.
     #[command(
@@ -123,7 +161,7 @@ pub struct ImportArgs {
     pub force: bool,
 }
 
-fn open(ctx: &Context) -> Result<OwnershipDb> {
+pub(super) fn open(ctx: &Context) -> Result<OwnershipDb> {
     OwnershipDb::open(&ctx.settings.ownership_db)
 }
 
@@ -142,18 +180,23 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 tbl::holders(r, ctx.color)
             })
         }
-        OwnershipCmd::Entity { name, as_of } => {
+        OwnershipCmd::Entity { name, as_of, exact } => {
             if name.trim().len() < 3 {
                 return Err(IdxError::Usage(
                     "entity name needs at least 3 characters".into(),
                 ));
             }
             let db = open(ctx)?;
-            let report = ownership::entity(&db, &name, as_of)?;
+            let report = ownership::entity(&db, &name, as_of, exact)?;
             emit(ctx, SCHEMA_OWNERSHIP_ENTITY, report, |r| {
                 tbl::entity(r, ctx.color)
             })
         }
+        OwnershipCmd::Search(a) => analytics::search(ctx, a).await,
+        OwnershipCmd::CrossHolders(a) => analytics::cross_holders(ctx, a).await,
+        OwnershipCmd::Concentration(a) => analytics::concentration(ctx, a).await,
+        OwnershipCmd::Graph(a) => analytics::graph(ctx, a).await,
+        OwnershipCmd::Resolve(cmd) => analytics::resolve(ctx, cmd).await,
         OwnershipCmd::Changes {
             from,
             to,

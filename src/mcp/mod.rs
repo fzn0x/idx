@@ -24,15 +24,16 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
-    IDX_EXCHANGE,
+    BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, HolderOrigin, Interval, Period,
+    StatementPeriod, Symbol, IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
-    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN,
-    SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
+    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_CONCENTRATION, SCHEMA_OWNERSHIP_CROSS_HOLDERS,
+    SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
+    SCHEMA_OWNERSHIP_GRAPH, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
+    SCHEMA_OWNERSHIP_SEARCH, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
@@ -71,6 +72,8 @@ idx_bandar reads it as bandarmology (are the top brokers accumulating or distrib
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
+idx_ownership_search finds a holder's entity_key by name; idx_ownership_rankings ranks
+holders by issuers held or issuers by concentration; idx_ownership_graph walks the network.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 // Tickers for the Yahoo-backed tools (idx_quote, idx_compare).
@@ -148,6 +151,73 @@ pub struct OwnershipTickerArgs {
 pub struct OwnershipEntityArgs {
     /// Part of a holder's name (person or institution), at least 3 letters or digits, e.g. "Dwimuria".
     pub name: String,
+    /// Release date YYYY-MM-DD (default: newest imported).
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// Match the holder's key exactly, e.g. an entity_key from idx_ownership_search (default false: substring).
+    #[serde(default)]
+    pub exact: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OwnershipSearchArgs {
+    /// Part of a holder's name (person or institution), at least 2 letters or digits; words in any order, e.g. "salim" or "lo kheng hong".
+    pub query: String,
+    /// Matches returned (default 20; 0 = all, at most 100; total_matches counts every match).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Release date YYYY-MM-DD in which issuers are counted (default: newest imported).
+    #[serde(default)]
+    pub as_of: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OwnershipRankingsArgs {
+    /// "holders" (default): holders ranked by the number of issuers they own more than 1% of. "issuers": issuers ranked by ownership concentration.
+    #[serde(default)]
+    pub view: Option<String>,
+    /// view holders: minimum number of issuers held above 1% (default 2).
+    #[serde(default)]
+    pub min_issuers: Option<u32>,
+    /// view holders: KSEI investor type, case-insensitive substring, e.g. "individual", "mutual fund", "pension".
+    #[serde(default)]
+    pub investor_type: Option<String>,
+    /// view holders: "foreign" (KSEI flag A) or "local" (L); default both.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// view issuers: IDX tickers, comma or space separated; omit to rank every issuer.
+    #[serde(default)]
+    pub symbols: Option<String>,
+    /// view issuers: "hhi" (default), "top1" or "top3".
+    #[serde(default)]
+    pub by: Option<String>,
+    /// view issuers: least concentrated (most widely held) first (default false).
+    #[serde(default)]
+    pub ascending: Option<bool>,
+    /// Rows returned (default 25; 0 = all). Ignored with symbols.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Release date YYYY-MM-DD (default: newest imported).
+    #[serde(default)]
+    pub as_of: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OwnershipGraphArgs {
+    /// Ticker (e.g. "BBCA") or a holder's name or entity_key (e.g. "Anthoni Salim") to start from.
+    pub root: String,
+    /// Hops to walk, 1-6 (default 2): from a ticker, 1 = its holders, 2 = their other holdings.
+    #[serde(default)]
+    pub depth: Option<u32>,
+    /// Ignore holdings below this percent (default 0; 5 keeps major stakes only).
+    #[serde(default)]
+    pub min_pct: Option<f64>,
+    /// Stop after this many nodes (default 100, at most 1000); truncated=true when hit.
+    #[serde(default)]
+    pub max_nodes: Option<u32>,
+    /// Treat root as a holder name even when it is also a ticker (default false).
+    #[serde(default)]
+    pub holder: Option<bool>,
     /// Release date YYYY-MM-DD (default: newest imported).
     #[serde(default)]
     pub as_of: Option<String>,
@@ -1369,7 +1439,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_entity",
-        description = "Every IDX position above 1% held by a person or institution whose name contains the query, from KSEI's monthly register (local SQLite). Spelling variants (PT/Tbk placement, punctuation) are grouped. Returns the idx.ownership.entity.v1 envelope."
+        description = "Every IDX position above 1% held by a person or institution whose name contains the query, from KSEI's monthly register (local SQLite). Spelling variants (PT/Tbk placement, punctuation) are grouped. With exact=true only the holder whose entity_key is the query (use a key from idx_ownership_search). Returns the idx.ownership.entity.v1 envelope."
     )]
     async fn ownership_entity(
         &self,
@@ -1381,7 +1451,8 @@ impl IdxServer {
                     return Err(IdxError::Usage("name needs at least 3 characters".into()));
                 }
                 let as_of = parse_date(&a.as_of)?;
-                let report = ownership::entity(&self.db()?, &a.name, as_of)?;
+                let report =
+                    ownership::entity(&self.db()?, &a.name, as_of, a.exact.unwrap_or(false))?;
                 ok(SCHEMA_OWNERSHIP_ENTITY, report)
             }
             .await,
@@ -1464,6 +1535,145 @@ impl IdxServer {
     )]
     async fn ownership_releases(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(async { ok(SCHEMA_OWNERSHIP_RELEASES, ownership::releases(&self.db()?)?) }.await)
+    }
+
+    #[tool(
+        name = "idx_ownership_search",
+        description = "Finds holders in KSEI's monthly register of shareholders above 1% (local SQLite) by name: case-insensitive, words in any order, every spelling KSEI printed in any imported month included. Each match has the entity_key (pass it to idx_ownership_entity with exact=true, or to idx_ownership_graph), the display name, how it matched (exact, spelling, prefix, contains, words), its spellings, the issuers it holds above 1% in the release with their summed percent, investor type, local/foreign flag and the last release it appears in. No match is an empty list with a warning. Returns the idx.ownership.search.v1 envelope."
+    )]
+    async fn ownership_search(
+        &self,
+        Parameters(a): Parameters<OwnershipSearchArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                ownership::analytics::search_key(&a.query)?;
+                let as_of = parse_date(&a.as_of)?;
+                // 0 means all, as for every idx limit, within the cap of 100.
+                let limit = match a.limit {
+                    Some(0) => 100,
+                    Some(n) => n.min(100),
+                    None => 20,
+                } as usize;
+                let report = ownership::search(&self.db()?, &a.query, as_of, Some(limit))?;
+                ok(SCHEMA_OWNERSHIP_SEARCH, report)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_ownership_rankings",
+        description = "Rankings over KSEI's monthly register of holders above 1% (local SQLite), accounts summed per holder. view=holders (default): holders that own more than 1% of the most IDX issuers, with issuer count, summed percent (a breadth measure, not a share of anything), largest stake and every position, optionally filtered by KSEI investor type or foreign/local; custodian and nominee accounts rank high because they hold for clients (idx.ownership.cross-holders.v1 envelope). view=issuers: ownership concentration per issuer, the Herfindahl-Hirschman index (sum of squared stakes of the listed holders, 0-10,000), largest and top-3 stakes, listed and undisclosed percent, holder count and, from the 30 Oct 2026 register, the controller group's percent; holders at or below 1% are not published, so HHI is a lower bound. Ranks every issuer by hhi, top1 or top3 (ascending for the most widely held) or reports the given symbols (idx.ownership.concentration.v1 envelope)."
+    )]
+    async fn ownership_rankings(
+        &self,
+        Parameters(a): Parameters<OwnershipRankingsArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let view = a
+                    .view
+                    .as_deref()
+                    .map(|v| v.trim().to_ascii_lowercase())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "holders".into());
+                let as_of = parse_date(&a.as_of)?;
+                let limit = match a.limit {
+                    Some(0) => None,
+                    Some(n) => Some(n as usize),
+                    None => Some(25),
+                };
+                let given = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+                match view.as_str() {
+                    // The other view's arguments are refused unless they hold
+                    // their default, which changes nothing.
+                    "holders" => {
+                        let by = parse_opt(&a.by, ConcentrationSort::Hhi)?;
+                        if given(&a.symbols)
+                            || by != ConcentrationSort::Hhi
+                            || a.ascending == Some(true)
+                        {
+                            return Err(IdxError::Usage(
+                                "symbols, by and ascending apply to view \"issuers\"".into(),
+                            ));
+                        }
+                        let origin =
+                            match a.origin.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                                Some(o) => Some(o.parse::<HolderOrigin>()?),
+                                None => None,
+                            };
+                        let filter = ownership::analytics::CrossFilter {
+                            min_issuers: a.min_issuers.unwrap_or(2) as usize,
+                            investor_type: a.investor_type.clone(),
+                            origin,
+                        };
+                        let report = ownership::cross_holders(&self.db()?, &filter, limit, as_of)?;
+                        ok(SCHEMA_OWNERSHIP_CROSS_HOLDERS, report)
+                    }
+                    "issuers" => {
+                        if a.min_issuers.is_some_and(|n| n != 2)
+                            || given(&a.investor_type)
+                            || given(&a.origin)
+                        {
+                            return Err(IdxError::Usage(
+                                "min_issuers, investor_type and origin apply to view \"holders\""
+                                    .into(),
+                            ));
+                        }
+                        let by = parse_opt(&a.by, ConcentrationSort::Hhi)?;
+                        let symbols = match a
+                            .symbols
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            Some(s) => Some(Symbol::parse_list([s])?),
+                            None => None,
+                        };
+                        let report = ownership::concentration(
+                            &self.db()?,
+                            symbols.as_deref(),
+                            by,
+                            a.ascending.unwrap_or(false),
+                            limit,
+                            as_of,
+                        )?;
+                        ok(SCHEMA_OWNERSHIP_CONCENTRATION, report)
+                    }
+                    other => Err(IdxError::Usage(format!(
+                        "invalid view {other:?}; use holders or issuers"
+                    ))),
+                }
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_ownership_graph",
+        description = "Ownership network around a ticker or a holder from KSEI's monthly register of holders above 1% (local SQLite): walks holder-issuer links for 1-6 hops (default 2: a ticker's holders and their other holdings, or a holder's issuers and their co-holders), strongest links first. Returns issuers and holders with their hop count (node ids ticker:SYMBOL and holder:entity_key) and every link between them (holder, issuer, percent, shares) in the idx.ownership.graph.v1 envelope; min_pct keeps larger stakes, max_nodes caps the size (truncated=true when hit). An ambiguous holder name starts at the best match and says so in warnings."
+    )]
+    async fn ownership_graph(
+        &self,
+        Parameters(a): Parameters<OwnershipGraphArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let as_of = parse_date(&a.as_of)?;
+                let report = ownership::graph(
+                    &self.db()?,
+                    &a.root,
+                    a.holder.unwrap_or(false),
+                    a.depth.unwrap_or(2) as usize,
+                    a.min_pct.unwrap_or(0.0),
+                    a.max_nodes.unwrap_or(100) as usize,
+                    as_of,
+                )?;
+                ok(SCHEMA_OWNERSHIP_GRAPH, report)
+            }
+            .await,
+        )
     }
 
     #[tool(
@@ -1674,7 +1884,10 @@ mod tests {
                 "idx_ownership_changes",
                 "idx_ownership_entity",
                 "idx_ownership_foreign",
+                "idx_ownership_graph",
+                "idx_ownership_rankings",
                 "idx_ownership_releases",
+                "idx_ownership_search",
                 "idx_ownership_ticker",
                 "idx_profile",
                 "idx_quote",
@@ -1862,6 +2075,235 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    fn server_at(db: &std::path::Path) -> IdxServer {
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            crate::cache::Cache::new(db.with_extension("cache")),
+            crate::http::CacheMode::Offline,
+        ));
+        IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            db.to_path_buf(),
+            StockbitConfig::default(),
+        )
+    }
+
+    fn json_of(r: &CallToolResult) -> serde_json::Value {
+        serde_json::from_str(&text(r)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn ownership_analytics_tools_check_their_arguments_and_answer() {
+        // Its own database: tests run in parallel and `server()` shares one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("own.sqlite");
+        let s = server_at(&path);
+        let search = |q: &str| OwnershipSearchArgs {
+            query: q.into(),
+            limit: None,
+            as_of: None,
+        };
+        let graph =
+            |root: &str, depth: Option<u32>, min_pct: Option<f64>, max_nodes: Option<u32>| {
+                OwnershipGraphArgs {
+                    root: root.into(),
+                    depth,
+                    min_pct,
+                    max_nodes,
+                    holder: None,
+                    as_of: None,
+                }
+            };
+        let rankings =
+            |view: Option<&str>, by: Option<&str>, origin: Option<&str>, symbols: Option<&str>| {
+                OwnershipRankingsArgs {
+                    view: view.map(Into::into),
+                    min_issuers: None,
+                    investor_type: None,
+                    origin: origin.map(Into::into),
+                    symbols: symbols.map(Into::into),
+                    by: by.map(Into::into),
+                    ascending: None,
+                    limit: None,
+                    as_of: None,
+                }
+            };
+        let code = |r: &CallToolResult| {
+            json_of(r)["error"]["code"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+
+        // Empty database: not found, as for the other ownership tools.
+        let r = s
+            .ownership_search(Parameters(search("salim")))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert_eq!(code(&r), "not_found");
+        let r = s
+            .ownership_rankings(Parameters(rankings(None, None, None, None)))
+            .await
+            .unwrap();
+        assert_eq!(code(&r), "not_found");
+
+        // Bad arguments are usage errors whatever the database holds.
+        let r = s.ownership_search(Parameters(search("x"))).await.unwrap();
+        assert_eq!(code(&r), "usage");
+        for bad in [
+            graph("AADI", Some(0), None, None),
+            graph("AADI", Some(7), None, None),
+            graph("AADI", None, Some(150.0), None),
+            graph("AADI", None, None, Some(2000)),
+        ] {
+            let r = s.ownership_graph(Parameters(bad)).await.unwrap();
+            assert_eq!(code(&r), "usage");
+        }
+        for bad in [
+            rankings(Some("nope"), None, None, None),
+            rankings(Some("issuers"), Some("nope"), None, None),
+            rankings(Some("holders"), None, Some("mars"), None),
+            rankings(Some("holders"), Some("top1"), None, None),
+            rankings(Some("holders"), None, None, Some("BBCA")),
+            rankings(Some("issuers"), None, Some("foreign"), None),
+        ] {
+            let r = s.ownership_rankings(Parameters(bad)).await.unwrap();
+            assert_eq!(code(&r), "usage", "{}", text(&r));
+        }
+
+        {
+            let mut db = OwnershipDb::open(&path).unwrap();
+            for (bytes, name) in [
+                (
+                    &include_bytes!(
+                        "../../tests/fixtures/ownership/above1_20260831_analytics_excerpt.xlsx"
+                    )[..],
+                    "aug.xlsx",
+                ),
+                (
+                    &include_bytes!(
+                        "../../tests/fixtures/ownership/above1_20260930_analytics_excerpt.xlsx"
+                    )[..],
+                    "sep.xlsx",
+                ),
+            ] {
+                let parsed = crate::ownership::ingest::parse_xlsx(bytes).unwrap();
+                db.import(&parsed, "xlsx", name, name).unwrap();
+            }
+        }
+
+        let v = json_of(
+            &s.ownership_search(Parameters(search("permadi")))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.ownership.search.v1");
+        assert_eq!(v["provider"], "local-db");
+        assert_eq!(v["data"]["matches"][0]["entity_key"], "T PERMADI RACHMAT");
+        assert_eq!(v["data"]["matches"][1]["last_seen"], "2026-08-31");
+        // limit 0 is every match (within the cap), as for the other limits.
+        for (limit, shown) in [(Some(1), 1), (Some(0), 2), (None, 2)] {
+            let mut args = search("permadi");
+            args.limit = limit;
+            let v = json_of(&s.ownership_search(Parameters(args)).await.unwrap());
+            assert_eq!(v["data"]["total_matches"], 2);
+            assert_eq!(
+                v["data"]["matches"].as_array().unwrap().len(),
+                shown,
+                "{limit:?}"
+            );
+        }
+
+        let v = json_of(
+            &s.ownership_rankings(Parameters(rankings(None, None, None, None)))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.ownership.cross-holders.v1");
+        assert_eq!(v["data"]["holders"][0]["entity_key"], "DRS SURONO SUBEKTI");
+        assert_eq!(v["data"]["total_matches"], 8);
+        // The other view's arguments at their defaults are fine; other values are not.
+        let mut holders = rankings(None, Some(" HHI "), None, None);
+        holders.ascending = Some(false);
+        let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let mut holders = rankings(None, None, None, None);
+        holders.ascending = Some(true);
+        let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
+        assert_eq!(code(&r), "usage");
+        for (min_issuers, ok) in [(Some(2), true), (Some(3), false), (Some(1), false)] {
+            let mut issuers = rankings(Some("issuers"), None, None, None);
+            issuers.min_issuers = min_issuers;
+            let r = s.ownership_rankings(Parameters(issuers)).await.unwrap();
+            assert_eq!(
+                r.is_error != Some(true),
+                ok,
+                "{min_issuers:?}: {}",
+                text(&r)
+            );
+        }
+        let v = json_of(
+            &s.ownership_rankings(Parameters(rankings(None, None, Some("foreign"), None)))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["data"]["total_matches"], 2);
+
+        let v = json_of(
+            &s.ownership_rankings(Parameters(rankings(
+                Some("issuers"),
+                Some("top1"),
+                None,
+                Some("bbca, tcid"),
+            )))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.ownership.concentration.v1");
+        assert_eq!(v["data"]["sort"], "top1");
+        assert_eq!(v["data"]["rows"][0]["symbol"], "BBCA");
+        assert_eq!(v["data"]["rows"][0]["hhi"], 3021.9114);
+        assert_eq!(v["data"]["rows"][1]["symbol"], "TCID");
+        assert!(v["data"]["rows"][0]["controller_pct"].is_null());
+
+        let v = json_of(
+            &s.ownership_graph(Parameters(graph("AADI", None, None, None)))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.ownership.graph.v1");
+        assert_eq!(v["data"]["root"], "ticker:AADI");
+        assert_eq!(v["data"]["links"].as_array().unwrap().len(), 13);
+        let r = s
+            .ownership_graph(Parameters(graph("ZZZZ", None, None, None)))
+            .await
+            .unwrap();
+        assert_eq!(code(&r), "not_found");
+
+        let exact = |name: &str, exact: Option<bool>| OwnershipEntityArgs {
+            name: name.into(),
+            as_of: Some("2026-08-31".into()),
+            exact,
+        };
+        let v = json_of(
+            &s.ownership_entity(Parameters(exact("T PERMADI RACHMAT", None)))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            v["data"]["holdings"].as_array().unwrap().len(),
+            3,
+            "substring"
+        );
+        let r = s
+            .ownership_entity(Parameters(exact("T PERMADI RACHMAT", Some(true))))
+            .await
+            .unwrap();
+        assert_eq!(code(&r), "not_found");
     }
 
     #[tokio::test]

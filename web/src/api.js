@@ -6,6 +6,7 @@
 import * as y from "./yahoo.js";
 import * as an from "./analysis.js";
 import * as ex from "./extras.js";
+import * as own from "./ownership.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
@@ -907,6 +908,92 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
   return envelope("idx.ownership.foreign-flow.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [fromDate, toDate]) });
 }
 
+// ---- ownership analytics (ports of src/ownership/analytics.rs) ------------------------------
+
+const STAKE_COLS = "symbol, issuer_name, entity_key, holder, holder_raw, investor_type, local_foreign, controller_or_affiliate, shares_total, pct";
+/** One month's positions (a holder's accounts already summed): one D1 read of the release, like entity and changes. */
+async function monthStakes(env, date) {
+  return (await env.DB.prepare(`SELECT ${STAKE_COLS} FROM own_holdings WHERE as_of = ?1 ORDER BY symbol, entity_key`).bind(date).all()).results;
+}
+const wholeIn = (v, name, lo, hi) => { if (!Number.isInteger(v) || v < lo || v > hi) throw usage(`${name} must be ${lo} to ${hi}`); return v; };
+const ownedBy = (fn) => { try { return fn(); } catch (e) { if (e instanceof own.UsageError) throw usage(e.message); throw e; } };
+
+/** idx.ownership.search.v1 over the selected month (the web has no table of every spelling ever seen). */
+export async function ownershipSearch(env, queryRaw, limit = 20, asOf) {
+  const query = String(queryRaw ?? "").trim();
+  ownedBy(() => own.searchKey(query));
+  const date = await ownershipRelease(env, asOf);
+  const rows = await monthStakes(env, date);
+  const all = ownedBy(() => own.search(own.knownFromMonth(rows, date), rows, query));
+  const warnings = await ownershipNotes(env, [date]);
+  warnings.push(`the web terminal searches the ${date} register only (its spellings, last_seen ${date}); idx ownership search covers every imported month`);
+  if (!all.length) warnings.push(`no holder matching "${query}"`);
+  const data = { query, as_of: date, total_matches: all.length, matches: limit > 0 ? all.slice(0, limit) : all };
+  return envelope("idx.ownership.search.v1", data, { provider: "github-mirror", cached: true, warnings });
+}
+
+/** idx.ownership.cross-holders.v1: holders ranked by the issuers they own more than 1 % of. */
+export async function ownershipCrossHolders(env, minIssuers = 2, typeRaw, originRaw, limit = 25, asOf) {
+  if (!Number.isInteger(minIssuers) || minIssuers < 1) throw usage("--min-issuers must be at least 1");
+  const origin = originRaw ? String(originRaw).trim().toLowerCase() : null;
+  if (origin && origin !== "foreign" && origin !== "local") throw usage(`invalid origin "${originRaw}"; use foreign or local`);
+  const investorType = String(typeRaw ?? "").split(/\s+/).filter(Boolean).join(" ") || null;
+  const date = await ownershipRelease(env, asOf);
+  const all = own.crossHolders(await monthStakes(env, date), { min_issuers: minIssuers, investor_type: investorType, origin });
+  const data = { as_of: date, min_issuers: minIssuers, investor_type: investorType, origin, total_matches: all.length, holders: limit > 0 ? all.slice(0, limit) : all };
+  return envelope("idx.ownership.cross-holders.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
+}
+
+/** idx.ownership.concentration.v1: HHI, top-1 and top-3 stakes per issuer. */
+export async function ownershipConcentration(env, symbolsRaw, byRaw = "hhi", ascending = false, limit = 25, asOf) {
+  const by = String(byRaw || "hhi").trim().toLowerCase();
+  if (!own.SORTS.includes(by)) throw usage(`invalid ranking "${byRaw}"; use hhi, top1 or top3`);
+  const symbols = symbolsRaw && String(symbolsRaw).trim() ? parseSymbols(symbolsRaw) : null;
+  const date = await ownershipRelease(env, asOf);
+  const reported = await controllerReported(env, date);
+  let rows = own.concentration(await monthStakes(env, date), reported);
+  const warnings = await ownershipNotes(env, [date]);
+  let total;
+  if (symbols) {
+    const bySymbol = new Map(rows.map((r) => [r.symbol, r]));
+    rows = [];
+    for (const s of symbols) {
+      if (bySymbol.has(s)) rows.push(bySymbol.get(s));
+      else warnings.push(`no holders above 1% recorded for ${s} as of ${date}`);
+    }
+    if (!rows.length) throw notFound(`no holders above 1% recorded for ${symbols.join(", ")} as of ${date}`);
+    total = rows.length;
+  } else {
+    own.rankConcentration(rows, by, ascending);
+    total = rows.length;
+    if (limit > 0) rows = rows.slice(0, limit);
+  }
+  const data = { as_of: date, sort: by, ascending, total_matches: total, controller_reported: reported, rows };
+  return envelope("idx.ownership.concentration.v1", data, { provider: "github-mirror", cached: true, warnings });
+}
+
+/** idx.ownership.graph.v1: the holder-issuer network around a ticker or a holder. */
+export async function ownershipGraph(env, rootRaw, depth = 2, minPct = 0, maxNodes = 100, forceHolder = false, asOf) {
+  wholeIn(depth, "--depth", 1, 6);
+  wholeIn(maxNodes, "--max-nodes", 1, 1000);
+  if (!Number.isFinite(minPct) || minPct < 0 || minPct > 100) throw usage("--min-pct must be 0 to 100");
+  const root = String(rootRaw ?? "").trim();
+  if (!root) throw usage("graph needs a ticker or a holder");
+  let symbol = null;
+  try { symbol = parseSymbol(root); } catch { symbol = null; }
+  const date = await ownershipRelease(env, asOf);
+  const stakes = await monthStakes(env, date);
+  const start = own.rootFor(stakes, root, forceHolder, symbol);
+  if (!start) throw notFound(`no ticker or holder matching "${root}" as of ${date}`);
+  const w = own.walk(stakes, start.root, depth, minPct, maxNodes);
+  const warnings = await ownershipNotes(env, [date]);
+  if (start.warning) warnings.push(start.warning);
+  if (w.truncated) warnings.push(`stopped at ${maxNodes} nodes; raise --max-nodes or --min-pct`);
+  const id = start.root.issuer != null ? own.issuerId(start.root.issuer) : own.holderId(start.root.holder);
+  const data = { as_of: date, root: id, depth, min_pct: minPct, max_nodes: maxNodes, truncated: w.truncated, issuers: w.issuers, holders: w.holders, links: w.links };
+  return envelope("idx.ownership.graph.v1", data, { provider: "github-mirror", cached: true, warnings });
+}
+
 // ---- brief ---------------------------------------------------------------------
 
 // The brief's "Valuation verdict" key point, null without a verdict. A P/B
@@ -1031,6 +1118,10 @@ export async function route(env, url) {
     case "/ownership/entity": return ownershipEntity(env, q.get("name"), q.get("as_of"));
     case "/ownership/changes": return ownershipChanges(env, q.get("from"), q.get("to"), q.get("symbol"), num(q.get("min_change"), 0), num(q.get("limit"), 50), num(q.get("offset"), 0));
     case "/ownership/releases": return ownershipReleases(env);
+    case "/ownership/search": return ownershipSearch(env, q.get("q") ?? q.get("query"), num(q.get("limit"), 20), q.get("as_of"));
+    case "/ownership/cross-holders": return ownershipCrossHolders(env, num(q.get("min_issuers"), 2), q.get("type"), q.get("origin"), num(q.get("limit"), 25), q.get("as_of"));
+    case "/ownership/concentration": return ownershipConcentration(env, q.get("symbols"), q.get("by") || "hhi", q.get("asc") === "1" || q.get("asc") === "true", num(q.get("limit"), 25), q.get("as_of"));
+    case "/ownership/graph": return ownershipGraph(env, q.get("root"), num(q.get("depth"), 2), num(q.get("min_pct"), 0), num(q.get("max_nodes"), 100), q.get("holder") === "1" || q.get("holder") === "true", q.get("as_of"));
     case "/ownership/status": return envelope("idx.ownership.sync.v1", await syncStatus(env), { provider: "github-mirror", cached: true });
     case "/universe": return envelope("idx.universe.v1", UNIVERSE.map(([symbol, name]) => ({ symbol, name })), { provider: "bundled", cached: true });
     case "/repo": return repo(env);

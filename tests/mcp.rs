@@ -121,11 +121,18 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 36, "{names:?}");
+    assert_eq!(names.len(), 39, "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
     assert!(names.contains(&"idx_ownership_ticker"), "{names:?}");
+    for name in [
+        "idx_ownership_search",
+        "idx_ownership_rankings",
+        "idx_ownership_graph",
+    ] {
+        assert!(names.contains(&name), "{names:?}");
+    }
     assert!(names.contains(&"idx_holidays"), "{names:?}");
     assert!(names.contains(&"idx_orderbook"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
@@ -269,6 +276,27 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("another exchange (SI)"));
+
+    // The new ownership tools answer from the (empty) sandbox database.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+        "params": {"name": "idx_ownership_search", "arguments": {"query": "salim"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 10);
+    assert_eq!(r["result"]["isError"], true);
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "not_found", "{body}");
+    let rankings = tools
+        .iter()
+        .find(|t| t["name"] == "idx_ownership_rankings")
+        .unwrap();
+    assert_eq!(
+        rankings["inputSchema"]["properties"]["view"]["type"],
+        "string"
+    );
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

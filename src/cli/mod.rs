@@ -24,6 +24,7 @@ pub mod input;
 pub mod market;
 pub mod mcp_cmd;
 pub mod ownership;
+pub mod ownership_analytics;
 pub mod stockbit;
 pub mod stocks;
 pub mod watch;
@@ -130,7 +131,7 @@ pub enum Command {
     #[command(subcommand)]
     Stocks(stocks::StocksCmd),
 
-    /// KSEI shareholder register (holders above 1 %): import monthly files, query holders, entities, changes.
+    /// KSEI shareholder register (holders above 1 %): import monthly files; holders, entities, search, cross-holders, concentration, network graph, changes; resolve spellings.
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 
@@ -182,7 +183,8 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
 
     /// MCP server over stdio (default) or HTTP; `mcp setup <client>` prints the registration recipe for any agent.
     #[command(
-        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n36 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker, idx_ownership_ticker|entity|changes|foreign|releases,\nand the realtime Stockbit tools idx_orderbook, idx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
+        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n39 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
+idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases,\nand the realtime Stockbit tools idx_orderbook, idx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
     )]
     Mcp(mcp_cmd::McpArgs),
 
