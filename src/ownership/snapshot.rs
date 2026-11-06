@@ -90,6 +90,30 @@ fn bad_manifest(msg: impl std::fmt::Display) -> IdxError {
     IdxError::provider("mirror", format!("invalid snapshot manifest: {msg}"))
 }
 
+/// Why this idx cannot use a manifest that a later idx may legitimately
+/// publish under the same name: another manifest `schema` or another
+/// `compression`. `None` for anything else, which [`parse_manifest`] then
+/// checks in full (a broken manifest stays an error).
+pub fn unsupported(bytes: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let short = |s: &str| s.chars().take(60).collect::<String>();
+    let schema = v.get("schema")?.as_str()?;
+    if schema != MANIFEST_SCHEMA {
+        return Some(format!(
+            "is {:?}, which this idx cannot read",
+            short(schema)
+        ));
+    }
+    let compression = v.get("compression")?.as_str()?;
+    if compression != "gzip" {
+        return Some(format!(
+            "uses {:?} compression, which this idx cannot read",
+            short(compression)
+        ));
+    }
+    None
+}
+
 /// Parses `snapshot-v{v}.json` and checks every field a client relies on:
 /// schema, version, file name, sizes, hashes and the release list.
 pub fn parse_manifest(bytes: &[u8], v: i64) -> Result<SnapshotManifest> {
@@ -628,13 +652,48 @@ pub fn status_mirror(offline: bool) -> (Option<String>, Option<String>) {
     }
 }
 
-/// `{base}/snapshot-v{V}.json` for this idx's schema, `None` when the
-/// mirror has none (404 or a missing file).
-pub async fn fetch_manifest(base: &str, timeout: Duration) -> Result<Option<SnapshotManifest>> {
+/// The mirror's `snapshot-v{V}.json` for this idx's schema.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Remote {
+    Found(Box<SnapshotManifest>),
+    /// No manifest (404 or a missing file).
+    Missing,
+    /// A manifest of a kind this idx cannot use ([`unsupported`]): sync
+    /// reads the monthly files, as without one.
+    Unsupported(String),
+}
+
+impl Remote {
+    pub fn manifest(&self) -> Option<&SnapshotManifest> {
+        match self {
+            Remote::Found(m) => Some(m.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The warning that says why there is no snapshot to install.
+    fn no_snapshot(&self, then: &str) -> String {
+        let name = manifest_name(SCHEMA_VERSION);
+        match self {
+            Remote::Unsupported(why) => {
+                format!("the mirror's {name} {why}; {then} (a newer idx installs the snapshot)")
+            }
+            _ => format!(
+                "the mirror has no snapshot for database schema {SCHEMA_VERSION} ({name}); {then}"
+            ),
+        }
+    }
+}
+
+/// `{base}/snapshot-v{V}.json` for this idx's schema.
+pub async fn fetch_manifest(base: &str, timeout: Duration) -> Result<Remote> {
     let url = format!("{base}/{}", manifest_name(SCHEMA_VERSION));
     match mirror::get_limited(&url, timeout, Some(MAX_MANIFEST_BYTES)).await {
-        Ok(bytes) => parse_manifest(&bytes, SCHEMA_VERSION).map(Some),
-        Err(IdxError::NotFound(_)) => Ok(None),
+        Ok(bytes) => match unsupported(&bytes) {
+            Some(why) => Ok(Remote::Unsupported(why)),
+            None => parse_manifest(&bytes, SCHEMA_VERSION).map(|m| Remote::Found(Box::new(m))),
+        },
+        Err(IdxError::NotFound(_)) => Ok(Remote::Missing),
         Err(e) => Err(e),
     }
 }
@@ -1095,7 +1154,8 @@ pub async fn sync(
     let timeout = timeout.max(MIN_TIMEOUT);
     let _lock = lock_sync(db_path, timeout).await?;
     let mut warnings = Vec::new();
-    let manifest = fetch_manifest(base, timeout).await?;
+    let remote = fetch_manifest(base, timeout).await?;
+    let manifest = remote.manifest();
     let index = match mirror::index(base, timeout).await {
         Ok(ix) => Some(ix),
         Err(e) if manifest.is_some() => {
@@ -1108,12 +1168,12 @@ pub async fn sync(
     };
     let listed = index.as_ref().map(index_months).unwrap_or_default();
     let local = inspect(db_path)?;
-    let decision = plan(&local, manifest.as_ref(), &listed, force);
+    let decision = plan(&local, manifest, &listed, force);
 
     let mut report = SyncReport {
         action: SyncAction::UpToDate,
         database: db_path.display().to_string(),
-        snapshot: manifest.as_ref().map(summary),
+        snapshot: manifest.map(summary),
         installed: vec![],
         imported: vec![],
         kept: vec![],
@@ -1130,12 +1190,9 @@ pub async fn sync(
                 db_path.display()
             )))
         }
-        Plan::NoSnapshot => warnings.push(format!(
-            "the mirror has no snapshot for database schema {SCHEMA_VERSION} ({}); sync reads its monthly files instead",
-            manifest_name(SCHEMA_VERSION)
-        )),
+        Plan::NoSnapshot => warnings.push(remote.no_snapshot("sync reads its monthly files instead")),
         Plan::Install | Plan::Replace { .. } => {
-            let m = manifest.as_ref().expect("a plan to install has a manifest");
+            let m = manifest.expect("a plan to install has a manifest");
             let replace = !matches!(decision, Plan::Install);
             let gz = download(base, m, timeout).await?;
             let bak = install(db_path, m, &gz, replace)?;
@@ -1261,9 +1318,9 @@ pub async fn status(
     };
     if let Some(base) = base {
         let timeout = timeout.max(MIN_TIMEOUT);
-        let manifest = fetch_manifest(base, timeout).await;
+        let remote = fetch_manifest(base, timeout).await;
         let index = mirror::index(base, timeout).await;
-        if let Err(e) = &manifest {
+        if let Err(e) = &remote {
             warnings.push(format!(
                 "could not read the mirror's {} ({e})",
                 manifest_name(SCHEMA_VERSION)
@@ -1272,11 +1329,11 @@ pub async fn status(
         if let Err(e) = &index {
             warnings.push(format!("could not read the mirror's index.json ({e})"));
         }
-        if manifest.is_ok() || index.is_ok() {
-            let snapshot = manifest.as_ref().ok().cloned().flatten();
+        if remote.is_ok() || index.is_ok() {
+            let snapshot = remote.as_ref().ok().and_then(Remote::manifest);
             let listed = index.as_ref().map(index_months).unwrap_or_default();
             let mut on_mirror: BTreeSet<NaiveDate> = listed.keys().copied().collect();
-            if let Some(m) = &snapshot {
+            if let Some(m) = snapshot {
                 on_mirror.extend(m.releases.iter().map(|r| r.as_of));
             }
             report.missing = on_mirror
@@ -1290,15 +1347,15 @@ pub async fn status(
                 .filter(|d| !on_mirror.contains(d))
                 .copied()
                 .collect();
-            if let (Ok(m), Ok(_)) = (&manifest, &index) {
-                let decision = plan(&local, m.as_ref(), &listed, false);
+            let mut no_snapshot = matches!(&remote, Ok(Remote::Unsupported(_)));
+            if let (Ok(r), Ok(_)) = (&remote, &index) {
+                let decision = plan(&local, r.manifest(), &listed, false);
                 let missing_from_index = listed.keys().any(|d| !local.months.contains_key(d));
                 report.sync = needed(&decision, missing_from_index);
-                if matches!(decision, Plan::NoSnapshot) {
-                    warnings.push(format!(
-                        "the mirror has no snapshot for database schema {SCHEMA_VERSION}; sync imports its monthly files"
-                    ));
-                }
+                no_snapshot |= matches!(decision, Plan::NoSnapshot);
+            }
+            if let (true, Ok(r)) = (no_snapshot, &remote) {
+                warnings.push(r.no_snapshot("sync imports its monthly files"));
             }
             let ix = index.as_ref().ok();
             report.remote = Some(MirrorState {
@@ -1306,7 +1363,7 @@ pub async fn status(
                 index_generated_at: ix.and_then(|i| i.generated_at.clone()),
                 releases: ix.map(|i| i.releases.len() as u64),
                 newest: ix.and_then(|i| i.releases.iter().map(|r| r.as_of).max()),
-                snapshot: snapshot.as_ref().map(summary),
+                snapshot: snapshot.map(summary),
             });
         }
     }
@@ -1645,7 +1702,17 @@ mod tests {
             let bytes = serde_json::to_vec(&v).unwrap();
             let e = parse_manifest(&bytes, 2).unwrap_err();
             assert_eq!(e.exit_code(), 3, "{name}: {e}");
+            // A later manifest schema or compression is not an error for
+            // sync (it reads the monthly files); everything else is.
+            let later = matches!(name, "schema" | "compression");
+            assert_eq!(unsupported(&bytes).is_some(), later, "{name}");
         }
+        assert_eq!(unsupported(&std::fs::read(FIXTURE).unwrap()), None);
+        assert_eq!(unsupported(b"not json"), None);
+        let v2 = br#"{"schema": "idx.ownership.snapshot.v2", "parts": []}"#;
+        assert!(unsupported(v2)
+            .unwrap()
+            .contains("idx.ownership.snapshot.v2"));
         let mut big = std::fs::read(FIXTURE).unwrap();
         big.resize(MAX_MANIFEST_BYTES as usize + 1, b' ');
         assert!(parse_manifest(&big, 2).is_err());
@@ -2195,6 +2262,45 @@ mod tests {
         assert!(other.execute_batch("BEGIN EXCLUSIVE").is_err());
         drop(held);
         other.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_manifest_of_a_later_kind_falls_back_to_the_monthly_files() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("mirror");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_index(&dir, &july_august());
+        let mut later = fixture_value();
+        later["schema"] = "idx.ownership.snapshot.v9".into();
+        std::fs::write(dir.join(manifest_name(SCHEMA_VERSION)), later.to_string()).unwrap();
+        let base = file_url(&dir);
+        let live = root.path().join("o.sqlite");
+
+        let st = status(&live, Some(&base), T).await.unwrap();
+        assert_eq!(st.data.sync, Some(SyncNeeded::Import));
+        assert!(st.data.remote.as_ref().unwrap().snapshot.is_none());
+        assert!(
+            st.warnings.iter().any(|w| w.contains("cannot read")),
+            "{:?}",
+            st.warnings
+        );
+        let s = sync(&live, &base, false, T).await.unwrap();
+        assert_eq!(s.data.action, SyncAction::Imported);
+        assert!(s.data.installed.is_empty() && s.data.snapshot.is_none());
+        assert_eq!(s.data.imported, vec![d("2026-07-31"), d("2026-08-31")]);
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("idx.ownership.snapshot.v9") && w.contains("monthly files")),
+            "{:?}",
+            s.warnings
+        );
+        // A broken manifest of this idx's kind is still an error.
+        let mut broken = fixture_value();
+        broken["bytes"] = 0.into();
+        std::fs::write(dir.join(manifest_name(SCHEMA_VERSION)), broken.to_string()).unwrap();
+        let e = sync(&live, &base, false, T).await.expect_err("refused");
+        assert_eq!(e.exit_code(), 3, "{e}");
     }
 
     #[test]

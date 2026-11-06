@@ -195,7 +195,7 @@ What `sync` does, first match wins:
 | local database | action |
 | --- | --- |
 | written by a newer idx (schema above `V`) | refused (exit 6) unless `--force` |
-| the mirror has no `snapshot-v{V}.json` | import the monthly files it lacks (`imported`) |
+| the mirror has no `snapshot-v{V}.json`, or one of a kind this idx cannot read (a later manifest schema or compression; a warning says so) | import the monthly files it lacks (`imported`) |
 | missing or without releases | install the snapshot (`installed`) |
 | has months neither the snapshot nor `index.json` has, a month re-imported from another file since the install, or rows in a table the snapshot leaves empty | keep it, import the months it lacks (`imported` or `up_to_date`, the months in `kept`); `--force` replaces it (`updated`, the months in `dropped`) |
 | installed from this very snapshot and still holding its months | nothing (`up_to_date`) |
