@@ -202,6 +202,10 @@ pub struct SessionStore {
     /// A refresh token Stockbit refused in this process (its SHA-256), so it
     /// is not presented again by every later request.
     refused: std::sync::Mutex<Option<[u8; 32]>>,
+    /// When the last paced live request on this session went out. Kept here,
+    /// not on the provider, so every provider over this store (MCP builds one
+    /// per tool call) is paced against the others.
+    pacer: Mutex<Option<tokio::time::Instant>>,
 }
 
 /// `true` while `token` is a JWT that is still good for the refresh buffer.
@@ -285,11 +289,18 @@ impl SessionStore {
             },
             inflight: Mutex::new(()),
             refused: std::sync::Mutex::new(None),
+            pacer: Mutex::new(None),
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The time of this session's last paced live request; held while a
+    /// paced request waits and goes out, so paced requests queue.
+    pub(super) fn pacer(&self) -> &Mutex<Option<tokio::time::Instant>> {
+        &self.pacer
     }
 
     /// `true` when this store was built from the same env seeds.

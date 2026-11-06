@@ -157,7 +157,6 @@ pub struct Stockbit {
     ttls: Ttls,
     store: Arc<SessionStore>,
     pace: Duration,
-    last_live: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Stockbit {
@@ -167,7 +166,6 @@ impl Stockbit {
             ttls,
             store,
             pace: PACE,
-            last_live: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -229,13 +227,14 @@ impl Stockbit {
         unreachable!("loop returns on the second attempt")
     }
 
-    /// [`get`](Self::get) a second after the previous live request of this
-    /// provider instance (cached answers cost no pause), for the commands
-    /// that read several Stockbit lists in a row: a human-ish request rate.
+    /// [`get`](Self::get) a second after the previous paced live request on
+    /// the same session in this process, from any provider or MCP tool call
+    /// (cached answers cost no pause), for the commands that read several
+    /// Stockbit lists in a row: a human-ish request rate.
     async fn get_paced(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
         let cached = self.fetcher.mode() != crate::http::CacheMode::Bypass
             && self.fetcher.cache().get(url, ttl).is_some_and(|h| h.fresh);
-        let mut last = self.last_live.lock().await;
+        let mut last = self.store.pacer().lock().await;
         if !cached && !self.fetcher.is_offline() {
             if let Some(t) = *last {
                 let wait = self.pace.saturating_sub(t.elapsed());
@@ -577,6 +576,26 @@ pub(crate) mod tests {
         assert!(!rejected(403, BLOCKED));
         assert!(!rejected(200, "{}"));
         assert!(!rejected(404, UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn pacing_is_shared_by_every_provider_on_a_session() {
+        let pace = Duration::from_millis(300);
+        let (a, be, _d) =
+            with_backend(FixtureBackend::new().route("corpaction/", 404, r#"{"message":"x"}"#));
+        let a = a.with_pace(pace);
+        // A second provider over the same store, as MCP builds per tool call.
+        let b =
+            Stockbit::new(a.fetcher().clone(), Ttls::default(), a.store().clone()).with_pace(pace);
+        let start = tokio::time::Instant::now();
+        let (ra, rb) = tokio::join!(
+            a.corporate_actions(CorporateEventKind::Dividend, None),
+            b.corporate_actions(CorporateEventKind::Rups, None),
+        );
+        ra.unwrap();
+        rb.unwrap();
+        assert_eq!(be.calls_matching("corpaction/"), 2);
+        assert!(start.elapsed() >= pace, "{:?}", start.elapsed());
     }
 
     #[tokio::test]

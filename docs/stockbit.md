@@ -151,7 +151,9 @@ text (schema `idx.stockbit.actions.v1`). Kinds: `dividend`, `stock_dividend`,
 `bonus`, `rights`, `warrant`, `split`, `reverse_split`, `rups` (alias
 `meeting`), `public_expose` (`expose`), `ipo`, `tender_offer` (`tender`), or
 `all`. Each kind is one request, a second apart, cached for 6 hours; a kind that
-fails leaves a warning and the others still show.
+fails leaves a warning and the others still show. The pause holds across every
+command and MCP tool call on the same session in one idx process, so parallel
+tool calls queue a second apart too.
 
 - A row's `date` is its cum date for dividends, bonuses, rights and splits (the
   ex date when there is none), else the event's first day: a warrant's first
