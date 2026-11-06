@@ -20,6 +20,7 @@ pub mod bandar;
 pub mod broker;
 pub mod cache_cmd;
 pub mod config_cmd;
+pub mod input;
 pub mod market;
 pub mod mcp_cmd;
 pub mod ownership;
@@ -139,6 +140,7 @@ pub enum Command {
   idx broker BBCA --board regular -n 5
   idx -o json broker BBCA | jq '.data[0].buyers[0]'
   idx -o csv broker BBCA BBRI > brokers.csv   # one row per broker per side
+  echo BBCA BBRI | idx broker -               # tickers from stdin
 
 Source: Indo Premier (IPOT) broker summary, the top 10 buyers and sellers ranked by lots, with
 lots, value, average price and each broker's class (local, foreign, BUMN). Broker names come from
@@ -159,7 +161,7 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
 
     /// Quote your watchlist, or manage it (add, remove, list, clear, returns).
     #[command(
-        after_help = "Examples:\n  idx watch add BBCA BBRI TLKM\n  idx watch                 # quotes for the list\n  idx watch returns         # 1w..5y returns vs IHSG\n  idx watch rm TLKM\n\nStored as plain text next to the config file (or $IDX_WATCHLIST)."
+        after_help = "Examples:\n  idx watch add BBCA BBRI TLKM\n  idx -o jsonl stocks screen -f \"div>6\" | idx watch add -   # the screen's tickers\n  idx watch                 # quotes for the list\n  idx watch returns         # 1w..5y returns vs IHSG\n  idx watch rm TLKM\n\nStored as plain text next to the config file (or $IDX_WATCHLIST)."
     )]
     Watch(watch::WatchArgs),
 

@@ -1400,3 +1400,103 @@ fn error_format_follows_the_resolved_output() {
             "error: config: unknown output format",
         ));
 }
+
+#[test]
+fn symbols_from_stdin() {
+    let sb = seeded();
+    let quoted = |stdin: &str| -> Vec<String> {
+        let out = idx(&sb.cache, &sb.config)
+            .args(["-o", "jsonl", "stocks", "quote", "-"])
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        json_lines(&out.stdout)
+            .iter()
+            .map(|r| r["symbol"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(quoted("BBCA\nBBRI, TLKM\n"), ["BBCA", "BBRI", "TLKM"]);
+    assert_eq!(
+        quoted("# idx watchlist: one ticker per line\r\nBBCA\r\nBBRI\r\nTLKM\r\n"),
+        ["BBCA", "BBRI", "TLKM"]
+    );
+    // idx's own JSON feeds back in, envelope or lines.
+    let json = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    let json = String::from_utf8(json.stdout).unwrap();
+    assert_eq!(quoted(&json), ["BBCA", "BBRI", "TLKM"]);
+    let lines = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "BBRI", "TLKM"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        quoted(&String::from_utf8(lines.stdout).unwrap()),
+        ["BBCA", "BBRI", "TLKM"]
+    );
+    // `-` mixes with arguments, in order, deduplicated.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "stocks", "quote", "BBCA", "-"])
+        .write_stdin("BBRI TLKM BBCA")
+        .output()
+        .unwrap();
+    assert_eq!(json_lines(&out.stdout).len(), 3);
+
+    // Usage errors, exit 2, before any request.
+    for (args, stdin, needle) in [
+        (
+            vec!["stocks", "quote", "-"],
+            "",
+            "no symbols read from stdin",
+        ),
+        (vec!["stocks", "quote", "-", "-"], "BBCA", "only once"),
+        (vec!["stocks", "quote", "-"], "B$CA", "invalid symbol"),
+        (
+            vec!["stocks", "compare", "-"],
+            "{\"symbol\":",
+            "does not parse",
+        ),
+        (
+            vec!["bandar", "screen", "--symbols", "-"],
+            "\n",
+            "no symbols",
+        ),
+        (vec!["broker", "-"], "# nothing\n", "no symbols"),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(&args)
+            .write_stdin(stdin)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(needle));
+    }
+    // Nothing piped at all (stdin closed) is the same usage error.
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "quote", "-"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no symbols read from stdin"));
+
+    // The watchlist takes them too.
+    let file = sb.cache.join("watchlist.txt");
+    idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["watch", "add", "-"])
+        .write_stdin("bbca\nTLKM\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BBCA TLKM"));
+    idx(&sb.cache, &sb.config)
+        .env("IDX_WATCHLIST", &file)
+        .args(["watch", "rm", "-"])
+        .write_stdin("TLKM")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(1 tickers)"));
+}

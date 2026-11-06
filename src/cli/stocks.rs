@@ -19,7 +19,7 @@ use crate::output::table_reports::{self as reports, StatementFlags};
 use crate::service::{self, ScreenOptions};
 use crate::universe;
 
-use super::{emit, Context};
+use super::{emit, input, Context};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Statement {
@@ -33,10 +33,10 @@ pub enum Statement {
 pub enum StocksCmd {
     /// Delayed quote for one or more tickers (comma or space separated).
     #[command(
-        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri"
+        after_help = "Examples:\n  idx stocks quote BBCA\n  idx stocks quote BBCA,BBRI,TLKM\n  idx -o json stocks quote bbca bbri\n  echo BBCA BBRI | idx stocks quote -          # tickers from stdin\n  idx stocks quote - < watchlist.txt\n\n`-` reads tickers from stdin: text (spaces, commas or lines; # starts a comment) or\nidx's own -o json / -o jsonl output, taking each row's symbol."
     )]
     Quote {
-        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional.
+        /// IDX tickers, e.g. BBCA or BBCA,BBRI. The .JK suffix is optional; `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
@@ -107,10 +107,10 @@ pub enum StocksCmd {
 
     /// Price returns over 1w..5y, YTD, CAGR, volatility, drawdowns and 52-week position, with excess returns over IHSG.
     #[command(
-        after_help = "Examples:\n  idx stocks returns BBCA\n  idx stocks returns BBCA BBRI BMRI BBNI          # side by side, plus IHSG\n  idx stocks returns TLKM --benchmark ^JKLQ45\n  idx stocks returns ASII --no-benchmark\n  idx -o json stocks returns BBCA | jq '.data[0] | {returns, benchmark}'\n\nComputed by idx from five years of daily closes (total price return, dividends excluded).\nIndex codes keep their caret: ^JKSE is IHSG, ^JKLQ45 is LQ45."
+        after_help = "Examples:\n  idx stocks returns BBCA\n  idx stocks returns BBCA BBRI BMRI BBNI          # side by side, plus IHSG\n  idx stocks returns TLKM --benchmark ^JKLQ45\n  idx stocks returns ASII --no-benchmark\n  idx -o json stocks returns BBCA | jq '.data[0] | {returns, benchmark}'\n  idx stocks returns - < tickers.txt              # tickers from stdin\n\nComputed by idx from five years of daily closes (total price return, dividends excluded).\nIndex codes keep their caret: ^JKSE is IHSG, ^JKLQ45 is LQ45."
     )]
     Returns {
-        /// One or more IDX tickers, comma or space separated.
+        /// One or more IDX tickers, comma or space separated; `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
         /// Index to measure excess returns against.
@@ -249,10 +249,10 @@ pub enum StocksCmd {
 
     /// Side-by-side fundamentals for two or more tickers.
     #[command(
-        after_help = "Examples:\n  idx stocks compare BBCA BBRI BMRI BBNI\n  idx -o json stocks compare TLKM,ISAT,EXCL | jq '.data[].valuation.pe_trailing'"
+        after_help = "Examples:\n  idx stocks compare BBCA BBRI BMRI BBNI\n  idx -o json stocks compare TLKM,ISAT,EXCL | jq '.data[].valuation.pe_trailing'\n  idx -o jsonl stocks screen -f \"pe<10,roe>15\" -n 5 | idx stocks compare -   # the screen's rows"
     )]
     Compare {
-        /// Two or more IDX tickers, comma or space separated.
+        /// Two or more IDX tickers, comma or space separated; `-` reads them from stdin.
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
@@ -375,7 +375,7 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
 }
 
 async fn quote(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
     let result = ctx.provider.quotes(&symbols).await?;
     emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
 }
@@ -438,7 +438,7 @@ async fn dividends(ctx: &Context, raw: &str, limit: usize) -> Result<()> {
 }
 
 async fn returns(ctx: &Context, raw: &[String], benchmark: &str, none: bool) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
     let bench = if none || benchmark.eq_ignore_ascii_case("none") {
         None
     } else {
@@ -481,7 +481,7 @@ async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {
 }
 
 async fn compare(ctx: &Context, raw: &[String]) -> Result<()> {
-    let symbols = Symbol::parse_list(raw)?;
+    let symbols = Symbol::parse_list(input::symbol_args(raw)?)?;
     let result = service::compare(ctx.provider.as_ref(), &symbols).await?;
     emit(ctx, SCHEMA_COMPARE, result, |d| {
         reports::compare(d, ctx.color)

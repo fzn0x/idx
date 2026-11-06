@@ -15,7 +15,7 @@ use crate::output::{table, table_reports as reports};
 use crate::providers::Sourced;
 use crate::service;
 
-use super::{emit, Context};
+use super::{emit, input, Context};
 
 #[derive(Debug, Args)]
 pub struct WatchArgs {
@@ -25,12 +25,12 @@ pub struct WatchArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WatchCmd {
-    /// Add tickers to the list.
+    /// Add tickers to the list (`-` reads them from stdin).
     Add {
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
-    /// Remove tickers from the list.
+    /// Remove tickers from the list (`-` reads them from stdin).
     #[command(alias = "rm")]
     Remove {
         #[arg(required = true, value_name = "SYMBOLS")]
@@ -121,7 +121,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
     let mut symbols = load(&file)?;
     match args.cmd {
         Some(WatchCmd::Add { symbols: raw }) => {
-            for s in Symbol::parse_list(&raw)? {
+            for s in Symbol::parse_list(input::symbol_args(&raw)?)? {
                 if !symbols.contains(&s) {
                     symbols.push(s);
                 }
@@ -130,7 +130,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
         }
         Some(WatchCmd::Remove { symbols: raw }) => {
-            let drop = Symbol::parse_list(&raw)?;
+            let drop = Symbol::parse_list(input::symbol_args(&raw)?)?;
             symbols.retain(|s| !drop.contains(s));
             save(&file, &symbols)?;
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
