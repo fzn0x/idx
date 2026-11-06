@@ -6,16 +6,14 @@ use predicates::prelude::*;
 
 fn idx(cache: &std::path::Path, config: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("idx").unwrap();
-    // Keep the Stockbit session inside the sandbox so a test never reads or
-    // writes the developer's real login.
-    let session = config
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("stockbit-session.json");
+    // Keep the Stockbit session and the ownership database inside the
+    // sandbox so a test never reads or writes the developer's real files.
+    let dir = config.parent().unwrap_or_else(|| std::path::Path::new("."));
     cmd.env_clear()
         .env("IDX_CACHE_DIR", cache)
         .env("IDX_CONFIG", config)
-        .env("IDX_STOCKBIT_SESSION", session)
+        .env("IDX_STOCKBIT_SESSION", dir.join("stockbit-session.json"))
+        .env("IDX_OWNERSHIP_DB", dir.join("ownership.sqlite"))
         .env("NO_COLOR", "1")
         .env_remove("IDX_STOCKBIT_ACCESS_TOKEN")
         .env_remove("IDX_STOCKBIT_REFRESH_TOKEN")

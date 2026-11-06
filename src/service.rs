@@ -513,8 +513,12 @@ pub async fn brief(
         )));
     }
 
-    let ownership = match crate::ownership::OwnershipDb::open(ownership_db) {
-        Ok(db) if ownership_db.exists() => {
+    // Only an existing file is opened: opening creates (and migrates) it.
+    let ownership = match ownership_db
+        .exists()
+        .then(|| crate::ownership::OwnershipDb::open(ownership_db))
+    {
+        Some(Ok(db)) => {
             match crate::ownership::holders(&db, symbol.as_str(), None) {
                 Ok(s) => {
                     // Notes about the release read (imported by an old idx, rows dated otherwise).
@@ -543,7 +547,12 @@ pub async fn brief(
                 }
             }
         }
-        _ => {
+        Some(Err(e)) => {
+            out.warnings.push(format!("ownership: {e}"));
+            failed.push("ownership".into());
+            None
+        }
+        None => {
             out.warnings
                 .push("ownership: no register imported (idx ownership import --latest)".into());
             failed.push("ownership".into());
