@@ -67,7 +67,8 @@ idx -o json stocks quote BBCA | jq '.data[0] | {price, change_pct, pe_trailing, 
   is imported into local SQLite with normalised entity names, so "who owns
   more than 1 % of BBCA" and "what did this fund change last month" are one
   command each. The monthly IDX files are mirrored to GitHub, so neither you
-  nor the web terminal imports anything by hand.
+  nor the web terminal imports anything by hand: `idx ownership sync`
+  installs every month in one download.
 - **Single static binary.** Rust, no runtime, Linux / macOS / Windows.
 
 ## Install
@@ -125,6 +126,7 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stocks foreign <SYMBOL> [--days 20]` | Foreign buying and selling per session from idx.co.id (shares, as IDX publishes them), net, net × close, totals and the net-buy/net-sell streak |
 | `stocks list [--board B] [--search S]` | Listed stocks from idx.co.id with listing board, listing date and shares; the bundled universe stands in offline |
 | `ownership import --latest\|--all\|--file F\|--url U` | Import KSEI's monthly ">1 % holders" register (XLSX or PDF) into local SQLite. `--latest`/`--all` read idx.co.id and fall back to the CI-maintained GitHub mirror |
+| `ownership sync [--force]` · `ownership status` | Install the prebuilt SQLite snapshot CI builds from the mirrored files (one download, SHA-256 checked), then any newer month; a database holding months the snapshot lacks is kept unless `--force` (a `.bak` copy is kept). `status` shows the local database, the mirror and what sync would do |
 | `ownership ticker <SYMBOL> [--as-of D]` | Holders above 1 % of a ticker (a holder's accounts summed; controller/affiliate flag from the 30 Oct 2026 register) |
 | `ownership entity "<NAME>" [--as-of D]` | Every position of a person or institution, spelling variants grouped |
 | `broker <SYMBOLS> [--date D \| --from D --to D] [--investor all\|foreign\|domestic] [--board all\|regular\|cash\|negotiated]` | Broker summary: the top 10 buyers and sellers of a ticker (ranked by lots), with broker name, class (local, foreign, BUMN), lots, value and average price, plus total value and foreign net. Latest session with trades by default; `-o csv` gives one row per broker |
@@ -142,7 +144,7 @@ idx completions powershell | Out-String | Invoke-Expression
 | `ownership foreign [SYMBOL] [--from D --to D]` | Disclosed foreign (KSEI `A`) vs local stake: one issuer month by month, or every issuer's change between two months |
 | `watch [add\|rm\|list\|clear\|returns]` | Plain-text watchlist next to the config; `idx watch` quotes it |
 | `ownership releases\|discover\|path` | Imported months, files published on idx.co.id, database path |
-| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 36 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
+| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 37 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_ownership_snapshot`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
 | `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `actions`, `foreign`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
 | `config init\|set\|get\|path` | Config file management |
 | `cache stats\|clear\|path` | Response cache management |
@@ -220,7 +222,7 @@ substitutes the absolute path, and `--npx` swaps in
 `npx -y github:fzn0x/idx mcp`). Each entry's remote (HTTP) form and the
 config file locations are in [docs/mcp.md](docs/mcp.md).
 
-The server lists 36 tools with typed input schemas kept to the subset every
+The server lists 37 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
 and one-paragraph descriptions. `idx_brief` is the one-call starting point;
 each tool returns the same envelope as `-o json`, so an agent that learned the
@@ -268,7 +270,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 | Yahoo Finance `v7/finance/quote` | quotes | anonymous cookie + crumb, cached 6 h | Falls back to the chart endpoint (fewer fields) if rejected |
 | Yahoo Finance `v10/finance/quoteSummary` | profile, fundamentals, earnings | same session | Statement modules are empty at the source, so they are not used |
 | Yahoo Finance `fundamentals-timeseries` | financials | none | Annual, quarterly and TTM statement items |
-| idx.co.id "Data Kepemilikan Saham" page + `Media/*.xlsx` | ownership (KSEI monthly register) | none, but Cloudflare bot protection | Mirrored three times a day by GitHub Actions to the [`ownership-data`](https://github.com/fzn0x/idx/releases/tag/ownership-data) release (byte-identical files, SHA-256 in `index.json`). The CLI tries idx.co.id first, then the mirror. See [docs/ownership.md](docs/ownership.md) |
+| idx.co.id "Data Kepemilikan Saham" page + `Media/*.xlsx` | ownership (KSEI monthly register) | none, but Cloudflare bot protection | Mirrored three times a day by GitHub Actions to the [`ownership-data`](https://github.com/fzn0x/idx/releases/tag/ownership-data) release (byte-identical files, SHA-256 in `index.json`). The CLI tries idx.co.id first, then the mirror; `idx ownership sync` installs the prebuilt SQLite snapshot published next to the files. See [docs/ownership.md](docs/ownership.md) |
 | Indo Premier (IPOT) `module/saham/include/data-brokersummary.php` | broker summary | none | Top 10 buyers and sellers per range, ranked by lots; figures of a million and more are rounded to one decimal by the source (`rounded: true`). Its nginx answers spurious 404s in bursts, so a 404 is retried with backoff. Broker names come from IDX's member list, bundled as `data/brokers.csv`; `bandar` computes its readings from these summaries |
 | idx.co.id JSON endpoints behind its pages (`primary/TradingSummary/GetStockSummary`, `GetBrokerSummary`, `GetIndexSummary`, `ListedCompany/GetTradingInfoSS`, `Home/GetCalendar`, `StockData/GetSecuritiesStock`, `ExchangeMember/GetBrokerSearch`) | foreign flow, member activity, indices, the exchange calendar, listed stocks, members | none, but Cloudflare bot protection | Foreign trading is published in shares only; `foreign_net_value_at_close` (net shares × close) is a rupiah scale, not the traded value. Ordinary connections pass; data centres and CI runners are often refused, and the error says so. Closed sessions are cached for 30 days |
 | Indo Premier (IPOT) `module/saham/include/corporateaction.php` | corporate actions, RUPS, warrants and rights | none | Same module and spurious-404 retry as the broker summary; repeated rows are dropped |
@@ -314,16 +316,23 @@ can write it:
    prerelease. idx.co.id blocks cloud networks, GitHub's own runners included,
    so the job runs on a self-hosted runner (an always-on machine with an
    ordinary connection; set the repository variable `OWNERSHIP_RUNNER` to
-   `self-hosted`). On GitHub's runners it keeps the mirror as is and turns red
-   once the newest register is 45 days old.
+   `self-hosted`). On GitHub's runners it rebuilds the parts and the snapshot
+   from the files already mirrored, and turns red once the newest register is
+   45 days old. From the same database it builds a prebuilt SQLite snapshot
+   (`snapshot-v{V}.json` plus a gzip of the file) and publishes it whenever its
+   content changes, the manifest last.
 2. The web terminal's Worker reads that release on its minute cron: it checks
    `index.json` every 30 minutes, verifies each part's SHA-256 and loads one
    part per minute into D1. A month appears only once all its rows are in and
    the count matches. The newest six months are kept. The Worker has no write
    endpoint at all.
-3. `idx ownership import --latest` on your machine tries idx.co.id and, when
-   Cloudflare refuses it, downloads the same file from the mirror and checks
-   its SHA-256. `IDX_OWNERSHIP_SOURCE=mirror` skips idx.co.id.
+3. `idx ownership sync` on your machine installs that snapshot (a few MB,
+   SHA-256 checked, swapped in as one SQLite transaction) and imports any
+   newer month from the raw files; a database holding months the snapshot
+   lacks is kept unless `--force`.
+4. `idx ownership import --latest` tries idx.co.id and, when Cloudflare
+   refuses it, downloads the same file from the mirror and checks its SHA-256.
+   `IDX_OWNERSHIP_SOURCE=mirror` skips idx.co.id.
 
 <p align="center">
   <a href="https://ihsg.midoriresearch.com/terminal"><img src="docs/screenshots/terminal.png" alt="The idx web terminal showing technical BBRI" width="100%"></a>
