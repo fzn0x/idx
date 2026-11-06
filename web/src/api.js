@@ -301,26 +301,36 @@ export async function dividends(env, symbolRaw) {
 /** Adds each warning once, keeping order. */
 const addWarnings = (list, more) => { for (const w of more || []) if (!list.includes(w)) list.push(w); };
 
+/** The cause inside a `live fetch failed (...); showing cached copy` warning, or null. */
+const failureCause = (warnings) => {
+  for (const w of warnings || []) {
+    const m = /^live fetch failed \((.*)\); showing cached copy$/s.exec(w);
+    if (m) return m[1];
+  }
+  return null;
+};
+
 export async function returns(env, symbolsRaw, benchmark = "^JKSE") {
   const symbols = parseSymbols(symbolsRaw);
   const bench = benchmark && benchmark.toLowerCase() !== "none" ? parseSymbol(benchmark) : null;
   const fetchOne = (s) => history(env, s, "5y", "1d", 0).then((e) => ({ ok: e })).catch((e) => ({ err: e }));
   const [results, b] = await Promise.all([Promise.all(symbols.map(fetchOne)), bench ? fetchOne(bench) : null]);
   const warnings = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
+  // A benchmark that is used counts toward the freshness, as in the CLI.
+  const fold = (e) => { cachedAll &&= e.cached; stale ||= e.stale; fetched = Math.min(fetched, Date.parse(e.fetched_at) / 1000); addWarnings(warnings, e.warnings); };
   let benchPerf = null;
   if (bench) {
-    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); else addWarnings(warnings, b.ok.warnings); }
+    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); else fold(b.ok); }
     else warnings.push(`benchmark ${bench} unavailable: ${b.err.message}`);
   }
   const data = [];
-  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
   results.forEach((r, i) => {
     if (r.err) { warnings.push(r.err.code === "not_found" ? `no data for ${symbols[i]}` : `${symbols[i]}: ${r.err.message}`); firstErr ||= r.err; return; }
     const p = ex.performance(r.ok.data);
     if (!p) { warnings.push(`${symbols[i]}: no candles`); return; }
     if (benchPerf) p.benchmark = { symbol: benchPerf.symbol, name: benchPerf.name, returns: benchPerf.returns, excess: ex.minusWindows(p.returns, benchPerf.returns) };
-    cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000);
-    addWarnings(warnings, r.ok.warnings);
+    fold(r.ok);
     data.push(p);
   });
   if (!data.length) throw firstErr || notFound("no data");
@@ -358,17 +368,22 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
   const fundFilters = filters.filter((f) => an.FUNDAMENTAL_FIELDS.has(f.field));
   rows = rows.filter((r) => an.matches(r, quoteFilters));
   const matchedQuote = rows.length;
-  let checked = 0, capped = false;
+  let checked = 0, capped = false, cachedAll = true, staleFund = 0, cause = null;
   const warnings = [];
   if (fundFilters.length || an.FUNDAMENTAL_FIELDS.has(sortField)) {
     an.sortRows(rows, "market_cap", true);
     const cap = Math.max(1, Math.min(maxFundamentals, 40));
     if (rows.length > cap) { capped = true; rows = rows.slice(0, cap); }
-    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).then((e) => e.data).catch(() => null)));
+    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).catch(() => null)));
     rows.forEach((r, i) => {
-      const f = results[i];
-      if (!f) return;
+      const e = results[i];
+      if (!e) return;
+      const f = e.data;
       checked++;
+      // Freshness only: one summary line below instead of a failure
+      // warning per company, as in the CLI.
+      cachedAll &&= e.cached;
+      if (e.stale) { staleFund++; cause ??= failureCause(e.warnings); }
       Object.assign(r, {
         fundamentals_checked: true, sector: f.sector, industry: f.industry, roe_pct: f.profitability.roe_pct, roa_pct: f.profitability.roa_pct,
         net_margin_pct: f.profitability.net_margin_pct, operating_margin_pct: f.profitability.operating_margin_pct, debt_to_equity: f.health.debt_to_equity,
@@ -377,6 +392,7 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
       r.pe_trailing ??= f.valuation.pe_trailing; r.price_to_book ??= f.valuation.price_to_book; r.dividend_yield_pct ??= f.dividend.yield_pct;
     });
     rows = rows.filter((r) => an.matches(r, fundFilters));
+    if (staleFund) warnings.push(`fundamentals for ${staleFund} of ${checked} companies are stale cached copies: the live fetch failed${cause ? ` (${cause})` : ""}`);
     if (capped) warnings.push(`fundamentals were fetched for the ${cap} largest companies that passed the quote filters; the web terminal caps this at 40`);
   }
   an.sortRows(rows, sortField, descending);
@@ -384,7 +400,7 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
   if (limit > 0) rows = rows.slice(0, limit);
   const data = { filters: filters.map((f) => f.raw), sort: sort.toLowerCase(), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote, fundamentals_checked: checked, fundamentals_capped: capped, total_matches: total, rows };
   const fresh = boardFreshness(b.value.ts, now);
-  return envelope("idx.screen.v1", data, { cached: true, stale: fresh.stale, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
+  return envelope("idx.screen.v1", data, { cached: cachedAll, stale: fresh.stale || staleFund > 0, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
 }
 
 // ---- news ---------------------------------------------------------------

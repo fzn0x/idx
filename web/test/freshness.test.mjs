@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 
 import * as hol from "../src/holidays.js";
 import * as y from "../src/yahoo.js";
-import { boardFreshness, envelope, history, market, marketIsOpen, quote, returns } from "../src/api.js";
+import { boardFreshness, envelope, history, market, marketIsOpen, quote, returns, screen } from "../src/api.js";
 import { redactUrls } from "../src/net.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -180,6 +180,97 @@ test("a failed fetch keeps its cause in history and in the returns built on it",
     assert.equal(r.stale, true);
     assert.equal(r.stale_reason, "fetch_failed");
     assert.deepEqual(r.warnings, h.warnings, "the cause survives into returns");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a stale benchmark makes the returns stale, as in the CLI", async () => {
+  const realFetch = globalThis.fetch;
+  const chart = fixture("yahoo/chart_bbca_1mo_1d.json");
+  const down = new Set();
+  globalThis.fetch = async (url) => {
+    if ([...down].some((s) => String(url).includes(s))) throw new TypeError(`fetch failed for ${url}`);
+    return new Response(chart, { status: 200 });
+  };
+  try {
+    const env = { DB: memoryDb() };
+    const warm = await returns(env, "BBCA", "^JKSE");
+    assert.equal(warm.stale, false);
+    assert.ok(!("stale_reason" in warm));
+
+    // Only the benchmark's copy is expired, and only its fetch fails.
+    env.DB.rows.get("history:^JKSE:5y:1d").expires_at = 0;
+    down.add("^JKSE");
+    const r = await returns(env, "BBCA", "^JKSE");
+    assert.equal(r.data[0].benchmark.returns.length, warm.data[0].benchmark.returns.length);
+    assert.equal(r.stale, true);
+    assert.equal(r.stale_reason, "fetch_failed");
+    assert.equal(r.cached, true);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /^live fetch failed \(fetch failed for https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/\^JKSE\); showing cached copy$/);
+
+    // Without the benchmark nothing is stale.
+    const plain = await returns(env, "BBCA", "none");
+    assert.equal(plain.stale, false);
+    assert.ok(!plain.warnings);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// D1 with both tables: `kv` (board, Yahoo session) and `cache` rows.
+function fullDb({ kv = {}, cache = {} }) {
+  const kvRows = new Map(Object.entries(kv));
+  const rows = new Map(Object.entries(cache));
+  const query = (sql, a) => ({
+    first: async () => {
+      if (sql.includes("FROM kv")) return kvRows.get(a[0] ?? "yahoo:session") ?? null;
+      if (sql.includes("FROM cache")) return rows.get(a[0]) ?? null;
+      return null;
+    },
+    all: async () => ({ results: [] }),
+    run: async () => { if (sql.includes("INTO cache")) rows.set(a[0], { v: a[1], expires_at: a[2], fetched_at: a[3] }); return {}; },
+  });
+  return { rows, prepare: (sql) => ({ ...query(sql, []), bind: (...a) => query(sql, a) }) };
+}
+
+test("a screen on stale fundamentals is stale and names the failure once", async () => {
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => { asked.push(String(url)); throw new TypeError(`fetch failed for ${url}`); };
+  try {
+    const now = new Date();
+    const ts = Math.floor(now.getTime() / 1000);
+    const body = JSON.parse(fixture("yahoo/quote_summary_fundamentals_bbca.json")).quoteSummary.result[0];
+    const env = { DB: fullDb({
+      kv: {
+        board: { v: JSON.stringify({ ts: ts - 60, quotes: BOARD_ROWS, index: null, warnings: [] }), updated_at: ts - 60 },
+        "yahoo:session": { v: JSON.stringify({ cookie: "A3=SECRETCOOKIE", crumb: "SECRETCRUMB" }), updated_at: ts },
+      },
+      // BBCA's fundamentals are an expired copy; WIKA and KAEF have none.
+      cache: { [`summary:BBCA:${y.FUNDAMENTAL_MODULES}`]: { v: JSON.stringify(body), expires_at: 0, fetched_at: ts - 7 * 3600 } },
+    }) };
+    const s = await screen(env, "", "roe", 25, 20, true, now);
+    assert.ok(asked.some((u) => u.includes("crumb=SECRETCRUMB")), "the session was used");
+    assert.equal(s.data.fundamentals_checked, 1);
+    assert.equal(s.data.rows.find((r) => r.symbol === "BBCA").fundamentals_checked, true);
+    assert.equal(s.stale, true);
+    assert.equal(s.stale_reason, "fetch_failed");
+    assert.equal(s.cached, true);
+    const summary = s.warnings.filter((w) => w.startsWith("fundamentals for"));
+    assert.deepEqual(summary, [
+      "fundamentals for 1 of 1 companies are stale cached copies: the live fetch failed (fetch failed for https://query2.finance.yahoo.com/v10/finance/quoteSummary/BBCA.JK)",
+    ]);
+    assert.ok(!s.warnings.some((w) => w.startsWith("live fetch failed")), "no per-company warning");
+    assert.ok(!JSON.stringify(s).includes("SECRET"), "no crumb or cookie in the envelope");
+
+    // Fresh fundamentals leave the board's freshness alone.
+    env.DB.rows.get(`summary:BBCA:${y.FUNDAMENTAL_MODULES}`).expires_at = ts + 3600;
+    const ok = await screen(env, "", "roe", 25, 20, true, now);
+    assert.equal(ok.stale, false);
+    assert.ok(!("stale_reason" in ok));
+    assert.ok(!(ok.warnings || []).some((w) => w.startsWith("fundamentals for")));
   } finally {
     globalThis.fetch = realFetch;
   }
