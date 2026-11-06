@@ -111,6 +111,36 @@ pub fn clip(s: &str, max: usize) -> String {
     }
 }
 
+/// A one-line chart of `values` in block characters, at most `width` cells:
+/// longer series are resampled (each cell is the last value of its stretch),
+/// the lowest value maps to the lowest block and the highest to the full one.
+/// Empty input gives an empty string; a flat series sits at mid height.
+pub fn sparkline(values: &[f64], width: usize) -> String {
+    const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let values: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let n = values.len();
+    if n == 0 || width == 0 {
+        return String::new();
+    }
+    let cells = n.min(width);
+    let points: Vec<f64> = (0..cells)
+        .map(|i| values[((i + 1) * n).div_ceil(cells) - 1])
+        .collect();
+    let lo = points.iter().copied().fold(f64::MAX, f64::min);
+    let hi = points.iter().copied().fold(f64::MIN, f64::max);
+    points
+        .iter()
+        .map(|v| {
+            if hi - lo < 1e-12 {
+                BLOCKS[3]
+            } else {
+                let level = ((v - lo) / (hi - lo) * 7.0).round() as usize;
+                BLOCKS[level.min(7)]
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +175,22 @@ mod tests {
         assert_eq!(compact(Some(12_500.0)), "12.50K");
         assert_eq!(compact(Some(999.0)), "999");
         assert_eq!(compact(None), DASH);
+    }
+
+    #[test]
+    fn sparklines() {
+        assert_eq!(sparkline(&[], 10), "");
+        assert_eq!(sparkline(&[1.0, 2.0, 3.0], 0), "");
+        assert_eq!(sparkline(&[1.0, 8.0], 10), "▁█");
+        assert_eq!(sparkline(&[5.0, 5.0, 5.0], 10), "▄▄▄");
+        let ramp: Vec<f64> = (0..8).map(f64::from).collect();
+        assert_eq!(sparkline(&ramp, 8), "▁▂▃▄▅▆▇█");
+        // 100 points into 10 cells: each cell is the last value of its tenth.
+        let long: Vec<f64> = (1..=100).map(f64::from).collect();
+        let s = sparkline(&long, 10);
+        assert_eq!(s.chars().count(), 10);
+        assert!(s.starts_with('▁') && s.ends_with('█'), "{s}");
+        assert_eq!(sparkline(&[1.0, f64::NAN, 3.0], 5), "▁█");
     }
 
     #[test]

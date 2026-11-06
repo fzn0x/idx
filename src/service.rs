@@ -17,7 +17,7 @@ use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
     BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Fundamentals,
-    History, Interval, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
+    History, Interval, Intraday, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
     OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport, Symbol,
     Technical,
 };
@@ -1660,6 +1660,118 @@ pub async fn bandar_broker(
     Ok(out)
 }
 
+/// The latest session of one stock or index by `interval` (1m to 1h): the
+/// provider's bars for `Period::D1` (today's session while the market trades,
+/// otherwise the last one), the quote fetched alongside and a summary of the
+/// bars. A failed quote is a warning, not an error; no bars is a warning too.
+/// The name is the source's, else the bundled universe's.
+///
+/// Yahoo's one-day window is empty for the first minutes after the open
+/// (observed 09:00 to past 09:02 WIB on 2026-11-06) while its five-day window
+/// still ends with the previous session, so an empty one-day answer is retried
+/// over five days and the last session there is shown, with a warning.
+/// Stockbit is not retried: its five-day window is hourly.
+pub async fn intraday(
+    p: &dyn Provider,
+    universe: &[Issuer],
+    symbol: &Symbol,
+    interval: Interval,
+) -> Result<Sourced<Intraday>> {
+    if !interval.is_intraday() {
+        return Err(IdxError::Usage(format!(
+            "intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not {interval}; use `stocks history` for daily bars"
+        )));
+    }
+    let wanted = std::slice::from_ref(symbol);
+    let (history, quotes) = tokio::join!(p.history(symbol, Period::D1, interval), p.quotes(wanted));
+    let mut history = history?;
+    let mut warnings = Vec::new();
+    let mut window = "the latest session";
+    if history.data.candles.is_empty() && p.name() != crate::providers::stockbit::NAME {
+        match p.history(symbol, Period::D5, interval).await {
+            Ok(wider) => match wider.data.candles.last().map(|c| c.date()) {
+                Some(day) => {
+                    warnings.push(format!(
+                        "no {interval} bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, {day}"
+                    ));
+                    history = wider;
+                }
+                None => window = "the last 5 days",
+            },
+            Err(e) => warnings.push(format!("retrying over 5 days failed: {e}")),
+        }
+    }
+    let quote = match quotes {
+        Ok(q) => {
+            let found = q.data.iter().find(|x| &x.symbol == symbol).cloned();
+            if found.is_none() {
+                warnings.push(format!("no quote for {symbol}"));
+            }
+            Some((found, q))
+        }
+        Err(e) => {
+            warnings.push(format!("no quote for {symbol}: {e}"));
+            None
+        }
+    };
+
+    let bars = analysis::intraday::session_bars(&history.data.candles).to_vec();
+    let summary = analysis::intraday::summary(&bars);
+    let session = bars.last().map(|c| c.date());
+    let mut out = Sourced {
+        data: (),
+        provider: history.provider,
+        cached: history.cached,
+        stale: history.stale,
+        fetched_at: history.fetched_at,
+        warnings: history.warnings,
+    };
+    let quote = match quote {
+        Some((found, q)) => {
+            out.absorb(&q);
+            found
+        }
+        None => None,
+    };
+    out.warnings.extend(warnings);
+    if bars.is_empty() {
+        out.warnings.push(format!(
+            "no bars for {symbol}: it did not trade in {window}, or the source has none outside trading hours"
+        ));
+    }
+    let quote_day = quote
+        .as_ref()
+        .and_then(|q| q.market_time)
+        .map(|t| t.date_naive());
+    if let (Some(day), Some(qd)) = (session, quote_day) {
+        if day != qd {
+            out.warnings.push(format!(
+                "the bars are from {day} but the quote's last trade is from {qd}; the source updates them separately"
+            ));
+        }
+    }
+    // The source's name first, as `brief` does; the bundled list fills gaps.
+    let name = history
+        .data
+        .name
+        .or_else(|| quote.as_ref().and_then(|q| q.name.clone()))
+        .or_else(|| {
+            universe
+                .iter()
+                .find(|i| &i.symbol == symbol)
+                .and_then(|i| i.name.clone())
+        });
+    Ok(out.map(|_| Intraday {
+        symbol: symbol.clone(),
+        name,
+        session,
+        interval,
+        quote,
+        bars,
+        summary,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1785,6 +1897,271 @@ mod tests {
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
+    mod intraday {
+        use super::super::*;
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        use crate::model::{wib_from_unix, Candle};
+        use crate::providers::yahoo::Yahoo;
+        use crate::providers::Ttls;
+        use async_trait::async_trait;
+        use std::sync::Mutex;
+
+        const CHART: &str = include_str!("../tests/fixtures/yahoo/chart_bbca_1d_1m.json");
+        const EMPTY: &str =
+            include_str!("../tests/fixtures/yahoo/chart_bbca_1d_1m_open_empty.json");
+        const FIVE_DAYS: &str = include_str!("../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json");
+        const QUOTE: &str = include_str!("../tests/fixtures/yahoo/quote_v7_bbca.json");
+
+        /// History from a list of candles (the same for every window), a
+        /// quote dated `quote_secs` or an error; records the windows asked for.
+        struct Stub {
+            name: &'static str,
+            candles: Vec<Candle>,
+            quote_secs: Option<i64>,
+            asked: Mutex<Vec<Period>>,
+        }
+
+        fn stub(candles: Vec<Candle>, quote_secs: Option<i64>) -> Stub {
+            Stub {
+                name: "stub",
+                candles,
+                quote_secs,
+                asked: Mutex::new(vec![]),
+            }
+        }
+
+        #[async_trait]
+        impl Provider for Stub {
+            fn name(&self) -> &'static str {
+                self.name
+            }
+            async fn quotes(&self, s: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+                let Some(secs) = self.quote_secs else {
+                    return Err(IdxError::provider("stub", "quote endpoint down"));
+                };
+                let mut q = Quote::empty(s[0].clone(), "stub");
+                q.price = Some(5_020.0);
+                q.name = Some("From the quote".into());
+                q.market_time = wib_from_unix(secs);
+                let mut out = Sourced::fresh(vec![q], "stub");
+                out.cached = true;
+                Ok(out)
+            }
+            async fn history(
+                &self,
+                s: &Symbol,
+                p: Period,
+                i: Interval,
+            ) -> Result<Sourced<History>> {
+                self.asked.lock().unwrap().push(p);
+                let mut out = Sourced::fresh(
+                    History {
+                        symbol: s.clone(),
+                        name: None,
+                        currency: None,
+                        period: p,
+                        interval: i,
+                        summary: History::summarise(&self.candles),
+                        candles: self.candles.clone(),
+                    },
+                    "stub",
+                );
+                out.cached = true;
+                Ok(out)
+            }
+        }
+
+        fn bar(secs: i64, close: f64) -> Candle {
+            Candle {
+                time: wib_from_unix(secs).unwrap(),
+                open: close,
+                high: close,
+                low: close,
+                close,
+                adj_close: None,
+                volume: 1_000,
+            }
+        }
+
+        // 2026-11-05 09:00 WIB.
+        const DAY: i64 = 1_793_844_000;
+
+        fn issuers() -> Vec<Issuer> {
+            vec![Issuer {
+                symbol: Symbol::parse("BBCA").unwrap(),
+                name: Some("BANK CENTRAL ASIA Tbk".into()),
+            }]
+        }
+
+        fn bbca() -> Symbol {
+            Symbol::parse("BBCA").unwrap()
+        }
+
+        #[tokio::test]
+        async fn bars_quote_and_summary() {
+            let p = stub(
+                vec![
+                    bar(DAY - 86_400, 4_900.0),
+                    bar(DAY, 5_000.0),
+                    bar(DAY + 60, 5_020.0),
+                ],
+                Some(DAY + 7_200),
+            );
+            let r = intraday(&p, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+            assert!(r.cached, "both parts came from the cache");
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1]);
+            let d = &r.data;
+            assert_eq!(d.session.unwrap().to_string(), "2026-11-05");
+            assert_eq!(d.bars.len(), 2, "only the latest date");
+            assert_eq!(d.name.as_deref(), Some("From the quote"));
+            assert_eq!(d.quote.as_ref().unwrap().price, Some(5_020.0));
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!((s.open, s.close, s.bars_volume), (5_000.0, 5_020.0, 2_000));
+            assert_eq!(s.vwap, Some(5_010.0));
+        }
+
+        #[tokio::test]
+        async fn quote_failure_and_lagging_bars_are_warnings() {
+            let p = stub(vec![bar(DAY, 5_000.0)], None);
+            let r = intraday(&p, &issuers(), &bbca(), Interval::Min5)
+                .await
+                .unwrap();
+            assert!(r.data.quote.is_none());
+            assert_eq!(r.data.interval, Interval::Min5);
+            assert_eq!(r.data.name.as_deref(), Some("BANK CENTRAL ASIA Tbk"));
+            assert_eq!(
+                r.warnings,
+                ["no quote for BBCA: stub: quote endpoint down"],
+                "{:?}",
+                r.warnings
+            );
+
+            // The quote has moved on to the next session; the bars have not.
+            let p = stub(vec![bar(DAY, 5_000.0)], Some(DAY + 86_400));
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(
+                r.warnings,
+                ["the bars are from 2026-11-05 but the quote's last trade is from 2026-11-06; the source updates them separately"]
+            );
+        }
+
+        #[tokio::test]
+        async fn no_bars_is_a_warning_after_the_five_day_retry() {
+            let p = stub(vec![], Some(DAY));
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1, Period::D5]);
+            assert!(r.data.bars.is_empty() && r.data.summary.is_none());
+            assert!(r.data.session.is_none());
+            assert_eq!(
+                r.warnings,
+                ["no bars for BBCA: it did not trade in the last 5 days, or the source has none outside trading hours"]
+            );
+
+            // Stockbit's 5-day window is hourly: no retry.
+            let mut p = stub(vec![], Some(DAY));
+            p.name = crate::providers::stockbit::NAME;
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1]);
+            assert_eq!(
+                r.warnings,
+                ["no bars for BBCA: it did not trade in the latest session, or the source has none outside trading hours"]
+            );
+        }
+
+        #[tokio::test]
+        async fn daily_and_longer_bars_are_a_usage_error() {
+            let p = stub(vec![], None);
+            for i in [Interval::Day1, Interval::Week1, Interval::Month1] {
+                let e = intraday(&p, &[], &bbca(), i).await.unwrap_err();
+                assert_eq!(e.exit_code(), 2, "{i}");
+            }
+            assert!(p.asked.lock().unwrap().is_empty());
+        }
+
+        fn yahoo(one_day: &str) -> (Yahoo, Arc<FixtureBackend>, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let be = Arc::new(
+                FixtureBackend::new()
+                    .route_with_headers(
+                        "https://fc.yahoo.com",
+                        404,
+                        "",
+                        &[("set-cookie", "A3=d=abc; Domain=.yahoo.com")],
+                    )
+                    .route("v1/test/getcrumb", 200, "crumb123")
+                    .route("v7/finance/quote?symbols=BBCA.JK", 200, QUOTE)
+                    .route("BBCA.JK?range=1d&interval=1m", 200, one_day)
+                    .route("BBCA.JK?range=5d&interval=1m", 200, FIVE_DAYS),
+            );
+            let fetcher = Arc::new(Fetcher::new(
+                be.clone(),
+                Cache::new(dir.path()),
+                CacheMode::Normal,
+            ));
+            (Yahoo::new(fetcher, Ttls::default()), be, dir)
+        }
+
+        #[tokio::test]
+        async fn yahoo_end_to_end_from_recorded_responses() {
+            let (y, be, _dir) = yahoo(CHART);
+            let r = intraday(&y, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert_eq!(r.provider, "yahoo");
+            assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+            let d = &r.data;
+            assert_eq!(d.name.as_deref(), Some("PT Bank Central Asia Tbk"));
+            assert_eq!(d.bars.len(), 333);
+            let q = d.quote.as_ref().unwrap();
+            assert_eq!(
+                (q.previous_close, q.price, q.volume),
+                (Some(4_930.0), Some(5_125.0), Some(166_336_900))
+            );
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!(s.bars_volume, 155_142_100);
+            assert_eq!(s.vwap, Some(5_089.98));
+            assert!(!be
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| u.contains("range=5d")));
+        }
+
+        #[tokio::test]
+        async fn yahoo_just_after_the_open_shows_the_last_session() {
+            // 09:00:40 WIB: the 1-day window is empty, the 5-day one still
+            // ends with 11-05, whose bars match the 1-day recording exactly.
+            let (y, be, _dir) = yahoo(EMPTY);
+            let r = intraday(&y, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert_eq!(
+                r.warnings,
+                ["no 1m bars in the source's 1-day window yet (they start some minutes after the open); showing the last session with bars, 2026-11-05"]
+            );
+            let d = &r.data;
+            assert_eq!(d.session.unwrap().to_string(), "2026-11-05");
+            assert_eq!(d.bars.len(), 333);
+            assert_eq!(
+                d.bars.last().unwrap().time.to_rfc3339(),
+                "2026-11-05T16:14:00+07:00"
+            );
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!((s.bars_volume, s.vwap), (155_142_100, Some(5_089.98)));
+            assert!(be
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| u.contains("range=5d")));
+        }
+    }
+
     mod broker {
         use super::super::*;
         use crate::cache::Cache;

@@ -9,11 +9,12 @@ use crate::model::{Interval, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSTRUMENTS,
-    SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
-    SCHEMA_TECHNICAL,
+    SCHEMA_INTRADAY, SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN,
+    SCHEMA_SENTIMENT, SCHEMA_TECHNICAL,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
+use crate::output::table_intraday as intraday_table;
 use crate::output::table_news as newstbl;
 use crate::output::table_reports::{self as reports, StatementFlags};
 use crate::service::{self, ScreenOptions};
@@ -43,7 +44,7 @@ pub enum StocksCmd {
 
     /// OHLCV price history.
     #[command(
-        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history ^JKSE --period 1d --interval 1m"
+        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history ^JKSE --period 1d --interval 1m\n\nFor the latest session by the minute with the quote and VWAP, see `idx stocks intraday`."
     )]
     History {
         /// IDX ticker, e.g. BBCA.
@@ -57,6 +58,22 @@ pub enum StocksCmd {
         interval: Interval,
         /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON is never limited.
         #[arg(long, short = 'n', default_value_t = 30)]
+        limit: usize,
+    },
+
+    /// The latest session by the minute: OHLCV bars, the quote and a session summary with VWAP.
+    #[command(
+        after_help = "Examples:\n  idx stocks intraday BBCA\n  idx stocks intraday ^JKSE --interval 5m\n  idx stocks intraday BBRI --limit 0\n  idx -o json stocks intraday TLKM | jq '.data.summary'\n  idx -o csv stocks intraday BBCA > bbca-minutes.csv\n\nToday's session while the market trades, otherwise the last one (weekends, holidays, before\nthe open, and the first minutes after it, before Yahoo has bars for the day; a warning says so).\nFrom Yahoo's chart, no login, about 10 minutes behind the market. Minutes without a\ntrade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the\nday's, and the closing auction lands in the 16:00 bar. VWAP is computed by idx from the bars'\ntypical prices, an approximation of IDX's average price. With --provider stockbit (after\n`idx stockbit login`) the bars come from your Stockbit session in real time."
+    )]
+    Intraday {
+        /// IDX ticker or index, e.g. BBCA or ^JKSE.
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Bar size: 1m, 2m, 5m, 15m, 30m or 1h.
+        #[arg(long, short = 'i', value_enum, default_value = "1m")]
+        interval: Interval,
+        /// Most recent bars shown in table mode; 0 shows all. JSON and CSV carry every bar.
+        #[arg(long, short = 'n', default_value_t = 15)]
         limit: usize,
     },
 
@@ -267,6 +284,20 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             interval,
             limit,
         } => history(ctx, &symbol, period, interval, limit).await,
+        StocksCmd::Intraday {
+            symbol,
+            interval,
+            limit,
+        } => {
+            let sym = Symbol::parse(&symbol)?;
+            let list = universe::load(None).unwrap_or_default();
+            let result = service::intraday(ctx.provider.as_ref(), &list, &sym, interval).await?;
+            let provider = result.provider;
+            let limit = (limit > 0).then_some(limit);
+            emit(ctx, SCHEMA_INTRADAY, result, |d| {
+                intraday_table::intraday(d, limit, provider, ctx.color)
+            })
+        }
         StocksCmd::Profile { symbol } => profile(ctx, &symbol).await,
         StocksCmd::Financials {
             symbol,

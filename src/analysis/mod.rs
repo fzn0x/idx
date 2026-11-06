@@ -4,6 +4,7 @@
 pub mod bandar;
 pub mod dividends;
 pub mod fundamental;
+pub mod intraday;
 pub mod returns;
 pub mod screen;
 pub mod sentiment;

@@ -28,7 +28,7 @@ use crate::model::{
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
-    SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
+    SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INTRADAY, SCHEMA_MARKET,
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN,
     SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
     SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
@@ -96,6 +96,18 @@ pub struct HistoryArgs {
     #[serde(default)]
     pub interval: Option<String>,
     /// Keep only the most recent N candles (default 60). 0 returns all of them.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct IntradayArgs {
+    /// One IDX ticker or index, e.g. "BBCA" or "^JKSE".
+    pub symbol: String,
+    /// Bar size: 1m (default), 2m, 5m, 15m, 30m or 1h.
+    #[serde(default)]
+    pub interval: Option<String>,
+    /// Keep only the most recent N bars (default 120). 0 returns all of them. The summary covers the whole session.
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -584,6 +596,35 @@ impl IdxServer {
                     ));
                 }
                 ok(SCHEMA_HISTORY, h)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_intraday",
+        description = "The latest session of one IDX stock or index by the minute (Yahoo's chart, no login, about 10 minutes behind the market): OHLCV bars oldest first, the quote (previous close, last price and change, the day's open, high, low and volume, market state, last trade time) and a session summary (first and last bar, open, high, low, close, the bars' volume, VWAP computed by idx from the bars' typical prices). Today's session while the market trades, otherwise the last one (also in the first minutes after the open, before Yahoo has bars for the day; a warning says so). Minutes without a trade have no bar, and the opening auction's volume is in no bar. With the server on --provider stockbit the bars are realtime from the user's session. Returns the idx.intraday.v1 envelope."
+    )]
+    async fn intraday(
+        &self,
+        Parameters(a): Parameters<IntradayArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbol = Symbol::parse(&a.symbol)?;
+                let interval = parse_opt(&a.interval, Interval::Min1)?;
+                let list = universe::load(None).unwrap_or_default();
+                let mut r =
+                    service::intraday(self.provider.as_ref(), &list, &symbol, interval).await?;
+                let limit = a.limit.unwrap_or(120) as usize;
+                if limit > 0 && r.data.bars.len() > limit {
+                    let skip = r.data.bars.len() - limit;
+                    r.data.bars.drain(..skip);
+                    r.warnings.push(format!(
+                        "bars truncated to the last {limit}; the summary covers the whole session"
+                    ));
+                }
+                ok(SCHEMA_INTRADAY, r)
             }
             .await,
         )
@@ -1657,6 +1698,7 @@ mod tests {
                 "idx_holidays",
                 "idx_indices",
                 "idx_instruments",
+                "idx_intraday",
                 "idx_market",
                 "idx_market_brokers",
                 "idx_market_foreign",
@@ -1781,6 +1823,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
         assert_eq!(v["error"]["code"], "usage", "{v}");
         assert!(v["error"]["message"].as_str().unwrap().contains("1d or 5d"));
+        for (interval, code) in [("1d", "usage"), ("7m", "usage"), ("1m", "offline_miss")] {
+            let r = s
+                .intraday(Parameters(IntradayArgs {
+                    symbol: "BBCA".into(),
+                    interval: Some(interval.into()),
+                    limit: None,
+                }))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true));
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], code, "{interval}: {v}");
+        }
 
         let broker = |date: Option<&str>, from: Option<&str>, investor: Option<&str>| BrokerArgs {
             symbols: "BBCA".into(),

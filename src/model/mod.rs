@@ -17,6 +17,7 @@ pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
 pub mod instruments;
+pub mod intraday;
 pub mod market;
 pub mod news;
 pub mod orderbook;
@@ -48,6 +49,7 @@ pub use fundamentals::{
     VerdictLabel,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
+pub use intraday::{Intraday, IntradaySummary};
 pub use market::{MarketOverview, MarketRow};
 pub use news::{NewsItem, NewsReport, SentimentLabel, SentimentReport};
 pub use orderbook::{BookLevel, OrderBook};
