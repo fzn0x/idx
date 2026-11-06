@@ -5,6 +5,11 @@ shareholder holding **more than 1 %** of a listed company ("Pemegang Saham di
 Atas 1%"). `idx ownership` imports those files into a local SQLite database
 and answers questions from it offline.
 
+KSEI also publishes, on its own site, a monthly composition of every
+security's holders by investor type, local and foreign ("Kepemilikan Efek").
+It names no holders; idx keeps it in separate tables and reads it with
+`idx ownership composition` (see [KSEI composition](#ksei-composition-kepemilikan-efek)).
+
 ## Source files
 
 | period | format | where |
@@ -20,7 +25,29 @@ the register as of 30 Oct 2026 `CONTROLLER_OR_AFFILIATE` (`CONTROLLER`,
 `AFFILIATE OF THE CONTROLLER` or blank) after `INVESTOR_CLASSIFICATION`.
 Columns are found by name, so both layouts import; the "di Atas 5 %" and
 investor-type workbooks on the same page lack required columns and are
-rejected with a clear message.
+rejected with a clear message. `idx ownership discover --family` lists them
+all:
+
+| `--family` | title on the page | file | importable |
+| --- | --- | --- | --- |
+| `above1` (default) | Pemegang Saham di Atas 1% per 31 Agustus 2026 | idx.co.id `Media/.../peng-YYYY-MM-NNNNN-satu-persen.xlsx` | yes |
+| `above5` | Pemegang Saham di Atas 5% per 23 September 2026 (a daily register: holders above 5 %, per account, with the day's change) | idx.co.id `peng-YYYY-MM-DD-NNNNN-lima-persen.xlsx` | no, listed only |
+| `investor-type` | Data Kepemilikan Saham Perusahaan Tercatat per Tipe Investor per 31 Agustus 2026 | idx.co.id `peng-YYYY-MM-NNNNN-tipe.xlsx` | no, listed only |
+| `classification` | Data Kepemilikan Saham Perusahaan Tercatat Berdasarkan Klasifikasi Investor per 31 Agustus 2026 | idx.co.id `peng-YYYY-MM-NNNNN-klasifikasi.xlsx` | no, listed only |
+| `composition` | Kepemilikan Efek 30 Oktober 2026 | ksei.co.id `storage/Download/BalanceposEfekYYYYMMDD.zip` | yes |
+| `all` | every family above | | |
+
+```sh
+idx ownership discover                                 # the above-1 % register, every month listed
+idx ownership discover --family all --limit 2           # every family, newest two each
+idx ownership discover --family composition --limit 24  # two years of KSEI archives
+```
+
+`--limit` counts per family (0: all). Without it every idx.co.id file is
+listed, as before, and one ksei.co.id page (eight months). Each entry carries
+`family` and `importable` in JSON. A family whose source fails becomes a
+warning while the others answer; the command fails only when every family
+failed (with the JSON code `blocked` when Cloudflare refused idx.co.id).
 
 Each row carries its own `DATE`. A file is filed under its most common date
 (`as_of`); rows with another date are kept but left out of that release's
@@ -129,13 +156,85 @@ accepts, with `gh` logged in:
 `pip install curl_cffi && python scripts/ownership_mirror.py --idx target/debug/idx --repo fzn0x/idx`
 (add `--dry-run` to change nothing).
 
+## KSEI composition (Kepemilikan Efek)
+
+KSEI lists one archive per month at
+<https://www.ksei.co.id/id/publikasi/data-dan-statistik/kepemilikan-efek>
+(eight months per page, newest first; `?page=N` for older ones), a few days
+after the month's last trading day: `BalanceposEfek<YYYYMMDD>.zip`, about
+125 KB, the date being that last trading day. The ZIP holds one
+pipe-separated text file, `Balancepos<YYYYMMDD>.txt`, CRLF line endings:
+
+```text
+Date|Code|Type|Sec. Num|Price|Local IS|Local CP|Local PF|Local IB|Local ID|Local MF|Local SC|Local FD|Local OT|Total|Foreign IS|Foreign CP|Foreign PF|Foreign IB|Foreign ID|Foreign MF|Foreign SC|Foreign FD|Foreign OT|Total
+30-OCT-2026|BBCA|EQUITY|123275050000|4980|2310613490|752250260|302459300|517672400|12030567470|1072720030|119977978|72753960|15254200|17194269088|666444425|575351467|4718402998|2382605437|324800480|20393323810|457281188|320342605|5420869622|35259422032
+```
+
+One row per security: shares listed (`Sec. Num`), the price, and the shares
+held by local and by foreign holders in nine investor types (IS insurance, CP
+corporate, PF pension fund, IB financial institution, ID individual, MF
+mutual fund, SC securities company, FD foundation, OT others), each side with
+its total. idx stores the `EQUITY` rows (1,005 on 30 Oct 2026) and counts the
+other types (bonds, sukuk, warrants, rights, funds, crowdfunding) without
+storing them. The header must match exactly; another layout is refused, not
+guessed at.
+
+**Scripless only.** The buckets cover shares held in KSEI accounts. Shares
+still held as certificates (scrip) are outside the archive: BBCA's rows add
+up to 42.55 % of its listed shares on 30 Oct 2026, because its controlling
+holder's 54.94 % stake is scrip. Percentages are therefore taken over the
+scripless total, and `scripless_pct` (scripless shares over listed shares) is
+always shown next to them. Never read the composition as a percent of listed
+shares.
+
+```sh
+idx ownership composition BBCA                     # newest month, nine types, local vs foreign
+idx ownership composition TLKM --as-of 2026-09-30
+idx ownership import --latest --family composition  # newest archive not imported yet
+idx ownership import --all --family composition     # every listed month (up to 10 pages)
+idx ownership import --file BalanceposEfek20261030.zip    # or the TXT inside
+idx ownership import --url https://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip
+```
+
+`ownership composition` downloads the newest month on first use, and later
+asks ksei.co.id again only once a newer month can exist (after the end of
+the month following the newest imported one; the listing is cached 12 h).
+`--as-of` downloads a listed month that is missing. `--offline` never
+downloads. The envelope's `provider` is `ksei` when the call imported,
+`local-db` otherwise, and a warning names what was imported. The report gives
+the stock's local and foreign shares and percents, the nine types in KSEI's
+order, and every imported month with the foreign percent's change in
+percentage points (`idx.ownership.composition.v1`). `-o csv` writes the
+largest list: `by_type`, or `history` once more months than types are
+imported.
+
+Composition imports never touch the register: `releases`, `ticker`,
+`entity`, `changes` and `foreign` read exactly what they read before, and a
+composition month and a register month can share a date. In an import report
+a composition month has `family: "composition"`, `rows` and `issuers` = the
+stocks stored, `entities` 0, `other_securities` the rows of other types, and
+`positions`, `other_date_rows`, `controller_column` null.
+
+Archives are read in memory, never unpacked to disk. A ZIP is refused when an
+entry's path leaves the archive (absolute, a drive, `..`), when it holds more
+than 16 entries, or when its text file unpacks to more than 64 MiB; a
+download stops at 32 MiB. Rows with a bad cell (a date, a count with
+separators, a non-positive `Sec. Num`) are skipped with a warning naming the
+line; a row whose types do not add up to KSEI's total keeps the total, with a
+warning.
+
+ksei.co.id has no bot protection (nginx and S3, any user agent). The web
+terminal does not carry the composition yet: a Worker has not been checked
+against ksei.co.id, so the tool is CLI and MCP only.
+
 ## Database
 
 Default path: `%LOCALAPPDATA%\idx\ownership.sqlite` on Windows,
 `$XDG_DATA_HOME/idx/ownership.sqlite` or `~/.local/share/idx/ownership.sqlite`
 elsewhere. Override with `IDX_OWNERSHIP_DB` or `ownership.db` in the config.
 
-Tables (schema version 2, kept in `PRAGMA user_version`):
+Tables (schema version 3, kept in `PRAGMA user_version`; version 3 adds the
+two composition tables):
 
 - `releases` one row per imported month (`as_of` unique; re-importing a month
   replaces it), with the source path/URL and SHA-256 of the file, the register
@@ -156,6 +255,12 @@ Tables (schema version 2, kept in `PRAGMA user_version`):
   lines are summed (shares and percent; `accounts` counts them); the holder's
   spelling is the largest line's, and type, controller flag, local/foreign,
   nationality and domicile come from the largest line that has a value.
+- `composition_releases` one row per imported KSEI composition month
+  (`as_of` unique; re-importing replaces it), with the format (`zip` or
+  `txt`), source, SHA-256, the stocks stored and the other securities left
+  out.
+- `composition` one row per (month, stock): shares listed, price, the nine
+  local and nine foreign investor-type counts and both totals, as printed.
 
 Why one holder has several lines: KSEI computes holdings per SID, and per
 account for scrip held without an SID (the register's own disclaimer). A
@@ -224,7 +329,7 @@ ownership.
 
 JSON schemas: `idx schema ownership-holders|ownership-entity|ownership-changes|
 ownership-foreign|ownership-foreign-flow|ownership-releases|ownership-import|
-ownership-discover`.
+ownership-discover|ownership-composition`.
 
 ## Caveats
 

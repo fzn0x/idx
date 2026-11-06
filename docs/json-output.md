@@ -10,8 +10,8 @@ Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
-`ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
-`candle`.
+`ownership-import`, `ownership-discover`, `ownership-composition`,
+`watchlist`, `error`, `quote`, `candle`.
 
 `-o csv` prints the payload's main list (candles, rows, items, holders,
 changes, dividends, ...) as comma-separated rows with a header; nested objects
@@ -339,6 +339,49 @@ rows keep `rows` (register lines) and add `positions`, `other_date_rows` and
 Notes about the months read (imported by an old idx, rows dated otherwise)
 come in the envelope's `warnings`. The versions stay `v1`: every change is an
 added field, and the values now match the documented "one entity's position".
+
+`discover` (`idx.ownership.discover.v1`) entries add `family` (`above1`,
+`above5`, `investor-type`, `classification` or `composition`) and
+`importable` (`true` for `above1` and `composition`); `origin` can now also be
+`ksei.co.id`. `import` (`idx.ownership.import.v1`) reports add `family`
+(`above1` or `composition`) and `other_securities` (composition only: rows of
+other security types left out). For a composition month `release.rows` and
+`release.issuers` count the stocks stored, `release.entities` is 0 and
+`positions`, `other_date_rows` and `controller_column` are `null`. Both stay
+`v1` (added fields).
+
+## `idx.ownership.composition.v1` (`ownership composition`)
+
+KSEI's monthly "Kepemilikan Efek" archive for one stock (see
+[ownership.md](ownership.md#ksei-composition-kepemilikan-efek)). `provider` is
+`ksei` when the call downloaded the month, `local-db` otherwise.
+
+```json
+{
+  "symbol": "BBCA", "as_of": "2026-10-30", "price": 4980.0,
+  "shares_listed": 123275050000, "shares_scripless": 52453691120, "scripless_pct": 42.5501,
+  "local_shares": 17194269088, "foreign_shares": 35259422032,
+  "local_pct": 32.7799, "foreign_pct": 67.2201,
+  "by_type": [
+    {"code": "ID", "investor_type": "INDIVIDUAL", "local_shares": 12030567470,
+     "foreign_shares": 324800480, "local_pct": 22.9356, "foreign_pct": 0.6192}
+  ],
+  "history": [
+    {"as_of": "2026-09-30", "local_pct": 31.1106, "foreign_pct": 68.8894, "scripless_pct": 42.5501, "foreign_change_pp": null},
+    {"as_of": "2026-10-30", "local_pct": 32.7799, "foreign_pct": 67.2201, "scripless_pct": 42.5501, "foreign_change_pp": -1.6693}
+  ],
+  "source": "https://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip"
+}
+```
+
+`shares_scripless` is the local total plus the foreign total: the shares held
+in KSEI accounts. Shares still held as certificates are outside the archive.
+Every `*_pct` but `scripless_pct` is a percent of `shares_scripless` (4
+decimals, `null` when it is 0); `scripless_pct` is `shares_scripless` over
+`shares_listed`. `by_type` always lists the nine types in KSEI's order (`IS`,
+`CP`, `PF`, `IB`, `ID`, `MF`, `SC`, `FD`, `OT`). `history` is every imported
+month for the stock, oldest first; `foreign_change_pp` is the change from the
+previous imported month. `price` is `null` when KSEI left it blank.
 
 ## `idx.watchlist.v1` (`watch add|rm|list|clear`)
 

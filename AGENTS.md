@@ -55,11 +55,13 @@ src/
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
                      bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers
-  ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
-                     mirror fallback), ingest.rs (XLSX/PDF, text numbers, controller column), normalize.rs
-                     (entity keys), db.rs (SQLite schema with `PRAGMA user_version` migrations, register lines
-                     and summed positions, queries); mod.rs query wrappers shared by cli/, mcp/ and the brief.
-                     Imported once, queried locally.
+  ownership/         KSEI >1% register: discover.rs (idx.co.id page and its families, Cloudflare strategy,
+                     `discover --family`), mirror.rs (GitHub mirror fallback), ingest.rs (XLSX/PDF, text
+                     numbers, controller column), normalize.rs (entity keys), db.rs (SQLite schema with
+                     `PRAGMA user_version` migrations, register lines and summed positions, queries); KSEI's
+                     composition archive: ksei.rs (ksei.co.id "Kepemilikan Efek" listing + ZIP download),
+                     composition.rs (ZIP/TXT parser with zip-slip and size limits, its own tables, report);
+                     mod.rs query wrappers shared by cli/, mcp/ and the brief. Imported once, queried locally.
   mcp/               rmcp server; one #[tool] per command, same JSON envelope as -o json;
                      schema.rs rewrites input schemas into the subset every harness accepts;
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
@@ -93,7 +95,7 @@ scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: 
 CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, returns,
 fundamental, technical, brief, compare, screen, news, sentiment, actions, foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
-`ownership` (import, ticker, entity, changes, foreign, releases, discover, path),
+`ownership` (import, ticker, entity, changes, foreign, composition, releases, discover, path),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook — opt-in
 realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 
@@ -113,7 +115,8 @@ realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`
    `idx schema <name>` (`output/json.rs`).
 5. **Providers are interchangeable.** Nothing outside `src/providers/<name>/`
    may know about a source's URL or field names. The one exception is
-   `src/ownership/`, which *is* the idx.co.id source module.
+   `src/ownership/`, which *is* the source module for the KSEI registers
+   (idx.co.id and ksei.co.id).
 6. **Cache keys exclude secrets.** Session tokens (crumbs, cookies) never form
    part of a cache key; pass an explicit `cache_key` to `Fetcher::get`.
 
