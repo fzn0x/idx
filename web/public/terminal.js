@@ -5,7 +5,7 @@ import { TOOLS, CLI_ONLY_REASON, byName } from "/tools.js";
 import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
-import { session, hhmm, wib } from "/clock.js";
+import { session, hhmm, wib, stateName, boardState } from "/clock.js";
 
 const out = document.getElementById("out");
 const form = document.getElementById("prompt");
@@ -492,7 +492,7 @@ const R = {
   },
   market(m) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wibAt(m.refreshed_at)} · ${m.market_open ? "market open" : "market closed"}` }));
+    frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wibAt(m.refreshed_at)} · ${boardWords(m)}` }));
     if (m.index_tape.length > 1) frag.append(sparkline(m.index_tape, { cls: "spark" }));
     const grid = el("div", { class: "three" });
     const mk = (title, rows, valueCol) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Price", f: (r) => fmt.price(r.price) }, valueCol], rows))]);
@@ -590,7 +590,7 @@ async function run(line) {
       }
       break;
     }
-    case "market": env = await api("market"); render = R.market; break;
+    case "market": env = await api("market"); await calendar; render = R.market; break;
     case "list": env = await api(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
     case "members": env = await api(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
     case "tools": {
@@ -857,24 +857,35 @@ addEventListener("popstate", (ev) => {
 // ---- status bar: the minute board's state, read once a minute ------------------
 
 let holidays = new Map();
+// The IDX holiday calendar, read once; the market panel waits for it so a holiday never reads as a session.
+const calendar = api("holidays?all=1&upcoming=1")
+  .then((h) => { holidays = new Map(h.data.holidays.map((x) => [x.date, x.name_en || x.name])); })
+  .catch(() => {});
+
+/** The market panel's state words, from the session classification the monitor's band uses. */
+function boardWords(m) {
+  const b = boardState(new Date(m.refreshed_at), m.as_of ? new Date(m.as_of) : null, holidays);
+  return b.lastTrade ? `${b.state} · ${b.lastTrade}` : b.state;
+}
+
+/** The status bar: the lamp and the snapshot's age, read with the board once a minute; a phone keeps just those. */
 async function board() {
   try {
     const m = await api("market");
     const at = new Date(m.data.refreshed_at);
     const s = session(new Date(), holidays);
+    const age = Math.max(0, (Date.now() - at) / 1000);
     if (!s.open) lamp("closed", "Closed");
-    else if ((Date.now() - at) / 1000 > 180) lamp("stale", "Stale");
+    else if (age > 180) lamp("stale", "Stale");
     else lamp("live", "Live");
-    document.getElementById("st-age").replaceChildren("Board ", el("b", { text: `${hhmm(wib(at).secs)} WIB` }), ` · ${fmt.int(m.data.quoted)} quoted${s.phase ? ` · ${s.phase.name}` : s.holiday ? ` · ${s.holiday}` : ""}`);
+    document.getElementById("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(at).secs)} WIB` }), ` · ${Math.floor(age / 60)} min ago`,
+      el("span", { class: "st-next", text: ` · ${fmt.int(m.data.quoted)} quoted · ${stateName(s)}` }));
   } catch {
-    lamp("offline", "Board unavailable");
+    lamp("offline", "Offline");
   }
   setTimeout(board, 60_000);
 }
-api("holidays?all=1&upcoming=1")
-  .then((h) => { holidays = new Map(h.data.holidays.map((x) => [x.date, x.name_en || x.name])); })
-  .catch(() => {})
-  .finally(board);
+calendar.then(board);
 
 // ---- deep links (?cmd=) -----------------------------------------------------------
 

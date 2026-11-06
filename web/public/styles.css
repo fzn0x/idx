@@ -365,9 +365,10 @@ main { display: block; }
 .st-state[data-state="error"] { color: var(--rose); }
 .st-state[data-state="error"]::before { background: var(--rose); }
 .st-state[data-state="paused"]::before { background: transparent; border: 1px solid var(--lit); width: 7px; height: 7px; }
-.st-age { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.st-age { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .st-age b { color: var(--lit); font-weight: 600; }
-.st-src { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.st-src { overflow: hidden; text-overflow: ellipsis; flex: 0 100 auto; min-width: 0; }
+/* The source note gives way first, so the age and the session words stay whole. */
 .st-right { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
 .st-btn {
   height: 20px; padding: 0 8px; border: 1px solid var(--edge); background: transparent; color: var(--lit); cursor: pointer;
@@ -543,6 +544,7 @@ pre.json { max-height: 30rem; overflow: auto; padding: 10px var(--gutter); borde
   .result .three > *, .result .two > * { border-right: 0; border-bottom: 1px solid var(--rule); }
   .result .three > *:last-child, .result .two > *:last-child { border-bottom: 0; }
   .st-src { display: none; }
+  .st-next { display: none; }
   .movers-more { display: none; }
 }
 @media (max-width: 46rem) {
@@ -588,7 +590,7 @@ pre.json { max-height: 30rem; overflow: auto; padding: 10px var(--gutter); borde
   .tbl-tools td:nth-child(3)::before { content: "Web" / ""; }
   .sign { grid-template-columns: 1fr; }
   .statusbar { gap: 10px; font-stretch: 75%; }
-  .st-next { display: none; }
+  .st-age { flex: 0 1 auto; }
   .st-btn { padding: 0 6px; letter-spacing: 0.04em; }
   .st-keys { display: none; }
   .kv { gap: 2px 12px; }

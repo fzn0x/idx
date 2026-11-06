@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { session, countdown, clockText, dayText, isTradingDay, nextTradingDay, TIMETABLE, wib } from "../public/clock.js";
+import { session, countdown, clockText, dayText, isTradingDay, nextTradingDay, TIMETABLE, wib, stateName, boardState } from "../public/clock.js";
 
 const web = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The same rows /api/holidays serves, as the page holds them: date -> name.
@@ -83,4 +83,27 @@ test("trading days, WIB dates and the clock faces", () => {
   assert.equal(countdown(2 * 86400 + 3 * 3600 + 7 * 60), "2d 03:07");
   assert.equal(countdown(-4), "00:00:00");
   assert.equal(dayText("2026-11-06"), "Fri 6 Nov 2026");
+});
+
+test("a snapshot reads as its session phase, and names an earlier last trade", () => {
+  // The terminal market panel and both status bars use these words, the band shows the same phases.
+  const pre = boardState(new Date("2026-11-06T01:47:37Z"), new Date("2026-11-05T16:14:59+07:00"), HOLIDAYS);
+  assert.deepEqual([pre.state, pre.lastTrade], ["Pre-opening", "last trade Thu 2026-11-05"]);
+  const cases = [
+    ["2026-11-05T10:00:00", "2026-11-05T09:59:00", "Session I", null],
+    ["2026-11-05T12:30:00", "2026-11-05T12:00:00", "Break", null],
+    ["2026-11-05T14:00:00", "2026-11-05T13:59:00", "Session II", null],
+    ["2026-11-05T15:55:00", "2026-11-05T15:49:59", "Pre-closing", null],
+    ["2026-11-05T16:05:00", "2026-11-05T16:04:00", "Post-closing", null],
+    ["2026-11-05T17:00:00", "2026-11-05T16:14:59", "Closed", null],
+    ["2026-11-07T10:00:00", "2026-11-06T16:14:59", "Closed, weekend", "last trade Fri 2026-11-06"],
+    ["2026-12-24T10:00:00", "2026-12-23T16:14:59", "Closed, Commemoration of Christmas Day", "last trade Wed 2026-12-23"],
+  ];
+  for (const [snap, trade, state, last] of cases) {
+    const b = boardState(at(snap), at(trade), HOLIDAYS);
+    assert.deepEqual([b.state, b.lastTrade], [state, last], snap);
+    assert.doesNotMatch(b.state, /^(market )?open$/i);
+  }
+  assert.equal(boardState(at("2026-11-05T10:00:00"), null).lastTrade, null);
+  assert.equal(stateName(session(at("2026-11-08T09:30:00"), HOLIDAYS)), "Closed, weekend");
 });

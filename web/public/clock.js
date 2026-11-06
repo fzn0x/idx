@@ -111,3 +111,20 @@ export const dayText = (iso) => `${DAYS[dowOf(iso)]} ${Number(iso.slice(8, 10))}
 
 /** "Wed 15:50" for a moment, in WIB. */
 export const stamp = (date) => { const w = wib(date); return `${DAYS[w.dow]} ${hhmm(w.secs)}`; };
+
+/** Where the session stands in words: the phase name, or why the market is closed. Never "open". */
+export function stateName(s) {
+  if (s.phase) return s.phase.name;
+  return s.holiday ? `Closed, ${s.holiday}` : s.tradingDay ? "Closed" : "Closed, weekend";
+}
+
+/**
+ * How a board snapshot reads: the session state at the snapshot's moment and,
+ * when its last trade is from an earlier day, that day ("last trade Thu 2026-11-05").
+ */
+export function boardState(snapshotAt, lastTradeAt, holidays = new Map()) {
+  const s = session(snapshotAt, holidays);
+  const day = wib(snapshotAt).iso;
+  const traded = lastTradeAt && Number.isFinite(lastTradeAt.getTime()) ? wib(lastTradeAt).iso : null;
+  return { state: stateName(s), lastTrade: traded && traded < day ? `last trade ${DAYS[dowOf(traded)]} ${traded}` : null, session: s };
+}

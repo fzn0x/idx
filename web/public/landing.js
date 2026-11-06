@@ -4,7 +4,7 @@
 // value; the gate sends a line to the web terminal.
 import { api, fmt, NA, el, sparkline, flip, setLive, machineLine, copyButton, loadUniverse, quoteHref, shortName, signClass, scrollCue, TICKER } from "/app.js";
 import { TOOLS } from "/tools.js";
-import { session, countdown, clockText, dayText, hhmm, stamp, wib } from "/clock.js";
+import { session, countdown, clockText, dayText, hhmm, stamp, wib, stateName } from "/clock.js";
 import { initShell, hotkeys, jump, lamp, onPause, isPaused, togglePause } from "/shell.js";
 import { mountGate, suggestions } from "/gate.js";
 
@@ -171,8 +171,7 @@ function sessionText(s) {
   const nextWib = wib(s.next.at);
   const time = hhmm(nextWib.secs);
   if (s.phase) return { name: s.phase.name, next: s.next.id === "closed" ? `Until the close at ${time}` : `Until ${s.next.name} at ${time}` };
-  const why = s.holiday ? `Closed, ${s.holiday}` : s.tradingDay ? "Closed" : "Closed, weekend";
-  return { name: why, next: `Pre-opening ${nextWib.iso === s.date ? "today" : dayText(nextWib.iso).slice(0, -5)} at ${time}` };
+  return { name: stateName(s), next: `Pre-opening ${nextWib.iso === s.date ? "today" : dayText(nextWib.iso).slice(0, -5)} at ${time}` };
 }
 
 /** The clock and the session cell; the session waits for the holiday calendar so a holiday never reads as open. */
@@ -212,7 +211,7 @@ function status(now, s) {
   if (refreshedAt) {
     $("st-age").replaceChildren("Snapshot ", el("b", { text: `${hhmm(wib(refreshedAt).secs)} WIB` }), ` · ${fmt.age(age)} ago`, el("span", { class: "st-next", text: ` · next read in ${countdown(Math.max(0, (nextRefresh - Date.now()) / 1000)).slice(3)}` }));
   }
-  if (failed) return lamp("offline", market ? "Offline, last board shown" : "Offline");
+  if (failed) return lamp("offline", "Offline");
   if (!market) return lamp("idle", "Connecting");
   if (stale) return lamp("stale", "Stale");
   return s.open ? lamp("live", "Live") : lamp("closed", "Closed");

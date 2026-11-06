@@ -51,6 +51,15 @@
         ],
         "createdAt": "2026-11-06T01:47:05.457Z",
         "reason": "Finish review: the share card's caps are its short top-bar label and status-strip label on a 1200x630 raster source, not body copy"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "web/public/index.html"
+        ],
+        "createdAt": "2026-11-06T01:54:17.532Z",
+        "reason": "Finish reviewer: not a defect in the Papan Stasiun world; hierarchy comes from weight, caps tracking, the numbered panel strips on the ghost-dot band and the Doto step in the LED band, and a second Martian Mono size would break the single-size grid the TUI brief commits to"
       }
     ]
   }
