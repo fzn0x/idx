@@ -75,9 +75,10 @@ locally with normalised entity names. Free, MIT, no API keys.
 
 ## Brand Commitments
 
-- Name: `idx` (lower-case wordmark). Assets: `assets/logo.svg`,
-  `assets/mark.svg` (candlestick mark: red / green candles on a near-black
-  tile `#0b0f14`, greens `#16a34a`/`#4ade80`, red `#f43f5e`).
+- Name: `idx` (lower-case wordmark). Assets: `assets/logo.svg` (with
+  `logo-light.svg` / `logo-dark.svg`), `assets/mark.svg` = `web/public/mark.svg`
+  (Material 3 Expressive mark, owner's brief of 2026-11-06: a nine-lobed
+  cookie in idx mint `#4ade80` holding three ink `#0b0f14` candles).
 - Publisher: Midori Research (midoriresearch.com), contact
   desk@midoriresearch.com. MIT licence.
 - Voice (from the CLI and README): plain, exact, no hype; disclaimers are

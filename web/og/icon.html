@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <title>idx touch icon</title>
 <!-- Source of public/apple-touch-icon.png (180x180). Not served; render with
-     scripts/og.mjs. The mark is used unaltered; the square ground fills the
-     corners that iOS masks itself. -->
+     scripts/og.mjs. The mark is used unaltered at 140px, centred on the square
+     ground, so the cookie stays clear of the corners that iOS masks itself. -->
 <style>
   * { margin: 0; }
   html, body { width: 180px; height: 180px; overflow: hidden; background: #0b0f14; }
-  img { display: block; width: 180px; height: 180px; }
+  body { display: grid; place-items: center; }
+  img { display: block; width: 140px; height: 140px; }
 </style>
 </head>
 <body><img src="../public/mark.svg" alt=""></body>

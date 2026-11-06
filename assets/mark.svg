@@ -1,27 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="idx mark">
-  <defs>
-    <linearGradient id="up" x1="0" y1="1" x2="0" y2="0">
-      <stop offset="0" stop-color="#16a34a"/>
-      <stop offset="1" stop-color="#4ade80"/>
-    </linearGradient>
-    <linearGradient id="dn" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f43f5e"/>
-      <stop offset="1" stop-color="#be123c"/>
-    </linearGradient>
-  </defs>
-  <rect width="128" height="128" rx="28" fill="#0b0f14"/>
-  <g stroke="#1f2937" stroke-width="1">
-    <line x1="16" y1="40" x2="112" y2="40"/>
-    <line x1="16" y1="64" x2="112" y2="64"/>
-    <line x1="16" y1="88" x2="112" y2="88"/>
+  <title>idx</title>
+  <!-- A Material 3 Expressive nine-lobed cookie in idx mint with three ink candles rising left to right. -->
+  <path d="M55.38 10.32A14.58 14.58 0 0 1 72.62 10.32A36.67 36.67 0 0 0 91.9 17.34A14.58 14.58 0 0 1 105.11 28.42A36.67 36.67 0 0 0 115.37 46.19A14.58 14.58 0 0 1 118.36 63.17A36.67 36.67 0 0 0 114.8 83.38A14.58 14.58 0 0 1 106.18 98.3A36.67 36.67 0 0 0 90.46 111.5A14.58 14.58 0 0 1 74.26 117.39A36.67 36.67 0 0 0 53.74 117.39A14.58 14.58 0 0 1 37.54 111.5A36.67 36.67 0 0 0 21.82 98.3A14.58 14.58 0 0 1 13.2 83.38A36.67 36.67 0 0 0 9.64 63.17A14.58 14.58 0 0 1 12.63 46.19A36.67 36.67 0 0 0 22.89 28.42A14.58 14.58 0 0 1 36.1 17.34A36.67 36.67 0 0 0 55.38 10.32Z" fill="#4ade80"/>
+  <g>
+    <rect x="39" y="56" width="4" height="44" rx="2" fill="#0b0f14"/><rect x="33" y="65" width="16" height="26" rx="8" fill="#0b0f14"/>
+    <rect x="62" y="39" width="4" height="52" rx="2" fill="#0b0f14"/><rect x="56" y="49" width="16" height="34" rx="8" fill="#0b0f14"/>
+    <rect x="85" y="27" width="4" height="50" rx="2" fill="#0b0f14"/><rect x="79" y="35" width="16" height="32" rx="8" fill="#0b0f14"/>
   </g>
-  <g stroke-linecap="round">
-    <line x1="36" y1="24" x2="36" y2="108" stroke="#f43f5e" stroke-width="3"/>
-    <rect x="28" y="50" width="16" height="42" rx="3" fill="url(#dn)"/>
-    <line x1="64" y1="18" x2="64" y2="96" stroke="#4ade80" stroke-width="3"/>
-    <rect x="56" y="28" width="16" height="52" rx="3" fill="url(#up)"/>
-    <line x1="92" y1="32" x2="92" y2="102" stroke="#4ade80" stroke-width="3"/>
-    <rect x="84" y="42" width="16" height="30" rx="3" fill="url(#up)"/>
-  </g>
-  <circle cx="36" cy="14" r="4" fill="#f8fafc"/>
 </svg>
