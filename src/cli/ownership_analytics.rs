@@ -227,7 +227,7 @@ pub async fn graph(ctx: &Context, a: GraphArgs) -> Result<()> {
     )?;
     if a.dot {
         for w in &s.warnings {
-            output::print_stderr(&format!("warning: {w}"));
+            output::print_notice(&format!("warning: {w}"));
         }
         return output::print_stdout(&analytics::to_dot(&s.data));
     }

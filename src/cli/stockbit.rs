@@ -436,7 +436,7 @@ async fn already_signed_in(ctx: &Context, sb: &Stockbit) -> Result<bool> {
     if sb.verify().await.is_err() {
         return Ok(false);
     }
-    output::print_stderr(
+    output::print_notice(
         "Already signed in to Stockbit; run `idx stockbit logout` to switch accounts, or pass --force.",
     );
     status_cmd(ctx).map(|_| true)
@@ -483,7 +483,7 @@ async fn login_cmd(
         Method::Paste => unreachable!("handled above"),
         Method::Page { why } => {
             if let Some(why) = why {
-                output::print_stderr(&format!(
+                output::print_notice(&format!(
                     "Using the sign-in page: {why} (--browser opens one anyway)."
                 ));
             }
@@ -504,7 +504,7 @@ async fn login_cmd(
             } else if std::io::stderr().is_terminal() && browser_found {
                 open_in_browser(&server.url);
             }
-            output::print_stderr(&format!(
+            output::print_notice(&format!(
                 "Waiting up to {}; Ctrl-C stops.",
                 page::span(timeout)
             ));
@@ -514,7 +514,7 @@ async fn login_cmd(
                     async move {
                         let r = sb.accept_session(&v).await;
                         if let Err(e) = &r {
-                            output::print_stderr(&page::describe(e));
+                            output::print_notice(&page::describe(e));
                         }
                         r
                     }
