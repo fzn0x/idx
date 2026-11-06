@@ -473,6 +473,97 @@ fn stockbit_corporate_actions_and_calendar() {
 }
 
 #[test]
+fn stockbit_holder_movements() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--holder"))
+        .stdout(predicate::str::contains("corporate-action"))
+        .stdout(predicate::str::contains("estimated_price"));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("stockbit login"));
+    for (args, needle) in [
+        (
+            &["stockbit", "movements", "--holder", "RUDI"][..],
+            "HOLDER ID",
+        ),
+        (&["stockbit", "movements", "--pages", "11"][..], "11"),
+        (&["stockbit", "movements", "--action", "short"][..], "short"),
+        (
+            &[
+                "stockbit",
+                "movements",
+                "--from",
+                "2026-11-02",
+                "--to",
+                "2026-11-01",
+            ][..],
+            "after it ends",
+        ),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(needle));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "stockbit-movements"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("estimated_price"))
+        .stdout(predicate::str::contains("pct_change"));
+
+    dummy_session(&sb);
+    seed(
+        &sb.cache,
+        "https://exodus.stockbit.com/insider/company/majorholder?page=1&source_type=SOURCE_TYPE_KSEI",
+        "stockbit/majorholder.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stockbit", "movements", "--source", "ksei"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "idx.stockbit.movements.v1");
+    assert_eq!(v["data"]["source"], "ksei");
+    assert_eq!(v["data"]["pages_read"], 1);
+    assert_eq!(v["data"]["more"], true);
+    let rudi = v["data"]["movements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["holder"] == "RUDI R. SUTANTRA")
+        .unwrap();
+    assert_eq!(rudi["shares_change"], -10_000_000);
+    assert!(rudi["price"].is_null() && rudi["value"].is_null());
+    assert_eq!(rudi["estimated_price"], 21.0);
+    assert_eq!(rudi["holder_id"], "1000004481");
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--source", "ksei"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("~21"))
+        .stdout(predicate::str::contains("40.65% (-0.16)"))
+        .stdout(predicate::str::contains("1 page, more remain"));
+    // A second page that is not cached: the first page's rows and a warning.
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "movements", "--source", "ksei", "--pages", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RUDI R. SUTANTRA"))
+        .stderr(predicate::str::contains("page 2 failed"));
+}
+
+#[test]
 fn orderbook_leaves_out_foreign_flow_stockbit_marks_stale() {
     let sb = sandbox();
     // BBCA during trading: has_foreign_bs false, so fbuy/fsell/fnet are the

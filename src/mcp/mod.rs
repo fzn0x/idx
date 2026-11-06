@@ -24,8 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, CorporateEventKind, Interval, Period,
-    StatementPeriod, Symbol,
+    BandarPeriod, BrokerBoard, BrokerInvestor, CorporateEventKind, Interval, MovementFilter,
+    MovementSource, Period, StatementPeriod, Symbol,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -41,8 +41,10 @@ use crate::output::json::{
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
     SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT, SCHEMA_STOCKBIT_ACTIONS,
+    SCHEMA_STOCKBIT_MOVEMENTS,
 };
 use crate::ownership::OwnershipDb;
+use crate::providers::stockbit::movement::MovementQuery;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{Provider, Sourced, StockbitOptions, Ttls};
 use crate::service;
@@ -103,6 +105,31 @@ pub struct StockbitActionsArgs {
     /// Calendar only: days after from when to is not given (default 14; the range covers at most 366 days).
     #[serde(default)]
     pub days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StockbitMovementsArgs {
+    /// One IDX ticker, e.g. "BBCA"; omit it for the whole market.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Only changes from this day, YYYY-MM-DD.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Only changes up to this day, YYYY-MM-DD.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// One holder: the holder_id of a row (digits).
+    #[serde(default)]
+    pub holder: Option<String>,
+    /// buy, sell, transfer, cross, or corporate_action (rights issues, private placements, tender offers and the like).
+    #[serde(default)]
+    pub action: Option<String>,
+    /// idx (insider disclosures, any size, with the trade price) or ksei (holders at 5% and above, no price filed).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Pages of 50 rows to read, 1 to 10 (default 1); each page is one request to Stockbit.
+    #[serde(default)]
+    pub pages: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1597,6 +1624,61 @@ impl IdxServer {
             .await,
         )
     }
+
+    #[tool(
+        name = "idx_stockbit_movements",
+        description = "Reported changes in insiders' and major holders' stakes in IDX stocks, from the user's own Stockbit session, newest first: IDX insider disclosures (directors, commissioners and other insiders, any size, with the trade price) and KSEI's daily changes of holders at 5% and above (no price filed: Stockbit's estimate is in estimated_price and estimated_value, never in price or value). One stock's with symbol, the whole market's without; filter by from/to, holder (a row's holder_id, digits), action (buy, sell, transfer, cross, corporate_action) and source (idx, ksei). shares_from/to/change are exact and signed; pct_from/to/change are percent of the company as Stockbit rounds them; roles say director or commissioner. 50 rows a page, pages 1 to 10 (default 1; one request each, a second apart, cached 1 h); more says rows remain. Filings, not signals: many insiders buying at one price on one day is usually a share plan, and rows appear days after the change. Needs a Stockbit login (idx_stockbit_status). Returns the idx.stockbit.movements.v1 envelope."
+    )]
+    async fn stockbit_movements(
+        &self,
+        Parameters(a): Parameters<StockbitMovementsArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let trimmed = |v: &Option<String>| -> Option<String> {
+                    v.as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                };
+                let action = match trimmed(&a.action) {
+                    Some(s) => Some(
+                        <MovementFilter as clap::ValueEnum>::from_str(&s, true).map_err(|_| {
+                            IdxError::Usage(format!(
+                                "unknown action {s:?}; use buy, sell, transfer, cross or corporate_action"
+                            ))
+                        })?,
+                    ),
+                    None => None,
+                };
+                let source = match trimmed(&a.source) {
+                    Some(s) => Some(
+                        <MovementSource as clap::ValueEnum>::from_str(&s, true).map_err(|_| {
+                            IdxError::Usage(format!("unknown source {s:?}; use idx or ksei"))
+                        })?,
+                    ),
+                    None => None,
+                };
+                let q = MovementQuery {
+                    symbol: trimmed(&a.symbol)
+                        .map(|s| Symbol::parse(&s))
+                        .transpose()?,
+                    from: parse_date(&a.from)?,
+                    to: parse_date(&a.to)?,
+                    holder_id: trimmed(&a.holder),
+                    action,
+                    source,
+                };
+                q.validate()?;
+                let pages = a.pages.unwrap_or(1);
+                ok(
+                    SCHEMA_STOCKBIT_MOVEMENTS,
+                    service::stockbit_movements(&self.stockbit_provider(), &q, pages).await?,
+                )
+            }
+            .await,
+        )
+    }
 }
 
 #[tool_handler]
@@ -1744,6 +1826,7 @@ mod tests {
                 "idx_sentiment",
                 "idx_stockbit_actions",
                 "idx_stockbit_login",
+                "idx_stockbit_movements",
                 "idx_stockbit_status",
                 "idx_technical",
             ]

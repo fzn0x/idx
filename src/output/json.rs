@@ -8,9 +8,10 @@ use crate::error::{IdxError, Result};
 use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CorporateActions,
     CorporateEvents, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
-    ForeignFlowReport, ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport,
-    IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance,
-    Profile, Quote, Release, ScreenReport, SentimentReport, Technical, Watchlist,
+    ForeignFlowReport, ForeignReport, Fundamentals, History, HolderMovements, HoldersReport,
+    Holidays, ImportReport, IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport,
+    OrderBook, Performance, Profile, Quote, Release, ScreenReport, SentimentReport, Technical,
+    Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::providers::Sourced;
@@ -77,6 +78,7 @@ pub const SCHEMA_MARKET_BROKERS: &str = "idx.market.brokers.v1";
 pub const SCHEMA_TECHNICAL: &str = "idx.technical.v1";
 pub const SCHEMA_ORDERBOOK: &str = "idx.orderbook.v1";
 pub const SCHEMA_STOCKBIT_ACTIONS: &str = "idx.stockbit.actions.v1";
+pub const SCHEMA_STOCKBIT_MOVEMENTS: &str = "idx.stockbit.movements.v1";
 pub const SCHEMA_SCREEN: &str = "idx.screen.v1";
 pub const SCHEMA_NEWS: &str = "idx.news.v1";
 pub const SCHEMA_SENTIMENT: &str = "idx.sentiment.v1";
@@ -117,6 +119,7 @@ pub type MarketBrokersEnvelope = Envelope<BrokerRanking>;
 pub type TechnicalEnvelope = Envelope<Technical>;
 pub type OrderBookEnvelope = Envelope<OrderBook>;
 pub type StockbitActionsEnvelope = Envelope<CorporateEvents>;
+pub type StockbitMovementsEnvelope = Envelope<HolderMovements>;
 pub type ScreenEnvelope = Envelope<ScreenReport>;
 pub type NewsEnvelope = Envelope<NewsReport>;
 pub type SentimentEnvelope = Envelope<SentimentReport>;
@@ -192,6 +195,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "technical",
         "orderbook",
         "stockbit-actions",
+        "stockbit-movements",
         "screen",
         "news",
         "sentiment",
@@ -240,6 +244,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "technical" => schemars::schema_for!(TechnicalEnvelope),
         "orderbook" => schemars::schema_for!(OrderBookEnvelope),
         "stockbit-actions" => schemars::schema_for!(StockbitActionsEnvelope),
+        "stockbit-movements" => schemars::schema_for!(StockbitMovementsEnvelope),
         "screen" => schemars::schema_for!(ScreenEnvelope),
         "news" => schemars::schema_for!(NewsEnvelope),
         "sentiment" => schemars::schema_for!(SentimentEnvelope),

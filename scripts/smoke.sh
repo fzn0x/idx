@@ -206,6 +206,9 @@ if [ "$code" = 0 ]; then
   expect "$TMP/sba.json" '"dividend_per_share":' "stockbit actions carry dividends"
   "$IDX" -o json stockbit calendar --kind dividend --days 30 >"$TMP/sbc.json" || fail "stockbit calendar"
   expect "$TMP/sbc.json" '"schema": "idx.stockbit.actions.v1"' "stockbit calendar schema"
+  "$IDX" -o json stockbit movements BBCA >"$TMP/sbm.json" || fail "stockbit movements"
+  expect "$TMP/sbm.json" '"schema": "idx.stockbit.movements.v1"' "stockbit movements schema"
+  expect "$TMP/sbm.json" '"estimated_price":' "stockbit movements keep estimates apart"
 else
   echo "  skip stockbit checks (no session; set IDX_STOCKBIT_ACCESS_TOKEN or run \`idx stockbit login\`)"
 fi

@@ -14,6 +14,8 @@
 //!   — OHLCV candles; Stockbit picks the granularity from the window.
 //! - `GET /corpaction/{type}[?symbol=SYM]` (`corpaction.rs`): corporate
 //!   actions, one kind per request; paced a second apart, cached 6 h.
+//! - `GET /insider/company/majorholder?page=N&..` (`movement.rs`): insider
+//!   and 5 % holder movements, 50 rows a page; paced, cached 1 h.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
 //! Only GETs under a short allowlist of read-only paths ([`READ_PREFIXES`])
@@ -40,7 +42,8 @@ use futures::future::join_all;
 use crate::error::{IdxError, Result};
 use crate::http::{Fetched, Fetcher};
 use crate::model::{
-    CorporateEvent, CorporateEventKind, History, Interval, OrderBook, Period, Quote, Symbol,
+    CorporateEvent, CorporateEventKind, History, HolderMovement, Interval, OrderBook, Period,
+    Quote, Symbol,
 };
 
 use super::{Provider, Sourced, Ttls};
@@ -48,6 +51,7 @@ use super::{Provider, Sourced, Ttls};
 pub mod auth;
 pub mod corpaction;
 pub mod login;
+pub mod movement;
 mod parse;
 
 pub use auth::{Session, SessionStore, Status};
@@ -143,6 +147,8 @@ pub fn is_fatal(e: &IdxError) -> bool {
 pub const PACE: Duration = Duration::from_secs(1);
 /// Corporate actions change a few times a day at most.
 const CORPACTION_TTL: Duration = Duration::from_secs(6 * 3600);
+/// Filings arrive through the day; an hour keeps paging consistent.
+const MOVEMENTS_TTL: Duration = Duration::from_secs(3600);
 
 pub struct Stockbit {
     fetcher: Arc<Fetcher>,
@@ -320,6 +326,40 @@ impl Stockbit {
             ));
         }
         Ok(Self::sourced(corpaction::parse(kind, &f.body)?, &f))
+    }
+
+    /// One page (from 1) of insider and 5 % holder movements, newest first:
+    /// its rows and whether more follow. Paced and cached 1 h. Stockbit
+    /// answering "not found" is an empty last page with a warning.
+    pub async fn movements_page(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        q.validate()?;
+        let url = movement::url(q, page);
+        let f = self
+            .get_paced(&url, MOVEMENTS_TTL, "shareholder movements")
+            .await?;
+        if f.status == 404 || parse::is_not_found(&f.body) {
+            let mut out = Self::sourced((Vec::new(), false), &f);
+            out.warnings.push(match &q.symbol {
+                Some(s) => format!("Stockbit lists no holder movements for {s}"),
+                None => "Stockbit lists no holder movements for these filters".into(),
+            });
+            return Ok(out);
+        }
+        if !f.is_success() {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "shareholder movements HTTP {}: {}",
+                    f.status,
+                    parse::error_message(&f.body)
+                ),
+            ));
+        }
+        Ok(Self::sourced(movement::parse_page(&f.body)?, &f))
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {

@@ -41,7 +41,8 @@ src/
                      (the user's own session) and the one not in the Auto chain: orderbook endpoint ->
                      quote + full depth ladder (model/orderbook.rs), charts/daily -> candles,
                      corpaction.rs: /corpaction/{type} -> corporate actions (model/corporate.rs), read by
-                     field suffix; only allow-listed read paths carry the bearer; auth.rs is
+                     field suffix; movement.rs: /insider/company/majorholder -> insider and 5 % holder
+                     movements (model/movements.rs); only allow-listed read paths carry the bearer; auth.rs is
                      the rotating-token session store (file 0600 + env seed, POST /login/refresh; one
                      store per session file per process, refreshes under a lock file), login.rs
                      captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
@@ -58,7 +59,8 @@ src/
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
                      bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers;
-                     service/stockbit.rs: Stockbit reads over several requests (actions, calendar)
+                     service/stockbit.rs: Stockbit reads over several requests (actions, calendar,
+                     movement pages)
   ownership/         KSEI >1% register: discover.rs (idx.co.id page, Cloudflare strategy), mirror.rs (GitHub
                      mirror fallback), ingest.rs (XLSX/PDF), normalize.rs (entity keys), db.rs (SQLite schema
                      + queries). Imported once, queried locally.
@@ -96,7 +98,7 @@ fundamental, technical, brief, compare, screen, news, sentiment, actions, foreig
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),
 `ownership` (import, ticker, entity, changes, foreign, releases, discover, path),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook, actions,
-calendar; opt-in, your own session), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
+calendar, movements; opt-in, your own session), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`.
 
 ## Rules that keep the tool trustworthy
 

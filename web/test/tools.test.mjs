@@ -16,7 +16,7 @@ const read = (...p) => readFileSync(join(root, ...p), "utf8");
 
 test("the tool list matches docs/mcp.md", () => {
   const documented = [...read("docs", "mcp.md").matchAll(/^\| `(idx_[a-z_]+)` \|/gm)].map((m) => m[1]);
-  assert.equal(documented.length, 37);
+  assert.equal(documented.length, 38);
   assert.deepEqual(TOOLS.map((t) => t.tool).sort(), [...documented].sort());
   assert.equal(new Set(TOOLS.map((t) => t.tool)).size, TOOLS.length);
   for (const t of TOOLS) {
@@ -28,7 +28,7 @@ test("the tool list matches docs/mcp.md", () => {
 });
 
 test("only the idx.co.id and Stockbit tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_foreign", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_status"]);
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_foreign", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
   const terminal = read("web", "public", "terminal.js");
   const names = new Set([...terminal.matchAll(/\{ name: "([a-z]+)", usage:/g)].map((m) => m[1]));
   for (const t of TOOLS.filter((x) => x.web)) assert.ok(names.has(t.web.split(" ")[0]), `${t.tool}: ${t.web}`);
@@ -49,7 +49,7 @@ test("the landing page lists every tool with its commands", () => {
     if (t.web) assert.ok(web.includes(`href="/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /CLI and MCP only/, tool);
   }
-  assert.match(html, /idx mcp · 37 tools/);
+  assert.match(html, /idx mcp · 38 tools/);
 });
 
 test("/api/instruments and /api/members serve the bundled lists", () => {

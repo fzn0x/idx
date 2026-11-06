@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 37 tools; several
+plain `GET /healthz`. It is the same server and the same 38 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -332,8 +332,9 @@ local agents can share one process and one cache this way.
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
 | `idx_stockbit_actions` | `symbol?`, `kind?`, `from?`, `to?`, `days?` | `idx.stockbit.actions.v1`: with `symbol`, one stock's corporate actions since listing, newest first; without, the market calendar from `from` to `to` (default today plus 14 days, at most 366), oldest first, open rights, tender and IPO offers included. `kind`: comma separated, or `all` (default: all but `ipo` for a stock, all but `warrant` for the calendar). Needs a Stockbit login |
+| `idx_stockbit_movements` | `symbol?`, `from?`, `to?`, `holder?`, `action?` (`buy` \| `sell` \| `transfer` \| `cross` \| `corporate_action`), `source?` (`idx` \| `ksei`), `pages?` (1-10, default 1) | `idx.stockbit.movements.v1`: insider disclosures and 5 % holder changes, newest first; shares exact and signed, stakes as rounded, filed `price`/`value` apart from Stockbit's `estimated_price`/`estimated_value`; `more` when rows remain. Needs a Stockbit login |
 
-The last four carry your own Stockbit session (opt-in); see
+The last five carry your own Stockbit session (opt-in); see
 [stockbit.md](stockbit.md).
 
 Paging: `idx_ownership_changes` returns `total_matches` and `offset`; ask for

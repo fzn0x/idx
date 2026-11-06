@@ -79,7 +79,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 37, "{names:?}");
+    assert_eq!(names.len(), 38, "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -89,6 +89,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_login"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_actions"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_movements"), "{names:?}");
     let quote = tools.iter().find(|t| t["name"] == "idx_quote").unwrap();
     assert_eq!(
         quote["inputSchema"]["properties"]["symbols"]["type"],
@@ -164,10 +165,19 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     for (id, args) in [
         (5, serde_json::json!({"symbol": "BBCA"})),
         (6, serde_json::json!({"kind": "dividend", "days": 30})),
+        (
+            8,
+            serde_json::json!({"symbol": "BBCA", "pages": 2, "source": "ksei"}),
+        ),
     ] {
+        let tool = if id == 8 {
+            "idx_stockbit_movements"
+        } else {
+            "idx_stockbit_actions"
+        };
         let call = serde_json::json!({
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {"name": "idx_stockbit_actions", "arguments": args}
+            "params": {"name": tool, "arguments": args}
         });
         writeln!(stdin, "{call}").unwrap();
         let r = next();
@@ -195,6 +205,30 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("unknown corporate action kind"));
+    // Bad filters are usage errors before the session is even looked at.
+    for (id, args, needle) in [
+        (9, serde_json::json!({"holder": "RUDI"}), "HOLDER ID"),
+        (10, serde_json::json!({"action": "short"}), "unknown action"),
+        (
+            11,
+            serde_json::json!({"pages": 11}),
+            "pages must be 1 to 10",
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_stockbit_movements", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("\"usage\"") && text.contains(needle),
+            "{text}"
+        );
+    }
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

@@ -6,8 +6,9 @@ order book from [Stockbit](https://stockbit.com)'s own backend, carrying **your
 own Stockbit account session**. It is never in the `auto` chain and is used only
 when you ask for it with `--provider stockbit`. The same session also reads what
 only Stockbit has in one place: every corporate action of a stock since its
-listing, and the market's corporate-action calendar
-(`idx stockbit actions`, `idx stockbit calendar`).
+listing, the market's corporate-action calendar, and the insider and 5 % holder
+movements filed with IDX and KSEI (`idx stockbit actions`, `idx stockbit
+calendar`, `idx stockbit movements`).
 
 > This uses an unofficial, undocumented API with your personal account. It may
 > conflict with Stockbit's Terms of Use, and automated access could get an
@@ -124,15 +125,57 @@ fails leaves a warning and the others still show.
 Without a login, `idx stocks actions` (IPOT, with the announcement texts) and
 `idx market calendar` (the exchange's own calendar) cover similar ground.
 
+## Insider and 5 % holder movements
+
+```sh
+idx stockbit movements BBCA                      # one stock, newest first
+idx stockbit movements                           # the whole market
+idx stockbit movements --source ksei --action sell
+idx stockbit movements --from 2026-10-01 --to 2026-10-31 --pages 5
+idx stockbit movements --holder 1000004481       # one holder, by the HOLDER ID column
+```
+
+Reported changes in a holder's stake (schema `idx.stockbit.movements.v1`), from
+two kinds of filing that Stockbit shows in one feed:
+
+- `idx`: insider disclosures to IDX. Directors, commissioners and other
+  insiders, any size, with the trade price the insider filed.
+- `ksei`: KSEI's daily changes of holders at 5 % and above. No price is filed;
+  Stockbit shows an estimate, which idx keeps in `estimated_price` and
+  `estimated_value` (shown as `~21` in the table), never in `price` or `value`.
+
+`shares_from`, `shares_to` and `shares_change` are exact and signed;
+`pct_from`, `pct_to` and `pct_change` are percent of the company as Stockbit
+rounds them (an insider's 0.0003 % stays 0.0003). A rights issue the holder did
+not take up shows as `shares_change: 0` with a negative `pct_change`. `--action`
+filters `buy`, `sell`, `transfer`, `cross` (crossings between accounts: repos,
+pledges) or `corporate-action` (rights issues, private placements, tender
+offers and the like); each row's own `action` is Stockbit's label, lowercased.
+`--holder` takes the digits of a row's `holder_id`, the same on every row of
+that holder.
+
+Stockbit serves 50 rows a page; `--pages` reads up to 10, one request each, a
+second apart, cached for an hour. `more` says rows remain. The feed gains rows
+at the top as filings arrive, so a row repeated across pages is kept once, and
+a later page that fails keeps the rows already read (with a warning).
+
+These are filings, not signals: a share plan reads as many insiders buying at
+one price on one day (BBCA's directors on 2026-03-25 at 6,982), crossings name
+securities firms as holders, and rows appear days after the change. The
+monthly register of holders above 1 % (`idx ownership`, no login) is the other
+view.
+
 ## MCP
 
-The MCP server exposes four Stockbit tools alongside the rest:
+The MCP server exposes five Stockbit tools alongside the rest:
 
 - `idx_stockbit_status`: is a session stored, and when do the tokens expire
   (never the token values). Call it before the others.
 - `idx_orderbook`: the live depth ladder and foreign flow for one ticker.
 - `idx_stockbit_actions`: one stock's corporate actions (`symbol`), or the
   market calendar without one; `kind`, `from`, `to`, `days` as on the CLI.
+- `idx_stockbit_movements`: insider and 5 % holder movements; `symbol`,
+  `from`, `to`, `holder`, `action`, `source`, `pages` as on the CLI.
 - `idx_stockbit_login`: opens a browser **on the machine running the server**
   for the user to sign in; only meaningful for a local stdio server the user is
   sitting at, never a remote HTTP one. Prefer telling the user to run
@@ -190,6 +233,7 @@ and browser-shaped `origin`/`referer` headers:
 | `GET /company-price-feed/v2/orderbook/companies/{SYM}` | quote (OHLC, volume, value, foreign flow only while `has_foreign_bs` is true) and the full depth ladder |
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `GET /corpaction/{type}[?symbol={SYM}]` | corporate actions, one kind per request: `dividend`, `stock_dividend`, `bonus`, `rightissue`, `warrant`, `stocksplit`, `reversesplit`, `rups`, `pubex`, `ipo`, `tenderoffer` |
+| `GET /insider/company/majorholder?page=N[&symbol=][&date_start=][&date_end=][&insider=][&action_type=][&source_type=]` | insider and 5 % holder movements, 50 rows a page |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 
 The same API places orders and moves cash, so idx keeps an allowlist of the

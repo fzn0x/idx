@@ -19,6 +19,7 @@ pub mod flow;
 pub mod fundamentals;
 pub mod instruments;
 pub mod market;
+pub mod movements;
 pub mod news;
 pub mod orderbook;
 pub mod ownership;
@@ -51,6 +52,7 @@ pub use fundamentals::{
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
 pub use market::{MarketOverview, MarketRow};
+pub use movements::{HolderMovement, HolderMovements, MovementFilter, MovementSource};
 pub use news::{NewsItem, NewsReport, SentimentLabel, SentimentReport};
 pub use orderbook::{BookLevel, OrderBook};
 pub use ownership::{

@@ -1,6 +1,7 @@
-//! `idx stockbit ...`: manage the realtime Stockbit session and read the live
-//! order book. Everything here uses the Stockbit provider regardless of the
-//! configured default, since it is the only source with a live book.
+//! `idx stockbit ...`: manage the Stockbit session and read what only the
+//! session reads: the live order book, corporate actions and the calendar,
+//! insider and 5 % holder movements. Everything here uses the Stockbit
+//! provider regardless of the configured default.
 //!
 //! Once logged in, the other commands use Stockbit with `--provider stockbit`
 //! (or `idx config set provider stockbit`).
@@ -13,9 +14,10 @@ use chrono::NaiveDate;
 use clap::Subcommand;
 
 use crate::error::{IdxError, Result};
-use crate::model::{CorporateEventKind, Symbol};
-use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS};
-use crate::output::{self, table, table_corporate};
+use crate::model::{CorporateEventKind, MovementFilter, MovementSource, Symbol};
+use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS, SCHEMA_STOCKBIT_MOVEMENTS};
+use crate::output::{self, table, table_corporate, table_movements};
+use crate::providers::stockbit::movement::MovementQuery;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{StockbitOptions, Ttls};
 use crate::service;
@@ -95,6 +97,33 @@ pub enum StockbitCmd {
         #[arg(long = "kind", short = 'k', value_name = "KINDS")]
         kinds: Option<String>,
     },
+    /// Insider and 5 % holder movements from your Stockbit session: IDX insider disclosures and KSEI's 5 % holder changes.
+    #[command(
+        after_help = "Examples:\n  idx stockbit movements BBCA\n  idx stockbit movements --source ksei --action sell\n  idx stockbit movements --from 2026-10-01 --to 2026-10-31 --pages 5\n  idx stockbit movements --holder 1000004481        # one holder (HOLDER ID column)\n  idx -o json stockbit movements BBCA | jq '.data.movements[] | {date, holder, action, shares_change, price}'\n\nReported changes in a holder's stake, newest first: IDX insider disclosures (directors,\ncommissioners and other insiders, any size, with the trade price) and KSEI's daily changes of\nholders at 5 % and above (no price filed; Stockbit's estimate shows as ~price and stays apart in\nJSON as estimated_price). Without SYMBOL, the whole market. 50 rows a page, one request each, a\nsecond apart, cached 1 h. Filings, not signals: a share plan reads as many insiders buying at one\nprice, and rows appear days after the change. Needs `idx stockbit login`. The monthly register of\nholders above 1 %, no login: `idx ownership`."
+    )]
+    Movements {
+        /// IDX ticker, e.g. BBCA; omit it for the whole market.
+        #[arg(value_name = "SYMBOL")]
+        symbol: Option<String>,
+        /// Only changes from this day (YYYY-MM-DD).
+        #[arg(long, value_name = "DATE")]
+        from: Option<NaiveDate>,
+        /// Only changes up to this day (YYYY-MM-DD).
+        #[arg(long, value_name = "DATE")]
+        to: Option<NaiveDate>,
+        /// One holder, by the id in the HOLDER ID column (digits).
+        #[arg(long, value_name = "ID")]
+        holder: Option<String>,
+        /// Only one kind of change.
+        #[arg(long, value_enum)]
+        action: Option<MovementFilter>,
+        /// Only IDX insider disclosures or KSEI's 5 % holder changes.
+        #[arg(long, value_enum)]
+        source: Option<MovementSource>,
+        /// Pages of 50 rows to read (1-10).
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=10))]
+        pages: u32,
+    },
 }
 
 impl StockbitCmd {
@@ -106,6 +135,7 @@ impl StockbitCmd {
             StockbitCmd::Orderbook { .. }
                 | StockbitCmd::Actions { .. }
                 | StockbitCmd::Calendar { .. }
+                | StockbitCmd::Movements { .. }
         )
     }
 }
@@ -196,6 +226,30 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
             let result = service::stockbit_calendar(&sb, &q, service::today_wib()).await?;
             emit(ctx, SCHEMA_STOCKBIT_ACTIONS, result, |d| {
                 table_corporate::corporate_events(d, ctx.color)
+            })
+        }
+        StockbitCmd::Movements {
+            symbol,
+            from,
+            to,
+            holder,
+            action,
+            source,
+            pages,
+        } => {
+            let q = MovementQuery {
+                symbol: symbol.as_deref().map(Symbol::parse).transpose()?,
+                from,
+                to,
+                holder_id: holder.map(|h| h.trim().to_string()),
+                action,
+                source,
+            };
+            q.validate()?;
+            let sb = provider(ctx, store(ctx));
+            let result = service::stockbit_movements(&sb, &q, pages).await?;
+            emit(ctx, SCHEMA_STOCKBIT_MOVEMENTS, result, |d| {
+                table_movements::holder_movements(d, ctx.color)
             })
         }
     }

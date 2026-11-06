@@ -1,5 +1,6 @@
 //! Reads from the user's Stockbit session that take several requests: one
-//! stock's corporate actions or the market's calendar (one request per kind).
+//! stock's corporate actions or the market's calendar (one request per kind),
+//! and pages of insider and 5 % holder movements.
 //! Shared by the CLI and the MCP server like the rest of `service`.
 //!
 //! The provider paces these requests a second apart (cached answers cost no
@@ -9,7 +10,8 @@
 use chrono::NaiveDate;
 
 use crate::error::{IdxError, Result};
-use crate::model::{CorporateEvent, CorporateEventKind, CorporateEvents, Symbol};
+use crate::model::{CorporateEvent, CorporateEventKind, CorporateEvents, HolderMovements, Symbol};
+use crate::providers::stockbit::movement::MovementQuery;
 use crate::providers::stockbit::{self, Stockbit};
 use crate::providers::Sourced;
 use crate::universe::Issuer;
@@ -60,6 +62,78 @@ async fn kinds_of(
         if !out.warnings.contains(&w) {
             out.warnings.push(w);
         }
+    }
+    Ok(out)
+}
+
+/// The most pages of movements one call reads.
+pub const STOCKBIT_MOVEMENT_MAX_PAGES: u32 = 10;
+
+/// Pages 1..=`pages` of holder movements, one at a time, stopping at the
+/// last page. A row repeated across pages (the feed gains rows at the top
+/// while it is paged) is kept once. A later page that fails keeps the rows
+/// read so far, with `more` and a warning; a failing first page is the error.
+pub async fn stockbit_movements(
+    sb: &Stockbit,
+    q: &MovementQuery,
+    pages: u32,
+) -> Result<Sourced<HolderMovements>> {
+    q.validate()?;
+    if !(1..=STOCKBIT_MOVEMENT_MAX_PAGES).contains(&pages) {
+        return Err(IdxError::Usage(format!(
+            "pages must be 1 to {STOCKBIT_MOVEMENT_MAX_PAGES}, not {pages}"
+        )));
+    }
+    let mut out = sb
+        .movements_page(q, 1)
+        .await?
+        .map(|(rows, more)| HolderMovements {
+            symbol: q.symbol.clone(),
+            from: q.from,
+            to: q.to,
+            holder_id: q.holder_id.clone(),
+            action: q.action,
+            source: q.source,
+            pages_read: 1,
+            more,
+            movements: rows,
+        });
+    let key = |m: &crate::model::HolderMovement| {
+        (
+            m.holder_id.clone(),
+            m.holder.clone(),
+            m.symbol.clone(),
+            m.date,
+            m.action.clone(),
+            m.shares_from,
+            m.shares_to,
+        )
+    };
+    let mut seen: std::collections::HashSet<_> = out.data.movements.iter().map(key).collect();
+    let mut page = 2;
+    while out.data.more && page <= pages {
+        match sb.movements_page(q, page).await {
+            Ok(s) => {
+                out.absorb(&s);
+                let (rows, more) = s.data;
+                for r in rows {
+                    if seen.insert(key(&r)) {
+                        out.data.movements.push(r);
+                    }
+                }
+                out.data.pages_read = page;
+                out.data.more = more;
+            }
+            Err(e) => {
+                out.warnings.push(format!(
+                    "page {page} failed ({e}); showing pages 1-{}",
+                    page - 1
+                ));
+                out.data.more = true;
+                break;
+            }
+        }
+        page += 1;
     }
     Ok(out)
 }
@@ -475,5 +549,90 @@ mod tests {
             .unwrap();
         assert_eq!(got.data.kinds, K::CALENDAR_DEFAULT);
         assert_eq!(be.calls_matching("corpaction/warrant"), 0);
+    }
+
+    const P1: &str = "majorholder?page=1";
+    const P2: &str = "majorholder?page=2";
+
+    #[tokio::test]
+    async fn movements_read_pages_until_the_last() {
+        let (sb, be, _d) = sb(FixtureBackend::new()
+            .route(P1, 200, &fx("majorholder"))
+            .route(P2, 200, &fx("majorholder_p2")));
+        let got = stockbit_movements(&sb, &MovementQuery::default(), 5)
+            .await
+            .unwrap();
+        let m = &got.data;
+        assert_eq!((m.pages_read, m.more), (2, false));
+        assert_eq!(m.movements.len(), 14);
+        assert_eq!(be.calls_matching("majorholder?page="), 2);
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        // One page asked for: the first, with more to come.
+        let got = stockbit_movements(&sb, &MovementQuery::default(), 1)
+            .await
+            .unwrap();
+        assert_eq!((got.data.pages_read, got.data.more), (1, true));
+        assert_eq!(got.data.movements.len(), 8);
+        assert!(got.cached);
+    }
+
+    #[tokio::test]
+    async fn movements_drop_rows_repeated_across_pages() {
+        // The feed gained rows while it was paged: page 2 repeats page 1.
+        let (sb, _be, _d) = sb(FixtureBackend::new()
+            .route(P1, 200, &fx("majorholder"))
+            .route(P2, 200, &fx("majorholder")));
+        let got = stockbit_movements(&sb, &MovementQuery::default(), 2)
+            .await
+            .unwrap();
+        assert_eq!(got.data.movements.len(), 8);
+        assert_eq!((got.data.pages_read, got.data.more), (2, true));
+    }
+
+    #[tokio::test]
+    async fn a_failing_later_page_keeps_the_rows_read() {
+        let (sb, _be, _d) = sb(FixtureBackend::new().route(P1, 200, &fx("majorholder_bbca")));
+        let q = MovementQuery {
+            symbol: Some(sym("BBCA")),
+            ..Default::default()
+        };
+        let got = stockbit_movements(&sb, &q, 3).await.unwrap();
+        assert_eq!(got.data.movements.len(), 8);
+        assert_eq!((got.data.pages_read, got.data.more), (1, true));
+        assert_eq!(got.data.symbol, Some(sym("BBCA")));
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.starts_with("page 2 failed (") && w.ends_with("showing pages 1-1")),
+            "{:?}",
+            got.warnings
+        );
+        // A failing first page is the error.
+        let (sb, _be, _d) = sb_empty();
+        assert_eq!(
+            stockbit_movements(&sb, &q, 1)
+                .await
+                .unwrap_err()
+                .exit_code(),
+            3
+        );
+        for (q, pages) in [
+            (
+                MovementQuery {
+                    holder_id: Some("RUDI".into()),
+                    ..Default::default()
+                },
+                1,
+            ),
+            (MovementQuery::default(), 0),
+            (MovementQuery::default(), 11),
+        ] {
+            let e = stockbit_movements(&sb, &q, pages).await.unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{q:?} {pages}");
+        }
+    }
+
+    fn sb_empty() -> (Stockbit, std::sync::Arc<FixtureBackend>, tempfile::TempDir) {
+        sb(FixtureBackend::new())
     }
 }

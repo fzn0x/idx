@@ -464,6 +464,26 @@ offer), `listing_date`, `shares` and `shares_pct` (offered or sought),
 (Stockbit's row id). Placeholders (empty strings, zeros, `0001-01-01`) are
 `null`. A kind that fails is a `warnings` entry.
 
+## `idx.stockbit.movements.v1` (`stockbit movements`)
+
+From the user's own Stockbit session; `provider` is `stockbit`. `data`: the
+filters asked for (`symbol`, `from`, `to`, `holder_id`, `action` as `buy`,
+`sell`, `transfer`, `cross` or `corporate_action`, `source` as `idx` or
+`ksei`; `null` when not given), `pages_read`, `more` (rows remain past the
+pages read, or a later page failed, which `warnings` names), and
+`movements[]`, newest first: `date`, `symbol`, `holder`, `holder_id` (the
+source's id for the holder, the same on all of that holder's rows), `roles`
+(`director`, `commissioner`, or another role lowercased), `foreign` (`true`,
+`false`, `null`), `action` (the source's label, lowercased: `buy`, `sell`,
+`transfer`, `cross`, `right_issue`, `private_placement`, `tender_offer`, ...),
+`source` (`idx` insider disclosure, `ksei` holder at 5 % and above),
+`shares_from`, `shares_to`, `shares_change` (exact, signed), `pct_from`,
+`pct_to`, `pct_change` (percent of the company as the source rounds it),
+`price` and `value` (IDR, as filed; `null` when the source only estimates),
+`estimated_price` and `estimated_value` (the source's estimate when no price
+was filed; `null` otherwise), `purpose` (as filed), `broker` and
+`broker_group` (seen on KSEI rows).
+
 ## Errors
 
 Written to stderr, exit code non-zero:
