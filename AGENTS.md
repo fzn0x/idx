@@ -31,7 +31,8 @@ src/
   cli/               clap definitions + handlers (mod.rs builds Context; one file per group)
   providers/         Provider trait, Chain fallback, ProviderKind; one subdir per source
     yahoo/           chart, v7 quote (cookie/crumb session), quoteSummary (summary.rs), timeseries.rs
-    msn/             autosuggest lookup -> Quotes / Equities (public web key)
+    msn/             autosuggest lookup -> Quotes / Equities (public web key); insights.rs (api.msn.com
+                     insights, peers via Quotes), screener.rs (whole-market return windows, one cached POST)
     ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried) and
                      corporate actions, RUPS, warrants/rights (actions.rs; nested announcement tables)
     idx/             idx.co.id JSON endpoints: stock/broker/index daily summaries, per-stock history,
@@ -42,8 +43,8 @@ src/
                      quote + full depth ladder (model/orderbook.rs), charts/daily -> candles; auth.rs is
                      the rotating-token session store (file 0600 + env seed, POST /login/refresh), login.rs
                      captures the token from a browser over the Chrome DevTools Protocol (ws, no TLS)
-  analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL),
-                     sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),
+  analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL,
+                     presets), sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,
                      phase, screen filters and presets); no network
   universe.rs        bundled data/universe.csv (IDX issuers) + ownership-db issuers; IDX_UNIVERSE override
@@ -122,7 +123,9 @@ realtime), `watch`, `mcp`, `schema`, `config`, `cache`, `completions`, `version`
 2. Create `src/providers/<name>/mod.rs` with a struct holding
    `Arc<Fetcher>` and `Ttls`. Implement `Provider` (`providers/mod.rs`). Put pure
    parsers in `parse.rs` and test them against the fixtures.
-3. Fetch through `self.fetcher.get(url, headers, ttl, cache_key)`. Map HTTP 404
+3. Fetch through `self.fetcher.get(url, headers, ttl, cache_key)`, or
+   `self.fetcher.post(url, headers, body, ttl, cache_key)` for a read-only
+   endpoint that takes its parameters in the body (the key is required). Map HTTP 404
    or a "not found" body to `IdxError::NotFound`; other failures to
    `IdxError::provider(NAME, ..)`. Leave the default `Unsupported` for
    capabilities the source lacks; `Chain` skips those.

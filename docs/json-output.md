@@ -8,7 +8,7 @@ JSON too. Nothing else is ever written to stdout in JSON mode, so
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `profile`, `fundamentals`, `compare`, `financials`, `earnings`, `dividends`,
 `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`,
-`ownership-holders`, `ownership-entity`, `ownership-changes`,
+`insights`, `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
 `ownership-import`, `ownership-discover`, `watchlist`, `error`, `quote`,
 `candle`.
@@ -113,6 +113,29 @@ and average-volume fields to be `null`.
 `fundamentals_capped` and `total_matches` describe the funnel, so a reader can
 tell a genuine "no match" from a capped fundamentals pass.
 
+Added in 0.8.2, all optional:
+
+- `data.preset`: the preset name (`top-performers`, `worst-performers`,
+  `high-dividend`, `low-pe`, `52w-high`, `52w-low`, `high-volume`,
+  `large-cap`) or `null`. Presets are idx's own definitions: a clause list plus
+  a sort key and direction (`top-performers` sorts by `ret1y` descending,
+  `low-pe` is `pe>0` ascending, `52w-high` is `range>=95`, `52w-low`
+  `range<=5`, ...; `idx stocks screen --help` lists them). `data.filters`
+  lists every clause applied, the preset's first.
+- `rows[].range_52w_pct`: where the price sits in the 52-week range, computed
+  by idx from the quote, 0 at the low and 100 at the high (not clamped; `null`
+  without all three figures or when the high equals the low). Filter and sort
+  key `range`.
+- `rows[].return_1w_pct`, `return_1m_pct`, `return_3m_pct`, `return_6m_pct`,
+  `return_ytd_pct`, `return_1y_pct`: price returns in percent as MSN reports
+  them (keys `ret1w`, `ret1m`, `ret3m`, `ret6m`, `retytd`, `ret1y`). They come
+  from one request for MSN's whole-market screener list, made only when a
+  filter, the sort or `--returns` needs them, and are `null` otherwise or when
+  MSN lists no value. A filter or sort that needs them fails rather than
+  returning an empty screen when the list cannot be fetched.
+- `data.returns_source`: `msn:screener` when the return windows were joined,
+  else `null`.
+
 ## `idx.news.v1` (`stocks news`) and `idx.sentiment.v1` (`stocks sentiment`)
 
 News items: `title`, `url`, `source` (`kontan/investasi`,
@@ -125,7 +148,49 @@ headlines before the limit and `company_only` records whether market context
 was suppressed. The sentiment report (company headlines only) adds `label`
 (`positive` | `negative` | `neutral` | `no_coverage`), `score`, counts, the
 covered period, top terms and the strongest `headlines`, plus `method`
-describing the lexicon rule.
+describing the lexicon rule. MSN Money's crowd sentiment is not part of it:
+`Finance/SentimentBrowser` returns no data for IDX tickers in any market
+tried (checked 2026-11-06), so `idx.sentiment.v1` stays headline-based.
+
+## `idx.insights.v1` (`stocks insights`)
+
+MSN Money's rule-based statements about one company:
+
+```json
+{
+  "symbol": "BBCA", "name": "Bank Central Asia Tbk PT", "updated": "2026-11-05T17:51:31Z",
+  "good": 17, "bad": 4, "neutral": 0, "not_rated": 9,
+  "peers": ["BBKP", "BABP", "SUPA", "INPC"],
+  "insights": [
+    { "category": "Valuation", "name": "P/B ratio",
+      "statement": "BBCA is trading at a P/B multiple (2.10x) above weighted average of its peers (0.56x)",
+      "short_statement": "...", "status": "bad", "criteria": "lower_is_better",
+      "value": 2.09778355810005, "benchmark_value": 0.564114114036551, "compared_with": "peers" }
+  ]
+}
+```
+
+- `insights[]` keeps MSN's order: `Valuation`, `Earnings`, `Growth`,
+  `Performance`, `Health`. The same `name` can appear twice with different
+  benchmarks (peers and industry).
+- `status`: `good`, `bad`, `neutral` or `not_rated` (MSN's `NA`, usually
+  missing data; an unknown rating is also listed as `not_rated`, with a
+  warning). `criteria`: `lower_is_better` or `higher_is_better`.
+- `value` and `benchmark_value` are as MSN reports them and their units differ
+  by statement: multiples (P/E 10.2), fractions (growth 0.038), rupiah
+  (revenue). For a statement MSN could not rate, a 0/0 pair is its placeholder
+  for missing data and is reported as `null`.
+- `compared_with` is derived by idx from MSN's benchmark object: `peers` (the
+  peer group's aggregate), `industry` (the industry aggregate), `own_history`
+  (the company's earlier quarters or years), `price` (analyst target against
+  the current price) or `threshold` (a fixed level, e.g. the analyst rating
+  scale); `null` for a benchmark idx does not recognise.
+- `peers`: the IDX tickers in MSN's peer group, resolved with one
+  `Finance/Quotes` call; empty with a warning when that lookup fails.
+- `updated`: when MSN last recomputed the statements (UTC), about once a day.
+
+An unknown ticker exits 4; a rejected MSN key exits 3 and names
+`IDX_MSN_API_KEY`.
 
 ## `idx.dividends.v1` (`stocks dividends`)
 
