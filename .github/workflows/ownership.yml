@@ -8,9 +8,10 @@ name: ownership data
 # idx.co.id blocks cloud networks (GitHub-hosted runners included), so the
 # scrape needs an ordinary connection: register an always-on machine you own as
 # a self-hosted runner and set the repository variable OWNERSHIP_RUNNER to
-# `self-hosted` (docs/ownership.md). On a GitHub-hosted runner the job leaves
-# the mirror unchanged and only fails when the newest register is 45 days old,
-# which works as a staleness alarm.
+# `self-hosted` (docs/ownership.md). On a GitHub-hosted runner the job cannot
+# reach idx.co.id: it rebuilds the parts from the files already mirrored
+# (uploading them when they change) and fails once the newest register is 45
+# days old, which works as a staleness alarm.
 
 on:
   schedule:
