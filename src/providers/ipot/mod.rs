@@ -96,6 +96,12 @@ pub fn url(
 
 /// Broker summary for `symbol` over `from..=to` (WIB dates). `today` decides
 /// the cache lifetime.
+///
+/// A range that reaches today holds the session so far (during trading:
+/// totals without broker lists, see [`ForeignSession::Pending`]). The cache
+/// decides freshness at read time, so such a page is kept under its own key
+/// with the short lifetime: on a later day, when the range has closed, the
+/// page is read again instead of serving the partial copy for a week.
 pub async fn broker_summary(
     fetcher: &Arc<Fetcher>,
     symbol: &Symbol,
@@ -106,8 +112,12 @@ pub async fn broker_summary(
     today: NaiveDate,
 ) -> Result<Sourced<BrokerSummary>> {
     let url = url(symbol, from, to, investor, board);
-    let ttl = if to < today { TTL_CLOSED } else { TTL_TODAY };
-    let f = page(fetcher, &url, ttl, "broker summary", symbol).await?;
+    let (ttl, key) = if to < today {
+        (TTL_CLOSED, None)
+    } else {
+        (TTL_TODAY, Some(format!("{url}#open")))
+    };
+    let f = page(fetcher, &url, ttl, key.as_deref(), "broker summary", symbol).await?;
     let p = match parse::parse(&f.body)? {
         parse::Page::Invalid => {
             return Err(IdxError::NotFound(format!(
@@ -339,16 +349,18 @@ pub async fn foreign_day(
 }
 
 /// One HTML fragment, retrying the spurious 404 stretches; any other
-/// failure is a provider error naming `what`.
+/// failure is a provider error naming `what`. `key` is the cache key when
+/// not the URL.
 async fn page(
     fetcher: &Arc<Fetcher>,
     url: &str,
     ttl: Duration,
+    key: Option<&str>,
     what: &str,
     symbol: &Symbol,
 ) -> Result<Fetched> {
     let headers = [("Accept".to_string(), "text/html".to_string())];
-    let mut f = fetcher.get(url, &headers, ttl, None).await?;
+    let mut f = fetcher.get(url, &headers, ttl, key).await?;
     for attempt in 1..ATTEMPTS {
         if f.status != 404 {
             break;
@@ -358,7 +370,7 @@ async fn page(
             let _pause = crate::progress::retrying(url, attempt);
             tokio::time::sleep(RETRY_PAUSE * (1 << (attempt - 1))).await;
         }
-        f = fetcher.get(url, &headers, ttl, None).await?;
+        f = fetcher.get(url, &headers, ttl, key).await?;
     }
     if !f.is_success() {
         return Err(IdxError::provider(
@@ -388,6 +400,7 @@ pub async fn corporate_actions(
         fetcher,
         &actions_url(symbol, since),
         TTL_ACTIONS,
+        None,
         "corporate actions",
         symbol,
     )
@@ -492,6 +505,43 @@ mod tests {
         .unwrap();
         assert!(again.cached);
         assert_eq!(be.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_session_read_while_it_traded_is_read_again_once_it_closed() {
+        let (f, be, _d) = fetcher(pages(&[(
+            "11/06/2026",
+            "11/06/2026",
+            "brokersummary_bbca_20261106_insession.html",
+        )]));
+        let s = Symbol::parse("BBCA").unwrap();
+        let day = d(2026, 11, 6);
+        let read = |today: NaiveDate| {
+            broker_summary(
+                &f,
+                &s,
+                day,
+                day,
+                BrokerInvestor::All,
+                BrokerBoard::All,
+                today,
+            )
+        };
+        // During the session: the totals so far, no broker lists yet.
+        let live = read(day).await.unwrap();
+        assert!(live.data.is_empty());
+        assert_eq!(live.data.total_value, Some(89_500_000_000.0));
+        assert!(
+            read(day).await.unwrap().cached,
+            "minutes later: the cached copy"
+        );
+        assert_eq!(be.call_count(), 1);
+        // On Monday the 11-06 copy is not the closed session: read again,
+        // then kept for the week.
+        let monday = d(2026, 11, 9);
+        assert!(!read(monday).await.unwrap().cached);
+        assert!(read(monday).await.unwrap().cached);
+        assert_eq!(be.call_count(), 2);
     }
 
     #[tokio::test]
