@@ -94,14 +94,22 @@ export function totals(p, investor = "all", board = "all") {
 // ---- per-session foreign flow (idx.foreign.value.v1) ---------------------
 
 /**
+ * Like ipot::unpublished: the footer shows trades but there are no broker
+ * lists, so the source has not published the range yet (seen for a session
+ * still trading; a past date read that way is treated the same).
+ */
+export const unpublished = (p) => !traded(p) && p.total_value > 0;
+
+/**
  * One session from its all-investor and foreign pages, like
  * ipot::foreign_day: { session: "none" } when the stock did not trade,
- * "pending" for today while the source has not published the session (no
- * broker lists, an empty foreign page), else "traded" with the day and
- * whether a figure was rounded. `foreign` is only read for a traded day.
+ * "pending" while the source has not published the session (trades without
+ * broker lists on any date; today, an empty foreign page too), else
+ * "traded" with the day and whether a figure was rounded. `foreign` is only
+ * read for a traded day.
  */
 export function foreignDay(date, all, foreign, today) {
-  if (!traded(all)) return { session: date >= today && all.total_value > 0 ? "pending" : "none" };
+  if (!traded(all)) return { session: unpublished(all) ? "pending" : "none" };
   if (date >= today && !traded(foreign)) return { session: "pending" };
   const f = totals(foreign, "foreign"), value = all.total_value;
   const share = f.buy_value != null && f.sell_value != null && value > 0 ? ((f.buy_value + f.sell_value) / (2 * value)) * 100 : null;

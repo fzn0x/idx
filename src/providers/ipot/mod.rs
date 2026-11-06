@@ -101,7 +101,9 @@ pub fn url(
 /// totals without broker lists, see [`ForeignSession::Pending`]). The cache
 /// decides freshness at read time, so such a page is kept under its own key
 /// with the short lifetime: on a later day, when the range has closed, the
-/// page is read again instead of serving the partial copy for a week.
+/// page is read again instead of serving the partial copy for a week. A
+/// closed range whose cached page still shows trades without broker lists
+/// (see [`unpublished`]) gets the short lifetime too.
 pub async fn broker_summary(
     fetcher: &Arc<Fetcher>,
     symbol: &Symbol,
@@ -117,23 +119,36 @@ pub async fn broker_summary(
     } else {
         (TTL_TODAY, Some(format!("{url}#open")))
     };
-    let f = page(fetcher, &url, ttl, key.as_deref(), "broker summary", symbol).await?;
-    let p = match parse::parse(&f.body)? {
-        parse::Page::Invalid => {
-            return Err(IdxError::NotFound(format!(
+    let read = |f: &Fetched| -> Result<BrokerSummary> {
+        match parse::parse(&f.body)? {
+            parse::Page::Invalid => Err(IdxError::NotFound(format!(
                 "{symbol} is not a stock code IPOT knows"
-            )))
+            ))),
+            parse::Page::Summary(p) => {
+                Ok(p.into_summary(symbol.clone(), from, to, investor, board))
+            }
         }
-        parse::Page::Summary(p) => p,
     };
-    let mut s = Sourced::fresh(
-        p.into_summary(symbol.clone(), from, to, investor, board),
-        NAME,
-    );
+    let mut f = page(fetcher, &url, ttl, key.as_deref(), "broker summary", symbol).await?;
+    let mut data = read(&f)?;
+    // Read before the source published it: such a copy lasts minutes.
+    if to < today && f.cached && unpublished(&data) {
+        f = page(fetcher, &url, TTL_TODAY, None, "broker summary", symbol).await?;
+        data = read(&f)?;
+    }
+    let mut s = Sourced::fresh(data, NAME);
     s.cached = f.cached;
     s.stale = f.stale;
     s.fetched_at = f.fetched_at;
     Ok(s)
+}
+
+/// `true` when a page shows trades in its footer but no broker lists: the
+/// source has not published the range yet. Seen for a session still trading
+/// (2026-11-06 09:15 WIB); when a closed session gets its lists is not
+/// probed, so a past date read that way is treated the same.
+pub fn unpublished(s: &BrokerSummary) -> bool {
+    s.is_empty() && s.buy_value.is_some_and(|v| v > 0.0)
 }
 
 /// Trading days [`broker_summary_range`] reads one by one from the end of a
@@ -268,11 +283,12 @@ async fn rebuild_net(
 pub enum ForeignSession {
     /// The stock did not trade that day.
     NoTrades,
-    /// Today: the stock trades, but the source publishes the session only
-    /// after the close. During the session the all-investor page carries the
-    /// totals so far without broker lists, the foreign page is the empty
-    /// template and `F. NVal` reads 0 (seen 2026-11-06 09:15 WIB), which is
-    /// not known to be zero.
+    /// The stock trades (or traded), but the source has not published the
+    /// session: it does so only after the close. During the session the
+    /// all-investor page carries the totals so far without broker lists, the
+    /// foreign page is the empty template and `F. NVal` reads 0 (seen
+    /// 2026-11-06 09:15 WIB), which is not known to be zero. A past date
+    /// read that way (see [`unpublished`]) is pending too.
     Pending,
     /// `rounded`: the source abbreviated a figure.
     Traded { day: ForeignValueDay, rounded: bool },
@@ -286,6 +302,9 @@ pub enum ForeignSession {
 ///   the foreign net, so their selling is buying minus net. A foreign page
 ///   without trades on a past traded day means no foreigner traded: zeros.
 ///   Today it means the figures are not published yet.
+///
+/// An all-investor page with trades but no broker lists is
+/// [`ForeignSession::Pending`] on any date.
 ///
 /// Both pages share their cache with `idx broker --date` and `bandar --daily`.
 pub async fn foreign_day(
@@ -307,9 +326,9 @@ pub async fn foreign_day(
     if all.data.is_empty() {
         // While a session trades, its page has the totals so far but no
         // broker lists and no foreign breakdown (seen 2026-11-06 09:15 WIB).
-        let trading = date >= today && all.data.total_value.is_some_and(|v| v > 0.0);
+        let pending = unpublished(&all.data);
         return Ok(all.map(|_| {
-            if trading {
+            if pending {
                 ForeignSession::Pending
             } else {
                 ForeignSession::NoTrades
@@ -546,6 +565,50 @@ mod tests {
         assert!(!read(monday).await.unwrap().cached);
         assert!(read(monday).await.unwrap().cached);
         assert_eq!(be.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_closed_session_read_before_it_was_published_is_not_kept_for_the_week() {
+        // 11-05 as if read before the source published it: totals, no broker
+        // lists (the shape of 11-06 at 09:15 WIB).
+        let early = fixture("brokersummary_bbca_20261106_insession.html");
+        let (f, be, dir) = fetcher(pages(&[(
+            "11/05/2026",
+            "11/05/2026",
+            "brokersummary_bbca_20261105.html",
+        )]));
+        let s = Symbol::parse("BBCA").unwrap();
+        let (day, today) = (d(2026, 11, 5), d(2026, 11, 6));
+        let key = url(&s, day, day, BrokerInvestor::All, BrokerBoard::All);
+        let cache = Cache::new(dir.path());
+        let ago = |secs: i64| chrono::Utc::now() - chrono::Duration::seconds(secs);
+        let read = || {
+            broker_summary(
+                &f,
+                &s,
+                day,
+                day,
+                BrokerInvestor::All,
+                BrokerBoard::All,
+                today,
+            )
+        };
+        // Cached an hour ago: read again, and the published page is kept.
+        cache.put_fetched_at(&key, 200, &early, ago(3600)).unwrap();
+        let got = read().await.unwrap();
+        assert!(!got.cached);
+        assert!(!got.data.is_empty());
+        assert!(read().await.unwrap().cached);
+        assert_eq!(be.call_count(), 1);
+
+        // Cached a minute ago: served, and its session is pending, not
+        // a day without trades.
+        cache.put_fetched_at(&key, 200, &early, ago(60)).unwrap();
+        let got = read().await.unwrap();
+        assert!(got.cached && unpublished(&got.data));
+        let session = foreign_day(&f, &s, day, today).await.unwrap();
+        assert_eq!(session.data, ForeignSession::Pending);
+        assert_eq!(be.call_count(), 1);
     }
 
     #[tokio::test]

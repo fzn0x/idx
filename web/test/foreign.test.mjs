@@ -103,3 +103,62 @@ test("/api/foreign reads a range from IPOT and refuses idx.co.id", async () => {
     ]) await assert.rejects(foreignFlow(env, ...bad), (e) => e.code === "usage", JSON.stringify(bad));
   });
 });
+
+/** IPOT from `routes` (a substring of the URL to a fixture file, first match); anything else fails like the network. */
+function routedFetch(routes, calls = []) {
+  return async (u) => {
+    const url = String(u);
+    calls.push(url);
+    const hit = routes.find(([part]) => url.includes(part));
+    return hit ? new Response(fixture(hit[1]), { status: 200 }) : new Response("busy", { status: 503 });
+  };
+}
+
+test("a past session with trades but no broker lists is pending, like ipot::foreign_day", () => {
+  const early = page("brokersummary_bbca_20261106_insession.html");
+  assert.equal(ipot.unpublished(early), true);
+  assert.equal(ipot.unpublished(page("brokersummary_bbca_20261017_no_trades.html")), false);
+  assert.equal(ipot.unpublished(page("brokersummary_bbca_20261105.html")), false);
+  assert.equal(ipot.foreignDay("2026-11-05", early, null, "2026-11-06").session, "pending");
+});
+
+test("/api/foreign leaves out a session not published yet, and says so when nothing else traded", async () => {
+  // 11-05 as if read before the source published it (the shape of 11-06 at 09:15 WIB).
+  const routes = [
+    ["start=11/05/2026&end=11/05/2026&fd=all", "brokersummary_bbca_20261106_insession.html"],
+    ["start=11/04/2026&end=11/04/2026&fd=all", "brokersummary_bbca_20261104.html"],
+    ["start=11/04/2026&end=11/04/2026&fd=F", "brokersummary_bbca_20261104_foreign.html"],
+  ];
+  const calls = [];
+  await withFetch(routedFetch(routes, calls), async () => {
+    const out = await foreignFlow(env, "BBCA", null, "2026-11-04", "2026-11-05");
+    assert.deepEqual(out.data.days.map((d) => d.date), ["2026-11-04"]);
+    assert.ok(out.warnings.includes("BBCA: the session of 2026-11-05 is left out: the source shows its totals but has not published its broker lists and foreign figures yet"), JSON.stringify(out.warnings));
+    assert.equal(calls.filter((u) => u.includes("start=11/05/2026") && u.includes("fd=F")).length, 0);
+    await assert.rejects(foreignFlow(env, "BBCA", null, "2026-11-05", "2026-11-05"), (e) => e.code === "not_found" && e.message.includes("the source has not published the session of 2026-11-05 yet"));
+  });
+});
+
+test("/api/foreign reports a failed day rather than no trades, like the CLI", async () => {
+  // 10-08 read without trades, 10-09 failed: that day may have traded.
+  await withFetch(routedFetch([["start=10/08/2026&end=10/08/2026", "brokersummary_bbca_20261017_no_trades.html"]]), async () => {
+    await assert.rejects(foreignFlow(env, "BBCA", null, "2026-10-08", "2026-10-09"), (e) => e.code === "provider" && /HTTP 503/.test(e.message));
+    await assert.rejects(foreignFlow(env, "BBCA", null, "2026-10-08", "2026-10-08"), (e) => e.code === "not_found" && /no sessions with trades/.test(e.message));
+  });
+});
+
+test("a closed page read before publication is cached for minutes, not the week", async () => {
+  const writes = [];
+  const recording = { DB: { prepare: () => ({ bind: (...args) => ({ first: async () => null, run: async () => { writes.push(args); return {}; } }) }) } };
+  const routes = [
+    ["start=11/05/2026&end=11/05/2026&fd=all", "brokersummary_bbca_20261106_insession.html"],
+    ["start=11/04/2026&end=11/04/2026&fd=all", "brokersummary_bbca_20261104.html"],
+    ["start=11/04/2026&end=11/04/2026&fd=F", "brokersummary_bbca_20261104_foreign.html"],
+  ];
+  await withFetch(routedFetch(routes), async () => {
+    await foreignFlow(recording, "BBCA", null, "2026-11-04", "2026-11-05");
+  });
+  const ttl = (k) => { const w = writes.find((a) => a[0] === k); return w[2] - w[3]; };
+  assert.equal(ttl("ipot:BBCA:2026-11-05:2026-11-05:all:all"), 5 * 60);
+  assert.equal(ttl("ipot:BBCA:2026-11-04:2026-11-04:all:all"), 7 * 86400);
+});

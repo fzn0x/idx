@@ -52,6 +52,7 @@ export function parseSymbols(raw) {
 // With `retryAfter`, a failure is remembered for that many seconds (row
 // `fail:<key>`), so readers get the stale copy or the error at once instead
 // of each waiting on a source that is down.
+/** `ttlSecs` may be a function of the produced value. */
 async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(key).first();
@@ -67,8 +68,9 @@ async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   }
   try {
     const value = await producer();
+    const ttl = typeof ttlSecs === "function" ? ttlSecs(value) : ttlSecs;
     await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
-      .bind(key, JSON.stringify(value), now + ttlSecs, now).run();
+      .bind(key, JSON.stringify(value), now + ttl, now).run();
     return { value, cached: false, stale: false, fetched_at: now };
   } catch (e) {
     if (retryAfter) {
@@ -448,7 +450,9 @@ function isoDate(raw, what) {
 
 /** One parsed IPOT page through the D1 cache. A range that ended before today no longer changes; today's moves with every trade. */
 async function ipotPage(env, symbol, from, to, investor, board, today) {
-  const ttl = to < today ? 7 * 86400 : 5 * 60;
+  // A closed range keeps for the week, unless its page shows trades without
+  // broker lists (not published yet, like ipot::broker_summary).
+  const ttl = (p) => (to < today && !ipot.unpublished(p) ? 7 * 86400 : 5 * 60);
   return cached(env, `ipot:${symbol}:${from}:${to}:${investor}:${board}`, ttl, async () => {
     let html;
     try { html = await ipot.fetchPage(ipot.url(symbol, from, to, investor, board)); } catch (e) { throw provider(`ipot: broker summary for ${symbol}: ${e.message}`); }
@@ -595,7 +599,7 @@ export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourc
     return { d, all, foreign: traded ? await ipotPage(env, symbol, d, d, "foreign", "all", today) : null };
   };
   const days = [], warnings = [];
-  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), rounded = false, firstErr = null, read = 0;
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), rounded = false, firstErr = null, pending = null;
   for (let i = 0; i < candidates.length; i += 3) {
     const got = await Promise.allSettled(candidates.slice(i, i + 3).map(readDay));
     for (const [k, r] of got.entries()) {
@@ -606,19 +610,26 @@ export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourc
         firstErr ||= r.reason;
         continue;
       }
-      read++;
       for (const page of [r.value.all, r.value.foreign].filter(Boolean)) {
         cachedAll &&= page.cached; stale ||= page.stale; fetched = Math.min(fetched, page.fetched_at);
         if (page.warning && !warnings.includes(page.warning)) warnings.push(page.warning);
       }
       const s = ipot.foreignDay(d, r.value.all.value, r.value.foreign?.value ?? null, today);
       if (s.session === "traded") { days.push(s.day); rounded ||= s.rounded; }
-      else if (s.session === "pending") warnings.push(`${symbol}: today's session (${d}) is left out: the source publishes the foreign figures after the close`);
+      else if (s.session === "pending") {
+        if (!pending || d > pending) pending = d;
+        warnings.push(d >= today
+          ? `${symbol}: today's session (${d}) is left out: the source publishes the foreign figures after the close`
+          : `${symbol}: the session of ${d} is left out: the source shows its totals but has not published its broker lists and foreign figures yet`);
+      }
     }
   }
   if (!days.length) {
-    if (!read && firstErr) throw firstErr;
-    throw notFound(`no sessions with trades for ${symbol} from ${candidates[0]} to ${candidates[candidates.length - 1]}`);
+    // A session that failed may have traded: say it failed, like the CLI.
+    if (firstErr) throw firstErr;
+    const span = `for ${symbol} from ${candidates[0]} to ${candidates[candidates.length - 1]}`;
+    if (pending) throw notFound(`no published session with trades ${span}: ${pending >= today ? `today's session (${pending}) is published after the close` : `the source has not published the session of ${pending} yet`}`);
+    throw notFound(`no sessions with trades ${span}`);
   }
   const list = n ? days.slice(-n) : days;
   if (n && list.length < n) warnings.push(`${symbol} traded on ${list.length} of the ${candidates.length} latest trading days the web reads`);

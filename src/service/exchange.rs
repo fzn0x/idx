@@ -669,8 +669,11 @@ async fn ipot_days(
 /// Foreign buying, selling and net of one stock in rupiah across all boards
 /// (IPOT broker summary), oldest first: its latest sessions with trades, or
 /// every session of a date range. Two single-session pages per trading day,
-/// cached; a day without trades is skipped, a day that fails becomes a
-/// warning. At most [`FOREIGN_IPOT_MAX_SESSIONS`].
+/// cached; a day without trades is skipped, a session the source has not
+/// published yet and a day that fails are left out with a warning. When no
+/// session with trades is left, a failure is the error (that day may have
+/// traded), then a session not yet published. At most
+/// [`FOREIGN_IPOT_MAX_SESSIONS`].
 pub async fn foreign_flow_ipot(
     fetcher: &Arc<Fetcher>,
     universe: &[Issuer],
@@ -733,6 +736,7 @@ pub async fn foreign_flow_ipot(
     let mut prov: Option<Sourced<()>> = None;
     let mut warnings = Vec::new();
     let mut first_err: Option<IdxError> = None;
+    let mut pending: Option<NaiveDate> = None;
     let mut list: Vec<ForeignValueDay> = Vec::new();
     let mut rounded = false;
     for (date, r) in got {
@@ -746,9 +750,14 @@ pub async fn foreign_flow_ipot(
                         rounded |= r;
                         list.push(day.clone());
                     }
-                    ipot::ForeignSession::Pending => warnings.push(format!(
-                        "{symbol}: today's session ({date}) is left out: the source publishes the foreign figures after the close"
-                    )),
+                    ipot::ForeignSession::Pending => {
+                        pending = pending.max(Some(date));
+                        warnings.push(if date >= today {
+                            format!("{symbol}: today's session ({date}) is left out: the source publishes the foreign figures after the close")
+                        } else {
+                            format!("{symbol}: the session of {date} is left out: the source shows its totals but has not published its broker lists and foreign figures yet")
+                        });
+                    }
                     ipot::ForeignSession::NoTrades => {}
                 }
                 if prov.is_none() {
@@ -763,16 +772,31 @@ pub async fn foreign_flow_ipot(
         }
     }
     let Some(mut s) = prov.filter(|_| !list.is_empty()) else {
-        return Err(first_err.unwrap_or_else(|| {
-            IdxError::NotFound(format!(
-                "no sessions with trades for {symbol} from {first} to {last}"
-            ))
+        // A session that failed may have traded: say it failed, not that
+        // nothing traded.
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+        return Err(IdxError::NotFound(match pending {
+            Some(date) if date >= today => format!(
+                "no published session with trades for {symbol} from {first} to {last}: today's session ({date}) is published after the close"
+            ),
+            Some(date) => format!(
+                "no published session with trades for {symbol} from {first} to {last}: the source has not published the session of {date} yet"
+            ),
+            None => format!("no sessions with trades for {symbol} from {first} to {last}"),
         }));
     };
     list.sort_by_key(|d| d.date);
     if let ForeignRange::Latest(n) = range {
         let extra = list.len().saturating_sub(n);
         list.drain(..extra);
+        if list.len() < n {
+            warnings.push(format!(
+                "{symbol}: {} sessions with trades from {first} to {last}, fewer than the {n} asked for",
+                list.len()
+            ));
+        }
     }
     let (from, to) = (list[0].date, list[list.len() - 1].date);
     let now = chrono::Utc::now().with_timezone(&crate::model::wib());
@@ -1456,6 +1480,93 @@ mod tests {
             "{:?}",
             s.warnings
         );
+
+        // Only today, still trading: said so, not "no sessions with trades".
+        let only_today = ForeignRange::Dates {
+            from: d(2026, 11, 6),
+            to: d(2026, 11, 6),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, only_today, d(2026, 11, 6))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string().contains(
+                "no published session with trades for BBCA from 2026-11-06 to 2026-11-06: today's session (2026-11-06) is published after the close"
+            ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_past_session_not_yet_published_is_left_out_with_a_warning() {
+        let sym = Symbol::parse("BBCA").unwrap();
+        let day5 = d(2026, 11, 5);
+        // 11-05 as if read before the source published it: totals, no broker
+        // lists (the shape of 11-06 at 09:15 WIB).
+        let be = ipot_sessions().route(
+            &ipot::url(
+                &sym,
+                day5,
+                day5,
+                crate::model::BrokerInvestor::All,
+                crate::model::BrokerBoard::All,
+            ),
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html"),
+        );
+        let (f, be, _d) = fetcher(be);
+        let range = ForeignRange::Dates {
+            from: d(2026, 11, 4),
+            to: day5,
+        };
+        let s = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 11, 6))
+            .await
+            .unwrap();
+        let dates: Vec<NaiveDate> = s.data.days.iter().map(|x| x.date).collect();
+        assert_eq!(dates, [d(2026, 11, 4)]);
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "BBCA: the session of 2026-11-05 is left out: the source shows its totals but has not published its broker lists and foreign figures yet"),
+            "{:?}",
+            s.warnings
+        );
+        assert_eq!(be.calls_matching("start=11/05/2026&end=11/05/2026&fd=F"), 0);
+
+        let only = ForeignRange::Dates {
+            from: day5,
+            to: day5,
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, only, d(2026, 11, 6))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string()
+                .contains("the source has not published the session of 2026-11-05 yet"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fewer_latest_ipot_sessions_than_asked_is_a_warning() {
+        // Every BBCA day besides the recorded ones has no trades.
+        let (f, _be, _d) = fetcher(ipot_sessions().route(
+            "code=BBCA&start=",
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html"),
+        ));
+        let sym = Symbol::parse("BBCA").unwrap();
+        let s = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(7), d(2026, 10, 17))
+            .await
+            .unwrap();
+        assert_eq!(s.data.days.len(), 5);
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "BBCA: 5 sessions with trades from 2026-09-23 to 2026-10-17, fewer than the 7 asked for"),
+            "{:?}",
+            s.warnings
+        );
     }
 
     #[tokio::test]
@@ -1518,6 +1629,22 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.exit_code(), 3);
+
+        // 10-08 read without trades, 10-09 failed: the failure, since that
+        // day may have traded.
+        let (f, _be, _d) = fetcher(ipot_sessions().route(
+            "code=BBCA&start=10/08/2026&end=10/08/2026&",
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html"),
+        ));
+        let range = ForeignRange::Dates {
+            from: d(2026, 10, 8),
+            to: d(2026, 10, 9),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3, "{err}");
     }
 
     #[test]

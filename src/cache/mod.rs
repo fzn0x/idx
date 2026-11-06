@@ -83,6 +83,25 @@ impl Cache {
     }
 
     /// Typed convenience for small structured state (sessions, tokens).
+    /// [`put`](Self::put) as if fetched at `fetched_at`, for tests of cache
+    /// lifetimes.
+    #[cfg(test)]
+    pub fn put_fetched_at(
+        &self,
+        key: &str,
+        status: u16,
+        body: &str,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let stored = Stored {
+            key: key.to_string(),
+            fetched_at,
+            status,
+            body: body.to_string(),
+        };
+        self.write(key, &stored)
+    }
+
     pub fn get_json<T: DeserializeOwned>(&self, key: &str, ttl: Duration) -> Option<T> {
         let hit = self.get(key, ttl)?;
         if !hit.fresh {

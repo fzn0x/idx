@@ -292,8 +292,14 @@ the two share no field names. Each session costs two single-session requests
 see `idx.broker.v1`), cached, at most 60 sessions. A day without trades is
 skipped; a traded day on which no foreigner traded has zeros. The source
 publishes a session after the close: while today trades it is left out with
-a warning. It rounds figures of a million and more to one decimal (`1.2 T`
-is ±4 %), and `foreign_sell_value` carries the error of both its terms.
+a warning, and so is any day whose page shows trades without broker lists
+(not published yet; such a page is cached for minutes, not the week). A
+range with no published session with trades is not found (exit 4), and says
+so when a session was left out for that reason; when a day failed, that
+failure is the error instead, since the day may have traded. `--days N` with
+fewer sessions with trades in the days read gives those, with a warning. It
+rounds figures of a million and more to one decimal (`1.2 T` is ±4 %), and
+`foreign_sell_value` carries the error of both its terms.
 
 ## `idx.market.foreign.v1` (`market foreign`)
 
