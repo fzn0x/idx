@@ -126,7 +126,8 @@ const R = {
         ` · prev close ${fmt.price(q.previous_close)} · open ${fmt.price(q.open)} · high ${fmt.price(q.day_high)} · low ${fmt.price(q.day_low)}${q.volume ? ` · volume ${fmt.compact(q.volume)}` : ""}${q.market_time ? ` · last trade ${fmt.wib(q.market_time)}` : ""}`,
       ]));
     }
-    if (!s) { frag.append(el("p", { class: "warn", text: "No bars for this session." })); return frag; }
+    const source = "Yahoo's chart, about 10 minutes behind the market. Minutes without a trade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the day's.";
+    if (!s) { frag.append(el("p", { class: "warn", text: "No bars for this session." }), el("p", { class: "warn", text: source })); return frag; }
     frag.append(el("p", { class: "prose", text: `Bars ${s.first_bar.slice(11, 16)} to ${s.last_bar.slice(11, 16)} WIB · ${s.bars} bar${s.bars === 1 ? "" : "s"} · open ${fmt.price(s.open)} · high ${fmt.price(s.high)} · low ${fmt.price(s.low)} · close ${fmt.price(s.close)}${s.bars_volume ? ` · volume ${fmt.compact(s.bars_volume)}` : ""} · ${s.vwap == null ? "no VWAP (the bars carry no volume)" : `VWAP ${fmt.price(s.vwap)}`}` }));
     frag.append(sparkline(d.bars.map((c, i) => [i, c.close]), { cls: "spark" }));
     const rows = d.bars.slice(-30);
@@ -138,7 +139,7 @@ const R = {
       { h: "Chg %", f: (c) => fmt.pct(c.chg), cls: (c) => `num ${signClass(c.chg)}` }, { h: "Volume", f: (c) => fmt.int(c.volume) },
     ], withChg)));
     if (d.bars.length > 30) frag.append(el("p", { class: "warn", text: `Showing the last 30 of ${d.bars.length} bars; json intraday ${d.symbol} carries all.` }));
-    frag.append(el("p", { class: "warn", text: "Yahoo's chart, about 10 minutes behind the market. Minutes without a trade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the day's. VWAP is computed from the bars' typical prices, an approximation of IDX's average price." }));
+    frag.append(el("p", { class: "warn", text: `${source} VWAP is computed from the bars' typical prices, an approximation of IDX's average price.` }));
     return frag;
   },
   profile(p) {

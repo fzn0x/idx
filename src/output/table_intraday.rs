@@ -49,6 +49,7 @@ pub fn intraday(d: &Intraday, limit: Option<usize>, provider: &str, color: bool)
 
     let Some(s) = &d.summary else {
         out.push_str("No bars for this session.\n");
+        out.push_str(source_note(provider));
         return out;
     };
     let mut line = vec![
@@ -112,15 +113,21 @@ pub fn intraday(d: &Intraday, limit: Option<usize>, provider: &str, color: bool)
             d.bars.len()
         ));
     }
-    out.push_str(match provider {
-        "stockbit" => "Realtime from your Stockbit session; minutes without a trade have no bar.\n",
-        "yahoo" => "Yahoo's chart, about 10 minutes behind the market; minutes without a trade have no bar;\nthe opening auction's volume is in no bar, so the bars' volume is below the day's.\n",
-        _ => "Delayed as published; minutes without a trade have no bar.\n",
-    });
+    out.push_str(source_note(provider));
     out.push_str(
         "VWAP is computed by idx from the bars ((high + low + close) / 3, weighted by volume), an approximation\nof IDX's average price (value / volume).\n",
     );
     out
+}
+
+/// How fresh the source's bars are and what they leave out, printed with or
+/// without bars (Stockbit is realtime, the rest delayed).
+fn source_note(provider: &str) -> &'static str {
+    match provider {
+        "stockbit" => "Realtime from your Stockbit session; minutes without a trade have no bar.\n",
+        "yahoo" => "Yahoo's chart, about 10 minutes behind the market; minutes without a trade have no bar;\nthe opening auction's volume is in no bar, so the bars' volume is below the day's.\n",
+        _ => "Delayed as published; minutes without a trade have no bar.\n",
+    }
 }
 
 #[cfg(test)]
@@ -187,8 +194,11 @@ mod tests {
         let t = intraday(&d, None, "stockbit", false);
         assert_eq!(
             t,
-            "BBCA · Bank Central Asia Tbk · 1m bars\nNo bars for this session.\n"
+            "BBCA · Bank Central Asia Tbk · 1m bars\nNo bars for this session.\nRealtime from your Stockbit session; minutes without a trade have no bar.\n"
         );
+        let t = intraday(&d, None, "yahoo", false);
+        assert!(t.contains("about 10 minutes behind the market"), "{t}");
+        assert!(!t.contains("VWAP"), "no VWAP note without bars: {t}");
         let t = intraday(&bbca(), None, "stockbit", false);
         assert!(t.contains("Realtime from your Stockbit session"));
         assert!(!t.contains("Showing the last"));
