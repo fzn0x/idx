@@ -30,8 +30,8 @@ use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_MARKET,
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN,
-    SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_RELEASES,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
+    SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_INSTITUTIONS,
+    SCHEMA_OWNERSHIP_RELEASES, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_TECHNICAL,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_INDICES, SCHEMA_INSTRUMENTS,
@@ -64,6 +64,7 @@ idx_bandar reads it as bandarmology (are the top brokers accumulating or distrib
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
 monthly); if it is empty they say so and the user must run `idx ownership import --latest`.
+idx_ownership_institutions is the exception: it asks MSN live and needs no import.
 Verdicts and signals are transparent rule scores, not investment advice.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1458,6 +1459,26 @@ impl IdxServer {
     }
 
     #[tool(
+        name = "idx_ownership_institutions",
+        description = "Institutional and fund holders of one IDX ticker from MSN Money (live, not the KSEI register; no import needed): up to 15 institutions and 20 funds with shares, percent of shares outstanding, the change since each holder's previous report (each holder reports on its own date, see report_date) and a signal computed by idx (new, buyer, seller, exited, unchanged), plus institutional, top-10 institutional, fund and free-float percentages and signal counts per list. Funds overlap their managers: never add the two lists. A stock MSN lists no holders for returns an empty report with a warning. Returns the idx.ownership.institutions.v1 envelope."
+    )]
+    async fn ownership_institutions(
+        &self,
+        Parameters(a): Parameters<SymbolArg>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbol = Symbol::parse(&a.symbol)?;
+                ok(
+                    SCHEMA_OWNERSHIP_INSTITUTIONS,
+                    self.provider.institutions(&symbol).await?,
+                )
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         name = "idx_orderbook",
         description = "Realtime order book for one IDX ticker from the user's Stockbit session: the full depth ladder (bids and asks, sizes in shares), last/open/high/low, session volume and value, and foreign buy/sell/net. Returns the idx.orderbook.v1 envelope. Needs a Stockbit login (idx_stockbit_status says whether one exists); errors with 'no Stockbit session' otherwise."
     )]
@@ -1665,6 +1686,7 @@ mod tests {
                 "idx_ownership_changes",
                 "idx_ownership_entity",
                 "idx_ownership_foreign",
+                "idx_ownership_institutions",
                 "idx_ownership_releases",
                 "idx_ownership_ticker",
                 "idx_profile",
@@ -1867,5 +1889,20 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
         assert_eq!(v["schema"], "idx.fundamentals.v1");
         assert_eq!(v["data"]["verdict"]["label"], "insufficient_data");
+    }
+
+    #[tokio::test]
+    async fn institutions_tool_reports_an_unsupported_provider() {
+        let s = server();
+        let r = s
+            .ownership_institutions(Parameters(SymbolArg {
+                symbol: "BBCA".into(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "unsupported", "{v}");
+        assert_eq!(v["exit_code"], 6);
     }
 }

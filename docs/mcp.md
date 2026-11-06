@@ -279,7 +279,7 @@ per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 36 tools; several
+plain `GET /healthz`. It is the same server and the same 37 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -328,6 +328,7 @@ local agents can share one process and one cache this way.
 | `idx_ownership_changes` | `from`, `to`, `symbol?`, `min_pct_change?`, `limit?`, `offset?` | `idx.ownership.changes.v1`: `summary` over every match, one page of rows |
 | `idx_ownership_foreign` | `symbol?`, `from?`, `to?`, `limit?` | `idx.ownership.foreign.v1` (one issuer over time) or `idx.ownership.foreign-flow.v1` (every issuer between two months) |
 | `idx_ownership_releases` | none | `idx.ownership.releases.v1` |
+| `idx_ownership_institutions` | `symbol` | `idx.ownership.institutions.v1`: institutions and funds holding the stock (MSN, live, no import), each with shares, % of shares outstanding, the change since its own previous report and a signal (`new`, `buyer`, `seller`, `exited`, `unchanged`), plus institutional, fund and free-float percentages and signal counts per list |
 | `idx_orderbook` | `symbol` | `idx.orderbook.v1`: realtime depth ladder (bids/asks, shares), last/OHLC, volume, value and foreign buy/sell/net. Needs a Stockbit login (`--provider stockbit`) |
 | `idx_stockbit_status` | none | whether a Stockbit session is stored and when its tokens expire (never the token values) |
 | `idx_stockbit_login` | `timeout?` | opens a browser on the machine running the server to sign in to Stockbit and store the session; local (stdio) servers only |
