@@ -1,0 +1,322 @@
+{
+  "date": "2026-11-06",
+  "at": "2026-11-06T16:00:00+07:00",
+  "bodies": [
+    {
+      "body": "sun",
+      "longitude": 223.96,
+      "sign": "scorpio",
+      "degree": 13.96,
+      "speed": 1.003,
+      "retrograde": false
+    },
+    {
+      "body": "moon",
+      "longitude": 189.94,
+      "sign": "libra",
+      "degree": 9.94,
+      "speed": 12.922,
+      "retrograde": false
+    },
+    {
+      "body": "mercury",
+      "longitude": 219.92,
+      "sign": "scorpio",
+      "degree": 9.92,
+      "speed": -1.22,
+      "retrograde": true
+    },
+    {
+      "body": "venus",
+      "longitude": 204.05,
+      "sign": "libra",
+      "degree": 24.05,
+      "speed": -0.311,
+      "retrograde": true
+    },
+    {
+      "body": "mars",
+      "longitude": 141.28,
+      "sign": "leo",
+      "degree": 21.28,
+      "speed": 0.485,
+      "retrograde": false
+    },
+    {
+      "body": "jupiter",
+      "longitude": 144.94,
+      "sign": "leo",
+      "degree": 24.94,
+      "speed": 0.108,
+      "retrograde": false
+    },
+    {
+      "body": "saturn",
+      "longitude": 8.96,
+      "sign": "aries",
+      "degree": 8.96,
+      "speed": -0.056,
+      "retrograde": true
+    },
+    {
+      "body": "uranus",
+      "longitude": 64.48,
+      "sign": "gemini",
+      "degree": 4.48,
+      "speed": -0.039,
+      "retrograde": true
+    },
+    {
+      "body": "neptune",
+      "longitude": 1.97,
+      "sign": "aries",
+      "degree": 1.97,
+      "speed": -0.019,
+      "retrograde": true
+    },
+    {
+      "body": "pluto",
+      "longitude": 303.17,
+      "sign": "aquarius",
+      "degree": 3.17,
+      "speed": 0.01,
+      "retrograde": false
+    }
+  ],
+  "moon": {
+    "phase": "waning_crescent",
+    "elongation": 325.98,
+    "illumination": 0.087,
+    "age_days": 26.7,
+    "previous_new_moon": "2026-10-10T22:50:00+07:00",
+    "next_new_moon": "2026-11-09T14:02:00+07:00",
+    "next_full_moon": "2026-11-24T21:54:00+07:00"
+  },
+  "mercury": {
+    "retrograde": true,
+    "retrograde_since": "2026-10-24T14:17:00+07:00",
+    "retrograde_until": "2026-11-13T22:56:00+07:00",
+    "next_retrograde": {
+      "from": "2027-02-10T00:33:00+07:00",
+      "until": "2027-03-03T19:41:00+07:00"
+    }
+  },
+  "weton": {
+    "day": "Jumat",
+    "day_en": "Friday",
+    "pasaran": "Pahing",
+    "neptu_day": 6,
+    "neptu_pasaran": 9,
+    "neptu": 15
+  },
+  "shio": {
+    "animal": "horse",
+    "animal_id": "Kuda",
+    "element": "fire",
+    "year_start": "2026-02-17"
+  },
+  "upcoming": {
+    "from": "2026-11-06T00:00:00+07:00",
+    "to": "2026-12-06T00:00:00+07:00",
+    "events": [
+      {
+        "at": "2026-11-09T14:02:00+07:00",
+        "kind": "new_moon",
+        "body": "moon",
+        "sign": "scorpio"
+      },
+      {
+        "at": "2026-11-13T22:56:00+07:00",
+        "kind": "station_direct",
+        "body": "mercury",
+        "sign": "scorpio"
+      },
+      {
+        "at": "2026-11-14T07:24:00+07:00",
+        "kind": "station_direct",
+        "body": "venus",
+        "sign": "libra"
+      },
+      {
+        "at": "2026-11-17T18:47:00+07:00",
+        "kind": "first_quarter",
+        "body": "moon",
+        "sign": "aquarius"
+      },
+      {
+        "at": "2026-11-22T14:26:00+07:00",
+        "kind": "ingress",
+        "body": "sun",
+        "sign": "sagittarius"
+      },
+      {
+        "at": "2026-11-24T21:54:00+07:00",
+        "kind": "full_moon",
+        "body": "moon",
+        "sign": "gemini"
+      },
+      {
+        "at": "2026-11-26T06:39:00+07:00",
+        "kind": "ingress",
+        "body": "mars",
+        "sign": "virgo"
+      },
+      {
+        "at": "2026-12-01T13:09:00+07:00",
+        "kind": "last_quarter",
+        "body": "moon",
+        "sign": "virgo"
+      },
+      {
+        "at": "2026-12-04T15:15:00+07:00",
+        "kind": "ingress",
+        "body": "venus",
+        "sign": "scorpio"
+      }
+    ]
+  },
+  "natal": {
+    "chart": "launch",
+    "date": "1983-04-01",
+    "at": "1983-04-01T12:00:00+07:00",
+    "bodies": [
+      {
+        "body": "sun",
+        "longitude": 10.91,
+        "sign": "aries",
+        "degree": 10.91,
+        "speed": 0.987,
+        "retrograde": false,
+        "approximate": false
+      },
+      {
+        "body": "moon",
+        "longitude": 233.92,
+        "sign": "scorpio",
+        "degree": 23.92,
+        "speed": 12.968,
+        "retrograde": false,
+        "approximate": true
+      },
+      {
+        "body": "mercury",
+        "longitude": 16.93,
+        "sign": "aries",
+        "degree": 16.93,
+        "speed": 2.053,
+        "retrograde": false,
+        "approximate": false
+      },
+      {
+        "body": "venus",
+        "longitude": 45.42,
+        "sign": "taurus",
+        "degree": 15.42,
+        "speed": 1.197,
+        "retrograde": false,
+        "approximate": false
+      },
+      {
+        "body": "mars",
+        "longitude": 26.75,
+        "sign": "aries",
+        "degree": 26.75,
+        "speed": 0.747,
+        "retrograde": false,
+        "approximate": false
+      },
+      {
+        "body": "jupiter",
+        "longitude": 250.9,
+        "sign": "sagittarius",
+        "degree": 10.9,
+        "speed": -0.013,
+        "retrograde": true,
+        "approximate": false
+      },
+      {
+        "body": "saturn",
+        "longitude": 212.62,
+        "sign": "scorpio",
+        "degree": 2.62,
+        "speed": -0.068,
+        "retrograde": true,
+        "approximate": false
+      },
+      {
+        "body": "uranus",
+        "longitude": 248.99,
+        "sign": "sagittarius",
+        "degree": 8.99,
+        "speed": -0.015,
+        "retrograde": true,
+        "approximate": false
+      },
+      {
+        "body": "neptune",
+        "longitude": 269.24,
+        "sign": "sagittarius",
+        "degree": 29.24,
+        "speed": 0.0,
+        "retrograde": true,
+        "approximate": false
+      },
+      {
+        "body": "pluto",
+        "longitude": 208.62,
+        "sign": "libra",
+        "degree": 28.62,
+        "speed": -0.026,
+        "retrograde": true,
+        "approximate": false
+      }
+    ],
+    "transits": [
+      {
+        "transit": "saturn",
+        "aspect": "trine",
+        "natal": "uranus",
+        "orb": 0.03,
+        "applying": false
+      },
+      {
+        "transit": "pluto",
+        "aspect": "square",
+        "natal": "saturn",
+        "orb": 0.55,
+        "applying": false
+      },
+      {
+        "transit": "sun",
+        "aspect": "opposition",
+        "natal": "venus",
+        "orb": 1.46,
+        "applying": true
+      },
+      {
+        "transit": "jupiter",
+        "aspect": "trine",
+        "natal": "mars",
+        "orb": 1.81,
+        "applying": true
+      },
+      {
+        "transit": "saturn",
+        "aspect": "trine",
+        "natal": "jupiter",
+        "orb": 1.94,
+        "applying": false
+      },
+      {
+        "transit": "saturn",
+        "aspect": "conjunction",
+        "natal": "sun",
+        "orb": 1.95,
+        "applying": false
+      }
+    ]
+  },
+  "backtest": null,
+  "method": "Apparent geocentric positions in the tropical zodiac (ecliptic and equinox of date) at 16:00 WIB (UTC+7), the IDX close. Planets and the Earth from JPL's Keplerian elements (Standish, Table 1, 1800-2050; Pluto from JPL's archived table), Jupiter and Saturn from Schlyter's elements with the Jupiter-Saturn perturbations, the Moon from Meeus, Astronomical Algorithms, ch. 47; light time, aberration, nutation and precession applied; Delta T after Espenak and Meeus. Checked against JPL Horizons 1800-2050: Sun and Moon within 0.01°, planets within 0.04°; phase times within 2 minutes of USNO; stations within 3 hours; slow planets' ingresses within 12 hours, so one can land on the neighbouring date. Moon phase: eight 45° sectors of the Moon-Sun elongation centred on the exact phases. Weton: pasaran from the Julian day number (17 Aug 1945 = Jumat Legi) on the civil date (Javanese days begin at sunset). Shio: Imlek from new moons and solar terms in China Standard Time, checked against published dates 1924-2050. Natal chart at noon WIB, time unknown: no houses, the Moon approximate; its dates (launch 1983-04-01, base 1982-08-10) come from secondary sources.",
+  "disclaimer": "Traditional astrology, not a forecast or investment advice: the positions are astronomy, their meanings are tradition, and the backtest only describes the past."
+}
