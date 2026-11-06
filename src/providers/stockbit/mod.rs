@@ -225,8 +225,8 @@ impl Provider for Stockbit {
         interval: Interval,
     ) -> Result<Sourced<History>> {
         let (tf, prev) = parse::timeframe_for(period, interval);
-        // Stockbit picks the bar size from the window; the warning below says
-        // so when it is not the interval asked for.
+        // Stockbit picks the bar size and the span from its window; the warning
+        // below says so when either is not what was asked for.
         let mut url = format!(
             "{EXODUS}/charts/{}/daily?timeframe={tf}&chart_type=PRICE_CHART_TYPE_CANDLE",
             stockbit_code(symbol)
@@ -311,10 +311,36 @@ pub fn serves_as_asked(period: Period, interval: Interval) -> bool {
     }
 }
 
-/// The warning a Stockbit history carries when its bars are not the interval
-/// asked for (Stockbit picks the bar size from the window, not the interval).
+/// `true` when the span Stockbit charts for a request is the period asked
+/// for. It is not for `2y` (charted over three years), `10y` and `max` (five
+/// years), or an intraday interval over `1mo` or longer (one week).
+fn window_is_period(period: Period, interval: Interval) -> bool {
+    matches!(
+        (period, parse::timeframe_for(period, interval).0),
+        (Period::D1, "1d")
+            | (Period::D5, "1w")
+            | (Period::M1, "1m")
+            | (Period::M3, "3m")
+            | (Period::M6 | Period::Ytd, "ytd")
+            | (Period::Y1, "1y")
+            | (Period::Y5, "5y")
+    )
+}
+
+/// The warning a Stockbit history carries when it is not the request as
+/// asked: Stockbit picks the bar size and the span from its own windows, so
+/// the bars can differ from the interval and the span from the period
+/// (`--period 1mo --interval 1h` comes back as one week of hourly bars). Its
+/// candles are not trimmed to the period, so the warning names both.
 pub fn granularity_warning(period: Period, interval: Interval) -> Option<String> {
     let bars = bars_for(period, interval);
+    if !window_is_period(period, interval) {
+        return Some(format!(
+            "Stockbit returned {} bars over {}, not {interval} bars over {period}; the candles cover that span and each candle's time reflects the real granularity",
+            bar_word(bars),
+            window_for(period, interval),
+        ));
+    }
     (bars != interval.as_str()).then(|| {
         format!(
             "Stockbit returned {} bars for this window, not {interval} bars; each candle's time reflects the real granularity",
@@ -326,6 +352,7 @@ pub fn granularity_warning(period: Period, interval: Interval) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::ValueEnum;
 
     #[test]
     fn bar_sizes_follow_the_window() {
@@ -390,5 +417,47 @@ mod tests {
         assert!(w.contains("one-minute bars"), "{w}");
         let w = granularity_warning(Period::D5, Interval::Day1).unwrap();
         assert!(w.contains("hourly bars"), "{w}");
+    }
+
+    #[test]
+    fn warning_names_a_span_that_is_not_the_period() {
+        // Matching bars over another span used to pass silently.
+        let w = granularity_warning(Period::M1, Interval::Hour1).unwrap();
+        assert!(w.contains("hourly bars over one week"), "{w}");
+        assert!(w.contains("not 1h bars over 1mo"), "{w}");
+        let w = granularity_warning(Period::Y2, Interval::Week1).unwrap();
+        assert!(w.contains("weekly bars over three years"), "{w}");
+        assert!(w.contains("not 1wk bars over 2y"), "{w}");
+        for period in [Period::Y10, Period::Max] {
+            let w = granularity_warning(period, Interval::Week1).unwrap();
+            assert!(w.contains("weekly bars over five years"), "{w}");
+            assert!(w.contains(&format!("over {period};")), "{w}");
+        }
+        let w = granularity_warning(Period::Y2, Interval::Day1).unwrap();
+        assert!(w.contains("weekly bars over three years"), "{w}");
+        let w = granularity_warning(Period::Y1, Interval::Min15).unwrap();
+        assert!(w.contains("hourly bars over one week"), "{w}");
+    }
+
+    #[test]
+    fn warning_is_silent_exactly_when_served_as_asked() {
+        // Same-day intraday is served (finer one-minute bars) and still says so.
+        for &period in Period::value_variants() {
+            for &interval in Interval::value_variants() {
+                let w = granularity_warning(period, interval);
+                if period == Period::D1 && interval.is_intraday() {
+                    assert!(
+                        w.unwrap().contains("one-minute bars"),
+                        "{period} {interval}"
+                    );
+                } else {
+                    assert_eq!(
+                        w.is_none(),
+                        serves_as_asked(period, interval),
+                        "{period} {interval}: {w:?}"
+                    );
+                }
+            }
+        }
     }
 }

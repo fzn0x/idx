@@ -84,7 +84,9 @@ A fallback after a Stockbit failure is a warning too
 (`stockbit history failed (...); candles from yahoo`), and the JSON envelope's
 `provider` names the source the candles came from. `history_provider =
 "stockbit"` with the default `provider = "auto"` keeps the free providers for
-quotes and fundamentals and takes only candles from Stockbit.
+quotes and fundamentals and takes only candles from Stockbit; a request it does
+not serve as asked then carries a warning naming the bars and span it returned
+(`--period 1mo --interval 1h` comes back as one week of hourly bars).
 
 ## Cache
 
