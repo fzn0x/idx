@@ -58,7 +58,7 @@ Examples:
 
 const AFTER_HELP: &str = "\
 Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider · 4 not found · 5 offline cache miss · 6 config
-Env: IDX_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
+Env: IDX_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_QUIET, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
 Docs: https://github.com/fzn0x/idx";
 
 #[derive(Debug, Parser)]
@@ -115,6 +115,10 @@ pub struct GlobalOpts {
     /// Verbose diagnostics on stderr (-v info, -vv debug, -vvv trace).
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Hide warnings, notes and the loading line on stderr (also IDX_QUIET=1). Errors still print, and -o json keeps warnings in the envelope.
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -216,10 +220,10 @@ pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
         return;
     }
     for w in &s.warnings {
-        output::print_stderr(&format!("warning: {w}"));
+        output::print_notice(&format!("warning: {w}"));
     }
     if s.stale {
-        output::print_stderr("warning: showing stale cached data");
+        output::print_notice("warning: showing stale cached data");
     }
 }
 
@@ -310,16 +314,31 @@ pub fn build_context(global: &GlobalOpts) -> Result<Context> {
 }
 
 /// The loading line on stderr while a network command waits; see
-/// [`progress`](crate::progress). Never offline, never under `-v`, never when
-/// stderr is not a terminal (scripts, agents).
+/// [`progress`](crate::progress). Never offline, never with `--quiet`, never
+/// under `-v`, never when stderr is not a terminal (scripts, agents).
 fn spinner(ctx: &Context, global: &GlobalOpts) -> Option<progress::Spinner> {
     let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
-    if ctx.fetcher.is_offline()
-        || !progress::wanted(terminal, global.verbose, &|k| std::env::var(k).ok())
-    {
+    if !wants_spinner(
+        ctx.fetcher.is_offline(),
+        output::is_quiet(),
+        terminal,
+        global.verbose,
+        &|k| std::env::var(k).ok(),
+    ) {
         return None;
     }
     progress::start()
+}
+
+/// Whether to show the loading line; `--quiet` wins over `IDX_PROGRESS=always`.
+fn wants_spinner(
+    offline: bool,
+    quiet: bool,
+    stderr_is_terminal: bool,
+    verbose: u8,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    !offline && !quiet && progress::wanted(stderr_is_terminal, verbose, env)
 }
 
 /// Entry point used by `main`. Returns the error for `main` to print and map
@@ -501,6 +520,26 @@ mod tests {
             let cli = Cli::parse_from(["idx", "-o", v, "version"]);
             assert_eq!(cli.global.output, Some(want));
         }
+    }
+
+    #[test]
+    fn quiet_flag_parses_and_conflicts_with_verbose() {
+        let cli = Cli::parse_from(["idx", "stocks", "quote", "BBCA", "-q"]);
+        assert!(cli.global.quiet);
+        let cli = Cli::parse_from(["idx", "--quiet", "version"]);
+        assert!(cli.global.quiet);
+        assert!(Cli::try_parse_from(["idx", "-q", "-v", "version"]).is_err());
+        assert!(Cli::try_parse_from(["idx", "--quiet", "-vv", "version"]).is_err());
+    }
+
+    #[test]
+    fn quiet_hides_the_loading_line_even_when_forced() {
+        let always = |k: &str| (k == "IDX_PROGRESS").then(|| "always".to_string());
+        assert!(wants_spinner(false, false, false, 0, &always));
+        assert!(!wants_spinner(false, true, false, 0, &always));
+        assert!(!wants_spinner(false, true, true, 0, &|_| None));
+        assert!(wants_spinner(false, false, true, 0, &|_| None));
+        assert!(!wants_spinner(true, false, true, 0, &always), "offline");
     }
 
     #[test]

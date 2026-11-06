@@ -53,7 +53,7 @@ pub fn run(global: &GlobalOpts, cmd: CacheCmd) -> Result<()> {
             if output::print_value(format, &serde_json::json!({ "removed": n }))? {
                 Ok(())
             } else {
-                output::print_stderr(&format!(
+                output::print_notice(&format!(
                     "removed {n} cached file(s) from {}",
                     cache.dir().display()
                 ));

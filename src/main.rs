@@ -1,9 +1,11 @@
 use clap::Parser;
 use idx::cli::{self, Cli};
 
-fn init_tracing(verbosity: u8) {
+fn init_tracing(verbosity: u8, quiet: bool) {
     use tracing_subscriber::EnvFilter;
     let default = match verbosity {
+        // --quiet: only errors, unless IDX_LOG asks for more.
+        0 if quiet => "error",
         0 => "warn",
         1 => "idx=info,warn",
         2 => "idx=debug,info",
@@ -21,7 +23,11 @@ fn init_tracing(verbosity: u8) {
 
 fn main() {
     let cli = Cli::parse();
-    init_tracing(cli.global.verbose);
+    let quiet = idx::config::quiet_requested(cli.global.quiet, cli.global.verbose, &|k| {
+        std::env::var(k).ok()
+    });
+    idx::output::set_quiet(quiet);
+    init_tracing(cli.global.verbose, quiet);
     let global = cli.global.clone();
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()

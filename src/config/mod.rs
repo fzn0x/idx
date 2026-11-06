@@ -344,6 +344,12 @@ fn truthy(v: &str) -> bool {
     )
 }
 
+/// `--quiet`, or `IDX_QUIET` set to `1`/`true`/`yes`/`on` when no `-v` asks
+/// for diagnostics. A flag and an env var only, no config key.
+pub fn quiet_requested(flag: bool, verbose: u8, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    flag || (verbose == 0 && env(&format!("{ENV_PREFIX}QUIET")).is_some_and(|v| truthy(&v)))
+}
+
 /// Merge the three layers. `env` is injectable so precedence is unit-testable.
 pub fn resolve(
     cli: &CliOverrides,
@@ -727,5 +733,21 @@ mod tests {
         cfg.set("output", "jsonl").unwrap();
         assert_eq!(cfg.get("output").unwrap().as_deref(), Some("jsonl"));
         assert_eq!(cfg.set("output", "yaml").unwrap_err().exit_code(), 6);
+    }
+
+    #[test]
+    fn quiet_from_the_flag_or_env_unless_verbose() {
+        let none = |_: &str| None;
+        assert!(!quiet_requested(false, 0, &none));
+        assert!(quiet_requested(true, 0, &none));
+        for v in ["1", "true", "YES", " on "] {
+            let env = env_from(&[("IDX_QUIET", v)]);
+            assert!(quiet_requested(false, 0, &env), "{v}");
+            assert!(!quiet_requested(false, 1, &env), "-v beats IDX_QUIET={v}");
+        }
+        for v in ["0", "false", "", "no"] {
+            let env = env_from(&[("IDX_QUIET", v)]);
+            assert!(!quiet_requested(false, 0, &env), "{v}");
+        }
     }
 }

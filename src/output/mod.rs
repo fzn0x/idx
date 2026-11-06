@@ -5,6 +5,7 @@
 //! with `idx schema <name>`.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -192,10 +193,31 @@ pub fn print_stdout(text: &str) -> Result<()> {
     }
 }
 
+/// Errors, hints and instructions the user must act on: always printed.
+/// Informational lines go through [`print_notice`].
 pub fn print_stderr(text: &str) {
     crate::progress::suspend(|| {
         let _ = writeln!(std::io::stderr(), "{text}");
     });
+}
+
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// `--quiet` / `IDX_QUIET`: hide [`print_notice`] lines for this process.
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+pub fn is_quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
+/// Warnings, the stale notice and confirmations on stderr; `--quiet` hides
+/// them. Never used for errors or for the payload.
+pub fn print_notice(text: &str) {
+    if !is_quiet() {
+        print_stderr(text);
+    }
 }
 
 #[cfg(test)]

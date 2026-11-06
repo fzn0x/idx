@@ -173,7 +173,7 @@ async fn login_cmd(
         login::Captured::Login => "captured your sign-in",
         login::Captured::AlreadySignedIn => "reused your already-signed-in browser session",
     };
-    output::print_stderr(&format!("Logged in — {note}."));
+    output::print_notice(&format!("Logged in: {note}."));
     status_cmd(ctx)
 }
 
@@ -195,6 +195,6 @@ fn manual_login(ctx: &Context, store: &SessionStore) -> Result<()> {
             )
         })?;
     store.save(&session)?;
-    output::print_stderr("Saved the Stockbit session.");
+    output::print_notice("Saved the Stockbit session.");
     status_cmd(ctx)
 }

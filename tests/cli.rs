@@ -1500,3 +1500,70 @@ fn symbols_from_stdin() {
         .success()
         .stdout(predicate::str::contains("(1 tickers)"));
 }
+
+#[test]
+fn quiet_silences_notes_but_not_the_payload_or_errors() {
+    let sb = seeded();
+    let run = |args: &[&str]| idx(&sb.cache, &sb.config).args(args).output().unwrap();
+    // Same stdout and exit code, stderr empty only with --quiet.
+    let loud = run(&["-o", "csv", "stocks", "quote", "BBCA", "ZZZZ"]);
+    let quiet = run(&["-o", "csv", "--quiet", "stocks", "quote", "BBCA", "ZZZZ"]);
+    assert!(loud.status.success() && quiet.status.success());
+    assert_eq!(loud.stdout, quiet.stdout);
+    assert!(String::from_utf8_lossy(&loud.stderr).contains("warning: no data for ZZZZ"));
+    assert!(
+        quiet.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    let q = run(&["-o", "jsonl", "-q", "stocks", "quote", "BBCA", "ZZZZ"]);
+    assert!(q.stderr.is_empty());
+    assert_eq!(json_lines(&q.stdout).len(), 1);
+    // The JSON envelope keeps its warnings.
+    let out = run(&["-o", "json", "--quiet", "stocks", "quote", "BBCA", "ZZZZ"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["warnings"][0], "no data for ZZZZ");
+    // IDX_QUIET=1 does the same; -v overrides it.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["-v", "stocks", "quote", "BBCA", "ZZZZ"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: no data for ZZZZ"));
+    // Errors and the hint still print.
+    idx(&sb.cache, &sb.config)
+        .args(["--quiet", "stocks", "quote", "ASII"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("error: "))
+        .stderr(predicate::str::contains("hint:"));
+    // Confirmations go quiet.
+    idx(&sb.cache, &sb.config)
+        .env("IDX_QUIET", "1")
+        .args(["config", "set", "provider", "yahoo"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "provider", "auto"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("provider = auto"));
+    idx(&sb.cache, &sb.config)
+        .args(["--quiet", "cache", "clear"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+    // --quiet with -v is a usage error.
+    idx(&sb.cache, &sb.config)
+        .args(["-q", "-v", "version"])
+        .assert()
+        .code(2);
+}

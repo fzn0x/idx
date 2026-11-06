@@ -41,14 +41,14 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&path, TEMPLATE)?;
-            output::print_stderr(&format!("wrote {}", path.display()));
+            output::print_notice(&format!("wrote {}", path.display()));
             Ok(())
         }
         ConfigCmd::Set { key, value } => {
             let mut cfg = FileConfig::load(&path)?;
             cfg.set(&key, &value)?;
             cfg.save(&path)?;
-            output::print_stderr(&format!("{key} = {value} ({})", path.display()));
+            output::print_notice(&format!("{key} = {value} ({})", path.display()));
             Ok(())
         }
         ConfigCmd::Get { key: Some(key) } => {
