@@ -204,6 +204,10 @@ export IDX_OWNERSHIP_DB="$TMP/own.sqlite"
 expect "$TMP/oi.txt" "Imported 2026-08-31" "ownership import summary"
 "$IDX" ownership ticker AADI >"$TMP/ot.txt" || fail "ownership ticker"
 expect "$TMP/ot.txt" "ADARO STRATEGIC INVESTMENTS" "ownership ticker lists the top holder"
+"$IDX" ownership import --file tests/fixtures/ownership/above1_20260930_accounts_excerpt.xlsx >"$TMP/oa.txt" || fail "ownership import (accounts excerpt)"
+expect "$TMP/oa.txt" "43 positions" "ownership import sums a holder's accounts"
+"$IDX" ownership ticker KREN >"$TMP/ok.txt" || fail "ownership ticker KREN"
+expect "$TMP/ok.txt" "13.45%" "ownership ticker shows KRESNA PRIMA INVEST's two accounts summed"
 set +e
 "$IDX" ownership discover >"$TMP/od.txt" 2>"$TMP/od.err"; code=$?
 set -e

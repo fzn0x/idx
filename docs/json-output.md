@@ -318,9 +318,27 @@ one section per topic, each either `null` or the dedicated command's object:
 `technical`, `returns` (one `Performance`), `dividends` (`ttm_total`,
 `ttm_payments`, `ttm_yield_pct`, `consecutive_years`, `last`,
 `payments_on_record`), `ownership` (`as_of`, `listed_pct`, `foreign_pct`,
-`holders_listed`, `top_holders[]`), `news` (`company_matches`, `sentiment`,
+`holders_listed`, `top_holders[]` with the same fields as `ownership ticker`),
+`news` (`company_matches`, `sentiment`,
 `score`, `headlines[]`), and `sections_failed[]` naming the `null` sections,
 with the reason in the envelope's `warnings`.
+
+## `idx.ownership.*.v1` (`ownership ...`)
+
+`ticker` (`idx.ownership.holders.v1`) and `entity` (`idx.ownership.entity.v1`)
+list `Holding` rows: one holder's position in one issuer, the holder's
+register lines (one per SID, one per scrip account without an SID) summed.
+Since 0.8.2 each row adds `accounts` (lines summed; `null` for months imported
+by idx 0.8.1 or older, which kept one line) and `controller_or_affiliate`
+(`CONTROLLER`, `AFFILIATE OF THE CONTROLLER` or `null`, from the register as
+of 30 Oct 2026); both reports add `controller_reported` (whether the release
+has that column). `changes` rows add `accounts_from`, `accounts_to` and
+`controller_or_affiliate` (later release, earlier one for exits). `releases`
+rows keep `rows` (register lines) and add `positions`, `other_date_rows` and
+`controller_column` (`null` for months imported by idx 0.8.1 or older).
+Notes about the months read (imported by an old idx, rows dated otherwise)
+come in the envelope's `warnings`. The versions stay `v1`: every change is an
+added field, and the values now match the documented "one entity's position".
 
 ## `idx.watchlist.v1` (`watch add|rm|list|clear`)
 
