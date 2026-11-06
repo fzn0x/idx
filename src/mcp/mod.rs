@@ -39,7 +39,7 @@ use crate::output::json::{
 };
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
-    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
+    SCHEMA_INSIGHTS, SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
 };
 use crate::ownership::OwnershipDb;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
@@ -1329,6 +1329,23 @@ impl IdxServer {
     }
 
     #[tool(
+        name = "idx_insights",
+        description = "MSN Money's rule-based insights for one IDX ticker: about 30 statements in five categories (Valuation, Earnings, Growth, Performance, Health), each rated good, bad, neutral or not_rated against the company's peers, its industry, its own history, the price or a fixed threshold (compared_with), with the value and benchmark_value as MSN reports them (units differ by statement), the counts per rating, when MSN last updated them and the peer tickers MSN compares against. Returns the idx.insights.v1 envelope."
+    )]
+    async fn insights(
+        &self,
+        Parameters(a): Parameters<SymbolArg>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbol = Symbol::parse(&a.symbol)?;
+                ok(SCHEMA_INSIGHTS, self.provider.insights(&symbol).await?)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         name = "idx_ownership_ticker",
         description = "Shareholders above 1% of one IDX ticker from KSEI's monthly register (local SQLite): holder name, investor type, local/foreign, shares, percent, sorted by percent. Returns the idx.ownership.holders.v1 envelope. Needs a prior `idx ownership import`."
     )]
@@ -1655,6 +1672,7 @@ mod tests {
                 "idx_history",
                 "idx_holidays",
                 "idx_indices",
+                "idx_insights",
                 "idx_instruments",
                 "idx_market",
                 "idx_market_brokers",
@@ -1853,6 +1871,20 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    #[tokio::test]
+    async fn insights_tool_is_unsupported_without_msn() {
+        let s = server();
+        let r = s
+            .insights(Parameters(SymbolArg {
+                symbol: "BBCA".into(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["exit_code"], 6, "{v}");
     }
 
     #[tokio::test]

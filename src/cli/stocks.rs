@@ -8,12 +8,13 @@ use crate::error::Result;
 use crate::model::{Interval, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
-    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSTRUMENTS,
-    SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
-    SCHEMA_TECHNICAL,
+    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSIGHTS,
+    SCHEMA_INSTRUMENTS, SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN,
+    SCHEMA_SENTIMENT, SCHEMA_TECHNICAL,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
+use crate::output::table_insights as tins;
 use crate::output::table_news as newstbl;
 use crate::output::table_reports::{self as reports, StatementFlags};
 use crate::service::{self, ScreenOptions};
@@ -198,7 +199,7 @@ pub enum StocksCmd {
 
     /// Lexicon sentiment over the headlines that mention one ticker.
     #[command(
-        after_help = "Examples:\n  idx stocks sentiment BBCA\n  idx -o json stocks sentiment BBRI | jq '.data | {label, score, items}'\n\nCounts Indonesian and English finance terms per headline. Indicative only."
+        after_help = "Examples:\n  idx stocks sentiment BBCA\n  idx -o json stocks sentiment BBRI | jq '.data | {label, score, items}'\n\nCounts Indonesian and English finance terms per headline. Indicative only.\nMSN's crowd sentiment is not used: it has no data for IDX tickers (checked 2026-11-06)."
     )]
     Sentiment {
         #[arg(value_name = "SYMBOL")]
@@ -208,6 +209,19 @@ pub enum StocksCmd {
         /// Strongest headlines shown.
         #[arg(long, short = 'n', default_value_t = 10)]
         limit: usize,
+    },
+
+    /// MSN Money insights: about 30 rated statements on valuation, earnings, growth, performance and health against peers and the industry.
+    #[command(
+        after_help = "Examples:\n  idx stocks insights BBCA\n  idx stocks insights TLKM --all          # include the ones MSN could not rate\n  idx -o json stocks insights GOTO | jq '.data.insights[] | select(.status==\"bad\") | .statement'\n\nRule-based statements by MSN Money, each rated good, bad, neutral or not_rated (missing data)\nagainst the company's peers, its industry, its own history, the price or a fixed threshold\n(compared_with). value and benchmark_value are as MSN reports them; units differ by statement.\npeers lists the IDX tickers MSN compares against. Not investment advice."
+    )]
+    Insights {
+        /// IDX ticker, e.g. BBCA.
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Also list the statements MSN could not rate (JSON always carries all).
+        #[arg(long)]
+        all: bool,
     },
 
     /// Listed stocks from idx.co.id: code, name, listing board, listing date and shares.
@@ -369,6 +383,13 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             let result = service::sentiment(&ctx.fetcher, &list, &sym, &source, limit).await?;
             emit(ctx, SCHEMA_SENTIMENT, result, |d| {
                 newstbl::sentiment(d, ctx.color)
+            })
+        }
+        StocksCmd::Insights { symbol, all } => {
+            let sym = Symbol::parse(&symbol)?;
+            let result = ctx.provider.insights(&sym).await?;
+            emit(ctx, SCHEMA_INSIGHTS, result, |d| {
+                tins::insights(d, all, ctx.color)
             })
         }
     }

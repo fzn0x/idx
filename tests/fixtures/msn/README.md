@@ -19,3 +19,31 @@ service answers 401.
 
 `Financials`, `KeyRatios`, `Overview`, `FinancialStatements` return 404 on this
 service; statements come from Yahoo's timeseries endpoint instead.
+
+## Insights (`api.msn.com`)
+
+Recorded 2026-11-06 06:52-07:01 WIB (before the session, so the statements
+reflect Thursday 2026-11-05's close) with curl, User-Agent Chrome 130, same
+public key. URL:
+`https://api.msn.com/msn/v0/pages/finance/insights?ids=<secid>&apikey=<key>&cm=en-id&ocid=finance-utils-peregrine&it=web&scn=ANON&wrapodata=false`.
+`assets.msn.com/service/Finance/Insights` does not exist (404/503).
+
+| file | request | notes |
+| --- | --- | --- |
+| insights_bbca.json | `insights?ids=bn91jc` | one object, 30 items: 17 `good`, 4 `bad`, 9 `NA`; `peers` = bkfmar, bkfgqh, cj53lh, bkgttc; `symbo` (sic) |
+| insights_goto_neutral.json | `insights?ids=c5tv8m` | 13 good, 2 bad, 1 `neutral`, 14 NA |
+| insights_bogus_404.json | `insights?ids=bogus1` | HTTP 404, `{"responses":[{"error":{"code":"NoDataFounded",...}}],"copyright":...}` |
+| quotes_bbca_insight_peers.json | `Quotes?ids=bkfmar,bkfgqh,cj53lh,bkgttc` | BBCA's peers resolve to BBKP, BABP, SUPA, INPC (all `XIDX`) |
+
+Benchmark objects seen on BBCA, TLKM, GOTO, STAR and ATAP (same pattern on all
+five): `AggregateData` `<id>peers` (16 items) is the peer group, another
+`AggregateData` id such as `ididbankingservices` (5) the industry, `Earning` (6)
+and `History` (1) the company's own past, `Quote` (1) the price (analyst
+target) and `Constant` (1) a threshold (analyst rating). Unrated (`NA`) items
+whose value and benchmark are both 0 carry MSN's placeholder for missing data;
+idx reports them as null.
+
+MSN's crowd sentiment (`assets.msn.com/service/Finance/SentimentBrowser`,
+needs `flightId`) answered `[]` for BBCA and TLKM in the en-us, en-id, id-id,
+en-sg, en-gb and en-ww markets, for DBS on SGX and the TLK ADR; only US names
+such as MSFT had data. It is not used and no fixture is kept.

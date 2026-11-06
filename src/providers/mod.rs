@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    DividendHistory, Earnings, Financials, Fundamentals, History, Interval, Period, Profile, Quote,
-    StatementPeriod, Symbol,
+    DividendHistory, Earnings, Financials, Fundamentals, History, Insights, Interval, Period,
+    Profile, Quote, StatementPeriod, Symbol,
 };
 
 pub mod idx;
@@ -161,6 +161,11 @@ pub trait Provider: Send + Sync {
         Err(IdxError::unsupported(self.name(), "fundamentals"))
     }
 
+    /// Rule-based statements about one company (MSN Money insights).
+    async fn insights(&self, _symbol: &Symbol) -> Result<Sourced<Insights>> {
+        Err(IdxError::unsupported(self.name(), "insights"))
+    }
+
     async fn financials(
         &self,
         _symbol: &Symbol,
@@ -189,7 +194,7 @@ pub enum ProviderKind {
     Auto,
     /// Yahoo Finance (chart, quote, quoteSummary, fundamentals timeseries).
     Yahoo,
-    /// MSN Money (quotes, profile, fundamentals).
+    /// MSN Money (quotes, profile, fundamentals, insights).
     Msn,
     /// Stockbit realtime (your own session; `idx stockbit login` first).
     Stockbit,
@@ -355,6 +360,10 @@ impl Provider for Chain {
         base.ok_or_else(|| Self::pick(errors))
     }
 
+    async fn insights(&self, symbol: &Symbol) -> Result<Sourced<Insights>> {
+        first_ok!(self, p => p.insights(symbol))
+    }
+
     async fn financials(
         &self,
         symbol: &Symbol,
@@ -441,6 +450,22 @@ mod tests {
             f.valuation.pe_trailing = Some(9.0);
             Ok(Sourced::fresh(f, "ok"))
         }
+        async fn insights(&self, s: &Symbol) -> Result<Sourced<Insights>> {
+            Ok(Sourced::fresh(
+                Insights {
+                    symbol: s.clone(),
+                    name: None,
+                    updated: None,
+                    good: 0,
+                    bad: 0,
+                    neutral: 0,
+                    not_rated: 0,
+                    peers: vec![],
+                    insights: vec![],
+                },
+                "ok",
+            ))
+        }
     }
 
     struct Ok2;
@@ -501,6 +526,18 @@ mod tests {
         }))]);
         let err = chain.profile(&sym()).await.unwrap_err();
         assert_eq!(err.exit_code(), 6);
+    }
+
+    #[tokio::test]
+    async fn chain_forwards_msn_only_capabilities() {
+        let chain = Chain::new(vec![
+            Box::new(Failing("yahoo", || IdxError::unsupported("yahoo", "x"))),
+            Box::new(Ok1),
+        ]);
+        assert_eq!(chain.insights(&sym()).await.unwrap().provider, "ok");
+        // A provider without the capability alone: exit 6.
+        let chain = Chain::new(vec![Box::new(Ok2)]);
+        assert_eq!(chain.insights(&sym()).await.unwrap_err().exit_code(), 6);
     }
 
     #[tokio::test]

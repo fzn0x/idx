@@ -23,11 +23,11 @@ pub const SOURCE_EQUITIES: &str = "msn:equities";
 /// Indonesia Stock Exchange MIC.
 pub const IDX_MIC: &str = "XIDX";
 
-fn f64_of(v: &Value, key: &str) -> Option<f64> {
+pub(super) fn f64_of(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite())
 }
 
-fn text(v: &Value, key: &str) -> Option<String> {
+pub(super) fn text(v: &Value, key: &str) -> Option<String> {
     v.get(key)
         .and_then(Value::as_str)
         .map(str::trim)
@@ -44,7 +44,7 @@ fn date(v: &Value, key: &str) -> Option<NaiveDate> {
     })
 }
 
-fn obj<'a>(v: &'a Value, path: &str) -> &'a Value {
+pub(super) fn obj<'a>(v: &'a Value, path: &str) -> &'a Value {
     static NULL: Value = Value::Null;
     v.pointer(path).unwrap_or(&NULL)
 }
@@ -74,7 +74,7 @@ pub fn parse_autosuggest(body: &str, symbol: &Symbol) -> Result<Option<String>> 
     Ok(None)
 }
 
-fn flatten(v: Value) -> Vec<Value> {
+pub(super) fn flatten(v: Value) -> Vec<Value> {
     match v {
         Value::Array(items) => items.into_iter().flat_map(flatten).collect(),
         Value::Object(_) => vec![v],
@@ -166,7 +166,7 @@ pub fn parse_profile(
 }
 
 /// `strongBuy` -> `strong_buy`, matching Yahoo's vocabulary.
-fn snake(s: &str) -> String {
+pub(super) fn snake(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for (i, ch) in s.chars().enumerate() {
         if ch.is_ascii_uppercase() {

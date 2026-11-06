@@ -76,7 +76,8 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 36, "{names:?}");
+    assert_eq!(names.len(), 37, "{names:?}");
+    assert!(names.contains(&"idx_insights"), "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -118,6 +119,11 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     for t in tools {
         walk(t["name"].as_str().unwrap(), &t["inputSchema"]);
     }
+    let insights = tools.iter().find(|t| t["name"] == "idx_insights").unwrap();
+    assert!(insights["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("symbol")));
     let news = tools.iter().find(|t| t["name"] == "idx_news").unwrap();
     assert_eq!(
         news["inputSchema"]["properties"]["limit"]["type"],

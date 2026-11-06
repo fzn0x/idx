@@ -861,6 +861,133 @@ fn msn_provider_is_selectable() {
 }
 
 #[test]
+fn insights_offline() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MSN Money"))
+        .stdout(predicate::str::contains("compared_with"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "sentiment", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("crowd sentiment is not used"));
+    // Nothing cached yet: an offline miss naming the ticker.
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("BBCA"));
+
+    seed(
+        &sb.cache,
+        "https://services.bingapis.com/contentservices-finance.csautosuggest/api/v1/Query?query=BBCA&market=en-id",
+        "msn/autosuggest_bbca.json",
+    );
+    seed(
+        &sb.cache,
+        "https://api.msn.com/msn/v0/pages/finance/insights?ids=bn91jc",
+        "msn/insights_bbca.json",
+    );
+    // Peers not cached: the report still comes, with a warning and no peers.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["peers"].as_array().unwrap().len(), 0);
+    assert!(v["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("could not resolve MSN's peer list"));
+
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Quotes?ids=bkfmar,bkfgqh,cj53lh,bkgttc",
+        "msn/quotes_bbca_insight_peers.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "insights", "bbca"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.insights.v1");
+    assert_eq!(v["provider"], "msn");
+    assert!(v.get("warnings").is_none(), "{v}");
+    let d = &v["data"];
+    assert_eq!(d["symbol"], "BBCA");
+    assert_eq!(d["good"], 17);
+    assert_eq!(d["bad"], 4);
+    assert_eq!(d["not_rated"], 9);
+    assert_eq!(d["updated"], "2026-11-05T17:51:31Z");
+    assert_eq!(
+        d["peers"],
+        serde_json::json!(["BBKP", "BABP", "SUPA", "INPC"])
+    );
+    assert_eq!(d["insights"].as_array().unwrap().len(), 30);
+    let pb = &d["insights"][2];
+    assert_eq!(pb["name"], "P/B ratio");
+    assert_eq!(pb["status"], "bad");
+    assert_eq!(pb["criteria"], "lower_is_better");
+    assert_eq!(pb["compared_with"], "peers");
+
+    let table = idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(table.stdout).unwrap();
+    assert!(text.contains("VALUATION"), "{text}");
+    assert!(text.contains("peers BBKP, BABP, SUPA, INPC"), "{text}");
+    assert!(
+        text.contains("9 statements MSN could not rate are hidden"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Unable to compare with industry average"),
+        "{text}"
+    );
+    let all = idx(&sb.cache, &sb.config)
+        .args(["stocks", "insights", "BBCA", "--all"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(all.stdout).unwrap();
+    assert!(
+        text.contains("Unable to compare with industry average"),
+        "{text}"
+    );
+    let csv = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "insights", "BBCA"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(csv.stdout).unwrap();
+    assert!(csv.starts_with("category,name,statement"), "{csv}");
+
+    // Stockbit serves no insights: exit 6.
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "stockbit", "stocks", "insights", "BBCA"])
+        .assert()
+        .code(6);
+    let schema = idx(&sb.cache, &sb.config)
+        .args(["schema", "insights"])
+        .output()
+        .unwrap();
+    assert!(schema.status.success());
+    let s = String::from_utf8_lossy(&schema.stdout);
+    assert!(
+        s.contains("compared_with") && s.contains("not_rated"),
+        "{s}"
+    );
+}
+
+#[test]
 fn ownership_import_and_queries_work_offline() {
     let sb = sandbox();
     let db = sb.cache.join("own.sqlite");

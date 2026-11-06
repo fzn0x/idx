@@ -16,6 +16,7 @@ pub mod calendar;
 pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
+pub mod insights;
 pub mod instruments;
 pub mod market;
 pub mod news;
@@ -47,6 +48,7 @@ pub use fundamentals::{
     PerShare, Profile, Profitability, RevenueEarnings, StatementPeriod, Valuation, Verdict,
     VerdictLabel,
 };
+pub use insights::{Insight, InsightBenchmark, InsightStatus, Insights};
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
 pub use market::{MarketOverview, MarketRow};
 pub use news::{NewsItem, NewsReport, SentimentLabel, SentimentReport};

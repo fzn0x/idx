@@ -13,6 +13,7 @@
 //! rotates it. MSN's `annualStatements` block has broken units for IDR and is
 //! deliberately not parsed; financial statements come from Yahoo.
 //! History is not served by MSN here (`Unsupported`), so `auto` uses Yahoo.
+//! Insights come from a second host (`api.msn.com`): see `insights.rs`.
 
 use std::sync::Arc;
 
@@ -21,10 +22,11 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
-use crate::model::{Fundamentals, History, Interval, Period, Profile, Quote, Symbol};
+use crate::model::{Fundamentals, History, Insights, Interval, Period, Profile, Quote, Symbol};
 
 use super::{Provider, Sourced, Ttls};
 
+pub mod insights;
 pub mod parse;
 
 pub use parse::{parse_autosuggest, parse_quotes};
@@ -35,6 +37,14 @@ const AUTOSUGGEST_URL: &str =
     "https://services.bingapis.com/contentservices-finance.csautosuggest/api/v1/Query";
 const SERVICE_BASE: &str = "https://assets.msn.com/service/Finance/";
 const COMMON_QUERY: &str = "cm=en-id&ocid=finance-utils-peregrine&it=web&scn=ANON&wrapodata=false";
+
+/// MSN answered 401 or 403: its public web key changed.
+fn key_rejected() -> IdxError {
+    IdxError::provider(
+        NAME,
+        "MSN rejected the API key; set IDX_MSN_API_KEY to the key msn.com/money currently uses",
+    )
+}
 
 pub struct Msn {
     fetcher: Arc<Fetcher>,
@@ -96,11 +106,11 @@ impl Msn {
         let f = self.fetcher.get(&url, &[], ttl, Some(&key)).await?;
         match f.status {
             200..=299 | 404 => Ok(f),
-            401 | 403 => Err(IdxError::provider(
+            401 | 403 => Err(key_rejected()),
+            s => Err(IdxError::provider(
                 NAME,
-                "MSN rejected the API key; set IDX_MSN_API_KEY to the key msn.com/money currently uses",
+                format!("{endpoint} returned HTTP {s}"),
             )),
-            s => Err(IdxError::provider(NAME, format!("{endpoint} returned HTTP {s}"))),
         }
     }
 
@@ -215,6 +225,10 @@ impl Provider for Msn {
         _interval: Interval,
     ) -> Result<Sourced<History>> {
         Err(IdxError::unsupported(NAME, "price history"))
+    }
+
+    async fn insights(&self, symbol: &Symbol) -> Result<Sourced<Insights>> {
+        self.insights_report(symbol).await
     }
 
     async fn profile(&self, symbol: &Symbol) -> Result<Sourced<Profile>> {
