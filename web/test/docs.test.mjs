@@ -60,7 +60,9 @@ test("links: pages stay on the site, other files go to GitHub, odd schemes are d
   assert.equal(resolveHref("json-output.md#errors", mcp, "md"), `${ORIGIN}/docs/json-output.md#errors`);
   assert.equal(resolveHref("../README.md", mcp, "html"), "/docs/");
   assert.equal(resolveHref("../web/", mcp, "md"), `${REPO}/blob/main/web/`);
-  assert.equal(resolveHref("#tools", mcp, "md"), "#tools");
+  assert.equal(resolveHref("#tools", mcp, "html"), "#tools");
+  // llms-full.txt joins every page, so a same-page anchor must name its page.
+  assert.equal(resolveHref("#tools", mcp, "md"), `${ORIGIN}/docs/mcp.md#tools`);
   assert.equal(resolveHref("javascript:alert(1)", mcp, "html"), null);
   assert.equal(render("[x](javascript:void)", { href: (u) => resolveHref(u, mcp, "html") }), "<p>x</p>");
 });
@@ -120,7 +122,7 @@ test("every internal link resolves to a page, a file or an anchor that exists", 
   }
   for (const [name, text] of files) {
     if (!name.endsWith(".md") && !name.endsWith(".txt")) continue;
-    assert.doesNotMatch(text, /\]\((?!https?:|mailto:|#)[^)]+\)/, `${name}: relative link left`);
+    assert.doesNotMatch(text, /\]\((?!https?:|mailto:)[^)]+\)/, `${name}: relative link left`);
     assert.doesNotMatch(text, /<p align|<img |<picture/, `${name}: README header left`);
     for (const [, url] of text.matchAll(/\]\((https:\/\/ihsg\.midoriresearch\.com[^)\s]*)\)/g)) {
       const { pathname, hash } = new URL(url);

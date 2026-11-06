@@ -66,10 +66,12 @@ export function version(root = ROOT) {
 
 /** Link target in `page`'s source -> site URL (html) or absolute Markdown URL (md).
  *  Links to another page stay on this site; links to any other repository
- *  file go to it on GitHub. Only http(s) and mailto links are kept (null
- *  drops the link and keeps its text). */
+ *  file go to it on GitHub. A same-page `#anchor` stays relative in the HTML
+ *  and names its page in the Markdown, which llms-full.txt joins into one
+ *  file. Only http(s) and mailto links are kept (null drops the link and
+ *  keeps its text). */
 export function resolveHref(url, page, mode) {
-  if (url.startsWith("#")) return url;
+  if (url.startsWith("#")) return mode === "html" ? url : `${ORIGIN}${mdPath(page.slug)}${url}`;
   if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return /^(?:https?|mailto):/i.test(url) ? url : null;
   const [path, hash] = url.split("#");
   const anchor = hash ? `#${hash}` : "";
