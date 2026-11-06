@@ -51,26 +51,32 @@ already documents.
 
 | schema | one line per |
 | --- | --- |
-| `idx.quotes.v1`, `idx.compare.v1`, `idx.returns.v1`, `idx.broker.v1`, `idx.bandar.v1`, `idx.ownership.releases.v1`, `idx.ownership.import.v1`, `idx.ownership.discover.v1` | item of `data` |
+| `idx.quotes.v1`, `idx.compare.v1`, `idx.returns.v1`, `idx.broker.v1`, `idx.bandar.v1`, `idx.ownership.releases.v1`, `idx.ownership.import.v1`, `idx.ownership.discover.v1`, `idx.ownership.resolution.v1`, `idx.ownership.resolutions.v1` | item of `data` |
 | `idx.history.v1` | `data.candles[]` |
+| `idx.intraday.v1` | `data.bars[]` (the quote and the summary stay in `-o json`) |
 | `idx.financials.v1` | `data.periods[]` |
 | `idx.dividends.v1` | `data.dividends[]` (yearly totals, splits and TTM figures stay in `-o json`) |
-| `idx.screen.v1`, `idx.bandar.screen.v1`, `idx.ownership.foreign-flow.v1` | `data.rows[]` |
+| `idx.screen.v1`, `idx.bandar.screen.v1`, `idx.ownership.foreign-flow.v1`, `idx.ownership.concentration.v1` | `data.rows[]` |
 | `idx.watchlist.v1` | `data.symbols[]`, JSON strings (`idx -o jsonl watch list \| jq -r .`) |
 | `idx.holidays.v1` | `data.holidays[]` |
 | `idx.instruments.v1` | `data.instruments[]` |
 | `idx.members.v1` | `data.members[]` |
 | `idx.indices.v1` | `data.indices[]` |
 | `idx.calendar.v1` | `data.events[]` |
-| `idx.foreign.v1` | `data.days[]` |
+| `idx.foreign.v1`, `idx.foreign.value.v1` | `data.days[]` |
 | `idx.market.brokers.v1` | `data.brokers[]` |
 | `idx.news.v1` | `data.items[]` |
-| `idx.ownership.holders.v1` | `data.holders[]` |
+| `idx.insights.v1` | `data.insights[]` (the peers stay in `-o json`) |
+| `idx.ownership.holders.v1`, `idx.ownership.institutions.v1`, `idx.ownership.cross-holders.v1` | `data.holders[]` |
 | `idx.ownership.entity.v1` | `data.holdings[]` |
 | `idx.ownership.changes.v1` | `data.changes[]` |
 | `idx.ownership.foreign.v1` | `data.points[]` |
-| `idx.profile.v1`, `idx.fundamentals.v1`, `idx.technical.v1`, `idx.brief.v1`, `idx.sentiment.v1` | `data` on one line (a single record) |
-| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1` | `data` on one line (several peer lists kept together) |
+| `idx.ownership.search.v1` | `data.matches[]` |
+| `idx.ownership.resolve-candidates.v1` | `data.candidates[]` |
+| `idx.stockbit.actions.v1` | `data.actions[]` |
+| `idx.stockbit.movements.v1` | `data.movements[]` |
+| `idx.profile.v1`, `idx.fundamentals.v1`, `idx.growth.v1`, `idx.valuation.v1`, `idx.risk.v1`, `idx.technical.v1`, `idx.brief.v1`, `idx.sentiment.v1`, `idx.ownership.snapshot.v1` | `data` on one line (a single record) |
+| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1`, `idx.ownership.graph.v1`, `idx.ownership.composition.v1`, `idx.ownership.snapshot-sync.v1`, `idx.ownership.status.v1`, `idx.astro.v1` | `data` on one line (several peer lists kept together) |
 
 ```sh
 idx -o jsonl stocks history BBCA --period 1mo | jq -c '{time, close}'
@@ -136,7 +142,7 @@ with exit code 4.
 | `market_state` | string? | `REGULAR`, `CLOSED`, ... |
 | `market_time` | RFC 3339? | Last trade time in WIB (`+07:00`) |
 | `source` | string | Endpoint that produced the row: `yahoo:quote` (full) or `yahoo:chart` (reduced fallback) |
-| `behind_session` | bool? | `true` when `market_time` is dated (WIB) before the latest IDX session that has ended (16:15 WIB, the end of post-closing; weekends and the bundled IDX holidays are skipped): the stock is suspended or did not trade, or the source lags the close. `false` when the last trade is from that session or later. `null` when `market_time` is unknown (Stockbit, MSN rows without a trade) or the symbol does not trade on IDX (`^GSPC`, `^N225`). Computed on every call, never cached. For years the holiday list does not cover only weekends are skipped, and unscheduled closures read as behind. |
+| `behind_session` | bool? | `true` when `market_time` is dated (WIB) before the latest IDX session that has ended (16:15 WIB, the end of post-closing; weekends and the bundled IDX holidays are skipped): the stock is suspended or did not trade, or the source lags the close. `false` when the last trade is from that session or later. `null` when `market_time` is unknown (Stockbit, MSN rows without a trade) or the symbol does not trade on IDX (`^GSPC`, `^N225`, another market's `D05.SI`). Computed on every call, never cached. For years the holiday list does not cover only weekends are skipped, and unscheduled closures read as behind. |
 
 `?` means the value is `null` when the source did not return it. Nothing is
 estimated. When `source` is `yahoo:chart`, expect `market_cap`, P/E, dividend

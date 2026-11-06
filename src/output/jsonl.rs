@@ -210,6 +210,31 @@ mod tests {
         v
     }
 
+    /// docs/json-output.md's `-o jsonl` table lists every schema with its rule.
+    #[test]
+    fn the_docs_table_lists_every_row_rule() {
+        let doc = include_str!("../../docs/json-output.md");
+        let start = doc.find("| schema | one line per |").expect("the JSONL table");
+        let table: Vec<&str> = doc[start..]
+            .lines()
+            .take_while(|l| l.starts_with('|'))
+            .collect();
+        for (id, rule) in ROWS {
+            let want = match rule {
+                Rows::Data => "item of `data`".to_string(),
+                Rows::Field(f) => format!("`data.{f}[]`"),
+                Rows::Whole => "`data` on one line".to_string(),
+            };
+            let tick = format!("`{id}`");
+            let row = table
+                .iter()
+                .find(|l| l.split(" | ").next().unwrap_or("").contains(&tick))
+                .unwrap_or_else(|| panic!("{id} is missing from the JSONL table"));
+            let lines = row.split(" | ").nth(1).unwrap_or("");
+            assert!(lines.contains(&want), "{id}: {row}");
+        }
+    }
+
     /// The rules agree with the JSON Schema of each payload: `Data` payloads
     /// are arrays, `Field` names an array property, `Whole` is an object.
     #[test]
