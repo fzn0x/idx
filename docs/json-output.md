@@ -420,9 +420,13 @@ from them, a `reading` and `sources`:
     { "rule": "liquidity", "points": 1, "reason": "current ratio 0.79 is under 1" },
     { "rule": "volatility", "points": 1, "reason": "volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)" }
   ],
-  "notes": ["leverage and liquidity: not scored for a financial company"]
+  "notes": []
 }
 ```
+
+(TLKM's risk reading on the recorded fixtures, two of its six rules shown.
+A rule that could not run lands in `notes`, for example
+`"leverage and liquidity: not scored for a financial company"` for a bank.)
 
 - `rules[]` lists every rule that ran, with its `points` (0 still ran and
   counts) and a `reason` carrying the figure and the threshold; `score` is
