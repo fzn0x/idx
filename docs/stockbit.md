@@ -61,9 +61,12 @@ idx -o json stockbit orderbook TLKM | jq '.data.bids[0]'
 Sizes in the order book are **shares** (one IDX lot is 100 shares); values are
 IDR. History candle volumes are converted from Stockbit's lots to shares so they
 match the other providers. Stockbit chooses the candle granularity from the
-window — `1mo`/`3mo`/`1y` are daily, `5d`/intraday is hourly, `5y` is weekly —
-and a warning says so when it is not the daily bars the interval nominally asks
-for.
+window (`1d` is one-minute; `5d`, and intraday intervals over any longer
+period, hourly over one week; `1mo` to `1y` daily; `2y` and longer weekly), and a
+warning says
+so whenever those bars are not the `--interval` asked for (`--period 1y
+--interval 1wk` gets daily bars and a warning; `--period 5d --interval 1h` gets
+the hourly bars it asked for and none).
 
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run

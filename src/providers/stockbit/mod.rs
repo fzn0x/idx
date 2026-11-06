@@ -225,6 +225,8 @@ impl Provider for Stockbit {
         interval: Interval,
     ) -> Result<Sourced<History>> {
         let (tf, prev) = parse::timeframe_for(period, interval);
+        // Stockbit picks the bar size from the window; the warning below says
+        // so when it is not the interval asked for.
         let mut url = format!(
             "{EXODUS}/charts/{}/daily?timeframe={tf}&chart_type=PRICE_CHART_TYPE_CANDLE",
             stockbit_code(symbol)
@@ -250,19 +252,81 @@ impl Provider for Stockbit {
             ));
         }
         let mut out = Self::sourced(parse::parse_history(symbol, period, interval, &f.body)?, &f);
-        // Stockbit picks the granularity from the window; say so when it is not
-        // the daily bars the interval nominally asks for.
-        let granularity = match tf {
-            "1w" => Some("hourly"),
-            "1d" => Some("intraday (one-minute)"),
-            "3y" | "5y" => Some("weekly"),
-            _ => None,
-        };
-        if let Some(g) = granularity {
-            out.warnings.push(format!(
-                "Stockbit returned {g} bars for this window, not {interval} bars; each candle's time reflects the real granularity"
-            ));
+        if let Some(w) = granularity_warning(period, interval) {
+            out.warnings.push(w);
         }
         Ok(out)
+    }
+}
+
+/// The bar size Stockbit returns for a request, in idx's interval vocabulary:
+/// `1m` (one minute), `1h`, `1d` or `1wk`. Stockbit picks it from the window:
+/// the same-day window is one-minute, `1w` hourly, `1m` to `1y` daily, `3y`
+/// and `5y` weekly.
+pub fn bars_for(period: Period, interval: Interval) -> &'static str {
+    match parse::timeframe_for(period, interval).0 {
+        "1d" => "1m",
+        "1w" => "1h",
+        "3y" | "5y" => "1wk",
+        _ => "1d",
+    }
+}
+
+/// Plain name of a bar size from [`bars_for`].
+pub fn bar_word(bars: &str) -> &'static str {
+    match bars {
+        "1m" => "one-minute",
+        "1h" => "hourly",
+        "1wk" => "weekly",
+        _ => "daily",
+    }
+}
+
+/// The warning a Stockbit history carries when its bars are not the interval
+/// asked for (Stockbit picks the bar size from the window, not the interval).
+pub fn granularity_warning(period: Period, interval: Interval) -> Option<String> {
+    let bars = bars_for(period, interval);
+    (bars != interval.as_str()).then(|| {
+        format!(
+            "Stockbit returned {} bars for this window, not {interval} bars; each candle's time reflects the real granularity",
+            bar_word(bars)
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_sizes_follow_the_window() {
+        assert_eq!(bars_for(Period::D1, Interval::Min5), "1m");
+        assert_eq!(bars_for(Period::D1, Interval::Day1), "1m");
+        assert_eq!(bars_for(Period::D5, Interval::Hour1), "1h");
+        assert_eq!(bars_for(Period::D5, Interval::Day1), "1h");
+        assert_eq!(bars_for(Period::M1, Interval::Min30), "1h");
+        assert_eq!(bars_for(Period::M1, Interval::Day1), "1d");
+        assert_eq!(bars_for(Period::Y1, Interval::Week1), "1d");
+        assert_eq!(bars_for(Period::Ytd, Interval::Day1), "1d");
+        assert_eq!(bars_for(Period::Y2, Interval::Day1), "1wk");
+        assert_eq!(bars_for(Period::Max, Interval::Month1), "1wk");
+    }
+
+    #[test]
+    fn warning_compares_bar_sizes() {
+        // Daily bars labelled weekly used to pass silently.
+        let w = granularity_warning(Period::Y1, Interval::Week1).unwrap();
+        assert!(w.contains("daily bars"), "{w}");
+        assert!(w.contains("not 1wk"), "{w}");
+        // Hourly bars for an hourly request are what was asked.
+        assert_eq!(granularity_warning(Period::D5, Interval::Hour1), None);
+        assert_eq!(granularity_warning(Period::Y1, Interval::Day1), None);
+        assert_eq!(granularity_warning(Period::Y5, Interval::Week1), None);
+        let w = granularity_warning(Period::Y5, Interval::Day1).unwrap();
+        assert!(w.contains("weekly bars"), "{w}");
+        let w = granularity_warning(Period::D1, Interval::Min5).unwrap();
+        assert!(w.contains("one-minute bars"), "{w}");
+        let w = granularity_warning(Period::D5, Interval::Day1).unwrap();
+        assert!(w.contains("hourly bars"), "{w}");
     }
 }
