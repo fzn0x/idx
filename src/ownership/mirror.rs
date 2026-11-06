@@ -11,6 +11,9 @@
 //! `curl-impersonate` binary is installed. Files are checked against the
 //! SHA-256 in the index before they are imported. `IDX_OWNERSHIP_MIRROR`
 //! points at another mirror; `off` disables the fallback.
+//!
+//! The same release also carries the prebuilt SQLite snapshot that
+//! `idx ownership sync` installs (see `snapshot.rs`).
 
 use std::time::Duration;
 
@@ -58,14 +61,42 @@ pub fn base() -> Option<String> {
 }
 
 async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>> {
+    get_limited(url, timeout, None).await
+}
+
+/// Reads `url` (`https://` or `file://`), refusing a body above `limit`
+/// bytes without reading the rest. HTTP 404 and a missing file are
+/// `NotFound`.
+pub(crate) async fn get_limited(
+    url: &str,
+    timeout: Duration,
+    limit: Option<u64>,
+) -> Result<Vec<u8>> {
+    let too_big = |n: u64, max: u64| {
+        IdxError::provider(
+            "mirror",
+            format!("{url}: more than {max} bytes ({n}); refusing to read it"),
+        )
+    };
     if let Some(path) = url.strip_prefix("file://") {
         let path = if cfg!(windows) {
             path.trim_start_matches('/')
         } else {
             path
         };
-        return std::fs::read(path)
-            .map_err(|e| IdxError::Usage(format!("cannot read {path}: {e}")));
+        let read_err = |e: std::io::Error| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                IdxError::NotFound(format!("{path}: not on the mirror"))
+            }
+            _ => IdxError::Usage(format!("cannot read {path}: {e}")),
+        };
+        if let Some(max) = limit {
+            let len = std::fs::metadata(path).map_err(read_err)?.len();
+            if len > max {
+                return Err(too_big(len, max));
+            }
+        }
+        return std::fs::read(path).map_err(read_err);
     }
     let _wait = crate::progress::request(url);
     let client = reqwest::Client::builder()
@@ -77,7 +108,7 @@ async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>> {
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
-    let resp = client.get(url).send().await?;
+    let mut resp = client.get(url).send().await?;
     let status = resp.status();
     if status.as_u16() == 404 {
         return Err(IdxError::NotFound(format!("{url}: not on the mirror")));
@@ -85,7 +116,20 @@ async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>> {
     if !status.is_success() {
         return Err(IdxError::Network(format!("{url}: HTTP {status}")));
     }
-    Ok(resp.bytes().await?.to_vec())
+    let Some(max) = limit else {
+        return Ok(resp.bytes().await?.to_vec());
+    };
+    if let Some(len) = resp.content_length().filter(|n| *n > max) {
+        return Err(too_big(len, max));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        body.extend_from_slice(&chunk);
+        if body.len() as u64 > max {
+            return Err(too_big(body.len() as u64, max));
+        }
+    }
+    Ok(body)
 }
 
 pub fn parse_index(bytes: &[u8]) -> Result<MirrorIndex> {

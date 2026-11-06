@@ -1,6 +1,7 @@
 //! KSEI shareholder register ("Pemegang Saham di Atas 1%") as published
-//! monthly by IDX: discovery and download (`discover`), parsing (`ingest`),
-//! name normalisation (`normalize`) and the local SQLite store (`db`).
+//! monthly by IDX: discovery and download (`discover`, `mirror`), parsing
+//! (`ingest`), name normalisation (`normalize`), the local SQLite store
+//! (`db`) and the prebuilt copy of it published on the mirror (`snapshot`).
 //!
 //! Unlike the quote providers, this data is not fetched on demand: a monthly
 //! file is imported once and every query runs locally, so the ownership
@@ -29,6 +30,7 @@ pub mod discover;
 pub mod ingest;
 pub mod mirror;
 pub mod normalize;
+pub mod snapshot;
 
 pub use db::{OwnershipDb, SCHEMA_VERSION};
 
