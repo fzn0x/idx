@@ -30,6 +30,19 @@ account, holding or token field.
 | market_session.json | `/company-price-feed/market-time/session` | `detail.regular.state_name`, e.g. `STATE_NAME_MARKET_CLOSED` |
 | unauthorized.json | any route with an invalid bearer | HTTP 401 `{"error_type":"UNAUTHORIZED","message":"Unauthorized"}` |
 
+## Recorded by 0xrsydn/idx-cli
+
+The files in this table were recorded by the reference CLI 0xrsydn/idx-cli (MIT
+License, Copyright (c) 2026 idx-cli contributors) on 2026-11-03 with a real session,
+GET only, and are copied byte for byte from its `crates/idx-core/tests/fixtures/` at
+commit be9d17b (file name there: `stockbit_exodus_<name>`, or `stockbit_<name>` for the
+block page). They were checked for user data (user ids, e-mail addresses, names of the
+account holder, `is_holding_exist`, JWTs) before they were copied: there is none.
+
+| file | request | notes |
+| --- | --- | --- |
+| blocked_403.html | any exodus route, from a network Stockbit's CDN refuses | HTTP 403 HTML page from CloudFront ("The request could not be satisfied"). Not a refused token: a refresh cannot help, so idx reports it and does not retry (a refused token is a 401, or a 403 with a JSON body such as `unauthorized.json`) |
+
 Constructed, not recorded (the tokens inside are dummies signed by nobody):
 
 | file | stands for | why constructed |

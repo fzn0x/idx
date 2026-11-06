@@ -179,7 +179,7 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
+        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-status | error | quote | candle
         name: Option<String>,
     },
 

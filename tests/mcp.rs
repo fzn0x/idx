@@ -12,6 +12,9 @@ fn spawn_server(dir: &std::path::Path) -> std::process::Child {
         .env_clear()
         .env("IDX_CACHE_DIR", dir.join("cache"))
         .env("IDX_CONFIG", dir.join("config.toml"))
+        // The default session path sits beside the default config file, not
+        // IDX_CONFIG's; keep the Stockbit tools off the developer's real login.
+        .env("IDX_STOCKBIT_SESSION", dir.join("stockbit-session.json"))
         .env("IDX_OFFLINE", "1")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())

@@ -14,6 +14,12 @@
 //!   — OHLCV candles; Stockbit picks the granularity from the window.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
+//! Only GETs under a short allowlist of read-only paths ([`READ_PREFIXES`])
+//! ever leave with the bearer: the same API places orders and moves cash. A
+//! 401, or a 403 with a JSON body, is a refused token (one refresh, one
+//! retry); an HTML 403 is Stockbit's CDN refusing this client, which no
+//! refresh changes, so it is reported and never retried.
+//!
 //! The order book's foreign flow is kept only while Stockbit marks it current
 //! (`has_foreign_bs: true`); during trading it still holds the previous
 //! session's figures, so it is left empty and the envelope says why.
@@ -84,6 +90,50 @@ pub fn stockbit_code(symbol: &Symbol) -> String {
     }
 }
 
+/// Paths idx may GET on the session API. The same API places orders and
+/// moves cash; anything else fails before a token is read. A feature that
+/// reads a new endpoint adds its prefix here.
+const READ_PREFIXES: &[&str] = &[
+    "/company-price-feed/",
+    "/charts/",
+    "/corpaction/",
+    "/insider/company/majorholder?",
+];
+
+/// `true` for an exodus URL under one of [`READ_PREFIXES`].
+fn is_read_url(url: &str) -> bool {
+    url.strip_prefix(EXODUS).is_some_and(|p| {
+        READ_PREFIXES.iter().any(|x| p.starts_with(x))
+            && !p.contains("..")
+            && !p.contains('%')
+            && !p.contains('#')
+    })
+}
+
+/// Stockbit refusing the bearer: 401, or a 403 with a JSON body. An HTML 403
+/// is CloudFront refusing this client, which a refresh cannot change.
+pub(crate) fn rejected(status: u16, body: &str) -> bool {
+    status == 401 || (status == 403 && serde_json::from_str::<serde_json::Value>(body).is_ok())
+}
+
+/// The error for an HTML 403 from Stockbit's CDN.
+const CDN_BLOCKED: &str = "exodus.stockbit.com refused this client (HTTP 403 from its CDN); idx does not retry a block, try later or from another network";
+
+/// Errors that no other Stockbit request in the same command can get past
+/// (no session, a refused session, a CDN block), so a command that reads
+/// several lists stops at the first one instead of repeating it.
+pub fn is_fatal(e: &IdxError) -> bool {
+    match e {
+        IdxError::Usage(_) => true,
+        IdxError::Provider { provider, message } if *provider == NAME => {
+            message == auth::REFRESH_REJECTED
+                || message == CDN_BLOCKED
+                || message.starts_with("Stockbit rejected the session")
+        }
+        _ => false,
+    }
+}
+
 pub struct Stockbit {
     fetcher: Arc<Fetcher>,
     ttls: Ttls,
@@ -103,14 +153,24 @@ impl Stockbit {
         &self.store
     }
 
+    pub fn fetcher(&self) -> &Arc<Fetcher> {
+        &self.fetcher
+    }
+
     /// GET an exodus URL with a valid bearer, refreshing the access token once
-    /// if the first attempt is rejected. `url` doubles as the cache key — it
-    /// carries no token, so no secret enters the cache (rule 6).
+    /// if the first attempt is rejected. `url` doubles as the cache key; it
+    /// carries no token, so no secret enters the cache (rule 6). Only
+    /// [`READ_PREFIXES`] paths are ever requested.
     async fn get(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        if !is_read_url(url) {
+            return Err(IdxError::Other(format!(
+                "idx does not call {url} on Stockbit's session API"
+            )));
+        }
         let now = chrono::Utc::now().timestamp();
+        let mut session = self.store.valid_session(&self.fetcher, now).await?;
         for attempt in 0..2 {
-            let token = self.store.valid_access(&self.fetcher, now).await?;
-            let headers = request_headers(&token);
+            let headers = request_headers(&session.access);
             let fetched = match self.fetcher.get(url, &headers, ttl, Some(url)).await {
                 Ok(f) => f,
                 Err(IdxError::OfflineMiss(_)) => {
@@ -118,19 +178,21 @@ impl Stockbit {
                 }
                 Err(e) => return Err(e),
             };
-            if (fetched.status == 401 || fetched.status == 403)
-                && attempt == 0
-                && !self.fetcher.is_offline()
-                && !fetched.cached
-            {
+            if fetched.status == 403 && !rejected(fetched.status, &fetched.body) {
+                return Err(IdxError::provider(NAME, CDN_BLOCKED));
+            }
+            if rejected(fetched.status, &fetched.body) {
+                if attempt == 1 || self.fetcher.is_offline() || fetched.cached {
+                    return Err(IdxError::provider(
+                        NAME,
+                        format!(
+                            "Stockbit rejected the session (HTTP {}) after a refresh; run `idx stockbit login` again",
+                            fetched.status
+                        ),
+                    ));
+                }
                 tracing::info!("stockbit rejected the token; refreshing once");
-                // Force the next loop to refresh by expiring the cached access.
-                let session = self.store.load();
-                let _ = self
-                    .store
-                    .refresh(&self.fetcher, &session)
-                    .await
-                    .map(|s| self.store.save(&s));
+                session = self.store.rotate(&self.fetcher, &session, now).await?;
                 continue;
             }
             return Ok(fetched);
@@ -285,7 +347,7 @@ impl Provider for Stockbit {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
@@ -335,5 +397,122 @@ mod tests {
         let got = sb.orderbook(&bbca).await.unwrap();
         assert_eq!(got.data.foreign_net, Some(-2_329_493_087_500.0));
         assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+    }
+
+    const BLOCKED: &str = include_str!("../../../tests/fixtures/stockbit/blocked_403.html");
+    const UNAUTHORIZED: &str = include_str!("../../../tests/fixtures/stockbit/unauthorized.json");
+    const REFRESHED: &str =
+        include_str!("../../../tests/fixtures/stockbit/login_refresh_constructed.json");
+
+    /// A provider over `be` whose session holds the dummy access token and a
+    /// dummy refresh token.
+    pub(crate) fn with_backend(
+        be: FixtureBackend,
+    ) -> (Stockbit, Arc<FixtureBackend>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let be = Arc::new(be);
+        let fetcher = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let store = Arc::new(SessionStore::new(
+            dir.path().join("session.json"),
+            Some(DUMMY_ACCESS.into()),
+            Some("eyJ0.eyJleHAiOjF9.dummy".into()),
+        ));
+        (Stockbit::new(fetcher, Ttls::default(), store), be, dir)
+    }
+
+    #[test]
+    fn only_read_paths_are_allowed() {
+        for ok in [
+            "https://exodus.stockbit.com/company-price-feed/v2/orderbook/companies/BBCA",
+            "https://exodus.stockbit.com/company-price-feed/market-time/session",
+            "https://exodus.stockbit.com/charts/BBCA/daily?timeframe=1m",
+            "https://exodus.stockbit.com/corpaction/dividend?symbol=BBCA",
+            "https://exodus.stockbit.com/insider/company/majorholder?page=1",
+        ] {
+            assert!(is_read_url(ok), "{ok}");
+        }
+        for no in [
+            "https://exodus.stockbit.com/order/buy",
+            "https://exodus.stockbit.com/login/refresh",
+            "https://exodus.stockbit.com/corpaction/../order/buy",
+            "https://exodus.stockbit.com/corpaction/%2e%2e/order/buy",
+            "https://exodus.stockbit.com/insider/company/majorholder/../../order",
+            "https://evil.test/corpaction/dividend",
+            "https://exodus.stockbit.com.evil.test/corpaction/dividend",
+            "http://exodus.stockbit.com/corpaction/dividend",
+        ] {
+            assert!(!is_read_url(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_json_403_is_a_refused_token_an_html_one_a_block() {
+        assert!(rejected(401, UNAUTHORIZED));
+        assert!(rejected(401, "<html>"));
+        assert!(rejected(403, UNAUTHORIZED));
+        assert!(!rejected(403, BLOCKED));
+        assert!(!rejected(200, "{}"));
+        assert!(!rejected(404, UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn a_path_off_the_allowlist_fails_before_any_request() {
+        let (sb, be, _d) = with_backend(FixtureBackend::new());
+        let e = sb
+            .get("https://exodus.stockbit.com/order/buy", REALTIME_TTL, "x")
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("does not call"), "{e}");
+        assert_eq!(be.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cdn_block_is_not_retried_and_spends_no_refresh() {
+        let (sb, be, _d) =
+            with_backend(FixtureBackend::new().route("orderbook/companies/BBCA", 403, BLOCKED));
+        let e = sb
+            .orderbook(&Symbol::parse("BBCA").unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        assert!(e.to_string().contains("HTTP 403 from its CDN"), "{e}");
+        assert!(is_fatal(&e));
+        assert_eq!(be.calls_matching("orderbook/companies/BBCA"), 1);
+        assert_eq!(be.calls_matching("login/refresh"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_refreshed_once_then_reported() {
+        let (sb, be, _d) = with_backend(
+            FixtureBackend::new()
+                .route("orderbook/companies/BBCA", 401, UNAUTHORIZED)
+                .route("login/refresh", 200, REFRESHED),
+        );
+        let e = sb
+            .orderbook(&Symbol::parse("BBCA").unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("run `idx stockbit login` again"),
+            "{e}"
+        );
+        assert!(is_fatal(&e));
+        assert_eq!(be.calls_matching("orderbook/companies/BBCA"), 2);
+        assert_eq!(be.calls_matching("login/refresh"), 1);
+        // The retry carried the refreshed access token, not the rejected one.
+        let headers = be.headers.lock().unwrap();
+        let bearer = |i: usize| {
+            headers[i]
+                .iter()
+                .find(|(k, _)| k == "authorization")
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(bearer(0), format!("Bearer {DUMMY_ACCESS}"));
+        assert_ne!(bearer(2), bearer(0));
     }
 }
