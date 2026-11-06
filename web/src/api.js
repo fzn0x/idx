@@ -444,7 +444,9 @@ const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400e
 function isoDate(raw, what) {
   if (raw == null || raw === "") return null;
   const s = String(raw).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(`${s}T00:00:00Z`))) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
+  const ms = Date.parse(`${s}T00:00:00Z`);
+  // Date.parse rolls 2026-02-30 over to 2 March; only a real date survives the round trip.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== s) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
   return s;
 }
 
