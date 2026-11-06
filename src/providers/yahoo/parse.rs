@@ -118,6 +118,11 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
         ) else {
             continue; // holiday / missing bar
         };
+        // Multi-day intraday windows end with a row stamped at the last trade
+        // time (16:14:43), a snapshot rather than a bar: bars start on the minute.
+        if interval.is_intraday() && t % 60 != 0 {
+            continue;
+        }
         let Some(time) = wib_from_unix(t) else {
             continue;
         };
@@ -374,6 +379,82 @@ mod tests {
         // 40 timestamps, 34 complete bars.
         assert_eq!(h.candles.len(), 34);
         assert_eq!(h.candles[0].time.to_rfc3339(), "2026-10-12T09:00:00+07:00");
+    }
+
+    #[test]
+    fn chart_one_minute_session() {
+        let h = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(h.interval, Interval::Min1);
+        // 435 rows; the null ones (lunch break, quiet minutes) are dropped.
+        assert_eq!(h.candles.len(), 333);
+        let first = &h.candles[0];
+        assert_eq!(first.time.to_rfc3339(), "2026-11-05T09:00:00+07:00");
+        assert_eq!(first.volume, 0, "the opening auction is in no bar");
+        assert_eq!(
+            h.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        let hm = |c: &Candle| c.time.format("%H:%M").to_string();
+        assert!(!h
+            .candles
+            .iter()
+            .any(|c| ("12:00".."13:30").contains(&hm(c).as_str())));
+        let closing = h.candles.iter().find(|c| hm(c) == "16:00").unwrap();
+        assert!(closing.volume > 20_000_000, "pre-closing auction bar");
+
+        let ix = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_jkse_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(ix.symbol.as_str(), "^JKSE");
+        assert_eq!(ix.candles.len(), 320);
+        assert!(ix.candles.iter().all(|c| c.volume == 0));
+        assert_eq!(hm(ix.candles.last().unwrap()), "16:00");
+    }
+
+    #[test]
+    fn chart_at_the_open_and_over_five_days() {
+        let empty = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m_open_empty.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert!(empty.candles.is_empty() && empty.summary.is_none());
+        assert_eq!(empty.symbol.as_str(), "BBCA");
+
+        let five = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json"),
+            Period::D5,
+            Interval::Min1,
+        )
+        .unwrap();
+        // 1,335 priced rows; the 16:14:43 last-trade snapshot is not a bar.
+        assert_eq!(five.candles.len(), 1_334);
+        assert!(five.candles.iter().all(|c| c.time.timestamp() % 60 == 0));
+        assert_eq!(
+            five.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        assert_eq!(
+            five.candles[0].time.to_rfc3339(),
+            "2026-11-02T09:00:00+07:00"
+        );
+    }
+
+    #[test]
+    fn chart_window_too_long_for_one_minute_bars() {
+        let body = include_str!("../../../tests/fixtures/yahoo/chart_bbca_1mo_1m_error.json");
+        let e = parse_chart(body, Period::M1, Interval::Min1).unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        assert!(chart_error(body).starts_with("Unprocessable Entity: 1m data not available"));
     }
 
     #[test]

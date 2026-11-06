@@ -146,6 +146,23 @@ pub fn timeframe_for(period: Period, interval: Interval) -> (&'static str, bool)
     }
 }
 
+/// The warning `history` adds when Stockbit's granularity for `tf` is not
+/// the `interval` asked for: `1w` is hourly, `1d` one-minute, `3y`/`5y`
+/// weekly. `None` when the bars are what was asked for.
+pub fn granularity_note(tf: &str, interval: Interval) -> Option<String> {
+    let real = match tf {
+        "1w" if interval == Interval::Hour1 => return None,
+        "1w" => "hourly",
+        "1d" if interval == Interval::Min1 => return None,
+        "1d" => "intraday (one-minute)",
+        "3y" | "5y" => "weekly",
+        _ => return None,
+    };
+    Some(format!(
+        "Stockbit returned {real} bars for this window, not {interval} bars; each candle's time reflects the real granularity"
+    ))
+}
+
 /// Candles from `/charts/{SYM}/daily`. `prices[]` rows carry `date` (epoch ms,
 /// the bar start in WIB), string OHLC and a `value` that is the close; `volume`
 /// is in lots and is converted to shares. Rows without a usable close or time
@@ -338,5 +355,25 @@ mod tests {
         assert_eq!(timeframe_for(Period::Y5, Interval::Day1).0, "5y");
         assert_eq!(timeframe_for(Period::Y1, Interval::Hour1), ("1w", true));
         assert_eq!(timeframe_for(Period::D1, Interval::Min5), ("1d", false));
+        assert_eq!(timeframe_for(Period::D1, Interval::Min1), ("1d", false));
+    }
+
+    #[test]
+    fn granularity_warning_only_when_the_bars_differ() {
+        assert_eq!(granularity_note("1d", Interval::Min1), None);
+        let w = granularity_note("1d", Interval::Min5).unwrap();
+        assert!(
+            w.contains("intraday (one-minute)") && w.contains("not 5m bars"),
+            "{w}"
+        );
+        assert!(granularity_note("1d", Interval::Day1).is_some());
+        assert!(granularity_note("1w", Interval::Min2)
+            .unwrap()
+            .contains("hourly"));
+        assert_eq!(granularity_note("1w", Interval::Hour1), None);
+        assert!(granularity_note("5y", Interval::Day1)
+            .unwrap()
+            .contains("weekly"));
+        assert_eq!(granularity_note("1y", Interval::Day1), None);
     }
 }

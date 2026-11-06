@@ -92,7 +92,7 @@ pub struct HistoryArgs {
     /// Look-back window: 1d, 5d, 1mo, 3mo, 6mo, 1y (default), 2y, 5y, 10y, ytd, max.
     #[serde(default)]
     pub period: Option<String>,
-    /// Candle size: 5m, 15m, 30m, 1h, 1d (default), 1wk, 1mo. Intraday sizes need short periods.
+    /// Candle size: 1m, 2m, 5m, 15m, 30m, 1h, 1d (default), 1wk, 1mo. 1m needs period 1d or 5d, 2m at most 1mo; the other intraday sizes need short periods.
     #[serde(default)]
     pub interval: Option<String>,
     /// Keep only the most recent N candles (default 60). 0 returns all of them.
@@ -573,6 +573,7 @@ impl IdxServer {
                 let symbol = Symbol::parse(&a.symbol)?;
                 let period = parse_opt(&a.period, Period::Y1)?;
                 let interval = parse_opt(&a.interval, Interval::Day1)?;
+                interval.check_period(period)?;
                 let mut h = self.provider.history(&symbol, period, interval).await?;
                 let limit = a.limit.unwrap_or(60) as usize;
                 if limit > 0 && h.data.candles.len() > limit {
@@ -1766,6 +1767,20 @@ mod tests {
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
         assert_eq!(v["error"]["code"], "offline_miss");
+
+        // One-minute bars over a month: refused before any fetch.
+        let r = s
+            .history(Parameters(HistoryArgs {
+                symbol: "BBCA".into(),
+                period: Some("1mo".into()),
+                interval: Some("1m".into()),
+                limit: None,
+            }))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["error"]["code"], "usage", "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("1d or 5d"));
 
         let broker = |date: Option<&str>, from: Option<&str>, investor: Option<&str>| BrokerArgs {
             symbols: "BBCA".into(),

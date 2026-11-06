@@ -43,7 +43,7 @@ pub enum StocksCmd {
 
     /// OHLCV price history.
     #[command(
-        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0"
+        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history ^JKSE --period 1d --interval 1m"
     )]
     History {
         /// IDX ticker, e.g. BBCA.
@@ -52,7 +52,7 @@ pub enum StocksCmd {
         /// Look-back window.
         #[arg(long, short = 'p', value_enum, default_value = "1y")]
         period: Period,
-        /// Bar size. Intraday sizes (5m..1h) only work with short periods.
+        /// Bar size. 1m needs --period 1d or 5d, 2m at most 1mo; the other intraday sizes (5m..1h) only work with short periods.
         #[arg(long, short = 'i', value_enum, default_value = "1d")]
         interval: Interval,
         /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON is never limited.
@@ -388,6 +388,7 @@ async fn history(
     limit: usize,
 ) -> Result<()> {
     let symbol = Symbol::parse(raw)?;
+    interval.check_period(period)?;
     let result = ctx.provider.history(&symbol, period, interval).await?;
     let limit = if limit == 0 { None } else { Some(limit) };
     emit(ctx, SCHEMA_HISTORY, result, |d| {

@@ -251,17 +251,9 @@ impl Provider for Stockbit {
         }
         let mut out = Self::sourced(parse::parse_history(symbol, period, interval, &f.body)?, &f);
         // Stockbit picks the granularity from the window; say so when it is not
-        // the daily bars the interval nominally asks for.
-        let granularity = match tf {
-            "1w" => Some("hourly"),
-            "1d" => Some("intraday (one-minute)"),
-            "3y" | "5y" => Some("weekly"),
-            _ => None,
-        };
-        if let Some(g) = granularity {
-            out.warnings.push(format!(
-                "Stockbit returned {g} bars for this window, not {interval} bars; each candle's time reflects the real granularity"
-            ));
+        // the bar size asked for.
+        if let Some(w) = parse::granularity_note(tf, interval) {
+            out.warnings.push(w);
         }
         Ok(out)
     }
