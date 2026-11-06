@@ -1670,10 +1670,17 @@ fn other_markets_on_the_yahoo_backed_commands() {
             .args(["-o", "json", "stocks", "history", "D05", "--period", "5d"]),
     );
     assert_eq!(v["data"]["symbol"], "D05.SI");
+    // The confirmation shows the value stored, not the one typed.
+    idx(&sb.cache, &sb.config)
+        .args(["config", "set", "exchange", "idx"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("exchange = JK ("));
     idx(&sb.cache, &sb.config)
         .args(["config", "set", "exchange", ".si"])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("exchange = SI ("));
     idx(&sb.cache, &sb.config)
         .args(["config", "get", "exchange"])
         .assert()

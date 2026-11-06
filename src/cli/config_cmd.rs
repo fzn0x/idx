@@ -48,7 +48,9 @@ pub fn run(global: &GlobalOpts, cmd: ConfigCmd) -> Result<()> {
             let mut cfg = FileConfig::load(&path)?;
             cfg.set(&key, &value)?;
             cfg.save(&path)?;
-            output::print_notice(&format!("{key} = {value} ({})", path.display()));
+            // What was stored, which may be normalised (`.si` is `SI`).
+            let stored = cfg.get(&key)?.unwrap_or(value);
+            output::print_notice(&format!("{key} = {stored} ({})", path.display()));
             Ok(())
         }
         ConfigCmd::Get { key: Some(key) } => {
