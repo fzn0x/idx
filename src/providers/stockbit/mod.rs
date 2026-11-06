@@ -337,11 +337,28 @@ impl Stockbit {
         q: &movement::MovementQuery,
         page: u32,
     ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        self.movements_page_within(q, page, MOVEMENTS_TTL).await
+    }
+
+    /// [`movements_page`](Self::movements_page) read live, past a cached
+    /// copy (offline, or when the request fails, that copy is served stale).
+    pub async fn movements_page_live(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
+        self.movements_page_within(q, page, Duration::ZERO).await
+    }
+
+    async fn movements_page_within(
+        &self,
+        q: &movement::MovementQuery,
+        page: u32,
+        ttl: Duration,
+    ) -> Result<Sourced<(Vec<HolderMovement>, bool)>> {
         q.validate()?;
         let url = movement::url(q, page);
-        let f = self
-            .get_paced(&url, MOVEMENTS_TTL, "shareholder movements")
-            .await?;
+        let f = self.get_paced(&url, ttl, "shareholder movements").await?;
         if f.status == 404 || parse::is_not_found(&f.body) {
             let mut out = Self::sourced((Vec::new(), false), &f);
             out.warnings.push(match &q.symbol {

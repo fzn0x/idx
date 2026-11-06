@@ -211,8 +211,11 @@ that holder.
 
 Stockbit serves 50 rows a page; `--pages` reads up to 10, one request each, a
 second apart, cached for an hour. `more` says rows remain. The feed gains rows
-at the top as filings arrive, so a row repeated across pages is kept once, and
-a later page that fails keeps the rows already read (with a warning).
+at the top as filings arrive, so a row repeated across pages is kept once, a
+page cached before the page above it was read is read again live (rows that
+moved down past the page break would otherwise be on neither page; when it
+cannot be read again, a warning says rows may be missing), and a later page
+that fails keeps the rows already read (with a warning).
 
 These are filings, not signals: a share plan reads as many insiders buying at
 one price on one day (BBCA's directors on 2026-03-25 at 6,982), crossings name

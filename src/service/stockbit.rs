@@ -71,8 +71,9 @@ pub const STOCKBIT_MOVEMENT_MAX_PAGES: u32 = 10;
 
 /// Pages 1..=`pages` of holder movements, one at a time, stopping at the
 /// last page. A row repeated across pages (the feed gains rows at the top
-/// while it is paged) is kept once. A later page that fails keeps the rows
-/// read so far, with `more` and a warning; a failing first page is the error.
+/// while it is paged) is kept once, and a page cached before the page above
+/// it is read again live. A later page that fails keeps the rows read so
+/// far, with `more` and a warning; a failing first page is the error.
 pub async fn stockbit_movements(
     sb: &Stockbit,
     q: &MovementQuery,
@@ -110,10 +111,27 @@ pub async fn stockbit_movements(
         )
     };
     let mut seen: std::collections::HashSet<_> = out.data.movements.iter().map(key).collect();
+    // When the page above was read. A page cached before it is an older
+    // snapshot: rows that have since moved down past the page break would be
+    // on neither page, so such a page is read again live.
+    let mut above_at = out.fetched_at;
     let mut page = 2;
     while out.data.more && page <= pages {
-        match sb.movements_page(q, page).await {
+        let read = match sb.movements_page(q, page).await {
+            Ok(s) if s.cached && s.fetched_at < above_at => {
+                sb.movements_page_live(q, page).await.or(Ok(s))
+            }
+            other => other,
+        };
+        match read {
             Ok(s) => {
+                if s.fetched_at < above_at {
+                    out.warnings.push(format!(
+                        "page {page} is an older copy than page {} (it could not be read again); rows between them may be missing",
+                        page - 1
+                    ));
+                }
+                above_at = s.fetched_at;
                 out.absorb(&s);
                 let (rows, more) = s.data;
                 for r in rows {
@@ -639,6 +657,51 @@ mod tests {
             .unwrap();
         assert_eq!(got.data.movements.len(), 8);
         assert_eq!((got.data.pages_read, got.data.more), (2, true));
+    }
+
+    #[tokio::test]
+    async fn a_later_page_cached_before_the_one_above_is_read_again() {
+        let q = MovementQuery::default();
+        let p2_url = crate::providers::stockbit::movement::url(&q, 2);
+        // Page 2 sits in the cache from an earlier snapshot; page 1 is live.
+        let (p, be, _d) = sb(FixtureBackend::new()
+            .route(P1, 200, &fx("majorholder"))
+            .route(P2, 200, &fx("majorholder_p2")));
+        p.fetcher()
+            .cache()
+            .put(&p2_url, 200, &fx("majorholder_p2"))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let got = stockbit_movements(&p, &q, 2).await.unwrap();
+        assert_eq!(be.calls_matching(P1), 1);
+        assert_eq!(be.calls_matching(P2), 1, "page 2 read again live");
+        assert_eq!(got.data.movements.len(), 14);
+        assert!(!got.cached);
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        // Both cached now, page 2 after page 1: nothing is read again.
+        let got = stockbit_movements(&p, &q, 2).await.unwrap();
+        assert!(got.cached);
+        assert_eq!(be.call_count(), 2);
+
+        // When page 2 cannot be read again, the older copy is kept and the
+        // gap is named.
+        let (p, be, _d) = sb(FixtureBackend::new().route(P1, 200, &fx("majorholder")));
+        p.fetcher()
+            .cache()
+            .put(&p2_url, 200, &fx("majorholder_p2"))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let got = stockbit_movements(&p, &q, 2).await.unwrap();
+        assert_eq!(be.calls_matching(P2), 1);
+        assert_eq!(got.data.movements.len(), 14);
+        assert_eq!((got.data.pages_read, got.data.more), (2, false));
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.starts_with("page 2 is an older copy than page 1")),
+            "{:?}",
+            got.warnings
+        );
     }
 
     #[tokio::test]
