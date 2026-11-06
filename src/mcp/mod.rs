@@ -1905,4 +1905,67 @@ mod tests {
         assert_eq!(v["error"]["code"], "unsupported", "{v}");
         assert_eq!(v["exit_code"], 6);
     }
+
+    #[tokio::test]
+    async fn institutions_tool_returns_the_msn_envelope() {
+        use crate::http::{CacheMode, FixtureBackend};
+        use crate::providers::msn::Msn;
+        let be = FixtureBackend::new()
+            .route(
+                "csautosuggest/api/v1/Query?query=JTPE",
+                200,
+                include_str!("../../tests/fixtures/msn/autosuggest_jtpe.json"),
+            )
+            .route(
+                "csautosuggest/api/v1/Query?query=ATAP",
+                200,
+                include_str!("../../tests/fixtures/msn/autosuggest_atap.json"),
+            )
+            .route(
+                "Finance/Equities?ids=bkgwu2",
+                200,
+                include_str!("../../tests/fixtures/msn/equities_jtpe_all_signals.json"),
+            )
+            .route(
+                "Finance/Equities?ids=bwzup2",
+                200,
+                include_str!("../../tests/fixtures/msn/equities_atap_empty_holders.json"),
+            );
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(be),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Msn::new(fetcher.clone(), Ttls::default(), None)),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let call = |symbol: &str| {
+            s.ownership_institutions(Parameters(SymbolArg {
+                symbol: symbol.into(),
+            }))
+        };
+
+        let r = call("jtpe").await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.institutions.v1");
+        assert_eq!(v["provider"], "msn");
+        assert_eq!(v["data"]["symbol"], "JTPE");
+        assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 9);
+        assert!(v.get("warnings").is_none(), "{v}");
+
+        let r = call("ATAP").await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+        assert_eq!(v["schema"], "idx.ownership.institutions.v1");
+        assert_eq!(v["data"]["holders"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            v["warnings"][0],
+            "MSN lists no institutional or fund holders for ATAP"
+        );
+    }
 }
