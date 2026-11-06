@@ -320,6 +320,25 @@ export function parseFundamentals(r, symbol) {
   };
 }
 
+// earningsTrend rows for this and next quarter and fiscal year (port of
+// estimates() in src/providers/yahoo/summary.rs). Counts keep a zero; amounts
+// padded as {raw: 0, fmt: null} are null.
+const ESTIMATE_KINDS = { "0q": "quarterly", "+1q": "quarterly", "0y": "annual", "+1y": "annual" };
+export function parseEstimates(trend) {
+  return (trend?.trend || []).filter((t) => ESTIMATE_KINDS[t?.period]).map((t) => {
+    const eps = t.earningsEstimate || {}, rev = t.revenueEstimate || {};
+    const growth = pct(eps, "growth");
+    const end = typeof t.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.endDate.trim()) ? t.endDate.trim() : null;
+    return {
+      period: t.period, period_type: ESTIMATE_KINDS[t.period], end_date: end,
+      eps_avg: amount(eps, "avg"), eps_low: amount(eps, "low"), eps_high: amount(eps, "high"), eps_year_ago: amount(eps, "yearAgoEps"),
+      eps_growth_pct: growth ?? pct(t, "growth"), eps_analysts: raw(eps, "numberOfAnalysts"),
+      revenue_avg: amount(rev, "avg"), revenue_low: amount(rev, "low"), revenue_high: amount(rev, "high"), revenue_year_ago: amount(rev, "yearAgoRevenue"),
+      revenue_growth_pct: pct(rev, "growth"), revenue_analysts: raw(rev, "numberOfAnalysts"),
+    };
+  });
+}
+
 export function parseEarnings(r, symbol) {
   const price = r?.price || {}, e = r?.earnings || {}, cal = r?.calendarEvents || {}, trend = r?.earningsTrend || {};
   const label = (x) => (typeof x?.date === "string" ? x.date : x?.date != null ? String(x.date) : "");
@@ -340,6 +359,7 @@ export function parseEarnings(r, symbol) {
   return {
     symbol, name: text(price, "longName") || text(price, "shortName"),
     currency: text(e, "financialCurrency") || text(price, "currency"),
+    estimates: parseEstimates(trend),
     quarters, yearly: re(e.financialsChart?.yearly), quarterly: re(e.financialsChart?.quarterly),
     next: (!cal.earnings && !cur) ? null : {
       date: nextDate ? new Date(nextDate * 1000).toISOString().slice(0, 10) : null,

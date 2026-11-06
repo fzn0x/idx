@@ -70,6 +70,28 @@ test("earnings parse: padded zero revenue is null and has no margin (recorded 20
   assert.equal(q.revenue, 28589918000000);
 });
 
+test("earnings estimates: this and next quarter and year, same numbers as the Rust parser", () => {
+  const e = y.parseEarnings(JSON.parse(fixture("yahoo/quote_summary_earnings_tlkm.json")).quoteSummary.result[0], "TLKM");
+  assert.deepEqual(e.estimates.map((x) => x.period), ["0q", "+1q", "0y", "+1y"]);
+  assert.deepEqual(e.estimates.map((x) => x.period_type), ["quarterly", "quarterly", "annual", "annual"]);
+  const q = e.estimates[0];
+  assert.equal(q.end_date, "2026-09-30");
+  assert.equal(q.eps_avg, 58.23986);
+  assert.equal(q.eps_low, 57.81064);
+  assert.equal(q.eps_year_ago, 48.54);
+  assert.ok(Math.abs(q.eps_growth_pct - 19.98) < 1e-9);
+  assert.equal(q.eps_analysts, 3);
+  assert.ok(Math.abs(q.revenue_growth_pct - 4.25) < 1e-9);
+  assert.equal(e.estimates[2].eps_analysts, 19);
+  assert.equal(e.estimates[2].revenue_analysts, 22);
+  const late = y.parseEarnings(JSON.parse(fixture("yahoo/quote_summary_earnings_tlkm_20261106.json")).quoteSummary.result[0], "TLKM");
+  const nq = late.estimates[1];
+  assert.equal(nq.eps_avg, 47.35);
+  assert.equal(nq.revenue_avg, null, "padded revenue consensus");
+  assert.equal(nq.revenue_growth_pct, null);
+  assert.equal(nq.revenue_analysts, 0);
+});
+
 test("timeseries pivot", () => {
   const body = JSON.parse(fixture("yahoo/timeseries_bbca.json"));
   const f = y.parseTimeseries(body, "BBCA", "annual");

@@ -473,11 +473,51 @@ pub struct NextEarnings {
     pub analysts: Option<u32>,
 }
 
+/// Whether an earnings row covers a fiscal year or a quarter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PeriodKind {
+    Annual,
+    Quarterly,
+}
+
+/// Analyst consensus for one period, as the source publishes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EarningsEstimate {
+    /// Source label: `0q` this quarter, `+1q` next quarter, `0y` this fiscal
+    /// year, `+1y` next fiscal year.
+    pub period: String,
+    pub period_type: PeriodKind,
+    /// Last day of the period.
+    pub end_date: Option<NaiveDate>,
+    pub eps_avg: Option<f64>,
+    pub eps_low: Option<f64>,
+    pub eps_high: Option<f64>,
+    /// EPS of the same period a year earlier.
+    pub eps_year_ago: Option<f64>,
+    /// Consensus EPS versus a year earlier, in percent (`19.98`).
+    pub eps_growth_pct: Option<f64>,
+    /// Analysts behind the EPS consensus.
+    pub eps_analysts: Option<u32>,
+    pub revenue_avg: Option<f64>,
+    pub revenue_low: Option<f64>,
+    pub revenue_high: Option<f64>,
+    pub revenue_year_ago: Option<f64>,
+    /// Consensus revenue versus a year earlier, in percent.
+    pub revenue_growth_pct: Option<f64>,
+    /// Analysts behind the revenue consensus.
+    pub revenue_analysts: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Earnings {
     pub symbol: Symbol,
     pub name: Option<String>,
     pub currency: Option<String>,
+    /// Analyst consensus for this and next quarter and fiscal year, in source
+    /// order (`0q`, `+1q`, `0y`, `+1y`).
+    #[serde(default)]
+    pub estimates: Vec<EarningsEstimate>,
     /// Reported quarters, oldest first.
     pub quarters: Vec<EarningsQuarter>,
     /// Fiscal-year revenue and earnings, oldest first.

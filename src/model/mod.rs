@@ -42,10 +42,10 @@ pub use flow::{
     ForeignFlow, ForeignRow, ForeignSort, ForeignTotals, MarketForeign,
 };
 pub use fundamentals::{
-    Analyst, BalanceSheet, CashFlow, Director, Dividend, Earnings, EarningsQuarter,
-    FinancialPeriod, Financials, Fundamentals, Growth, Health, IncomeStatement, NextEarnings,
-    PerShare, Profile, Profitability, RevenueEarnings, StatementPeriod, Valuation, Verdict,
-    VerdictLabel,
+    Analyst, BalanceSheet, CashFlow, Director, Dividend, Earnings, EarningsEstimate,
+    EarningsQuarter, FinancialPeriod, Financials, Fundamentals, Growth, Health, IncomeStatement,
+    NextEarnings, PerShare, PeriodKind, Profile, Profitability, RevenueEarnings, StatementPeriod,
+    Valuation, Verdict, VerdictLabel,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
 pub use market::{MarketOverview, MarketRow};

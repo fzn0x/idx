@@ -71,6 +71,7 @@ function kv(pairs) {
   return dl;
 }
 const pct = (v) => fmt.pctPlain(v);
+const ESTIMATE_NAMES = { "0q": "this quarter", "+1q": "next quarter", "0y": "this year", "+1y": "next year" };
 const x = (v) => (v == null ? "—" : `${fmt.num(v, 2)}x`);
 
 const newsTable = (items) => wrapScroll(table([
@@ -182,6 +183,13 @@ const R = {
     if (e.quarters.length) frag.append(wrapScroll(table([{ h: "Quarter", k: "period", l: true, cls: "sym" }, { h: "Period end", f: (q) => fmt.date(q.end_date), l: true }, { h: "Reported", f: (q) => fmt.date(q.reported_date), l: true }, { h: "EPS actual", f: (q) => fmt.price(q.eps_actual) }, { h: "EPS est.", f: (q) => fmt.price(q.eps_estimate) }, { h: "Surprise", f: (q) => fmt.pct(q.surprise_pct), cls: (q) => `num ${signClass(q.surprise_pct)}` }], e.quarters)));
     const re = [...e.yearly, ...e.quarterly];
     if (re.length) frag.append(wrapScroll(table([{ h: "Period", k: "period", l: true, cls: "sym" }, { h: "Revenue", f: (r) => fmt.compact(r.revenue) }, { h: "Earnings", f: (r) => fmt.compact(r.earnings) }, { h: "Margin", f: (r) => pct(r.profit_margin_pct) }], re)));
+    const est = e.estimates || [];
+    if (est.length) frag.append(wrapScroll(table([
+      { h: "Consensus", f: (r) => `${ESTIMATE_NAMES[r.period] || r.period} (${r.period})`, l: true, cls: "sym" }, { h: "Period end", f: (r) => fmt.date(r.end_date), l: true },
+      { h: "EPS avg", f: (r) => fmt.price(r.eps_avg) }, { h: "EPS low", f: (r) => fmt.price(r.eps_low) }, { h: "EPS high", f: (r) => fmt.price(r.eps_high) }, { h: "Analysts", f: (r) => fmt.int(r.eps_analysts) },
+      { h: "EPS growth", f: (r) => fmt.pct(r.eps_growth_pct), cls: (r) => `num ${signClass(r.eps_growth_pct)}` }, { h: "Revenue avg", f: (r) => fmt.compact(r.revenue_avg) },
+      { h: "Revenue growth", f: (r) => fmt.pct(r.revenue_growth_pct), cls: (r) => `num ${signClass(r.revenue_growth_pct)}` },
+    ], est)));
     if (e.next) frag.append(el("p", { class: "prose", text: `Next earnings ${e.next.date || "—"}${e.next.date_is_estimate ? " (estimated)" : ""} · EPS consensus ${fmt.price(e.next.eps_avg)} (${fmt.price(e.next.eps_low)} – ${fmt.price(e.next.eps_high)}, ${e.next.analysts ?? "—"} analysts) · revenue consensus ${fmt.compact(e.next.revenue_avg)}` }));
     if (e.ex_dividend_date) frag.append(el("p", { class: "prose", text: `Ex-dividend ${e.ex_dividend_date} · payment ${e.dividend_date || "—"}` }));
     return frag;

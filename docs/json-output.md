@@ -410,12 +410,24 @@ Symbols that failed are listed in `warnings`.
 
 ## `idx.earnings.v1` (`stocks earnings`)
 
-`data`: `quarters[]` (`period` like `3Q2025`, `end_date`, `reported_date`,
-`eps_actual`, `eps_estimate`, `surprise_pct`), `yearly[]` and `quarterly[]`
-(`period`, `revenue`, `earnings`, `profit_margin_pct`), `next` (`date`,
-`date_is_estimate`, `eps_avg`/`eps_low`/`eps_high`, `eps_growth_pct`,
+`data`: `estimates[]`, `quarters[]` (`period` like `3Q2025`, `end_date`,
+`reported_date`, `eps_actual`, `eps_estimate`, `surprise_pct`), `yearly[]` and
+`quarterly[]` (`period`, `revenue`, `earnings`, `profit_margin_pct`), `next`
+(`date`, `date_is_estimate`, `eps_avg`/`eps_low`/`eps_high`, `eps_growth_pct`,
 `revenue_avg`/`revenue_low`/`revenue_high`, `analysts`), `ex_dividend_date`,
 `dividend_date`, `source`.
+
+- `estimates[]` is the analyst consensus for this and next quarter and fiscal
+  year, in source order: `period` (`0q`, `+1q`, `0y`, `+1y`), `period_type`
+  (`quarterly` or `annual`), `end_date`, `eps_avg`/`eps_low`/`eps_high`,
+  `eps_year_ago`, `eps_growth_pct` (percent, versus a year earlier),
+  `eps_analysts`, `revenue_avg`/`revenue_low`/`revenue_high`,
+  `revenue_year_ago`, `revenue_growth_pct`, `revenue_analysts`. An optional
+  addition to `idx.earnings.v1`: envelopes from older versions lack it.
+- Yahoo pads figures it has not loaded as zeros; idx reports those as `null`
+  (a quarter's `revenue`, `earnings` and `profit_margin_pct`, a consensus
+  amount), never as `0`. `profit_margin_pct` is set only when both revenue and
+  earnings are.
 
 ## `idx.technical.v1` (`stocks technical`)
 

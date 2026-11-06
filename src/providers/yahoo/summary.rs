@@ -9,8 +9,9 @@ use serde_json::Value;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    Analyst, Director, Dividend, Earnings, EarningsQuarter, Fundamentals, Growth, Health,
-    NextEarnings, PerShare, Profile, Profitability, RevenueEarnings, Symbol, Valuation,
+    Analyst, Director, Dividend, Earnings, EarningsEstimate, EarningsQuarter, Fundamentals, Growth,
+    Health, NextEarnings, PerShare, PeriodKind, Profile, Profitability, RevenueEarnings, Symbol,
+    Valuation,
 };
 
 use super::NAME;
@@ -237,6 +238,53 @@ fn revenue_earnings(arr: Option<&Vec<Value>>) -> Vec<RevenueEarnings> {
     .unwrap_or_default()
 }
 
+/// An analyst count. Unlike amounts, a count of zero is a value: Yahoo writes
+/// every zero as `{"raw": 0, "fmt": null}`, padded or not.
+fn count(v: &Value, key: &str) -> Option<u32> {
+    raw(v, key).map(|x| x.max(0.0) as u32)
+}
+
+/// The consensus rows of `earningsTrend.trend[]` for this and next quarter and
+/// fiscal year (`0q`, `+1q`, `0y`, `+1y`), in source order. Long-term growth
+/// rows (`+5y`, `-5y`), when present, are not period estimates and are left out.
+fn estimates(trend: &Value) -> Vec<EarningsEstimate> {
+    let Some(rows) = trend.get("trend").and_then(Value::as_array) else {
+        return vec![];
+    };
+    rows.iter()
+        .filter_map(|t| {
+            let period = t.get("period").and_then(Value::as_str)?;
+            let period_type = match period {
+                "0q" | "+1q" => PeriodKind::Quarterly,
+                "0y" | "+1y" => PeriodKind::Annual,
+                _ => return None,
+            };
+            let eps = module(t, "earningsEstimate");
+            let rev = module(t, "revenueEstimate");
+            Some(EarningsEstimate {
+                period: period.to_string(),
+                period_type,
+                end_date: t
+                    .get("endDate")
+                    .and_then(Value::as_str)
+                    .and_then(|d| NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d").ok()),
+                eps_avg: amount(eps, "avg"),
+                eps_low: amount(eps, "low"),
+                eps_high: amount(eps, "high"),
+                eps_year_ago: amount(eps, "yearAgoEps"),
+                eps_growth_pct: pct(eps, "growth").or_else(|| pct(t, "growth")),
+                eps_analysts: count(eps, "numberOfAnalysts"),
+                revenue_avg: amount(rev, "avg"),
+                revenue_low: amount(rev, "low"),
+                revenue_high: amount(rev, "high"),
+                revenue_year_ago: amount(rev, "yearAgoRevenue"),
+                revenue_growth_pct: pct(rev, "growth"),
+                revenue_analysts: count(rev, "numberOfAnalysts"),
+            })
+        })
+        .collect()
+}
+
 pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
     let r = result(body)?;
     let price = module(&r, "price");
@@ -304,6 +352,7 @@ pub fn parse_earnings(body: &str, symbol: &Symbol) -> Result<Earnings> {
         symbol: symbol.clone(),
         name: text(price, "longName").or_else(|| text(price, "shortName")),
         currency: text(e, "financialCurrency").or_else(|| text(price, "currency")),
+        estimates: estimates(trend),
         quarters,
         yearly: revenue_earnings(
             e.pointer("/financialsChart/yearly")
@@ -432,6 +481,61 @@ mod tests {
         let e = parse_earnings(EARN_TLKM, &sym("TLKM")).unwrap();
         assert!(!e.quarters.is_empty());
         assert!(!e.yearly.is_empty());
+    }
+
+    #[test]
+    fn estimates_for_this_and_next_quarter_and_year() {
+        let e = parse_earnings(EARN_TLKM, &sym("TLKM")).unwrap();
+        let periods: Vec<&str> = e.estimates.iter().map(|x| x.period.as_str()).collect();
+        assert_eq!(periods, ["0q", "+1q", "0y", "+1y"]);
+        let q = &e.estimates[0];
+        assert_eq!(q.period_type, PeriodKind::Quarterly);
+        assert_eq!(q.end_date, NaiveDate::from_ymd_opt(2026, 9, 30));
+        assert_eq!(q.eps_avg, Some(58.23986));
+        assert_eq!(q.eps_low, Some(57.81064));
+        assert_eq!(q.eps_high, Some(58.68895));
+        assert_eq!(q.eps_year_ago, Some(48.54));
+        assert!((q.eps_growth_pct.unwrap() - 19.98).abs() < 1e-9);
+        assert_eq!(q.eps_analysts, Some(3));
+        assert_eq!(q.revenue_avg, Some(38_169_334_860_000.0));
+        assert_eq!(q.revenue_year_ago, Some(36_613_000_000_000.0));
+        assert!((q.revenue_growth_pct.unwrap() - 4.25).abs() < 1e-9);
+        assert_eq!(q.revenue_analysts, Some(3));
+        let next_q = &e.estimates[1];
+        assert_eq!(next_q.end_date, NaiveDate::from_ymd_opt(2026, 12, 31));
+        assert_eq!(next_q.eps_avg, Some(36.08966));
+        assert!((next_q.eps_growth_pct.unwrap() - 76.05).abs() < 1e-9);
+        assert_eq!(next_q.revenue_analysts, Some(1));
+        let y = &e.estimates[2];
+        assert_eq!(y.period_type, PeriodKind::Annual);
+        assert_eq!(y.eps_avg, Some(202.63542));
+        assert_eq!(y.eps_analysts, Some(19));
+        assert!((y.eps_growth_pct.unwrap() - 12.68).abs() < 1e-9);
+        assert_eq!(y.revenue_avg, Some(150_213_955_830_000.0));
+        assert_eq!(y.revenue_analysts, Some(22));
+        let next_y = &e.estimates[3];
+        assert_eq!(next_y.end_date, NaiveDate::from_ymd_opt(2027, 12, 31));
+        assert_eq!(next_y.eps_avg, Some(221.80434));
+        assert_eq!(next_y.eps_analysts, Some(20));
+        assert!((next_y.eps_growth_pct.unwrap() - 9.46).abs() < 1e-9);
+
+        // 2026-11-06: next quarter's revenue consensus is padded (no analysts).
+        let e = parse_earnings(EARN_TLKM_20261106, &sym("TLKM")).unwrap();
+        let q = &e.estimates[0];
+        assert_eq!(q.end_date, NaiveDate::from_ymd_opt(2026, 12, 31));
+        assert_eq!(q.eps_avg, Some(42.29838));
+        assert_eq!(q.eps_analysts, Some(1));
+        let next_q = &e.estimates[1];
+        assert_eq!(next_q.eps_avg, Some(47.35));
+        assert_eq!(next_q.revenue_avg, None);
+        assert_eq!(next_q.revenue_low, None);
+        assert_eq!(next_q.revenue_year_ago, None);
+        assert_eq!(next_q.revenue_growth_pct, None);
+        assert_eq!(next_q.revenue_analysts, Some(0));
+        // BBCA carries the same four rows.
+        let e = parse_earnings(EARN_BBCA, &sym("BBCA")).unwrap();
+        assert_eq!(e.estimates.len(), 4);
+        assert_eq!(e.estimates[3].eps_avg, Some(526.90076));
     }
 
     #[test]
