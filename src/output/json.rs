@@ -8,9 +8,10 @@ use crate::error::{IdxError, Result};
 use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CorporateActions,
     DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials, ForeignFlowReport,
-    ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport, IndexBoard,
-    InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
-    Release, ScreenReport, SentimentReport, Technical, Watchlist,
+    ForeignReport, Fundamentals, GrowthLens, History, HoldersReport, Holidays, ImportReport,
+    IndexBoard, InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance,
+    Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport, Technical, ValuationLens,
+    Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::providers::Sourced;
@@ -53,6 +54,9 @@ pub const SCHEMA_QUOTES: &str = "idx.quotes.v1";
 pub const SCHEMA_HISTORY: &str = "idx.history.v1";
 pub const SCHEMA_PROFILE: &str = "idx.profile.v1";
 pub const SCHEMA_FUNDAMENTALS: &str = "idx.fundamentals.v1";
+pub const SCHEMA_GROWTH: &str = "idx.growth.v1";
+pub const SCHEMA_VALUATION: &str = "idx.valuation.v1";
+pub const SCHEMA_RISK: &str = "idx.risk.v1";
 pub const SCHEMA_COMPARE: &str = "idx.compare.v1";
 pub const SCHEMA_FINANCIALS: &str = "idx.financials.v1";
 pub const SCHEMA_EARNINGS: &str = "idx.earnings.v1";
@@ -92,6 +96,9 @@ pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
 pub type ProfileEnvelope = Envelope<Profile>;
 pub type FundamentalsEnvelope = Envelope<Fundamentals>;
+pub type GrowthEnvelope = Envelope<GrowthLens>;
+pub type ValuationEnvelope = Envelope<ValuationLens>;
+pub type RiskEnvelope = Envelope<RiskLens>;
 pub type CompareEnvelope = Envelope<Vec<Fundamentals>>;
 pub type FinancialsEnvelope = Envelope<Financials>;
 pub type EarningsEnvelope = Envelope<Earnings>;
@@ -166,6 +173,9 @@ pub fn schema_names() -> &'static [&'static str] {
         "history",
         "profile",
         "fundamentals",
+        "growth",
+        "valuation",
+        "risk",
         "compare",
         "financials",
         "earnings",
@@ -212,6 +222,9 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "history" => schemars::schema_for!(HistoryEnvelope),
         "profile" => schemars::schema_for!(ProfileEnvelope),
         "fundamentals" => schemars::schema_for!(FundamentalsEnvelope),
+        "growth" => schemars::schema_for!(GrowthEnvelope),
+        "valuation" => schemars::schema_for!(ValuationEnvelope),
+        "risk" => schemars::schema_for!(RiskEnvelope),
         "compare" => schemars::schema_for!(CompareEnvelope),
         "financials" => schemars::schema_for!(FinancialsEnvelope),
         "earnings" => schemars::schema_for!(EarningsEnvelope),

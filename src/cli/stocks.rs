@@ -5,15 +5,16 @@ use clap::Subcommand;
 use crate::analysis::screen::{parse_filters, Key};
 use crate::error::IdxError;
 use crate::error::Result;
-use crate::model::{Interval, Period, StatementPeriod, Symbol};
+use crate::model::{Interval, Lens, Period, StatementPeriod, Symbol};
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
-    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_HISTORY, SCHEMA_INSTRUMENTS,
-    SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
-    SCHEMA_TECHNICAL,
+    SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FUNDAMENTALS, SCHEMA_GROWTH, SCHEMA_HISTORY,
+    SCHEMA_INSTRUMENTS, SCHEMA_NEWS, SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK,
+    SCHEMA_SCREEN, SCHEMA_SENTIMENT, SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
+use crate::output::table_lenses as lenses;
 use crate::output::table_news as newstbl;
 use crate::output::table_reports::{self as reports, StatementFlags};
 use crate::service::{self, ScreenOptions};
@@ -132,9 +133,39 @@ pub enum StocksCmd {
 
     /// Valuation, profitability, balance-sheet, growth and dividend ratios with a plain-language verdict.
     #[command(
-        after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n  idx -o json stocks fundamental ITMG | jq '.data | {currency, financial_currency}'\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). Negative shareholders' equity scores against the company and sets the P/B, ROE and debt/equity rules aside. When the statements are in another currency than the price (financial_currency USD, price in IDR), P/B, P/S and EV multiples mix the two, so P/B is not scored and the table marks them with *. It is not investment advice."
+        after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n  idx -o json stocks fundamental ITMG | jq '.data | {currency, financial_currency}'\n  idx stocks fundamental TLKM --lens risk   # same as idx stocks risk TLKM\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). Negative shareholders' equity scores against the company and sets the P/B, ROE and debt/equity rules aside. When the statements are in another currency than the price (financial_currency USD, price in IDR), P/B, P/S and EV multiples mix the two, so P/B is not scored and the table marks them with *. With --lens growth, valuation or risk a focused reading replaces the report (idx.growth.v1, idx.valuation.v1, idx.risk.v1). It is not investment advice."
     )]
     Fundamental {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// A focused reading instead of the full report: the same as `stocks growth|valuation|risk`.
+        #[arg(long, value_enum, value_name = "LENS")]
+        lens: Option<Lens>,
+    },
+
+    /// Growth lens: latest quarter, forward EPS against trailing, and revenue and net income across the fiscal years.
+    #[command(
+        after_help = "Examples:\n  idx stocks growth BBCA\n  idx -o json stocks growth TLKM | jq '.data.reading'\n  idx stocks fundamental BBCA --lens growth   # the same\n\nLatest-quarter revenue and earnings growth, forward EPS against trailing, and revenue and net\nincome across the annual statements (about four fiscal years: CAGR, how often revenue grew,\na turn from profit to loss). Every rule that ran is listed with its points (+ favours growth),\nevery rule that could not run is noted. Label: growing (score 2 or more), shrinking (-2 or\nless), mixed (points both ways), stable, or insufficient_data (fewer than 3 rules).\nHeuristic, not investment advice."
+    )]
+    Growth {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+    },
+
+    /// Valuation lens: P/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and the analyst target, each scored.
+    #[command(
+        after_help = "Examples:\n  idx stocks valuation ITMG\n  idx -o json stocks valuation BBCA | jq '.data.reading.rules'\n  idx stocks fundamental ITMG --lens valuation   # the same\n\nP/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and the analyst mean target (3 or more\nanalysts), each scored (+ favours cheapness). Book, sales and EV multiples are not scored for\ncompanies whose statements are in another currency than the price (USD reporters such as\nITMG), P/B not with negative equity, and P/S and EV/EBITDA not for banks and insurers. Label:\ncheap (score 3 or more), expensive (-3 or less), fair, or insufficient_data (fewer than 3\nrules). It can disagree with the verdict of `stocks fundamental`, which also weighs quality\nand growth. Heuristic, not investment advice."
+    )]
+    Valuation {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+    },
+
+    /// Risk lens: negative equity, leverage, liquidity, losses, and beta, volatility and largest fall against IHSG.
+    #[command(
+        after_help = "Examples:\n  idx stocks risk GIAA\n  idx -o json stocks risk TLKM | jq '.data.price'\n  idx stocks fundamental TLKM --lens risk   # the same\n\nBalance sheet (negative equity, debt/equity, current ratio; banks and insurers skip the last\ntwo), losses over the trailing twelve months, and a year of daily closes against IHSG (^JKSE)\non the sessions both traded: beta (120 sessions or more), volatility relative to IHSG's, and\nthe largest fall relative to IHSG's. Points add risk. Label: high (score 3 or more), low (-2\nor less), moderate, or insufficient_data (fewer than 3 rules). Beta is computed by idx; the\nsource's own beta in `stocks fundamental` does not track IHSG. Heuristic, not investment advice."
+    )]
+    Risk {
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -281,7 +312,14 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             benchmark,
             no_benchmark,
         } => returns(ctx, &symbols, &benchmark, no_benchmark).await,
-        StocksCmd::Fundamental { symbol } => fundamental(ctx, &symbol).await,
+        StocksCmd::Fundamental {
+            symbol,
+            lens: Some(l),
+        } => lens(ctx, &symbol, l).await,
+        StocksCmd::Fundamental { symbol, lens: None } => fundamental(ctx, &symbol).await,
+        StocksCmd::Growth { symbol } => lens(ctx, &symbol, Lens::Growth).await,
+        StocksCmd::Valuation { symbol } => lens(ctx, &symbol, Lens::Valuation).await,
+        StocksCmd::Risk { symbol } => lens(ctx, &symbol, Lens::Risk).await,
         StocksCmd::Technical { symbol, period } => technical(ctx, &symbol, period).await,
         StocksCmd::Compare { symbols } => compare(ctx, &symbols).await,
         StocksCmd::Foreign { symbol, days } => {
@@ -470,6 +508,19 @@ async fn fundamental(ctx: &Context, raw: &str) -> Result<()> {
     emit(ctx, SCHEMA_FUNDAMENTALS, result, |d| {
         reports::fundamentals(d, ctx.color)
     })
+}
+
+async fn lens(ctx: &Context, raw: &str, which: Lens) -> Result<()> {
+    let symbol = Symbol::parse(raw)?;
+    match service::lens(ctx.provider.as_ref(), &symbol, which).await? {
+        service::LensResult::Growth(r) => {
+            emit(ctx, SCHEMA_GROWTH, r, |d| lenses::growth(d, ctx.color))
+        }
+        service::LensResult::Valuation(r) => emit(ctx, SCHEMA_VALUATION, r, |d| {
+            lenses::valuation(d, ctx.color)
+        }),
+        service::LensResult::Risk(r) => emit(ctx, SCHEMA_RISK, r, |d| lenses::risk(d, ctx.color)),
+    }
 }
 
 async fn technical(ctx: &Context, raw: &str, period: Period) -> Result<()> {

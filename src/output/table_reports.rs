@@ -91,7 +91,7 @@ pub fn wrap(text: &str, width: usize) -> String {
     out
 }
 
-fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
+pub(crate) fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
     let mut t = base_table(color);
     t.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS);
@@ -101,7 +101,7 @@ fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
     t
 }
 
-fn section(color: bool, name: &str) -> Cell {
+pub(crate) fn section(color: bool, name: &str) -> Cell {
     let c = Cell::new(name.to_uppercase()).add_attribute(Attribute::Bold);
     if color {
         c.fg(Color::Cyan)

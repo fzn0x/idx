@@ -975,6 +975,316 @@ fn usd_statements_do_not_score_pb() {
         .stdout(predicate::str::contains("financial_currency"));
 }
 
+const CHART: &str = "https://query1.finance.yahoo.com/v8/finance/chart";
+const TIMESERIES: &str =
+    "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries";
+
+/// Seeds what the lenses read for one ticker, recorded 2026-11-06: the
+/// quoteSummary fundamentals, the annual statements, and a year of daily
+/// candles for the ticker and (unless `with_index` is false) for IHSG.
+fn seed_lens(cache: &std::path::Path, sym: &str, statements: &str, with_index: bool) {
+    let lower = sym.to_ascii_lowercase();
+    seed(
+        cache,
+        &format!("{QUOTE_SUMMARY}/{sym}.JK?{FUNDAMENTAL_MODULES}"),
+        &format!("yahoo/quote_summary_fundamentals_{lower}.json"),
+    );
+    seed(
+        cache,
+        &format!(
+            "{TIMESERIES}/{sym}.JK?type={}",
+            idx::providers::yahoo::timeseries::types_param(idx::model::StatementPeriod::Annual)
+        ),
+        &format!("yahoo/{statements}"),
+    );
+    seed(
+        cache,
+        &format!("{CHART}/{sym}.JK?range=1y&interval=1d&includePrePost=false"),
+        &format!("yahoo/chart_{lower}_1y_1d.json"),
+    );
+    if with_index {
+        seed(
+            cache,
+            &format!("{CHART}/^JKSE?range=1y&interval=1d&includePrePost=false"),
+            "yahoo/chart_jkse_1y_1d.json",
+        );
+    }
+}
+
+fn json_of(cache: &std::path::Path, config: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    let out = idx(cache, config).args(args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+fn rule_ids(reading: &serde_json::Value) -> Vec<(String, i64)> {
+    reading["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["rule"].as_str().unwrap().to_string(),
+                r["points"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn lens_commands_have_help_and_schemas() {
+    let sb = sandbox();
+    for (cmd, needle) in [
+        ("growth", "idx stocks growth BBCA"),
+        ("valuation", "idx stocks valuation ITMG"),
+        ("risk", "idx stocks risk GIAA"),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(["stocks", cmd, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(needle))
+            .stdout(predicate::str::contains("Heuristic"));
+        let v = json_of(&sb.cache, &sb.config, &["schema", cmd]);
+        assert!(v["$schema"].as_str().unwrap().contains("json-schema.org"));
+        assert!(v.to_string().contains("inputs_available"), "{cmd}");
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "fundamental", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--lens <LENS>"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "fundamental", "BBCA", "--lens", "bogus"])
+        .assert()
+        .code(2);
+    // Nothing cached: the lenses fail like the other stock commands.
+    for cmd in ["growth", "valuation", "risk"] {
+        idx(&sb.cache, &sb.config)
+            .args(["--offline", "stocks", cmd, "BBCA"])
+            .assert()
+            .code(5)
+            .stderr(predicate::str::contains("BBCA"));
+    }
+}
+
+#[test]
+fn risk_lens_reads_a_year_against_ihsg() {
+    let sb = sandbox();
+    seed_lens(&sb.cache, "TLKM", "timeseries_tlkm.json", true);
+    let v = json_of(
+        &sb.cache,
+        &sb.config,
+        &["-o", "json", "stocks", "risk", "TLKM"],
+    );
+    assert_eq!(v["schema"], "idx.risk.v1");
+    assert!(v.get("warnings").is_none(), "{v}");
+    let d = &v["data"];
+    assert_eq!(d["reading"]["label"], "moderate");
+    assert_eq!(d["reading"]["score"], 2);
+    assert_eq!(
+        rule_ids(&d["reading"]),
+        [
+            ("leverage".to_string(), 0),
+            ("liquidity".into(), 1),
+            ("losses".into(), 0),
+            ("beta".into(), 0),
+            ("volatility".into(), 1),
+            ("drawdown".into(), 0),
+        ]
+    );
+    assert_eq!(d["price"]["benchmark"], "^JKSE");
+    assert_eq!(d["price"]["observations"], 238);
+    assert_eq!(d["price"]["to"], "2026-11-04");
+    assert!((d["price"]["beta"].as_f64().unwrap() - 1.122).abs() < 0.003);
+
+    // --lens on `stocks fundamental` is the same reading.
+    let same = json_of(
+        &sb.cache,
+        &sb.config,
+        &[
+            "-o",
+            "json",
+            "stocks",
+            "fundamental",
+            "TLKM",
+            "--lens",
+            "risk",
+        ],
+    );
+    assert_eq!(same["schema"], "idx.risk.v1");
+    assert_eq!(same["data"], v["data"]);
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "risk", "TLKM"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("TLKM · "))
+        .stdout(predicate::str::contains("PRICE VS ^JKSE (1Y DAILY)"))
+        .stdout(predicate::str::contains("238 matched sessions"))
+        .stdout(predicate::str::contains("MODERATE (score +2, 6 rules)"))
+        .stdout(predicate::str::contains(
+            "  +1  volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)",
+        ))
+        .stdout(predicate::str::contains("Points add risk."));
+}
+
+#[test]
+fn risk_lens_without_ihsg_keeps_the_balance_sheet() {
+    let sb = sandbox();
+    seed_lens(&sb.cache, "TLKM", "timeseries_tlkm.json", false);
+    let v = json_of(
+        &sb.cache,
+        &sb.config,
+        &[
+            "--provider",
+            "yahoo",
+            "-o",
+            "json",
+            "stocks",
+            "risk",
+            "TLKM",
+        ],
+    );
+    let warnings = v["warnings"].to_string();
+    assert!(
+        warnings.contains("benchmark ^JKSE unavailable"),
+        "{warnings}"
+    );
+    let d = &v["data"];
+    assert!(d["price"]["beta"].is_null());
+    assert!(d["price"]["volatility_pct"].as_f64().unwrap() > 40.0);
+    assert_eq!(d["reading"]["inputs_available"], 3);
+    assert!(d["reading"]["notes"]
+        .to_string()
+        .contains("benchmark ^JKSE unavailable"));
+}
+
+#[test]
+fn growth_and_valuation_lenses_offline() {
+    let sb = sandbox();
+    seed_lens(&sb.cache, "TLKM", "timeseries_tlkm.json", true);
+    let g = json_of(
+        &sb.cache,
+        &sb.config,
+        &["-o", "json", "stocks", "growth", "TLKM"],
+    );
+    assert_eq!(g["schema"], "idx.growth.v1");
+    assert_eq!(g["data"]["reading"]["label"], "mixed");
+    assert_eq!(g["data"]["annual"].as_array().unwrap().len(), 4);
+    assert_eq!(g["data"]["sources"][1], "yahoo:timeseries");
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "growth", "TLKM"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fiscal year"))
+        .stdout(predicate::str::contains("MIXED (score +0, 6 rules)"))
+        .stdout(predicate::str::contains("Points favour growth."));
+
+    let v = json_of(
+        &sb.cache,
+        &sb.config,
+        &["-o", "json", "stocks", "valuation", "TLKM"],
+    );
+    assert_eq!(v["schema"], "idx.valuation.v1");
+    assert_eq!(v["data"]["reading"]["label"], "fair");
+    let same = json_of(
+        &sb.cache,
+        &sb.config,
+        &[
+            "-o",
+            "json",
+            "stocks",
+            "fundamental",
+            "TLKM",
+            "--lens",
+            "valuation",
+        ],
+    );
+    assert_eq!(same["data"], v["data"]);
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "valuation", "TLKM"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EV/EBITDA"))
+        .stdout(predicate::str::contains("FAIR (score +2, 7 rules)"))
+        .stdout(predicate::str::contains(
+            "dividend yield 10.0% is high, but the payout (125%) exceeds earnings",
+        ));
+}
+
+#[test]
+fn lenses_on_negative_equity_and_usd_statements() {
+    // GIAA: negative equity, losses, a weak year against IHSG.
+    let sb = sandbox();
+    seed_lens(&sb.cache, "GIAA", "timeseries_annual_giaa.json", true);
+    let args = ["--provider", "yahoo", "-o", "json", "stocks"];
+    let r = json_of(
+        &sb.cache,
+        &sb.config,
+        &[&args[..], &["risk", "GIAA"]].concat(),
+    );
+    assert_eq!(r["data"]["reading"]["label"], "high");
+    assert_eq!(r["data"]["reading"]["score"], 6);
+    assert_eq!(r["data"]["negative_equity"], true);
+    let g = json_of(
+        &sb.cache,
+        &sb.config,
+        &[&args[..], &["growth", "GIAA"]].concat(),
+    );
+    assert_eq!(g["data"]["statements_currency"], "USD");
+    assert!(g["data"]["reading"]["rules"]
+        .to_string()
+        .contains("net income turned from a profit in FY2022 to a loss in FY2025"));
+
+    // ITMG: USD statements, so P/B, P/S and EV/EBITDA are shown, not scored.
+    seed_lens(&sb.cache, "ITMG", "timeseries_annual_itmg.json", true);
+    let v = json_of(
+        &sb.cache,
+        &sb.config,
+        &[&args[..], &["valuation", "ITMG"]].concat(),
+    );
+    let d = &v["data"];
+    assert_eq!(d["reading"]["label"], "cheap");
+    assert_eq!(d["financial_currency"], "USD");
+    assert!(
+        d["price_to_book"].as_f64().unwrap() > 14000.0,
+        "as reported"
+    );
+    assert_eq!(
+        rule_ids(&d["reading"]),
+        [
+            ("pe_trailing".to_string(), 2),
+            ("peg".into(), 1),
+            ("dividend_yield".into(), 1),
+            ("analyst_target".into(), 0),
+        ]
+    );
+    let notes = d["reading"]["notes"].to_string();
+    assert!(
+        notes.contains("P/B 14103.31 not scored: statements in USD, price in IDR"),
+        "{notes}"
+    );
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "yahoo", "stocks", "valuation", "ITMG"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("14,103.31*"))
+        .stdout(predicate::str::contains(
+            "* Statements in USD, price in IDR",
+        ));
+    let r = json_of(
+        &sb.cache,
+        &sb.config,
+        &[&args[..], &["risk", "ITMG"]].concat(),
+    );
+    assert_eq!(r["data"]["reading"]["label"], "low");
+}
+
 #[test]
 fn ownership_import_and_queries_work_offline() {
     let sb = sandbox();

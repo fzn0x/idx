@@ -27,7 +27,9 @@ use crate::providers::{Provider, Sourced};
 use crate::universe::Issuer;
 
 mod exchange;
+mod lenses;
 pub use exchange::*;
+pub use lenses::*;
 
 /// Ratios plus the rule-based verdict.
 pub async fn fundamentals(p: &dyn Provider, symbol: &Symbol) -> Result<Sourced<Fundamentals>> {
