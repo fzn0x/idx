@@ -37,7 +37,8 @@ export function parseSymbol(raw) {
   if (!s) throw usage("empty symbol");
   // Index codes keep their caret (^JKSE is IHSG), like the CLI's Symbol::parse.
   const body = s.startsWith("^") ? s.slice(1) : s;
-  if (!body || body.length > 12 || !/^[A-Z0-9-]+$/.test(body)) throw usage(`invalid symbol "${raw}": expected an IDX ticker like BBCA`);
+  // A code starts with a letter or digit (BUKA-W is fine, "-" and "-BBCA" are not).
+  if (!body || body.length > 12 || !/^[A-Z0-9][A-Z0-9-]*$/.test(body)) throw usage(`invalid symbol "${raw}": expected an IDX ticker like BBCA`);
   return s;
 }
 export function parseSymbols(raw) {

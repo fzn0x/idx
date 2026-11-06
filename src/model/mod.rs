@@ -86,7 +86,9 @@ pub struct Symbol(String);
 
 impl Symbol {
     /// Accepts `bbca`, `BBCA`, `BBCA.JK`, ` bbca ` and returns `BBCA`.
-    /// Index codes keep their caret: `^JKSE` (IHSG), `^JKLQ45`.
+    /// Index codes keep their caret: `^JKSE` (IHSG), `^JKLQ45`. A code starts
+    /// with a letter or digit (`BUKA-W` is fine, `-` and `-BBCA` are not, so
+    /// the `-` that reads stdin never passes as a ticker).
     pub fn parse(raw: &str) -> Result<Symbol> {
         let mut s = raw.trim().to_ascii_uppercase();
         if let Some(stripped) = s.strip_suffix(".JK") {
@@ -96,7 +98,7 @@ impl Symbol {
             return Err(IdxError::Usage("empty symbol".into()));
         }
         let body = s.strip_prefix('^').unwrap_or(&s);
-        let ok = !body.is_empty()
+        let ok = body.starts_with(|c: char| c.is_ascii_alphanumeric())
             && body.len() <= 12
             && body.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
         if !ok {
@@ -469,6 +471,16 @@ mod tests {
         assert_eq!(Symbol::from_yahoo("^JKSE").as_str(), "^JKSE");
         assert!(Symbol::parse("^").is_err());
         assert!(!Symbol::parse("BBCA").unwrap().is_index());
+    }
+
+    #[test]
+    fn symbol_starts_with_a_letter_or_digit() {
+        for bad in ["-", "--", "-BBCA", "^-", "^-JKSE"] {
+            let e = Symbol::parse(bad).unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{bad}");
+        }
+        assert_eq!(Symbol::parse("buka-w").unwrap().as_str(), "BUKA-W");
+        assert_eq!(Symbol::parse("1A").unwrap().as_str(), "1A");
     }
 
     #[test]
