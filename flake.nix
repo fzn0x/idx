@@ -109,7 +109,9 @@
             }
           );
 
-          # `nix run github:fzn0x/idx#mcp`: the MCP server over stdio, for agent configs.
+          # `nix run github:fzn0x/idx#mcp`: the MCP server over stdio. Agent
+          # configs should point at an installed idx instead (README, Install):
+          # a cold `nix run` builds from source first.
           idx-mcp = pkgs.writeShellApplication {
             name = "idx-mcp";
             text = ''exec ${lib.getExe idx} mcp "$@"'';

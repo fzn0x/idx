@@ -76,11 +76,11 @@ The package is called **`ihsg-cli`**; the command it installs is **`idx`**
 (npm also adds `ihsg-cli` as an alias).
 
 ```sh
-cargo install ihsg-cli                    # crates.io, builds from source (Rust 1.89+)
+cargo install --locked ihsg-cli           # crates.io, builds from source (Rust 1.89+)
 npm install -g github:fzn0x/idx           # npm, straight from this repository
 npx github:fzn0x/idx stocks quote BBCA    # npm, no install
 curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh   # Linux, macOS
-nix profile install github:fzn0x/idx      # Nix (Linux, Apple silicon macOS), with shell completions
+nix profile install github:fzn0x/idx      # Nix (Linux; Apple silicon macOS untested), with shell completions
 nix run github:fzn0x/idx -- stocks quote BBCA   # Nix, no install
 ```
 
@@ -96,14 +96,21 @@ the [releases page](https://github.com/fzn0x/idx/releases). Static Linux
 binaries are musl builds and run on any distribution. The development version installs
 with `cargo install --git https://github.com/fzn0x/idx`.
 
-With Nix, `nix run github:fzn0x/idx#mcp` is a ready MCP server command
-(`"command": "nix", "args": ["run", "github:fzn0x/idx#mcp"]`), `overlays.default`
+Nix builds idx from source on your machine (there is no binary cache), so the
+first `nix profile install` or `nix run` takes several minutes. The bare
+`github:fzn0x/idx` ref follows `main`; add a release tag to pin one, as in
+`github:fzn0x/idx/v0.8.2` (the first release with the flake). For MCP clients,
+install once and register `$HOME/.nix-profile/bin/idx`, written as an absolute
+path, with the argument `mcp`: `idx mcp setup` prints the binary's resolved
+`/nix/store` path, which an upgrade followed by garbage collection removes.
+`nix run github:fzn0x/idx#mcp` starts the same server without installing, for
+trying it from a terminal; do not make it a client's server command, because a
+cold start (the first run, or the first after `main` moves) builds idx before
+the server answers, which takes longer than clients wait. `overlays.default`
 adds `pkgs.idx` for NixOS and home-manager configurations, and `nix develop` in
-a clone gives the toolchain from `rust-toolchain.toml` plus Node for `web/`.
-`idx mcp setup` prints the binary's resolved `/nix/store` path, which an upgrade
-followed by garbage collection removes, so register `~/.nix-profile/bin/idx` or
-the `nix run` command instead. On NixOS, point `idx stockbit login` at a browser
-with `IDX_BROWSER=$(command -v chromium)`.
+a clone gives the toolchain from `rust-toolchain.toml` plus Node for `web/`. On
+NixOS, point `idx stockbit login` at a browser with
+`IDX_BROWSER=$(command -v chromium)`.
 
 Shell completions:
 
