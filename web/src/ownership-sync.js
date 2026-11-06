@@ -10,6 +10,12 @@
 // Limits it respects: one D1 statement per part (D1 query caps), a daily
 // rows-written budget (D1 free tier allows 100k/day; every holding is three
 // writes with its two indexes), and the newest OWN_KEEP_RELEASES months.
+//
+// A part row is one holder's position in one issuer, the holder's register
+// lines already summed by idx (`accounts`). A month reloads when the IDX file
+// changes (sha256) or when an index written by idx 0.8.2 or later lists other
+// parts for it (`parts_key`), for example after the mirror is rebuilt with a
+// newer parser.
 
 import { fetchWithin } from "./net.js";
 
@@ -47,25 +53,38 @@ export async function sha256Hex(text) {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Picks the next action from the mirror index and what D1 holds. Pure, tested. */
+/** The part SHA-256s of one index release, in order: what D1 stores as `parts_key`. */
+export const partsKey = (r) => (r.parts || []).map((p) => p.sha256).join(",");
+
+/**
+ * Whether D1's copy of a month (`h`: {sha256, parts_key}) is the one the index
+ * lists. An index from idx 0.8.1 or older (no `positions`) has parts without
+ * summed accounts, so only the file hash counts there; once the index carries
+ * `positions`, its parts must match too. That way a month loaded before the
+ * mirror was rebuilt reloads once, and only from the rebuilt parts.
+ */
+const isCurrent = (h, r) => !!h && h.sha256 === r.sha256 && (r.positions == null || (h.parts_key ?? null) === partsKey(r));
+
+/** Picks the next action from the mirror index and what D1 holds (as_of -> {sha256, parts_key}). Pure, tested. */
 export function plan(index, have, keep) {
   if (index?.schema !== SCHEMA) throw new Error(`unexpected mirror schema ${index?.schema}`);
   const wanted = [...index.releases].sort((a, b) => b.as_of.localeCompare(a.as_of)).slice(0, keep);
   const wantedDates = new Set(wanted.map((r) => r.as_of));
   const prune = [...have.keys()].filter((d) => !wantedDates.has(d)).sort();
   if (prune.length) return { prune: prune[0] };
-  const load = wanted.find((r) => have.get(r.as_of) !== r.sha256);
+  const load = wanted.find((r) => !isCurrent(have.get(r.as_of), r));
   return load ? { load } : { upToDate: wanted.length };
 }
 
 const INSERT = `INSERT OR REPLACE INTO own_holdings
   (as_of, symbol, issuer_name, entity_key, holder, holder_raw, investor_type, local_foreign,
-   nationality, domicile, shares_scripless, shares_scrip, shares_total, pct)
+   nationality, domicile, shares_scripless, shares_scrip, shares_total, pct, accounts, controller_or_affiliate)
   SELECT ?1, json_extract(value, '$.symbol'), json_extract(value, '$.issuer_name'), json_extract(value, '$.entity_key'),
          json_extract(value, '$.holder'), json_extract(value, '$.holder_raw'), json_extract(value, '$.investor_type'),
          json_extract(value, '$.local_foreign'), json_extract(value, '$.nationality'), json_extract(value, '$.domicile'),
          json_extract(value, '$.shares_scripless'), json_extract(value, '$.shares_scrip'),
-         json_extract(value, '$.shares_total'), json_extract(value, '$.pct')
+         json_extract(value, '$.shares_total'), json_extract(value, '$.pct'),
+         json_extract(value, '$.accounts'), json_extract(value, '$.controller_or_affiliate')
   FROM json_each(?2)`;
 
 /**
@@ -82,7 +101,7 @@ export async function ownershipSync(env, { force = false } = {}) {
     if (!force && now - checked < CHECK_EVERY_SECS) return { idle: true, next_check_in: CHECK_EVERY_SECS - (now - checked) };
     const index = JSON.parse(await fetchText(`${base}/index.json`));
     await kvPut(env, "own:checked", now);
-    const have = new Map((await env.DB.prepare("SELECT as_of, sha256 FROM own_releases").all()).results.map((r) => [r.as_of, r.sha256]));
+    const have = new Map((await env.DB.prepare("SELECT as_of, sha256, parts_key FROM own_releases").all()).results.map((r) => [r.as_of, { sha256: r.sha256, parts_key: r.parts_key }]));
     const next = plan(index, have, keepReleases(env));
     if (next.upToDate != null) return { up_to_date: next.upToDate };
     if (next.prune) {
@@ -102,6 +121,9 @@ export async function ownershipSync(env, { force = false } = {}) {
     state = {
       as_of: r.as_of, sha256: r.sha256, format: r.format, source: r.source_url || `${base}/${r.file}`,
       rows: r.rows, issuers: r.issuers ?? null, entities: r.entities ?? null, parts: r.parts, next: 0, started_at: now,
+      // From an index written by idx 0.8.2 or later; null for older ones.
+      lines: r.lines ?? null, other_date_rows: r.other_date_rows ?? null,
+      controller_column: r.controller_column == null ? null : r.controller_column ? 1 : 0, parts_key: partsKey(r),
     };
     await kvPut(env, "own:sync", state);
   }
@@ -134,8 +156,8 @@ export async function ownershipSync(env, { force = false } = {}) {
     throw new Error(`${state.as_of}: loaded ${count} rows but the index lists ${state.rows}; discarded`);
   }
   await env.DB.prepare(
-    "INSERT OR REPLACE INTO own_releases (as_of, format, source, rows, synced_at, sha256, issuers, entities) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-  ).bind(state.as_of, state.format, state.source, count, now, state.sha256, state.issuers, state.entities).run();
+    "INSERT OR REPLACE INTO own_releases (as_of, format, source, rows, synced_at, sha256, issuers, entities, lines, other_date_rows, controller_column, parts_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+  ).bind(state.as_of, state.format, state.source, count, now, state.sha256, state.issuers, state.entities, state.lines ?? null, state.other_date_rows ?? null, state.controller_column ?? null, state.parts_key ?? null).run();
   await kvDel(env, "own:checked"); // next tick looks for the next month to load
   return { committed: state.as_of, rows: count };
 }

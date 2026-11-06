@@ -762,7 +762,20 @@ async function ownershipRelease(env, asOf) {
   }
   return row.as_of;
 }
-const holdingRow = (r) => ({ as_of: r.as_of, symbol: r.symbol, issuer_name: r.issuer_name, holder: r.holder, holder_raw: r.holder_raw, entity_key: r.entity_key, investor_type: r.investor_type, local_foreign: r.local_foreign, nationality: r.nationality ?? null, domicile: r.domicile ?? null, shares_scripless: r.shares_scripless ?? null, shares_scrip: r.shares_scrip ?? null, shares_total: r.shares_total, pct: r.pct });
+const holdingRow = (r) => ({ as_of: r.as_of, symbol: r.symbol, issuer_name: r.issuer_name, holder: r.holder, holder_raw: r.holder_raw, entity_key: r.entity_key, investor_type: r.investor_type, local_foreign: r.local_foreign, nationality: r.nationality ?? null, domicile: r.domicile ?? null, shares_scripless: r.shares_scripless ?? null, shares_scrip: r.shares_scrip ?? null, shares_total: r.shares_total, pct: r.pct, accounts: r.accounts ?? null, controller_or_affiliate: r.controller_or_affiliate ?? null });
+/** What the CLI's release notes say about loaded months: copies made before idx 0.8.2 summed accounts, rows dated otherwise. */
+async function ownershipNotes(env, dates) {
+  const rows = (await env.DB.prepare(`SELECT as_of, lines, other_date_rows FROM own_releases WHERE as_of IN (${dates.map((_, i) => `?${i + 1}`).join(", ")}) ORDER BY as_of`).bind(...dates).all()).results;
+  const notes = [];
+  const legacy = rows.filter((r) => r.lines == null).map((r) => r.as_of);
+  if (legacy.length) notes.push(`the web copy of ${legacy.join(", ")} predates idx 0.8.2, which sums a holder's accounts; it reloads once the mirror is rebuilt`);
+  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} row${r.other_date_rows === 1 ? "" : "s"} dated otherwise; they are not part of the ${r.as_of} holdings`);
+  return notes;
+}
+async function controllerReported(env, date) {
+  const r = await env.DB.prepare("SELECT controller_column FROM own_releases WHERE as_of = ?1").bind(date).first();
+  return r?.controller_column === 1;
+}
 
 export async function ownershipTicker(env, symbolRaw, asOf) {
   const symbol = parseSymbol(symbolRaw);
@@ -770,7 +783,8 @@ export async function ownershipTicker(env, symbolRaw, asOf) {
   const rows = (await env.DB.prepare("SELECT * FROM own_holdings WHERE as_of = ?1 AND symbol = ?2 ORDER BY pct DESC").bind(date, symbol).all()).results;
   if (!rows.length) throw notFound(`no holders above 1% recorded for ${symbol} as of ${date}`);
   const holders = rows.map(holdingRow);
-  return envelope("idx.ownership.holders.v1", { symbol, issuer_name: rows[0].issuer_name, as_of: date, listed_pct: holders.reduce((s, h) => s + h.pct, 0), holders }, { provider: "github-mirror", cached: true });
+  const data = { symbol, issuer_name: rows[0].issuer_name, as_of: date, listed_pct: holders.reduce((s, h) => s + h.pct, 0), holders, controller_reported: await controllerReported(env, date) };
+  return envelope("idx.ownership.holders.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
 }
 export async function ownershipEntity(env, query, asOf) {
   if (!query || query.trim().length < 3) throw usage("entity name needs at least 3 characters");
@@ -781,7 +795,8 @@ export async function ownershipEntity(env, query, asOf) {
   const rows = (await env.DB.prepare("SELECT * FROM own_holdings WHERE as_of = ?1 AND entity_key LIKE ?2 ORDER BY pct DESC").bind(date, `%${key}%`).all()).results;
   if (!rows.length) throw notFound(`no holder matching "${query}" as of ${date}`);
   const entities = [...new Set(rows.map((r) => r.holder))].sort();
-  return envelope("idx.ownership.entity.v1", { query, as_of: date, entities, holdings: rows.map(holdingRow) }, { provider: "github-mirror", cached: true });
+  const data = { query, as_of: date, entities, holdings: rows.map(holdingRow), controller_reported: await controllerReported(env, date) };
+  return envelope("idx.ownership.entity.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
 }
 export async function ownershipReleases(env) {
   const rows = (await env.DB.prepare("SELECT * FROM own_releases ORDER BY as_of").all()).results;
@@ -789,35 +804,31 @@ export async function ownershipReleases(env) {
   const warnings = [];
   if (s.loading) warnings.push(`loading ${s.loading.as_of}: part ${s.loading.part} of ${s.loading.of}`);
   if (!rows.length && !s.loading) warnings.push(await emptyRegisterMessage(env));
-  return envelope("idx.ownership.releases.v1", rows.map((r) => ({ as_of: r.as_of, format: r.format, source: r.source, sha256: r.sha256 || "", rows: r.rows, issuers: r.issuers ?? 0, entities: r.entities ?? 0, imported_at: new Date(r.synced_at * 1000).toISOString() })), { provider: "github-mirror", cached: true, warnings });
+  if (rows.length) warnings.push(...(await ownershipNotes(env, rows.map((r) => r.as_of))));
+  // D1 `rows` counts the positions loaded; `lines` (index from idx 0.8.2 on) the register lines behind them.
+  const list = rows.map((r) => ({
+    as_of: r.as_of, format: r.format, source: r.source, sha256: r.sha256 || "", rows: r.lines ?? r.rows, issuers: r.issuers ?? 0, entities: r.entities ?? 0, imported_at: new Date(r.synced_at * 1000).toISOString(),
+    positions: r.lines != null ? r.rows : null, other_date_rows: r.other_date_rows ?? null, controller_column: r.controller_column == null ? null : r.controller_column === 1,
+  }));
+  return envelope("idx.ownership.releases.v1", list, { provider: "github-mirror", cached: true, warnings });
 }
 export async function ownershipChanges(env, from, to, symbolRaw, minChange = 0, limit = 50, offset = 0) {
   if (!from || !to || from >= to) throw usage("--from must be earlier than --to (YYYY-MM-DD)");
   await ownershipRelease(env, from); await ownershipRelease(env, to);
   const symbol = symbolRaw ? parseSymbol(symbolRaw) : null;
+  const cols = "symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct, accounts, controller_or_affiliate";
   const load = async (d) => {
-    const q = symbol ? env.DB.prepare("SELECT symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct FROM own_holdings WHERE as_of = ?1 AND symbol = ?2").bind(d, symbol)
-                     : env.DB.prepare("SELECT symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct FROM own_holdings WHERE as_of = ?1").bind(d);
-    const m = new Map();
-    for (const r of (await q.all()).results) m.set(`${r.symbol}|${r.entity_key}`, r);
-    return m;
+    const q = symbol ? env.DB.prepare(`SELECT ${cols} FROM own_holdings WHERE as_of = ?1 AND symbol = ?2`).bind(d, symbol)
+                     : env.DB.prepare(`SELECT ${cols} FROM own_holdings WHERE as_of = ?1`).bind(d);
+    return (await q.all()).results;
   };
   const [before, after] = await Promise.all([load(from), load(to)]);
-  const changes = [];
-  const r4 = (v) => Math.round(v * 1e4) / 1e4;
-  for (const [k, a] of after) {
-    const b = before.get(k);
-    if (b) {
-      if (Math.abs(a.pct - b.pct) < 1e-9 && a.shares_total === b.shares_total) continue;
-      changes.push({ symbol: a.symbol, holder: a.holder, entity_key: a.entity_key, investor_type: a.investor_type, local_foreign: a.local_foreign, kind: "changed", pct_from: b.pct, pct_to: a.pct, pct_change: r4(a.pct - b.pct), shares_from: b.shares_total, shares_to: a.shares_total, shares_change: a.shares_total - b.shares_total });
-    } else changes.push({ symbol: a.symbol, holder: a.holder, entity_key: a.entity_key, investor_type: a.investor_type, local_foreign: a.local_foreign, kind: "new", pct_from: null, pct_to: a.pct, pct_change: r4(a.pct), shares_from: null, shares_to: a.shares_total, shares_change: a.shares_total });
-  }
-  for (const [k, b] of before) if (!after.has(k)) changes.push({ symbol: b.symbol, holder: b.holder, entity_key: b.entity_key, investor_type: b.investor_type, local_foreign: b.local_foreign, kind: "exited", pct_from: b.pct, pct_to: null, pct_change: r4(-b.pct), shares_from: b.shares_total, shares_to: null, shares_change: -b.shares_total });
+  const changes = ex.diffPositions(before, after);
   const kept = changes.filter((c) => Math.abs(c.pct_change) + 1e-12 >= minChange).sort((a, b) => Math.abs(b.pct_change) - Math.abs(a.pct_change) || a.symbol.localeCompare(b.symbol));
   const summary = ex.summariseChanges(kept);
   const off = Math.min(Math.max(0, offset), kept.length);
   const page = kept.slice(off, limit > 0 ? off + limit : undefined);
-  return envelope("idx.ownership.changes.v1", { from, to, symbol, min_pct_change: minChange, total_matches: kept.length, offset: off, summary, changes: page }, { provider: "github-mirror", cached: true });
+  return envelope("idx.ownership.changes.v1", { from, to, symbol, min_pct_change: minChange, total_matches: kept.length, offset: off, summary, changes: page }, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [from, to]) });
 }
 
 async function ownershipPct(env, asOf) {
