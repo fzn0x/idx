@@ -9,14 +9,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use clap::Subcommand;
 
 use crate::error::{IdxError, Result};
-use crate::model::Symbol;
-use crate::output::json::SCHEMA_ORDERBOOK;
-use crate::output::{self, table};
+use crate::model::{CorporateEventKind, Symbol};
+use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS};
+use crate::output::{self, table, table_corporate};
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{StockbitOptions, Ttls};
+use crate::service;
+use crate::universe;
 
 use super::{emit, Context};
 
@@ -56,6 +59,55 @@ pub enum StockbitCmd {
         #[arg(long, short = 'd', default_value_t = 10)]
         depth: usize,
     },
+    /// One stock's corporate actions from your Stockbit session: dividends, bonus shares, rights, warrants, splits, RUPS, public exposes, tender offers.
+    #[command(
+        after_help = "Examples:\n  idx stockbit actions BBCA\n  idx stockbit actions TLKM --kind dividend\n  idx stockbit actions BBRI --kind split,bonus,rights --from 2015-01-01\n  idx -o json stockbit actions BBCA --kind dividend | jq '.data.actions[] | {cum_date, dividend_per_share}'\n\nKinds: dividend, stock_dividend, bonus, rights, warrant, split, reverse_split, rups (meeting),\npublic_expose (expose), ipo, tender_offer (tender), or all. Default: every kind but ipo.\nStockbit keeps a stock's whole history (BBCA's cash dividends go back to 2009). One request per\nkind, a second apart, cached 6 h. Needs `idx stockbit login`. IPOT's view with the announcement\ntexts, no login: `idx stocks actions`."
+    )]
+    Actions {
+        /// IDX ticker, e.g. BBCA.
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Kinds, comma separated (see below), or all.
+        #[arg(long = "kind", short = 'k', value_name = "KINDS")]
+        kinds: Option<String>,
+        /// Only actions dated from this day (YYYY-MM-DD).
+        #[arg(long, value_name = "DATE")]
+        from: Option<NaiveDate>,
+        /// Only actions dated up to this day (YYYY-MM-DD).
+        #[arg(long, value_name = "DATE")]
+        to: Option<NaiveDate>,
+    },
+    /// Corporate actions across IDX from your Stockbit session, in a date range (default: the next 14 days).
+    #[command(
+        after_help = "Examples:\n  idx stockbit calendar\n  idx stockbit calendar --kind dividend --days 30\n  idx stockbit calendar --kind ipo,tender_offer --from 2026-01-01 --to 2026-12-31\n  idx -o json stockbit calendar --kind dividend | jq '.data.actions[] | {symbol, cum_date, dividend_per_share}'\n\nA row's date is its cum date for dividends, bonuses, rights and splits (the ex date without one),\nelse the event's first day; rights trading, tender offers and IPO offers still open in the range\nare listed too. Default kinds: all but warrant (structured warrants list dozens a month; `--kind\nall` adds them). A range covers at most 366 days. One request per kind, a second apart, cached\n6 h. Needs `idx stockbit login`. The exchange's own calendar, no login: `idx market calendar`."
+    )]
+    Calendar {
+        /// First day (YYYY-MM-DD); default today.
+        #[arg(long, value_name = "DATE")]
+        from: Option<NaiveDate>,
+        /// Last day (YYYY-MM-DD); default --from plus --days.
+        #[arg(long, value_name = "DATE", conflicts_with = "days")]
+        to: Option<NaiveDate>,
+        /// Days ahead of --from when --to is not given.
+        #[arg(long, value_name = "N")]
+        days: Option<u32>,
+        /// Kinds, comma separated, or all (default: all but warrant).
+        #[arg(long = "kind", short = 'k', value_name = "KINDS")]
+        kinds: Option<String>,
+    },
+}
+
+impl StockbitCmd {
+    /// Commands that only read data, and so show the loading line; the
+    /// session commands print their own prompts.
+    pub fn shows_progress(&self) -> bool {
+        matches!(
+            self,
+            StockbitCmd::Orderbook { .. }
+                | StockbitCmd::Actions { .. }
+                | StockbitCmd::Calendar { .. }
+        )
+    }
 }
 
 /// The process's one store for the session file (shared with the provider
@@ -105,6 +157,45 @@ pub async fn run(ctx: &Context, cmd: StockbitCmd) -> Result<()> {
             let result = sb.orderbook(&sym).await?;
             emit(ctx, SCHEMA_ORDERBOOK, result, |d| {
                 table::orderbook(d, depth, ctx.color)
+            })
+        }
+        StockbitCmd::Actions {
+            symbol,
+            kinds,
+            from,
+            to,
+        } => {
+            let sym = Symbol::parse(&symbol)?;
+            let kinds = CorporateEventKind::parse_list(
+                kinds.as_deref(),
+                &CorporateEventKind::STOCK_DEFAULT,
+            )?;
+            let list = universe::load(None).unwrap_or_default();
+            let sb = provider(ctx, store(ctx));
+            let result = service::stockbit_actions(&sb, &list, &sym, &kinds, from, to).await?;
+            emit(ctx, SCHEMA_STOCKBIT_ACTIONS, result, |d| {
+                table_corporate::corporate_events(d, ctx.color)
+            })
+        }
+        StockbitCmd::Calendar {
+            from,
+            to,
+            days,
+            kinds,
+        } => {
+            let q = service::StockbitCalendarQuery {
+                from,
+                to,
+                days,
+                kinds: CorporateEventKind::parse_list(
+                    kinds.as_deref(),
+                    &CorporateEventKind::CALENDAR_DEFAULT,
+                )?,
+            };
+            let sb = provider(ctx, store(ctx));
+            let result = service::stockbit_calendar(&sb, &q, service::today_wib()).await?;
+            emit(ctx, SCHEMA_STOCKBIT_ACTIONS, result, |d| {
+                table_corporate::corporate_events(d, ctx.color)
             })
         }
     }

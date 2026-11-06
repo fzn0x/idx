@@ -440,6 +440,30 @@ the fields still hold the previous session's figures) they are `null` and
 `warnings` says why. Sizes are shares (one IDX lot is 100 shares). A level the
 book does not show, or a field the source omits, is absent/`null`.
 
+## `idx.stockbit.actions.v1` (`stockbit actions`, `stockbit calendar`)
+
+From the user's own Stockbit session; `provider` is `stockbit`. `data`:
+`symbol` (the stock asked for; `null` for the calendar), `name` (from the
+bundled issuer list), `from` / `to` (the range idx applied; `null` when open),
+`kinds` (each one request), `total` (rows Stockbit returned for these kinds
+before the range), and `actions[]`, newest first for a stock and oldest first
+for the calendar. Each action: `symbol` (a structured warrant's own code for
+those), `name` (IPOs, tender offers), `kind` (`dividend`, `stock_dividend`,
+`bonus`, `rights`, `warrant`, `split`, `reverse_split`, `rups`,
+`public_expose`, `ipo`, `tender_offer`), `date` (the cum date for
+entitlements, the ex date without one, else the event's first day),
+`cum_date`, `ex_date`, `recording_date` (for a RUPS, the date that decides who
+may attend), `distribution_date` (payment; a tender offer's settlement),
+`dividend_per_share` and `currency` (ISO code), `ratio_old` / `ratio_new` (as
+published), `factor` (Stockbit's price adjustment factor), `price` (IDR per
+share: rights or warrant exercise, tender offer, final IPO price),
+`trading_start` / `trading_end` (rights and warrants), `exercise_start` /
+`exercise_end` (warrants), `offer_start` / `offer_end` (IPO offering, tender
+offer), `listing_date`, `shares` and `shares_pct` (offered or sought),
+`time` (RUPS or expose time as published, WIB), `venue`, `note`, `id`
+(Stockbit's row id). Placeholders (empty strings, zeros, `0001-01-01`) are
+`null`. A kind that fails is a `warnings` entry.
+
 ## Errors
 
 Written to stderr, exit code non-zero:

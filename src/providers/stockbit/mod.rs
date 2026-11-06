@@ -12,6 +12,8 @@
 //!   volume, value, foreign flow) and the full depth ladder.
 //! - `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE`
 //!   — OHLCV candles; Stockbit picks the granularity from the window.
+//! - `GET /corpaction/{type}[?symbol=SYM]` (`corpaction.rs`): corporate
+//!   actions, one kind per request; paced a second apart, cached 6 h.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
 //! Only GETs under a short allowlist of read-only paths ([`READ_PREFIXES`])
@@ -37,11 +39,14 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::{Fetched, Fetcher};
-use crate::model::{History, Interval, OrderBook, Period, Quote, Symbol};
+use crate::model::{
+    CorporateEvent, CorporateEventKind, History, Interval, OrderBook, Period, Quote, Symbol,
+};
 
 use super::{Provider, Sourced, Ttls};
 
 pub mod auth;
+pub mod corpaction;
 pub mod login;
 mod parse;
 
@@ -134,10 +139,17 @@ pub fn is_fatal(e: &IdxError) -> bool {
     }
 }
 
+/// Pause between live requests of the commands that read several lists.
+pub const PACE: Duration = Duration::from_secs(1);
+/// Corporate actions change a few times a day at most.
+const CORPACTION_TTL: Duration = Duration::from_secs(6 * 3600);
+
 pub struct Stockbit {
     fetcher: Arc<Fetcher>,
     ttls: Ttls,
     store: Arc<SessionStore>,
+    pace: Duration,
+    last_live: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Stockbit {
@@ -146,7 +158,16 @@ impl Stockbit {
             fetcher,
             ttls,
             store,
+            pace: PACE,
+            last_live: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// The same provider with another pause between paced requests (tests
+    /// use zero).
+    pub fn with_pace(mut self, pace: Duration) -> Self {
+        self.pace = pace;
+        self
     }
 
     pub fn store(&self) -> &Arc<SessionStore> {
@@ -200,6 +221,28 @@ impl Stockbit {
         unreachable!("loop returns on the second attempt")
     }
 
+    /// [`get`](Self::get) a second after the previous live request of this
+    /// provider instance (cached answers cost no pause), for the commands
+    /// that read several Stockbit lists in a row: a human-ish request rate.
+    async fn get_paced(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        let cached = self.fetcher.mode() != crate::http::CacheMode::Bypass
+            && self.fetcher.cache().get(url, ttl).is_some_and(|h| h.fresh);
+        let mut last = self.last_live.lock().await;
+        if !cached && !self.fetcher.is_offline() {
+            if let Some(t) = *last {
+                let wait = self.pace.saturating_sub(t.elapsed());
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+            }
+        }
+        let f = self.get(url, ttl, what).await;
+        if matches!(&f, Ok(f) if !f.cached) {
+            *last = Some(tokio::time::Instant::now());
+        }
+        f
+    }
+
     fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
         Sourced {
             data,
@@ -242,6 +285,41 @@ impl Stockbit {
             out.warnings.push(foreign_not_current(&flag));
         }
         Ok(out)
+    }
+
+    /// One kind of corporate action: one stock's whole history with
+    /// `symbol`, the market's recent and announced actions without it.
+    /// Paced and cached 6 h. Stockbit answering "not found" is an empty list
+    /// with a warning.
+    pub async fn corporate_actions(
+        &self,
+        kind: CorporateEventKind,
+        symbol: Option<&Symbol>,
+    ) -> Result<Sourced<Vec<CorporateEvent>>> {
+        let code = symbol.map(stockbit_code);
+        let url = corpaction::url(kind, code.as_deref());
+        let f = self
+            .get_paced(&url, CORPACTION_TTL, "corporate actions")
+            .await?;
+        if f.status == 404 || parse::is_not_found(&f.body) {
+            let mut out = Self::sourced(Vec::new(), &f);
+            out.warnings.push(match symbol {
+                Some(s) => format!("Stockbit lists no {kind} for {s}"),
+                None => format!("Stockbit lists no {kind}"),
+            });
+            return Ok(out);
+        }
+        if !f.is_success() {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "corporate actions ({kind}) HTTP {}: {}",
+                    f.status,
+                    parse::error_message(&f.body)
+                ),
+            ));
+        }
+        Ok(Self::sourced(corpaction::parse(kind, &f.body)?, &f))
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {

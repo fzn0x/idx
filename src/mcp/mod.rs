@@ -24,7 +24,8 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    BandarPeriod, BrokerBoard, BrokerInvestor, Interval, Period, StatementPeriod, Symbol,
+    BandarPeriod, BrokerBoard, BrokerInvestor, CorporateEventKind, Interval, Period,
+    StatementPeriod, Symbol,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -39,7 +40,7 @@ use crate::output::json::{
 };
 use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
-    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
+    SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT, SCHEMA_STOCKBIT_ACTIONS,
 };
 use crate::ownership::OwnershipDb;
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
@@ -83,6 +84,25 @@ pub struct StockbitLoginArgs {
     /// Seconds to wait for the sign-in (default 300, clamped to 30..900).
     #[serde(default)]
     pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StockbitActionsArgs {
+    /// One IDX ticker, e.g. "BBCA": that stock's whole history, newest first. Omit it for the market calendar: every stock's actions in a date range, oldest first.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Kinds, comma separated: dividend, stock_dividend, bonus, rights, warrant, split, reverse_split, rups, public_expose, ipo, tender_offer, or "all". Default: every kind but ipo for a stock, every kind but warrant for the calendar. Each kind is one request to Stockbit.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// First day, YYYY-MM-DD. A stock: only actions dated from it. The calendar: default today.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Last day, YYYY-MM-DD. A stock: only actions dated up to it. The calendar: default from plus days.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Calendar only: days after from when to is not given (default 14; the range covers at most 366 days).
+    #[serde(default)]
+    pub days: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1527,6 +1547,56 @@ impl IdxServer {
             .await,
         )
     }
+
+    #[tool(
+        name = "idx_stockbit_actions",
+        description = "Corporate actions from the user's own Stockbit session, one structured row each. With symbol: that stock's whole history, newest first, as far back as Stockbit keeps it (BBCA's cash dividends go back to 2009). Without symbol: the market calendar, oldest first, dated from `from` to `to` (default today and the next 14 days, at most 366), plus rights trading, tender offers and IPO offers still open in the range. kind filters: dividend, stock_dividend, bonus, rights, warrant, split, reverse_split, rups, public_expose, ipo, tender_offer, or all (default: all but ipo for a stock, all but warrant for the calendar, as structured warrants list dozens a month). Each row: kind, date (cum date for entitlements, else the event's first day), cum/ex/recording/distribution dates, dividend_per_share and currency, ratio_old:ratio_new, factor, price (rights or warrant exercise, tender or IPO price, IDR), trading/exercise/offer windows, listing_date, shares and shares_pct, meeting time and venue; null where Stockbit has nothing. One request per kind, a second apart, cached 6 h; a failing kind leaves a warning. Needs a Stockbit login (idx_stockbit_status); IPOT's free view with announcement texts is idx_corporate_actions, the exchange's calendar idx_calendar. Returns the idx.stockbit.actions.v1 envelope."
+    )]
+    async fn stockbit_actions(
+        &self,
+        Parameters(a): Parameters<StockbitActionsArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let from = parse_date(&a.from)?;
+                let to = parse_date(&a.to)?;
+                let symbol = match a.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(s) => Some(Symbol::parse(s)?),
+                    None => None,
+                };
+                let sb = self.stockbit_provider();
+                let s = match symbol {
+                    Some(sym) => {
+                        if a.days.is_some() {
+                            return Err(IdxError::Usage(
+                                "days is for the market calendar (no symbol); give from/to to narrow a stock's history".into(),
+                            ));
+                        }
+                        let kinds = CorporateEventKind::parse_list(
+                            a.kind.as_deref(),
+                            &CorporateEventKind::STOCK_DEFAULT,
+                        )?;
+                        let list = universe::load(None).unwrap_or_default();
+                        service::stockbit_actions(&sb, &list, &sym, &kinds, from, to).await?
+                    }
+                    None => {
+                        let q = service::StockbitCalendarQuery {
+                            from,
+                            to,
+                            days: a.days,
+                            kinds: CorporateEventKind::parse_list(
+                                a.kind.as_deref(),
+                                &CorporateEventKind::CALENDAR_DEFAULT,
+                            )?,
+                        };
+                        service::stockbit_calendar(&sb, &q, service::today_wib()).await?
+                    }
+                };
+                ok(SCHEMA_STOCKBIT_ACTIONS, s)
+            }
+            .await,
+        )
+    }
 }
 
 #[tool_handler]
@@ -1672,6 +1742,7 @@ mod tests {
                 "idx_returns",
                 "idx_screen",
                 "idx_sentiment",
+                "idx_stockbit_actions",
                 "idx_stockbit_login",
                 "idx_stockbit_status",
                 "idx_technical",

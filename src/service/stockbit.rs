@@ -1,0 +1,479 @@
+//! Reads from the user's Stockbit session that take several requests: one
+//! stock's corporate actions or the market's calendar (one request per kind).
+//! Shared by the CLI and the MCP server like the rest of `service`.
+//!
+//! The provider paces these requests a second apart (cached answers cost no
+//! pause) and stops at the first error no later request can get past (no
+//! session, a refused session, a CDN block).
+
+use chrono::NaiveDate;
+
+use crate::error::{IdxError, Result};
+use crate::model::{CorporateEvent, CorporateEventKind, CorporateEvents, Symbol};
+use crate::providers::stockbit::{self, Stockbit};
+use crate::providers::Sourced;
+use crate::universe::Issuer;
+
+/// How far ahead `stockbit calendar` looks when no end is given.
+pub const STOCKBIT_CALENDAR_DEFAULT_DAYS: u32 = 14;
+/// The longest calendar range, in days.
+pub const STOCKBIT_CALENDAR_MAX_DAYS: i64 = 366;
+
+/// Every kind's rows, one request per kind in order. A kind that fails
+/// leaves a warning; when every kind fails, the first error is returned.
+async fn kinds_of(
+    sb: &Stockbit,
+    kinds: &[CorporateEventKind],
+    symbol: Option<&Symbol>,
+) -> Result<Sourced<Vec<CorporateEvent>>> {
+    let mut out: Option<Sourced<Vec<CorporateEvent>>> = None;
+    let mut first_err: Option<IdxError> = None;
+    let mut warnings = Vec::new();
+    for &kind in kinds {
+        match sb.corporate_actions(kind, symbol).await {
+            Ok(s) => match &mut out {
+                None => out = Some(s),
+                Some(o) => {
+                    o.absorb(&s);
+                    o.data.extend(s.data);
+                }
+            },
+            Err(e) if stockbit::is_fatal(&e) => {
+                if out.is_none() {
+                    return Err(e);
+                }
+                warnings.push(format!("{kind} and the kinds after it: {e}"));
+                break;
+            }
+            Err(e) => {
+                warnings.push(format!("{kind}: {e}"));
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    let mut out = match (out, first_err) {
+        (Some(o), _) => o,
+        (None, Some(e)) => return Err(e),
+        (None, None) => return Err(IdxError::Usage("no corporate action kinds given".into())),
+    };
+    for w in warnings {
+        if !out.warnings.contains(&w) {
+            out.warnings.push(w);
+        }
+    }
+    Ok(out)
+}
+
+/// One stock's corporate actions of `kinds` (newest first), optionally only
+/// those dated `from..=to`.
+pub async fn stockbit_actions(
+    sb: &Stockbit,
+    universe: &[Issuer],
+    symbol: &Symbol,
+    kinds: &[CorporateEventKind],
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+) -> Result<Sourced<CorporateEvents>> {
+    if symbol.is_index() {
+        return Err(IdxError::Usage(format!(
+            "{symbol} is an index; corporate actions belong to stocks"
+        )));
+    }
+    if let (Some(f), Some(t)) = (from, to) {
+        if f > t {
+            return Err(IdxError::Usage(format!(
+                "the range starts ({f}) after it ends ({t})"
+            )));
+        }
+    }
+    let mut s = kinds_of(sb, kinds, Some(symbol)).await?;
+    // A structured warrant on the stock carries its own code, which starts
+    // with the stock's; anything else is not this stock's.
+    let before = s.data.len();
+    s.data
+        .retain(|e| e.symbol.as_str().starts_with(symbol.as_str()));
+    if s.data.len() < before {
+        s.warnings.push(format!(
+            "left out {} rows Stockbit returned for other codes",
+            before - s.data.len()
+        ));
+    }
+    let total = s.data.len();
+    s.data
+        .retain(|e| from.is_none_or(|f| e.date >= f) && to.is_none_or(|t| e.date <= t));
+    s.data
+        .sort_by(|a, b| b.date.cmp(&a.date).then(a.kind.cmp(&b.kind)));
+    let name = universe
+        .iter()
+        .find(|i| &i.symbol == symbol)
+        .and_then(|i| i.name.clone());
+    Ok(s.map(|actions| CorporateEvents {
+        symbol: Some(symbol.clone()),
+        name,
+        from,
+        to,
+        kinds: kinds.to_vec(),
+        total,
+        actions,
+    }))
+}
+
+/// What `stockbit calendar` asks for.
+#[derive(Debug, Clone, Default)]
+pub struct StockbitCalendarQuery {
+    /// First day; default today (WIB).
+    pub from: Option<NaiveDate>,
+    /// Last day; default `from` plus `days`.
+    pub to: Option<NaiveDate>,
+    /// Look-ahead when `to` is not given; default
+    /// [`STOCKBIT_CALENDAR_DEFAULT_DAYS`].
+    pub days: Option<u32>,
+    /// Kinds to read; empty means [`CorporateEventKind::CALENDAR_DEFAULT`].
+    pub kinds: Vec<CorporateEventKind>,
+}
+
+/// `true` when the row belongs in `from..=to`: dated inside it, or a rights
+/// trading window, a tender offer or an IPO offering still open in it.
+/// Warrants count by their date only (their windows run for years).
+fn in_range(e: &CorporateEvent, from: NaiveDate, to: NaiveDate) -> bool {
+    use CorporateEventKind as K;
+    if e.date >= from && e.date <= to {
+        return true;
+    }
+    let window = match e.kind {
+        K::Rights => (e.trading_start, e.trading_end),
+        K::TenderOffer | K::Ipo => (e.offer_start, e.offer_end),
+        _ => return false,
+    };
+    match window {
+        (Some(s), Some(t)) => s <= to && t >= from,
+        _ => false,
+    }
+}
+
+/// The market's corporate actions of `q.kinds` in a date range, oldest first.
+pub async fn stockbit_calendar(
+    sb: &Stockbit,
+    q: &StockbitCalendarQuery,
+    today: NaiveDate,
+) -> Result<Sourced<CorporateEvents>> {
+    let from = q.from.unwrap_or(today);
+    if q.to.is_some() && q.days.is_some() {
+        return Err(IdxError::Usage(
+            "give either an end date (to) or a number of days, not both".into(),
+        ));
+    }
+    let days = q.days.unwrap_or(STOCKBIT_CALENDAR_DEFAULT_DAYS);
+    let to =
+        q.to.unwrap_or_else(|| from + chrono::Days::new(u64::from(days)));
+    if from > to {
+        return Err(IdxError::Usage(format!(
+            "the range starts ({from}) after it ends ({to})"
+        )));
+    }
+    if (to - from).num_days() > STOCKBIT_CALENDAR_MAX_DAYS {
+        return Err(IdxError::Usage(format!(
+            "a calendar range covers at most {STOCKBIT_CALENDAR_MAX_DAYS} days"
+        )));
+    }
+    let kinds = if q.kinds.is_empty() {
+        CorporateEventKind::CALENDAR_DEFAULT.to_vec()
+    } else {
+        q.kinds.clone()
+    };
+    let mut s = kinds_of(sb, &kinds, None).await?;
+    let total = s.data.len();
+    s.data.retain(|e| in_range(e, from, to));
+    s.data.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| a.symbol.cmp(&b.symbol))
+            .then(a.kind.cmp(&b.kind))
+    });
+    Ok(s.map(|actions| CorporateEvents {
+        symbol: None,
+        name: None,
+        from: Some(from),
+        to: Some(to),
+        kinds,
+        total,
+        actions,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::FixtureBackend;
+    use crate::providers::stockbit::tests::with_backend;
+    use std::time::Duration;
+    use CorporateEventKind as K;
+
+    fn fx(name: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/stockbit/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    }
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn sym(s: &str) -> Symbol {
+        Symbol::parse(s).unwrap()
+    }
+
+    fn sb(be: FixtureBackend) -> (Stockbit, std::sync::Arc<FixtureBackend>, tempfile::TempDir) {
+        let (sb, be, dir) = with_backend(be);
+        (sb.with_pace(Duration::ZERO), be, dir)
+    }
+
+    #[tokio::test]
+    async fn a_stocks_kinds_merge_newest_first() {
+        let (sb, be, _d) = sb(FixtureBackend::new()
+            .route(
+                "corpaction/dividend?symbol=BBCA",
+                200,
+                &fx("corpaction_dividend_bbca"),
+            )
+            .route(
+                "corpaction/stocksplit?symbol=BBCA",
+                200,
+                &fx("corpaction_stocksplit_bbca"),
+            ));
+        let universe = [Issuer {
+            symbol: sym("BBCA"),
+            name: Some("Bank Central Asia Tbk".into()),
+        }];
+        let got = stockbit_actions(
+            &sb,
+            &universe,
+            &sym("BBCA"),
+            &[K::Split, K::Dividend],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ev = &got.data;
+        assert_eq!(ev.total, 40);
+        assert_eq!(ev.actions.len(), 40);
+        assert_eq!(ev.name.as_deref(), Some("Bank Central Asia Tbk"));
+        assert_eq!(ev.kinds, [K::Split, K::Dividend]);
+        assert!(ev.actions.windows(2).all(|w| w[0].date >= w[1].date));
+        assert_eq!(ev.actions[0].date, d("2026-08-28"));
+        assert_eq!(got.provider, "stockbit");
+        assert!(!got.cached);
+        // The bearer went out; nothing was refreshed.
+        assert_eq!(be.calls_matching("corpaction/"), 2);
+        assert_eq!(be.calls_matching("login/refresh"), 0);
+        let bearer = be.headers.lock().unwrap()[0]
+            .iter()
+            .any(|(k, v)| k == "authorization" && v.starts_with("Bearer "));
+        assert!(bearer);
+
+        // A date range keeps total and filters the rows.
+        let got = stockbit_actions(
+            &sb,
+            &universe,
+            &sym("BBCA"),
+            &[K::Split, K::Dividend],
+            Some(d("2021-01-01")),
+            Some(d("2021-12-31")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.data.total, 40);
+        assert!(got
+            .data
+            .actions
+            .iter()
+            .all(|e| e.date.format("%Y").to_string() == "2021"));
+        assert!(got.data.actions.iter().any(|e| e.kind == K::Split));
+        // Second time round both kinds come from the cache: no request.
+        assert_eq!(be.calls_matching("corpaction/"), 2);
+        assert!(got.cached);
+    }
+
+    #[tokio::test]
+    async fn a_failing_kind_is_a_warning_and_all_failing_an_error() {
+        let (sb, _be, _d) = sb(FixtureBackend::new()
+            .route(
+                "corpaction/dividend?symbol=BBCA",
+                200,
+                &fx("corpaction_dividend_bbca"),
+            )
+            .route("corpaction/rups?symbol=BBCA", 500, r#"{"message":"boom"}"#));
+        let got = stockbit_actions(
+            &sb,
+            &[],
+            &sym("BBCA"),
+            &[K::Dividend, K::Rups, K::Bonus],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.data.actions.len(), 37);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.starts_with("rups: ") && w.contains("HTTP 500")),
+            "{:?}",
+            got.warnings
+        );
+        assert!(
+            got.warnings.iter().any(|w| w.starts_with("bonus: ")),
+            "{:?}",
+            got.warnings
+        );
+
+        let e = stockbit_actions(&sb, &[], &sym("BBCA"), &[K::Rups], None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        let e = stockbit_actions(&sb, &[], &sym("^JKSE"), &[K::Rups], None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        let e = stockbit_actions(
+            &sb,
+            &[],
+            &sym("BBCA"),
+            &[K::Rups],
+            Some(d("2026-02-01")),
+            Some(d("2026-01-01")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_cdn_block_stops_at_the_first_kind() {
+        let blocked = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/stockbit/blocked_403.html",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let (sb, be, _d) = sb(FixtureBackend::new().route("corpaction/", 403, &blocked));
+        let e = stockbit_calendar(&sb, &StockbitCalendarQuery::default(), d("2026-11-03"))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("CDN"), "{e}");
+        assert_eq!(be.calls_matching("corpaction/"), 1);
+    }
+
+    #[tokio::test]
+    async fn without_a_session_nothing_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = std::sync::Arc::new(FixtureBackend::new());
+        let fetcher = std::sync::Arc::new(crate::http::Fetcher::new(
+            be.clone(),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let store = std::sync::Arc::new(crate::providers::stockbit::SessionStore::new(
+            dir.path().join("none.json"),
+            None,
+            None,
+        ));
+        let sb = Stockbit::new(fetcher, Default::default(), store);
+        let e = stockbit_actions(&sb, &[], &sym("BBCA"), &K::STOCK_DEFAULT, None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(e.to_string().contains("stockbit login"), "{e}");
+        assert_eq!(be.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_calendar_keeps_open_offers_and_sorts_oldest_first() {
+        let (sb, _be, _d) = sb(FixtureBackend::new()
+            .route("corpaction/tenderoffer", 200, &fx("corpaction_tenderoffer"))
+            .route("corpaction/warrant", 200, &fx("corpaction_warrant"))
+            .route("corpaction/rightissue", 200, &fx("corpaction_rightissue"))
+            .route("corpaction/dividend", 200, &fx("corpaction_dividend")));
+        let q = StockbitCalendarQuery {
+            from: Some(d("2026-11-05")),
+            to: Some(d("2026-11-12")),
+            days: None,
+            kinds: vec![K::TenderOffer, K::Warrant, K::Rights, K::Dividend],
+        };
+        let got = stockbit_calendar(&sb, &q, d("2026-11-03")).await.unwrap();
+        let ev = &got.data;
+        assert_eq!(
+            (ev.from, ev.to),
+            (Some(d("2026-11-05")), Some(d("2026-11-12")))
+        );
+        assert!(ev.symbol.is_none());
+        assert!(ev.total > ev.actions.len());
+        assert!(ev.actions.windows(2).all(|w| w[0].date <= w[1].date));
+        // AUTO's tender offer opened 2026-10-13 and runs to 2026-11-11.
+        let auto = ev
+            .actions
+            .iter()
+            .find(|e| e.symbol.as_str() == "AUTO")
+            .unwrap();
+        assert_eq!(auto.date, d("2026-10-13"));
+        // MGLV's rights trade 2026-11-10..23: inside by its window.
+        assert!(ev
+            .actions
+            .iter()
+            .any(|e| e.symbol.as_str() == "MGLV" && e.kind == K::Rights));
+        // BRNA's warrants trade from 2026-10-16 until 2029: dated before the
+        // range, so out despite the open window.
+        assert!(!ev.actions.iter().any(|e| e.symbol.as_str() == "BRNA"));
+        // MIDI's dividend cum date 2026-11-11 is inside.
+        assert!(ev.actions.iter().any(|e| e.symbol.as_str() == "MIDI"));
+    }
+
+    #[tokio::test]
+    async fn calendar_ranges() {
+        let (sb, be, _d) =
+            sb(FixtureBackend::new().route("corpaction/dividend", 200, &fx("corpaction_dividend")));
+        let one = |from, to, days| StockbitCalendarQuery {
+            from,
+            to,
+            days,
+            kinds: vec![K::Dividend],
+        };
+        let got = stockbit_calendar(&sb, &one(None, None, None), d("2026-11-03"))
+            .await
+            .unwrap();
+        assert_eq!(
+            (got.data.from, got.data.to),
+            (Some(d("2026-11-03")), Some(d("2026-11-17")))
+        );
+        let got = stockbit_calendar(&sb, &one(None, None, Some(30)), d("2026-11-03"))
+            .await
+            .unwrap();
+        assert_eq!(got.data.to, Some(d("2026-12-03")));
+        for bad in [
+            one(Some(d("2026-11-03")), Some(d("2026-11-02")), None),
+            one(Some(d("2026-01-01")), Some(d("2027-01-03")), None),
+            one(None, None, Some(367)),
+            one(None, Some(d("2026-12-01")), Some(5)),
+        ] {
+            let e = stockbit_calendar(&sb, &bad, d("2026-11-03"))
+                .await
+                .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{bad:?}");
+        }
+        // 366 days is fine; the defaults read every kind but warrants.
+        stockbit_calendar(
+            &sb,
+            &one(Some(d("2026-01-01")), Some(d("2027-01-02")), None),
+            d("2026-11-03"),
+        )
+        .await
+        .unwrap();
+        let got = stockbit_calendar(&sb, &StockbitCalendarQuery::default(), d("2026-11-03"))
+            .await
+            .unwrap();
+        assert_eq!(got.data.kinds, K::CALENDAR_DEFAULT);
+        assert_eq!(be.calls_matching("corpaction/warrant"), 0);
+    }
+}

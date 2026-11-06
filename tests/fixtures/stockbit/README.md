@@ -41,6 +41,21 @@ account holder, `is_holding_exist`, JWTs) before they were copied: there is none
 
 | file | request | notes |
 | --- | --- | --- |
+| corpaction_dividend.json | `/corpaction/dividend` | market-wide cash dividends, 21 rows, cum dates 2025-11-12 .. 2026-11-11, plus `"today":"2026-11-03"`. Row fields `dividend_{cumdate,exdate,recdate,paydate,value,currency,id}` (`value` a string, `currency` `CURRENCY_IDR`), `event_note`, `lastprice` |
+| corpaction_dividend_bbca.json | `/corpaction/dividend?symbol=BBCA` | BBCA's cash dividends, 37 rows, 2026-08-28 back to 2009-06-09 |
+| corpaction_stock_dividend.json | `/corpaction/stock_dividend` | `{"stock_dividend":[]}`: empty on the recording day |
+| corpaction_bonus.json | `/corpaction/bonus` | bonus shares: `sahambonus_{ratio,id}` (ratio `"6 : 4"`) and the dates and terms under `stocksplit_*` names (`cumdate`, `exdate`, `recdate`, `paymentdate`, `old`, `new`, `factor`); `sahambonus_new_price: 0` is a placeholder |
+| corpaction_rightissue.json | `/corpaction/rightissue` | `rightissue_{cumdate,exdate,recdate,old,new,ratio,price,factor,trading_start,trading_end,id}`; `price` a number; decoys `rightissue_adj_factor`, `_price_factor`, `_price_adj` are 0 |
+| corpaction_warrant.json | `/corpaction/warrant` | 36 rows: BRNA's company warrant and 35 structured warrants whose `company_symbol` is the warrant's own 10-character code (`ASIIZPCN7A`); `wrant_{trading_from,trading_end,exc_from,exc_end,exc_price,id}` |
+| corpaction_stocksplit.json | `/corpaction/stocksplit` | market-wide splits, `stocksplit_{cumdate,exdate,recdate,old,new,ratio,factor,id}` |
+| corpaction_stocksplit_bbca.json | `/corpaction/stocksplit?symbol=BBCA` | BBCA's splits: 2021 1 : 5, 2008 and 2004 1 : 2 |
+| corpaction_reversesplit.json | `/corpaction/reversesplit` | `{"stock_reverse":[]}`: the list key is not the path type; empty on the recording day |
+| corpaction_rups.json | `/corpaction/rups` | 47 meetings, 2026-11-03 .. 2026-12-09: the market list starts on the recording day. `rups_{date,time,venue,eligible_date,id}`, `company_name` often `""` |
+| corpaction_rups_bbca.json | `/corpaction/rups?symbol=BBCA` | BBCA's meetings back to 2020; venues contain newlines and tabs |
+| corpaction_pubex.json | `/corpaction/pubex` | public exposes 2026-11-03 .. 2026-11-24, `puexp_{date,time,venue,id}` (`time` `"13:00:00"`) |
+| corpaction_pubex_bbca.json | `/corpaction/pubex?symbol=BBCA` | BBCA's six exposes back to 2021; tabs in a venue |
+| corpaction_ipo.json | `/corpaction/ipo` | 15 listings 2025-11-06 .. 2026-09-26: `ipo_listing_date`, `company_name`, `ipo_price.final`, `ipo_data_detail.{shares,percentage,offering_start,offering_end}`; ETF listings carry the placeholders `0`, `""` and `0001-01-01 00:00:00` |
+| corpaction_tenderoffer.json | `/corpaction/tenderoffer` | `{"tender":[..]}` (list key `tender`): `tender_{start,end,paydate,price,shares,percentage,id}`, `company_name`; AUTO at 3,600 for 238,442,293 shares (4.95 %) |
 | blocked_403.html | any exodus route, from a network Stockbit's CDN refuses | HTTP 403 HTML page from CloudFront ("The request could not be satisfied"). Not a refused token: a refresh cannot help, so idx reports it and does not retry (a refused token is a 401, or a 403 with a JSON body such as `unauthorized.json`) |
 
 Constructed, not recorded (the tokens inside are dummies signed by nobody):

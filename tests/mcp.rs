@@ -79,7 +79,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 36, "{names:?}");
+    assert_eq!(names.len(), 37, "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -88,6 +88,7 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     assert!(names.contains(&"idx_orderbook"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_status"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_login"), "{names:?}");
+    assert!(names.contains(&"idx_stockbit_actions"), "{names:?}");
     let quote = tools.iter().find(|t| t["name"] == "idx_quote").unwrap();
     assert_eq!(
         quote["inputSchema"]["properties"]["symbols"]["type"],
@@ -157,6 +158,43 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         .as_str()
         .unwrap()
         .contains("usage"));
+
+    // A Stockbit tool without a session: a usage error naming the login,
+    // before any request (the sandbox has no session file).
+    for (id, args) in [
+        (5, serde_json::json!({"symbol": "BBCA"})),
+        (6, serde_json::json!({"kind": "dividend", "days": 30})),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_stockbit_actions", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true);
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("idx stockbit login"),
+            "{body}"
+        );
+    }
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "idx_stockbit_actions", "arguments": {"symbol": "BBCA", "kind": "nope"}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unknown corporate action kind"));
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

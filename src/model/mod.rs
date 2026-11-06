@@ -13,6 +13,7 @@ pub mod bandar;
 pub mod brief;
 pub mod broker;
 pub mod calendar;
+pub mod corporate;
 pub mod dividends;
 pub mod flow;
 pub mod fundamentals;
@@ -36,6 +37,7 @@ pub use bandar::{
 pub use brief::{Brief, DividendSummary, NewsSummary, OwnershipSummary};
 pub use broker::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary};
 pub use calendar::{Calendar, CalendarCategory, CalendarEvent, Holiday, Holidays};
+pub use corporate::{CorporateEvent, CorporateEventKind, CorporateEvents};
 pub use dividends::{DividendEvent, DividendHistory, DividendYear, SplitEvent};
 pub use flow::{
     BrokerActivity, BrokerDayRow, BrokerRanking, BrokerSort, BrokerStockRow, ForeignDay,

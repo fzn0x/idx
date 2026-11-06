@@ -4,7 +4,10 @@
 exception**: an opt-in provider that serves realtime quotes, history and a live
 order book from [Stockbit](https://stockbit.com)'s own backend, carrying **your
 own Stockbit account session**. It is never in the `auto` chain and is used only
-when you ask for it with `--provider stockbit`.
+when you ask for it with `--provider stockbit`. The same session also reads what
+only Stockbit has in one place: every corporate action of a stock since its
+listing, and the market's corporate-action calendar
+(`idx stockbit actions`, `idx stockbit calendar`).
 
 > This uses an unofficial, undocumented API with your personal account. It may
 > conflict with Stockbit's Terms of Use, and automated access could get an
@@ -78,14 +81,59 @@ The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run
 them without `--provider stockbit`.
 
+## Corporate actions and calendar
+
+```sh
+idx stockbit actions BBCA                         # every kind but ipo, newest first
+idx stockbit actions TLKM --kind dividend
+idx stockbit actions BBRI --kind split,bonus,rights --from 2015-01-01
+idx stockbit calendar                             # the next 14 days, oldest first
+idx stockbit calendar --kind dividend --days 30
+idx stockbit calendar --kind ipo,tender --from 2026-01-01 --to 2026-12-31
+```
+
+One structured row per action, with the dates and terms and no announcement
+text (schema `idx.stockbit.actions.v1`). Kinds: `dividend`, `stock_dividend`,
+`bonus`, `rights`, `warrant`, `split`, `reverse_split`, `rups` (alias
+`meeting`), `public_expose` (`expose`), `ipo`, `tender_offer` (`tender`), or
+`all`. Each kind is one request, a second apart, cached for 6 hours; a kind that
+fails leaves a warning and the others still show.
+
+- A row's `date` is its cum date for dividends, bonuses, rights and splits (the
+  ex date when there is none), else the event's first day: a warrant's first
+  trading day, the meeting or expose day, an IPO's listing day, a tender offer's
+  opening day.
+- `stockbit actions` reads a stock's whole history: BBCA's cash dividends go
+  back to 2009, its splits to 2004. `--from`/`--to` narrow it. The default is
+  every kind but `ipo`.
+- `stockbit calendar` reads the market-wide lists and keeps the rows dated in
+  the range (at most 366 days; default today and the next 14), plus rights
+  trading windows, tender offers and IPO offerings still open in it. The default
+  is every kind but `warrant`: most market-wide warrant rows are structured
+  warrants, listed under their own codes (`ASIIZPCN7A`), dozens a month.
+- As recorded on 2026-11-03, the market-wide lists reach about a year back and
+  as far ahead as announced, except RUPS and public exposes, whose market lists
+  started on the recording day. The stock dividend and reverse split lists were
+  empty that day; their rows are read by the field names the other entitlement
+  rows use.
+- `ratio_old : ratio_new` is as published (1 : 5 for a five-for-one split, 655
+  held : 104 rights). `price` is the rights or warrant exercise price, the tender
+  offer price, or the final IPO price, IDR per share. Anything Stockbit leaves
+  empty or zero is `null`.
+
+Without a login, `idx stocks actions` (IPOT, with the announcement texts) and
+`idx market calendar` (the exchange's own calendar) cover similar ground.
+
 ## MCP
 
-The MCP server exposes three Stockbit tools alongside the rest:
+The MCP server exposes four Stockbit tools alongside the rest:
 
-- `idx_stockbit_status` — is a session stored, and when do the tokens expire
-  (never the token values). Call it before `idx_orderbook`.
-- `idx_orderbook` — the live depth ladder and foreign flow for one ticker.
-- `idx_stockbit_login` — opens a browser **on the machine running the server**
+- `idx_stockbit_status`: is a session stored, and when do the tokens expire
+  (never the token values). Call it before the others.
+- `idx_orderbook`: the live depth ladder and foreign flow for one ticker.
+- `idx_stockbit_actions`: one stock's corporate actions (`symbol`), or the
+  market calendar without one; `kind`, `from`, `to`, `days` as on the CLI.
+- `idx_stockbit_login`: opens a browser **on the machine running the server**
   for the user to sign in; only meaningful for a local stdio server the user is
   sitting at, never a remote HTTP one. Prefer telling the user to run
   `idx stockbit login` in a terminal themselves.
@@ -141,6 +189,7 @@ and browser-shaped `origin`/`referer` headers:
 | --- | --- |
 | `GET /company-price-feed/v2/orderbook/companies/{SYM}` | quote (OHLC, volume, value, foreign flow only while `has_foreign_bs` is true) and the full depth ladder |
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
+| `GET /corpaction/{type}[?symbol={SYM}]` | corporate actions, one kind per request: `dividend`, `stock_dividend`, `bonus`, `rightissue`, `warrant`, `stocksplit`, `reversesplit`, `rups`, `pubex`, `ipo`, `tenderoffer` |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 
 The same API places orders and moves cash, so idx keeps an allowlist of the
