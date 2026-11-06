@@ -275,8 +275,10 @@ pub fn parse_fundamentals(
 
 /// One `institutionalOwnership` / `mutualFundOwnership` row. Rows without a
 /// holder name are skipped. `marketValue` and `change` are deliberately not
-/// read: they are holder-level totals in an unstated currency, not the value
-/// of this position.
+/// read: `marketValue` is a holder-level total (identical for one manager
+/// across stocks), and `change` is `sharesChange` at the report-date price in
+/// an unstated currency (it looks like USD). Neither is the value of this
+/// position in rupiah.
 fn holder(h: &Value, kind: HolderKind, index: usize) -> Option<InstitutionalHolder> {
     let name = text(obj(h, "/entity"), "displayName")?;
     let shares = f64_of(h, "shares").map(|x| x.max(0.0) as u64);
@@ -530,7 +532,8 @@ mod tests {
         assert_eq!(r.oldest_report, day("2025-12-31"));
         assert_eq!(r.newest_report, day("2026-09-30"));
 
-        // MSN's holder-level totals and insider share never reach the output.
+        // MSN's `marketValue` and `change` and its insider share never reach
+        // the output.
         let v = serde_json::to_value(&r).unwrap();
         let keys: Vec<&str> = v["holders"][0]
             .as_object()

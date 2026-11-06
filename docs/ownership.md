@@ -212,10 +212,11 @@ Read it with care:
 - Funds are part of their managers' institutional positions (Fidelity the
   manager is an institution, Fidelity's funds are funds): never add the two
   lists or their percentages.
-- Not used on purpose: MSN's `marketValue` and `change` (holder-level totals in
-  an unstated currency, identical for one manager across stocks, so not the
-  value of this position) and `insiderOwnershipPercent` (1.21 % for BBCA,
-  whose controlling holder has 54.94 % in the KSEI register).
+- Not used on purpose: MSN's `marketValue` (a holder-level total, identical
+  for one manager across stocks), its `change` (the share change at the
+  report-date price, in an unstated currency that looks like USD; neither is
+  the value of this position in rupiah) and `insiderOwnershipPercent` (1.21 %
+  for BBCA, whose controlling holder has 54.94 % in the KSEI register).
 - Coverage: on 2026-11-06, 420 of the 887 IDX stocks MSN lists had
   institutions, 381 had the block with empty lists and 86 had none. A stock
   without holders gives an empty report with a warning (exit 0); a ticker MSN
