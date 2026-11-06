@@ -41,7 +41,7 @@ use crate::output::json::{
     SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER, SCHEMA_HOLIDAYS,
     SCHEMA_NEWS, SCHEMA_ORDERBOOK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
 };
-use crate::ownership::OwnershipDb;
+use crate::ownership::{self, OwnershipDb};
 use crate::providers::stockbit::{login, SessionStore, Stockbit};
 use crate::providers::{Provider, Sourced, StockbitOptions, Ttls};
 use crate::service;
@@ -1330,7 +1330,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_ticker",
-        description = "Shareholders above 1% of one IDX ticker from KSEI's monthly register (local SQLite): holder name, investor type, local/foreign, shares, percent, sorted by percent. Returns the idx.ownership.holders.v1 envelope. Needs a prior `idx ownership import`."
+        description = "Shareholders above 1% of one IDX ticker from KSEI's monthly register (local SQLite): holder name, investor type, local/foreign, shares, percent, sorted by percent. A holder listed on several register lines (scrip and scripless accounts) is summed into one row with `accounts`; from the 30 Oct 2026 register each row carries `controller_or_affiliate` (`controller_reported` says whether the release has it). Returns the idx.ownership.holders.v1 envelope. Needs a prior `idx ownership import`."
     )]
     async fn ownership_ticker(
         &self,
@@ -1340,8 +1340,8 @@ impl IdxServer {
             async {
                 let symbol = Symbol::parse(&a.symbol)?;
                 let as_of = parse_date(&a.as_of)?;
-                let report = self.db()?.holders(symbol.as_str(), as_of)?;
-                ok(SCHEMA_OWNERSHIP_HOLDERS, Sourced::fresh(report, "local-db"))
+                let report = ownership::holders(&self.db()?, symbol.as_str(), as_of)?;
+                ok(SCHEMA_OWNERSHIP_HOLDERS, report)
             }
             .await,
         )
@@ -1361,8 +1361,8 @@ impl IdxServer {
                     return Err(IdxError::Usage("name needs at least 3 characters".into()));
                 }
                 let as_of = parse_date(&a.as_of)?;
-                let report = self.db()?.entity(&a.name, as_of)?;
-                ok(SCHEMA_OWNERSHIP_ENTITY, Sourced::fresh(report, "local-db"))
+                let report = ownership::entity(&self.db()?, &a.name, as_of)?;
+                ok(SCHEMA_OWNERSHIP_ENTITY, report)
             }
             .await,
         )
@@ -1370,7 +1370,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_changes",
-        description = "Month-over-month changes in holders above 1% between two imported release dates: new holders, exits and position changes with percentage-point and share deltas, largest moves first. The summary block (counts, net percentage points for foreign vs local holders and per investor type, per-issuer flow, top rises and falls) always covers every match; limit/offset page the rows. Optional ticker filter. Returns the idx.ownership.changes.v1 envelope."
+        description = "Month-over-month changes in holders above 1% between two imported release dates: new holders, exits and position changes with percentage-point and share deltas, largest moves first. The summary block (counts, net percentage points for foreign vs local holders and per investor type, per-issuer flow, top rises and falls) always covers every match; limit/offset page the rows. Optional ticker filter. Holders are compared by their summed position; `accounts_from`/`accounts_to` show the number of register lines. Returns the idx.ownership.changes.v1 envelope."
     )]
     async fn ownership_changes(
         &self,
@@ -1386,7 +1386,8 @@ impl IdxServer {
                     Some(n) => Some(n as usize),
                     None => Some(50),
                 };
-                let report = self.db()?.changes(
+                let report = ownership::changes(
+                    &self.db()?,
                     from,
                     to,
                     symbol.as_ref().map(Symbol::as_str),
@@ -1394,7 +1395,7 @@ impl IdxServer {
                     limit,
                     a.offset.unwrap_or(0) as usize,
                 )?;
-                ok(SCHEMA_OWNERSHIP_CHANGES, Sourced::fresh(report, "local-db"))
+                ok(SCHEMA_OWNERSHIP_CHANGES, report)
             }
             .await,
         )
@@ -1414,8 +1415,8 @@ impl IdxServer {
                 match a.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                     Some(s) => {
                         let sym = Symbol::parse(s)?;
-                        let report = db.foreign_trend(sym.as_str())?;
-                        ok(SCHEMA_OWNERSHIP_FOREIGN, Sourced::fresh(report, "local-db"))
+                        let report = ownership::foreign_trend(&db, sym.as_str())?;
+                        ok(SCHEMA_OWNERSHIP_FOREIGN, report)
                     }
                     None => {
                         let limit = match a.limit {
@@ -1423,12 +1424,13 @@ impl IdxServer {
                             Some(n) => Some(n as usize),
                             None => Some(25),
                         };
-                        let report =
-                            db.foreign_flow(parse_date(&a.from)?, parse_date(&a.to)?, limit)?;
-                        ok(
-                            SCHEMA_OWNERSHIP_FOREIGN_FLOW,
-                            Sourced::fresh(report, "local-db"),
-                        )
+                        let report = ownership::foreign_flow(
+                            &db,
+                            parse_date(&a.from)?,
+                            parse_date(&a.to)?,
+                            limit,
+                        )?;
+                        ok(SCHEMA_OWNERSHIP_FOREIGN_FLOW, report)
                     }
                 }
             }
@@ -1438,23 +1440,10 @@ impl IdxServer {
 
     #[tool(
         name = "idx_ownership_releases",
-        description = "Lists the monthly KSEI register releases imported into the local database (as-of date, row counts, source). Use it to pick dates for idx_ownership_changes. Returns the idx.ownership.releases.v1 envelope."
+        description = "Lists the monthly KSEI register releases imported into the local database (as-of date, source, `rows` = register lines, `positions` after summing each holder's accounts, `other_date_rows`, `controller_column`). Releases imported by older idx versions are named in `warnings`. Use it to pick dates for idx_ownership_changes. Returns the idx.ownership.releases.v1 envelope."
     )]
     async fn ownership_releases(&self) -> std::result::Result<CallToolResult, McpError> {
-        finish(
-            async {
-                let list = self.db()?.releases()?;
-                let mut s = Sourced::fresh(list, "local-db");
-                if s.data.is_empty() {
-                    s.warnings.push(
-                        "no ownership data imported yet; run `idx ownership import --latest`"
-                            .into(),
-                    );
-                }
-                ok(SCHEMA_OWNERSHIP_RELEASES, s)
-            }
-            .await,
-        )
+        finish(async { ok(SCHEMA_OWNERSHIP_RELEASES, ownership::releases(&self.db()?)?) }.await)
     }
 
     #[tool(

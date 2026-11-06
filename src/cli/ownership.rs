@@ -18,8 +18,6 @@ use crate::providers::Sourced;
 
 use super::{emit, Context};
 
-pub const LOCAL: &str = "local-db";
-
 #[derive(Debug, Subcommand)]
 pub enum OwnershipCmd {
     /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) into the local database.
@@ -127,7 +125,7 @@ fn open(ctx: &Context) -> Result<OwnershipDb> {
 }
 
 fn local<T>(data: T) -> Sourced<T> {
-    Sourced::fresh(data, LOCAL)
+    Sourced::fresh(data, ownership::PROVIDER)
 }
 
 pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
@@ -136,8 +134,8 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         OwnershipCmd::Ticker { symbol, as_of } => {
             let sym = Symbol::parse(&symbol)?;
             let db = open(ctx)?;
-            let report = db.holders(sym.as_str(), as_of)?;
-            emit(ctx, SCHEMA_OWNERSHIP_HOLDERS, local(report), |r| {
+            let report = ownership::holders(&db, sym.as_str(), as_of)?;
+            emit(ctx, SCHEMA_OWNERSHIP_HOLDERS, report, |r| {
                 tbl::holders(r, ctx.color)
             })
         }
@@ -148,8 +146,8 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 ));
             }
             let db = open(ctx)?;
-            let report = db.entity(&name, as_of)?;
-            emit(ctx, SCHEMA_OWNERSHIP_ENTITY, local(report), |r| {
+            let report = ownership::entity(&db, &name, as_of)?;
+            emit(ctx, SCHEMA_OWNERSHIP_ENTITY, report, |r| {
                 tbl::entity(r, ctx.color)
             })
         }
@@ -163,7 +161,8 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         } => {
             let sym = symbol.map(|s| Symbol::parse(&s)).transpose()?;
             let db = open(ctx)?;
-            let report = db.changes(
+            let report = ownership::changes(
+                &db,
                 from,
                 to,
                 sym.as_ref().map(Symbol::as_str),
@@ -171,7 +170,7 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 if limit == 0 { None } else { Some(limit) },
                 offset,
             )?;
-            emit(ctx, SCHEMA_OWNERSHIP_CHANGES, local(report), |r| {
+            emit(ctx, SCHEMA_OWNERSHIP_CHANGES, report, |r| {
                 tbl::changes(r, ctx.color)
             })
         }
@@ -185,15 +184,19 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
             match symbol {
                 Some(s) => {
                     let sym = Symbol::parse(&s)?;
-                    let report = db.foreign_trend(sym.as_str())?;
-                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN, local(report), |r| {
+                    let report = ownership::foreign_trend(&db, sym.as_str())?;
+                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN, report, |r| {
                         tbl::foreign(r, ctx.color)
                     })
                 }
                 None => {
-                    let report =
-                        db.foreign_flow(from, to, if limit == 0 { None } else { Some(limit) })?;
-                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN_FLOW, local(report), |r| {
+                    let report = ownership::foreign_flow(
+                        &db,
+                        from,
+                        to,
+                        if limit == 0 { None } else { Some(limit) },
+                    )?;
+                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN_FLOW, report, |r| {
                         tbl::foreign_flow(r, ctx.color)
                     })
                 }
@@ -201,13 +204,7 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         }
         OwnershipCmd::Releases => {
             let db = open(ctx)?;
-            let list = db.releases()?;
-            let mut s = local(list);
-            if s.data.is_empty() {
-                s.warnings.push(
-                    "no ownership data imported yet; run `idx ownership import --latest`".into(),
-                );
-            }
+            let s = ownership::releases(&db)?;
             emit(ctx, SCHEMA_OWNERSHIP_RELEASES, s, |r| {
                 tbl::releases(r, &ctx.settings.ownership_db, ctx.color)
             })

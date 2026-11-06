@@ -514,27 +514,35 @@ pub async fn brief(
     }
 
     let ownership = match crate::ownership::OwnershipDb::open(ownership_db) {
-        Ok(db) if ownership_db.exists() => match db.holders(symbol.as_str(), None) {
-            Ok(h) => Some(OwnershipSummary {
-                as_of: h.as_of,
-                listed_pct: h.listed_pct,
-                // `+ 0.0` turns the -0.0 an empty f64 sum yields into 0.0.
-                foreign_pct: h
-                    .holders
-                    .iter()
-                    .filter(|x| x.local_foreign.as_deref() == Some("A"))
-                    .map(|x| x.pct)
-                    .sum::<f64>()
-                    + 0.0,
-                holders_listed: h.holders.len(),
-                top_holders: h.holders.into_iter().take(5).collect(),
-            }),
-            Err(e) => {
-                out.warnings.push(format!("ownership: {e}"));
-                failed.push("ownership".into());
-                None
+        Ok(db) if ownership_db.exists() => {
+            match crate::ownership::holders(&db, symbol.as_str(), None) {
+                Ok(s) => {
+                    // Notes about the release read (imported by an old idx, rows dated otherwise).
+                    out.warnings
+                        .extend(s.warnings.iter().map(|w| format!("ownership: {w}")));
+                    let h = s.data;
+                    Some(OwnershipSummary {
+                        as_of: h.as_of,
+                        listed_pct: h.listed_pct,
+                        // `+ 0.0` turns the -0.0 an empty f64 sum yields into 0.0.
+                        foreign_pct: h
+                            .holders
+                            .iter()
+                            .filter(|x| x.local_foreign.as_deref() == Some("A"))
+                            .map(|x| x.pct)
+                            .sum::<f64>()
+                            + 0.0,
+                        holders_listed: h.holders.len(),
+                        top_holders: h.holders.into_iter().take(5).collect(),
+                    })
+                }
+                Err(e) => {
+                    out.warnings.push(format!("ownership: {e}"));
+                    failed.push("ownership".into());
+                    None
+                }
             }
-        },
+        }
         _ => {
             out.warnings
                 .push("ownership: no register imported (idx ownership import --latest)".into());
