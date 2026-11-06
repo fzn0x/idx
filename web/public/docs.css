@@ -4,7 +4,7 @@
    shell (navy masthead, navy section bands, white sheets on the newsprint
    ground, the signed footer) are copied here from public/styles.css; keep the
    two in step. Long-form text reads at 18px on a measure of about 66
-   characters; every ## section opens with a numbered navy band, as the home
+   characters; every ## section opens with a navy band, as the home
    page's modules do; code sits on the band colour; tables are the home page's
    tables, a 2px ink rule under the head and hairlines between rows. Day by
    default, night when the device asks for it. */
@@ -142,7 +142,7 @@ b, strong { font-weight: 700; }
 .pages a .t { overflow-wrap: anywhere; }
 .pages a:hover { background: var(--band); }
 .pages a:hover .t { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
-.pages a[aria-current="page"] { background: var(--navy-soft); box-shadow: inset 4px 0 var(--mark); font-weight: 700; }
+.pages a[aria-current="page"] { background: var(--navy-soft); font-weight: 700; }
 .pages .toc { list-style: none; margin: 2px 0 8px; padding: 0; }
 .pages .toc a { padding: 5px 18px 5px 32px; color: var(--ink-2); font-size: 0.85rem; }
 .pages .toc a:hover { color: var(--ink); }
@@ -255,7 +255,6 @@ b, strong { font-weight: 700; }
 }
 @media (max-width: 48rem) {
   :root { --gutter: 16px; }
-  html { font-size: 106.25%; }
   .masthead .wrap { min-height: 0; padding-top: 6px; gap: 0 12px; }
   .brand img { width: 32px; height: 32px; }
   .nav { order: 3; flex-basis: 100%; margin: 0 calc(-1 * var(--gutter)); padding: 0 calc(var(--gutter) - 14px); overflow-x: auto; border-top: 1px solid rgb(255 255 255 / 0.16); }
@@ -268,7 +267,6 @@ b, strong { font-weight: 700; }
   .doc-body > h1 + blockquote { font-size: 1.1rem; }
   .doc-body h2 { margin-top: 36px; gap: 10px; font-size: 1.15rem; }
   .doc-body h3 { margin-top: 30px; font-size: 1.1rem; }
-  .doc-body h2 { --no: 32px; }
   .doc-body pre { padding: 12px 14px; font-size: 0.8rem; }
   /* On a phone a many-column table scrolls rather than crushing its columns;
      the last column, the prose one in these docs, keeps a readable width. */
