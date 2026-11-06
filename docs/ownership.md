@@ -240,7 +240,10 @@ matches come first, then holders listed in the selected release (`--as-of`,
 default newest) before those that left the register, then prefix, contains
 and word matches, then the holders with more issuers. A query needs 2 letters
 or digits. `entity --exact` takes the key and lists that one holder, where
-plain `entity` lists every holder whose key contains the name.
+plain `entity` lists every holder whose key contains the name. `entity`
+reads one release (newest by default), so for a holder that left the
+register pass its `last_seen` as `--as-of`; the line under the search table
+prints that command for the first match.
 
 ## Holders across issuers
 

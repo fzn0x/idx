@@ -1259,8 +1259,29 @@ fn ownership_analytics_work_offline() {
         .stdout(predicate::str::contains("T PERMADI RACHMAT"))
         .stdout(predicate::str::contains("IR. T. PERMADI RACHMAT"))
         .stdout(predicate::str::contains(
-            "idx ownership entity --exact \"T PERMADI RACHMAT\"",
+            "idx ownership entity --exact \"T PERMADI RACHMAT\" --as-of 2026-09-30",
         ));
+    // A first match that left the register: the hint names its last month,
+    // and the command it prints works.
+    own()
+        .args(["ownership", "search", "ir. t. permadi rachmat"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "idx ownership entity --exact \"IR T PERMADI RACHMAT\" --as-of 2026-08-31",
+        ));
+    own()
+        .args([
+            "ownership",
+            "entity",
+            "--exact",
+            "IR T PERMADI RACHMAT",
+            "--as-of",
+            "2026-08-31",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("IR. T. PERMADI RACHMAT"));
     own()
         .args(["-o", "json", "ownership", "search", "salim", "anthoni"])
         .assert()

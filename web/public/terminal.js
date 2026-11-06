@@ -556,7 +556,8 @@ const R = {
       { h: "Total %", f: (m) => (m.issuers ? pct(m.total_pct) : null) }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true },
       { h: "Spellings", f: (m) => m.spellings.join(" | "), l: true }, { h: "Key", k: "entity_key", l: true },
     ], r.matches)));
-    frag.append(el("p", { class: "warn", text: `Total %: stakes in different issuers added up (a breadth measure). Next: ownership entity ${r.matches[0].entity_key}` }));
+    const top = r.matches[0];
+    frag.append(el("p", { class: "warn", text: `Total %: stakes in different issuers added up (a breadth measure). Next: ownership entity ${top.entity_key} --as-of ${top.issuers ? r.as_of : top.last_seen}` }));
     return frag;
   },
   crossHolders(r) {

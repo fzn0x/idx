@@ -100,9 +100,17 @@ pub fn search(r: &SearchReport, color: bool) -> String {
         t.add_row(row);
     }
     out.push_str(&t.to_string());
+    // `entity` reads one release: the one searched when the holder is in it,
+    // else the last one that lists the holder.
+    let top = &r.matches[0];
+    let date = if top.issuers > 0 {
+        r.as_of
+    } else {
+        top.last_seen
+    };
     out.push_str(&format!(
-        "\nTotal %: stakes in different issuers added up (a breadth measure). Next: idx ownership entity --exact \"{}\"\n",
-        r.matches[0].entity_key
+        "\nTotal %: stakes in different issuers added up (a breadth measure). Next: idx ownership entity --exact \"{}\" --as-of {date}\n",
+        top.entity_key
     ));
     out
 }
