@@ -5,6 +5,12 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 - `public/` landing page (`index.html`) and the browser terminal (`terminal.html`),
   plain HTML/CSS/ES modules, no build step.
 - `src/worker.js` entry: host check, security headers, `/api/*`, cron.
+  `src/headers.js` holds the security headers (CSP, nosniff, frame and
+  referrer policy); `public/_headers` gives the same set to the static assets,
+  which the assets layer serves without running the Worker.
+  `test/headers.test.mjs` keeps the two equal and checks that every page
+  works under the CSP (no inline scripts or handlers, styles only from this
+  site and Google Fonts).
 - `src/api.js` endpoints returning the CLI's JSON envelopes; D1-backed cache.
 - `src/ipot.js` the IPOT broker summary and corporate actions (port of
   `src/providers/ipot`, names from `src/brokers.json`, generated from

@@ -1,0 +1,11 @@
+# Security headers for every static asset: the landing page, the terminal,
+# their scripts and styles, the 404 page. The assets layer serves these
+# without running the Worker, so the Worker cannot add them. The same list
+# lives in src/headers.js for the responses the Worker builds itself;
+# test/headers.test.mjs fails when the two differ.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'

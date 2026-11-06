@@ -1,6 +1,8 @@
 // idx web: Cloudflare Worker for ihsg.midoriresearch.com.
 //
-// - Serves the landing page and the web terminal from `public/`.
+// - Serves the landing page and the web terminal from `public/` (the assets
+//   layer answers those without running the Worker; `public/_headers` gives
+//   them the same security headers, see src/headers.js).
 // - `/api/*` answers with the same JSON envelopes as `idx -o json`, backed by
 //   a D1 snapshot that `scheduled()` refreshes every minute in trading hours.
 // - Domain-only: any Host other than PUBLIC_HOST gets a 404, so even an
@@ -9,6 +11,7 @@
 import { route, ApiError, refreshSnapshot } from "./api.js";
 import { ownershipSync } from "./ownership-sync.js";
 import { bandarScanStep } from "./bandar-scan.js";
+import { SECURITY_HEADERS } from "./headers.js";
 
 // Constant-time comparison for the maintainer token.
 function tokenOk(env, given) {
@@ -18,15 +21,6 @@ function tokenOk(env, given) {
   for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ given.charCodeAt(i);
   return diff === 0;
 }
-
-const SECURITY_HEADERS = {
-  "x-content-type-options": "nosniff",
-  "x-frame-options": "DENY",
-  "referrer-policy": "strict-origin-when-cross-origin",
-  "permissions-policy": "camera=(), microphone=(), geolocation=()",
-  "content-security-policy":
-    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-};
 
 function json(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body, null, 2), {
