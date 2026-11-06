@@ -213,4 +213,15 @@ set +e
 set -e
 if [ "$code" = 0 ]; then pass "ownership discover reached idx.co.id"; else echo "  skip ownership discover (exit $code): $(head -c 160 "$TMP/od.err")"; fi
 
+echo "ownership snapshot (GitHub mirror)"
+"$IDX" -o json ownership status >"$TMP/os.json" || fail "ownership status"
+expect "$TMP/os.json" '"schema": "idx.ownership.status.v1"' "ownership status envelope"
+expect "$TMP/os.json" '"mirror": "https://github.com/' "ownership status read the mirror"
+IDX_OWNERSHIP_DB="$TMP/sync/ownership.sqlite" "$IDX" -o json ownership sync >"$TMP/osy.json" || fail "ownership sync"
+expect "$TMP/osy.json" '"schema": "idx.ownership.snapshot-sync.v1"' "ownership sync envelope"
+grep -qE '"action": "(installed|imported)"' "$TMP/osy.json" && pass "ownership sync filled an empty database" || { cat "$TMP/osy.json"; fail "ownership sync action"; }
+grep -qF '"snapshot": null' "$TMP/osy.json" && echo "  note: the mirror has no snapshot for this schema yet; sync imported the monthly files"
+IDX_OWNERSHIP_DB="$TMP/sync/ownership.sqlite" "$IDX" -o json ownership sync >"$TMP/osy2.json" || fail "ownership sync (again)"
+expect "$TMP/osy2.json" '"action": "up_to_date"' "a second ownership sync has nothing to do"
+
 echo "all live checks passed"

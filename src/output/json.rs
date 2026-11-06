@@ -10,7 +10,8 @@ use crate::model::{
     DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials, ForeignFlowReport,
     ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport, IndexBoard,
     InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
-    Release, ScreenReport, SentimentReport, Technical, Watchlist,
+    Release, ScreenReport, SentimentReport, SnapshotManifest, StatusReport, SyncReport, Technical,
+    Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
 use crate::providers::Sourced;
@@ -87,6 +88,13 @@ pub const SCHEMA_OWNERSHIP_FOREIGN: &str = "idx.ownership.foreign.v1";
 pub const SCHEMA_OWNERSHIP_FOREIGN_FLOW: &str = "idx.ownership.foreign-flow.v1";
 pub const SCHEMA_OWNERSHIP_IMPORT: &str = "idx.ownership.import.v1";
 pub const SCHEMA_OWNERSHIP_DISCOVER: &str = "idx.ownership.discover.v1";
+/// `ownership sync`. Not `idx.ownership.sync.v1`: the web terminal's
+/// `/api/ownership/status` already answers with that name (its D1 loader).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT_SYNC: &str = "idx.ownership.snapshot-sync.v1";
+pub const SCHEMA_OWNERSHIP_STATUS: &str = "idx.ownership.status.v1";
+/// The snapshot manifest (`snapshot-v{V}.json` on the mirror, and the data
+/// of `ownership build-snapshot -o json`).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT: &str = "idx.ownership.snapshot.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
@@ -126,6 +134,9 @@ pub type OwnershipForeignEnvelope = Envelope<ForeignReport>;
 pub type OwnershipForeignFlowEnvelope = Envelope<ForeignFlowReport>;
 pub type OwnershipImportEnvelope = Envelope<Vec<ImportReport>>;
 pub type OwnershipDiscoverEnvelope = Envelope<Vec<DiscoveredFile>>;
+pub type OwnershipSnapshotSyncEnvelope = Envelope<SyncReport>;
+pub type OwnershipStatusEnvelope = Envelope<StatusReport>;
+pub type OwnershipSnapshotEnvelope = Envelope<SnapshotManifest>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -200,6 +211,9 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-foreign-flow",
         "ownership-import",
         "ownership-discover",
+        "ownership-snapshot-sync",
+        "ownership-status",
+        "ownership-snapshot",
         "error",
         "quote",
         "candle",
@@ -246,6 +260,9 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-foreign-flow" => schemars::schema_for!(OwnershipForeignFlowEnvelope),
         "ownership-import" => schemars::schema_for!(OwnershipImportEnvelope),
         "ownership-discover" => schemars::schema_for!(OwnershipDiscoverEnvelope),
+        "ownership-snapshot-sync" => schemars::schema_for!(OwnershipSnapshotSyncEnvelope),
+        "ownership-status" => schemars::schema_for!(OwnershipStatusEnvelope),
+        "ownership-snapshot" => schemars::schema_for!(OwnershipSnapshotEnvelope),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),

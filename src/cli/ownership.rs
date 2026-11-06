@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Args, Subcommand};
 
 use crate::error::{IdxError, Result};
@@ -10,10 +10,11 @@ use crate::model::Symbol;
 use crate::output::json::{
     SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_DISCOVER, SCHEMA_OWNERSHIP_ENTITY,
     SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS,
-    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
+    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES, SCHEMA_OWNERSHIP_SNAPSHOT,
+    SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, SCHEMA_OWNERSHIP_STATUS,
 };
-use crate::output::{self, table_ownership as tbl};
-use crate::ownership::{self, OwnershipDb};
+use crate::output::{self, table_ownership as tbl, table_ownership_sync as tbl_sync};
+use crate::ownership::{self, snapshot, OwnershipDb};
 use crate::providers::Sourced;
 
 use super::{emit, Context};
@@ -22,7 +23,7 @@ use super::{emit, Context};
 pub enum OwnershipCmd {
     /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) into the local database.
     #[command(
-        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror."
+        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror. For a fresh install `idx ownership sync` is faster: one download of the\nprebuilt database."
     )]
     Import(ImportArgs),
 
@@ -96,11 +97,44 @@ pub enum OwnershipCmd {
     )]
     Releases,
 
+    /// Bring the local database up to date from the GitHub mirror: install the prebuilt snapshot, or import the missing months.
+    #[command(
+        after_help = "Examples:\n  idx ownership sync                  # one download (a few MB), SHA-256 checked\n  idx ownership sync --force          # replace a database holding months the snapshot lacks (a .bak copy is kept)\n  idx -o json ownership sync | jq .data.action\n\nCI builds the snapshot from the same IDX files as the mirror. Sync installs it when the local\ndatabase is empty, older or a subset of it, then imports any newer monthly file. A database\nholding months (or other data) the snapshot lacks is kept, and only the missing months are\nimported, unless --force. The swap is one SQLite transaction, safe while idx mcp reads the file.\nIDX_OWNERSHIP_MIRROR points at another mirror; off disables sync."
+    )]
+    Sync {
+        /// Replace a database that holds months or data the snapshot lacks (a .bak copy is kept).
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// The local database, the snapshot it came from, what the mirror holds and what sync would do.
+    #[command(
+        after_help = "Examples:\n  idx ownership status\n  idx --offline ownership status      # the local database only\n  idx -o json ownership status | jq .data.sync\n\nNever creates the database. `sync` is up_to_date, install, update or import (null when the\nmirror was not checked)."
+    )]
+    Status,
+
     /// List the monthly files currently published on idx.co.id (needs network).
     Discover,
 
     /// Print the database path.
     Path,
+
+    /// Maintainer tool: write the snapshot of the local database (scripts/ownership_mirror.py publishes it).
+    #[command(
+        hide = true,
+        after_help = "Examples:\n  IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite idx ownership build-snapshot --out build/snap --sources build/ownership/out/index.json\n\nWrites ownership-v{V}-{newest}-{sha12}.sqlite.gz and snapshot-v{V}.json into --out and prints the\nmanifest. --sources (the mirror's index.json) records each release's idx.co.id URL; every\nimported_at becomes --generated-at (default: now). The database itself is not changed."
+    )]
+    BuildSnapshot {
+        /// Directory for the two files.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// The mirror's index.json, for each release's idx.co.id URL.
+        #[arg(long, value_name = "FILE")]
+        sources: Option<PathBuf>,
+        /// Build time recorded in the snapshot (RFC 3339, UTC).
+        #[arg(long, value_name = "TIME")]
+        generated_at: Option<DateTime<Utc>>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -246,6 +280,50 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         }
         OwnershipCmd::Path => {
             output::print_stdout(&format!("{}\n", ctx.settings.ownership_db.display()))
+        }
+        OwnershipCmd::Sync { force } => {
+            let base = snapshot::mirror_base(ctx.fetcher.is_offline())?;
+            let s = snapshot::sync(
+                &ctx.settings.ownership_db,
+                &base,
+                force,
+                ctx.settings.timeout(),
+            )
+            .await?;
+            emit(ctx, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, s, tbl_sync::sync)
+        }
+        OwnershipCmd::Status => {
+            let (base, note) = snapshot::status_mirror(ctx.fetcher.is_offline());
+            let mut s = snapshot::status(
+                &ctx.settings.ownership_db,
+                base.as_deref(),
+                ctx.settings.timeout(),
+            )
+            .await?;
+            s.warnings.splice(0..0, note);
+            emit(ctx, SCHEMA_OWNERSHIP_STATUS, s, tbl_sync::status)
+        }
+        OwnershipCmd::BuildSnapshot {
+            out,
+            sources,
+            generated_at,
+        } => {
+            let index = match &sources {
+                Some(p) => {
+                    let bytes = std::fs::read(p).map_err(|e| {
+                        IdxError::Usage(format!("cannot read {}: {e}", p.display()))
+                    })?;
+                    Some(ownership::mirror::parse_index(&bytes)?)
+                }
+                None => None,
+            };
+            let m = snapshot::build(
+                &ctx.settings.ownership_db,
+                &out,
+                index.as_ref(),
+                generated_at.unwrap_or_else(Utc::now),
+            )?;
+            emit(ctx, SCHEMA_OWNERSHIP_SNAPSHOT, local(m), tbl_sync::built)
         }
     }
 }

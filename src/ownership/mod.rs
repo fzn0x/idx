@@ -136,7 +136,7 @@ pub fn releases(db: &OwnershipDb) -> Result<Sourced<Vec<Release>>> {
     let mut s = sourced(db, list, &dates)?;
     if s.data.is_empty() {
         s.warnings
-            .push("no ownership data imported yet; run `idx ownership import --latest`".into());
+            .push("no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`)".into());
     }
     Ok(s)
 }

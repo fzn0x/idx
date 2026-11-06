@@ -759,7 +759,7 @@ impl OwnershipDb {
                     .map(|r| r.as_of.to_string())
                     .collect();
                 Err(IdxError::NotFound(if available.is_empty() {
-                    "no ownership data imported yet; run `idx ownership import --latest` or `--file <xlsx>`".into()
+                    "no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`, `--file <xlsx>`)".into()
                 } else {
                     format!(
                         "no ownership release for {}; available: {}",
@@ -1152,7 +1152,7 @@ impl OwnershipDb {
                     .last()
                     .ok_or_else(|| {
                         IdxError::NotFound(
-                            "no ownership data imported yet; run `idx ownership import --latest`"
+                            "no ownership data imported yet; run `idx ownership sync` (or `idx ownership import --latest`)"
                                 .into(),
                         )
                     })?

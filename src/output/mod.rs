@@ -20,6 +20,7 @@ pub mod table_broker;
 pub mod table_exchange;
 pub mod table_news;
 pub mod table_ownership;
+pub mod table_ownership_sync;
 pub mod table_reports;
 
 #[derive(
