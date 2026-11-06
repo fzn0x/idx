@@ -76,7 +76,7 @@ The package is called **`ihsg-cli`**; the command it installs is **`idx`**
 (npm also adds `ihsg-cli` as an alias).
 
 ```sh
-cargo install ihsg-cli                    # crates.io, builds from source (Rust 1.88+)
+cargo install ihsg-cli                    # crates.io, builds from source (Rust 1.89+)
 npm install -g github:fzn0x/idx           # npm, straight from this repository
 npx github:fzn0x/idx stocks quote BBCA    # npm, no install
 curl -fsSL https://raw.githubusercontent.com/fzn0x/idx/main/install.sh | sh   # Linux, macOS

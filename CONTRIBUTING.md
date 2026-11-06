@@ -11,7 +11,7 @@ cargo build
 cargo test
 ```
 
-Rust stable (1.80+) is the only requirement. `rust-toolchain.toml` pins
+Rust stable (1.89+) is the only requirement. `rust-toolchain.toml` pins
 `rustfmt` and `clippy` as components.
 
 ## Before you open a pull request
