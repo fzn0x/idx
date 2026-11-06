@@ -1,0 +1,314 @@
+{
+  "message": "Successfully majorholder data",
+  "data": {
+    "is_more": false,
+    "movement": [
+      {
+        "id": "13898",
+        "name": "CGS INTERNATIONAL SEKURITAS INDONESIA",
+        "symbol": "ENRG",
+        "date": "29 Oct 26",
+        "previous": {
+          "value": "3,600,545,611",
+          "percentage": "9.04",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "3,100,545,614",
+          "percentage": "7.78",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "-499,999,997",
+          "percentage": "-1.25",
+          "formatted_value": "499,999,997"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_CROSS",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "715",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "715"
+          },
+          "formatted": "715"
+        },
+        "value": {
+          "raw": {
+            "value": "357499997855"
+          },
+          "formatted": "357.50B"
+        },
+        "is_estimated_price": false,
+        "purpose": "Reverse REPO",
+        "icon_url": "https://assets.stockbit.com/logos/companies/ENRG.png?version=1750036449822958153"
+      },
+      {
+        "id": "12202",
+        "name": "MAYBANK SEKURITAS INDONESIA",
+        "symbol": "ENRG",
+        "date": "28 Oct 26",
+        "previous": {
+          "value": "2,380,252,500",
+          "percentage": "5.97",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "2,442,752,500",
+          "percentage": "6.13",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+62,500,000",
+          "percentage": "+0.16",
+          "formatted_value": "62,500,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_CROSS",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "724"
+          },
+          "formatted": "724"
+        },
+        "value": {
+          "raw": {
+            "value": "45250000000"
+          },
+          "formatted": "45.25B"
+        },
+        "is_estimated_price": true,
+        "purpose": "Penambahan jaminan saham untuk transaksi repo",
+        "icon_url": "https://assets.stockbit.com/logos/companies/ENRG.png?version=1750036449822958153"
+      },
+      {
+        "id": "1000000448",
+        "name": "TRINUGRAHA THOHIR HARMONI",
+        "symbol": "VISI",
+        "date": "28 Oct 26",
+        "previous": {
+          "value": "246,000,000",
+          "percentage": "7.70",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "270,144,900",
+          "percentage": "8.45",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+24,144,900",
+          "percentage": "+0.76",
+          "formatted_value": "24,144,900"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_PRIVATE_PLACEMENT",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "994",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "994"
+          },
+          "formatted": "994"
+        },
+        "value": {
+          "raw": {
+            "value": "24000030600"
+          },
+          "formatted": "24.00B"
+        },
+        "is_estimated_price": false,
+        "purpose": "PMTHMETD",
+        "icon_url": "https://assets.stockbit.com/logos/companies/VISI.png"
+      },
+      {
+        "id": "1000005952",
+        "name": "WIBOWO GROUP CAPITAL",
+        "symbol": "MBSS",
+        "date": "15 Oct 26",
+        "previous": {
+          "value": "1,443,766,800",
+          "percentage": "82.50",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "1,576,605,000",
+          "percentage": "90.09",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+132,838,200",
+          "percentage": "+7.59",
+          "formatted_value": "132,838,200"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_TENDER_OFFER",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "2,915",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "2915"
+          },
+          "formatted": "2,915"
+        },
+        "value": {
+          "raw": {
+            "value": "387223353000"
+          },
+          "formatted": "387.22B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/MBSS.png"
+      },
+      {
+        "id": "1000006017",
+        "name": "JEFRI NEDI",
+        "symbol": "FUJI",
+        "date": "15 Oct 26",
+        "previous": {
+          "value": "109,431,600",
+          "percentage": "8.42",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "109,251,600",
+          "percentage": "8.40",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "-180,000",
+          "percentage": "-0.01",
+          "formatted_value": "180,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_SELL",
+        "data_source": {
+          "label": "Sumber: KSEI",
+          "type": "SOURCE_TYPE_KSEI"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "CP",
+          "group": "BROKER_GROUP_FOREIGN"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "298"
+          },
+          "formatted": "298"
+        },
+        "value": {
+          "raw": {
+            "value": "53640000"
+          },
+          "formatted": "53.64M"
+        },
+        "is_estimated_price": true,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/FUJI.png"
+      },
+      {
+        "id": "1000004481",
+        "name": "RUDI R. SUTANTRA",
+        "symbol": "ATLA",
+        "date": "15 Oct 26",
+        "previous": {
+          "value": "2,638,254,200",
+          "percentage": "42.56",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "2,610,254,200",
+          "percentage": "42.10",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "-28,000,000",
+          "percentage": "-0.45",
+          "formatted_value": "28,000,000"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_SELL",
+        "data_source": {
+          "label": "Sumber: KSEI",
+          "type": "SOURCE_TYPE_KSEI"
+        },
+        "price_formatted": "",
+        "broker_detail": {
+          "code": "AG",
+          "group": "BROKER_GROUP_FOREIGN"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "29"
+          },
+          "formatted": "29"
+        },
+        "value": {
+          "raw": {
+            "value": "812000000"
+          },
+          "formatted": "812.00M"
+        },
+        "is_estimated_price": true,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/ATLA.png"
+      }
+    ]
+  }
+}

@@ -16,14 +16,25 @@ routes = [
 directory = "public"
 binding = "ASSETS"
 not_found_handling = "404-page"
-run_worker_first = ["/api/*", "/healthz"]
+# The docs (/docs, /llms*.txt) pass through the Worker for the charset and
+# CORS of the Markdown files; every other asset gets its headers from
+# public/_headers.
+run_worker_first = ["/api/*", "/healthz", "/docs", "/docs/*", "/llms.txt", "/llms-full.txt"]
+
+# The docs pages, llms.txt and llms-full.txt are generated from README.md and
+# docs/*.md into public/ (gitignored) before every `wrangler dev` and
+# `wrangler deploy`.
+[build]
+command = "node scripts/docs.mjs"
+watch_dir = ["scripts", "../docs"]
 
 [vars]
 PUBLIC_HOST = "ihsg.midoriresearch.com"
 # KSEI register mirror published by .github/workflows/ownership.yml.
 OWN_MIRROR_URL = "https://github.com/fzn0x/idx/releases/download/ownership-data"
 OWN_KEEP_RELEASES = "6"
-# D1 free tier: 100k rows written per day; the register takes ~22k per month loaded.
+# D1 free tier: 100k rows written per UTC day; the register takes ~22k per month
+# loaded, and ~43k to replace a month D1 already holds (the delete counts too).
 OWN_DAILY_WRITE_BUDGET = "60000"
 
 [[d1_databases]]

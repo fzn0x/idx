@@ -6,13 +6,19 @@ use serde::Serialize;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CorporateActions,
-    DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials, ForeignFlowReport,
-    ForeignReport, Fundamentals, History, HoldersReport, Holidays, ImportReport, IndexBoard,
-    InstrumentList, MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote,
-    Release, ScreenReport, SentimentReport, Technical, Watchlist,
+    Astro, BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport,
+    CompositionReport, CorporateActions, CorporateEvents, DiscoveredFile, DividendHistory,
+    Earnings, EntityReport, Financials, ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens,
+    History, HolderMovements, HoldersReport, Holidays, ImportReport, IndexBoard, Insights,
+    InstitutionalOwnership, InstrumentList, Intraday, MarketOverview, MemberList, NewsReport,
+    OrderBook, Performance, Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport,
+    SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, ValuationLens, Watchlist,
 };
-use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, MarketForeign};
+use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign};
+use crate::model::{
+    ConcentrationReport, CrossHoldersReport, GraphReport, Resolution, ResolutionReport,
+    ResolveCandidates, SearchReport,
+};
 use crate::providers::Sourced;
 
 /// Stable wrapper. `schema` names the payload shape and is versioned
@@ -29,6 +35,11 @@ pub struct Envelope<T> {
     pub cached: bool,
     /// `true` when the cached copy is older than its TTL (offline or network failure).
     pub stale: bool,
+    /// Why `stale` is true: `offline` (`--offline`, the network was not
+    /// tried) or `fetch_failed` (the live request failed; a warning names
+    /// the failure). Omitted when the data is not stale.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stale_reason: Option<StaleReason>,
     /// Non-fatal notes, e.g. symbols the source did not know.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub warnings: Vec<String>,
@@ -43,6 +54,7 @@ impl<T> Envelope<T> {
             fetched_at: s.fetched_at.trunc_subsecs(0),
             cached: s.cached,
             stale: s.stale,
+            stale_reason: s.stale_reason,
             warnings: s.warnings,
             data: s.data,
         }
@@ -51,8 +63,12 @@ impl<T> Envelope<T> {
 
 pub const SCHEMA_QUOTES: &str = "idx.quotes.v1";
 pub const SCHEMA_HISTORY: &str = "idx.history.v1";
+pub const SCHEMA_INTRADAY: &str = "idx.intraday.v1";
 pub const SCHEMA_PROFILE: &str = "idx.profile.v1";
 pub const SCHEMA_FUNDAMENTALS: &str = "idx.fundamentals.v1";
+pub const SCHEMA_GROWTH: &str = "idx.growth.v1";
+pub const SCHEMA_VALUATION: &str = "idx.valuation.v1";
+pub const SCHEMA_RISK: &str = "idx.risk.v1";
 pub const SCHEMA_COMPARE: &str = "idx.compare.v1";
 pub const SCHEMA_FINANCIALS: &str = "idx.financials.v1";
 pub const SCHEMA_EARNINGS: &str = "idx.earnings.v1";
@@ -66,19 +82,24 @@ pub const SCHEMA_BANDAR_SCREEN: &str = "idx.bandar.screen.v1";
 pub const SCHEMA_BANDAR_BROKER: &str = "idx.bandar.broker.v1";
 pub const SCHEMA_WATCHLIST: &str = "idx.watchlist.v1";
 pub const SCHEMA_HOLIDAYS: &str = "idx.holidays.v1";
+pub const SCHEMA_ASTRO: &str = "idx.astro.v1";
 pub const SCHEMA_INSTRUMENTS: &str = "idx.instruments.v1";
 pub const SCHEMA_MEMBERS: &str = "idx.members.v1";
 pub const SCHEMA_INDICES: &str = "idx.indices.v1";
 pub const SCHEMA_CALENDAR: &str = "idx.calendar.v1";
 pub const SCHEMA_ACTIONS: &str = "idx.actions.v1";
 pub const SCHEMA_FOREIGN: &str = "idx.foreign.v1";
+pub const SCHEMA_FOREIGN_VALUE: &str = "idx.foreign.value.v1";
 pub const SCHEMA_MARKET_FOREIGN: &str = "idx.market.foreign.v1";
 pub const SCHEMA_MARKET_BROKERS: &str = "idx.market.brokers.v1";
 pub const SCHEMA_TECHNICAL: &str = "idx.technical.v1";
 pub const SCHEMA_ORDERBOOK: &str = "idx.orderbook.v1";
+pub const SCHEMA_STOCKBIT_ACTIONS: &str = "idx.stockbit.actions.v1";
+pub const SCHEMA_STOCKBIT_MOVEMENTS: &str = "idx.stockbit.movements.v1";
 pub const SCHEMA_SCREEN: &str = "idx.screen.v1";
 pub const SCHEMA_NEWS: &str = "idx.news.v1";
 pub const SCHEMA_SENTIMENT: &str = "idx.sentiment.v1";
+pub const SCHEMA_INSIGHTS: &str = "idx.insights.v1";
 pub const SCHEMA_OWNERSHIP_HOLDERS: &str = "idx.ownership.holders.v1";
 pub const SCHEMA_OWNERSHIP_ENTITY: &str = "idx.ownership.entity.v1";
 pub const SCHEMA_OWNERSHIP_CHANGES: &str = "idx.ownership.changes.v1";
@@ -87,11 +108,31 @@ pub const SCHEMA_OWNERSHIP_FOREIGN: &str = "idx.ownership.foreign.v1";
 pub const SCHEMA_OWNERSHIP_FOREIGN_FLOW: &str = "idx.ownership.foreign-flow.v1";
 pub const SCHEMA_OWNERSHIP_IMPORT: &str = "idx.ownership.import.v1";
 pub const SCHEMA_OWNERSHIP_DISCOVER: &str = "idx.ownership.discover.v1";
+pub const SCHEMA_OWNERSHIP_SEARCH: &str = "idx.ownership.search.v1";
+pub const SCHEMA_OWNERSHIP_CROSS_HOLDERS: &str = "idx.ownership.cross-holders.v1";
+pub const SCHEMA_OWNERSHIP_CONCENTRATION: &str = "idx.ownership.concentration.v1";
+pub const SCHEMA_OWNERSHIP_GRAPH: &str = "idx.ownership.graph.v1";
+pub const SCHEMA_OWNERSHIP_RESOLVE_CANDIDATES: &str = "idx.ownership.resolve-candidates.v1";
+pub const SCHEMA_OWNERSHIP_RESOLUTION: &str = "idx.ownership.resolution.v1";
+pub const SCHEMA_OWNERSHIP_RESOLUTIONS: &str = "idx.ownership.resolutions.v1";
+pub const SCHEMA_OWNERSHIP_COMPOSITION: &str = "idx.ownership.composition.v1";
+/// `ownership sync`. Not `idx.ownership.sync.v1`: the web terminal's
+/// `/api/ownership/status` already answers with that name (its D1 loader).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT_SYNC: &str = "idx.ownership.snapshot-sync.v1";
+pub const SCHEMA_OWNERSHIP_STATUS: &str = "idx.ownership.status.v1";
+/// The snapshot manifest (`snapshot-v{V}.json` on the mirror, and the data
+/// of `ownership build-snapshot -o json`).
+pub const SCHEMA_OWNERSHIP_SNAPSHOT: &str = "idx.ownership.snapshot.v1";
+pub const SCHEMA_OWNERSHIP_INSTITUTIONS: &str = "idx.ownership.institutions.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
+pub type IntradayEnvelope = Envelope<Intraday>;
 pub type ProfileEnvelope = Envelope<Profile>;
 pub type FundamentalsEnvelope = Envelope<Fundamentals>;
+pub type GrowthEnvelope = Envelope<GrowthLens>;
+pub type ValuationEnvelope = Envelope<ValuationLens>;
+pub type RiskEnvelope = Envelope<RiskLens>;
 pub type CompareEnvelope = Envelope<Vec<Fundamentals>>;
 pub type FinancialsEnvelope = Envelope<Financials>;
 pub type EarningsEnvelope = Envelope<Earnings>;
@@ -105,19 +146,24 @@ pub type BandarScreenEnvelope = Envelope<BandarScreen>;
 pub type BandarBrokerEnvelope = Envelope<BrokerActivity>;
 pub type WatchlistEnvelope = Envelope<Watchlist>;
 pub type HolidaysEnvelope = Envelope<Holidays>;
+pub type AstroEnvelope = Envelope<Astro>;
 pub type InstrumentsEnvelope = Envelope<InstrumentList>;
 pub type MembersEnvelope = Envelope<MemberList>;
 pub type IndicesEnvelope = Envelope<IndexBoard>;
 pub type CalendarEnvelope = Envelope<Calendar>;
 pub type ActionsEnvelope = Envelope<CorporateActions>;
 pub type ForeignEnvelope = Envelope<ForeignFlow>;
+pub type ForeignValueEnvelope = Envelope<ForeignValueFlow>;
 pub type MarketForeignEnvelope = Envelope<MarketForeign>;
 pub type MarketBrokersEnvelope = Envelope<BrokerRanking>;
 pub type TechnicalEnvelope = Envelope<Technical>;
 pub type OrderBookEnvelope = Envelope<OrderBook>;
+pub type StockbitActionsEnvelope = Envelope<CorporateEvents>;
+pub type StockbitMovementsEnvelope = Envelope<HolderMovements>;
 pub type ScreenEnvelope = Envelope<ScreenReport>;
 pub type NewsEnvelope = Envelope<NewsReport>;
 pub type SentimentEnvelope = Envelope<SentimentReport>;
+pub type InsightsEnvelope = Envelope<Insights>;
 pub type OwnershipHoldersEnvelope = Envelope<HoldersReport>;
 pub type OwnershipEntityEnvelope = Envelope<EntityReport>;
 pub type OwnershipChangesEnvelope = Envelope<ChangesReport>;
@@ -126,6 +172,18 @@ pub type OwnershipForeignEnvelope = Envelope<ForeignReport>;
 pub type OwnershipForeignFlowEnvelope = Envelope<ForeignFlowReport>;
 pub type OwnershipImportEnvelope = Envelope<Vec<ImportReport>>;
 pub type OwnershipDiscoverEnvelope = Envelope<Vec<DiscoveredFile>>;
+pub type OwnershipSearchEnvelope = Envelope<SearchReport>;
+pub type OwnershipCrossHoldersEnvelope = Envelope<CrossHoldersReport>;
+pub type OwnershipConcentrationEnvelope = Envelope<ConcentrationReport>;
+pub type OwnershipGraphEnvelope = Envelope<GraphReport>;
+pub type OwnershipResolveCandidatesEnvelope = Envelope<ResolveCandidates>;
+pub type OwnershipResolutionEnvelope = Envelope<Vec<ResolutionReport>>;
+pub type OwnershipResolutionsEnvelope = Envelope<Vec<Resolution>>;
+pub type OwnershipCompositionEnvelope = Envelope<CompositionReport>;
+pub type OwnershipSnapshotSyncEnvelope = Envelope<SyncReport>;
+pub type OwnershipStatusEnvelope = Envelope<StatusReport>;
+pub type OwnershipSnapshotEnvelope = Envelope<SnapshotManifest>;
+pub type OwnershipInstitutionsEnvelope = Envelope<InstitutionalOwnership>;
 
 /// Error shape written to stderr in JSON mode.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -136,7 +194,8 @@ pub struct ErrorEnvelope {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ErrorBody {
-    /// `usage` | `config` | `network` | `provider` | `not_found` | `offline_miss` | `io` | `internal`
+    /// `usage` | `config` | `network` | `provider` | `blocked` | `not_found` | `offline_miss` | `unsupported` | `io` | `internal`.
+    /// `blocked` (exit 3): the source's bot protection (Cloudflare) refused this network.
     pub code: String,
     pub message: String,
 }
@@ -164,8 +223,12 @@ pub fn schema_names() -> &'static [&'static str] {
     &[
         "quotes",
         "history",
+        "intraday",
         "profile",
         "fundamentals",
+        "growth",
+        "valuation",
+        "risk",
         "compare",
         "financials",
         "earnings",
@@ -179,19 +242,24 @@ pub fn schema_names() -> &'static [&'static str] {
         "bandar-broker",
         "watchlist",
         "holidays",
+        "astro",
         "instruments",
         "members",
         "indices",
         "calendar",
         "actions",
         "foreign",
+        "foreign-value",
         "market-foreign",
         "market-brokers",
         "technical",
         "orderbook",
+        "stockbit-actions",
+        "stockbit-movements",
         "screen",
         "news",
         "sentiment",
+        "insights",
         "ownership-holders",
         "ownership-entity",
         "ownership-changes",
@@ -200,6 +268,19 @@ pub fn schema_names() -> &'static [&'static str] {
         "ownership-foreign-flow",
         "ownership-import",
         "ownership-discover",
+        "ownership-search",
+        "ownership-cross-holders",
+        "ownership-concentration",
+        "ownership-graph",
+        "ownership-resolve-candidates",
+        "ownership-resolution",
+        "ownership-resolutions",
+        "ownership-composition",
+        "ownership-snapshot-sync",
+        "ownership-status",
+        "ownership-snapshot",
+        "ownership-institutions",
+        "stockbit-status",
         "error",
         "quote",
         "candle",
@@ -210,8 +291,12 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
     let root = match name {
         "quotes" => schemars::schema_for!(QuotesEnvelope),
         "history" => schemars::schema_for!(HistoryEnvelope),
+        "intraday" => schemars::schema_for!(IntradayEnvelope),
         "profile" => schemars::schema_for!(ProfileEnvelope),
         "fundamentals" => schemars::schema_for!(FundamentalsEnvelope),
+        "growth" => schemars::schema_for!(GrowthEnvelope),
+        "valuation" => schemars::schema_for!(ValuationEnvelope),
+        "risk" => schemars::schema_for!(RiskEnvelope),
         "compare" => schemars::schema_for!(CompareEnvelope),
         "financials" => schemars::schema_for!(FinancialsEnvelope),
         "earnings" => schemars::schema_for!(EarningsEnvelope),
@@ -225,19 +310,24 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "bandar-broker" => schemars::schema_for!(BandarBrokerEnvelope),
         "watchlist" => schemars::schema_for!(WatchlistEnvelope),
         "holidays" => schemars::schema_for!(HolidaysEnvelope),
+        "astro" => schemars::schema_for!(AstroEnvelope),
         "instruments" => schemars::schema_for!(InstrumentsEnvelope),
         "members" => schemars::schema_for!(MembersEnvelope),
         "indices" => schemars::schema_for!(IndicesEnvelope),
         "calendar" => schemars::schema_for!(CalendarEnvelope),
         "actions" => schemars::schema_for!(ActionsEnvelope),
         "foreign" => schemars::schema_for!(ForeignEnvelope),
+        "foreign-value" => schemars::schema_for!(ForeignValueEnvelope),
         "market-foreign" => schemars::schema_for!(MarketForeignEnvelope),
         "market-brokers" => schemars::schema_for!(MarketBrokersEnvelope),
         "technical" => schemars::schema_for!(TechnicalEnvelope),
         "orderbook" => schemars::schema_for!(OrderBookEnvelope),
+        "stockbit-actions" => schemars::schema_for!(StockbitActionsEnvelope),
+        "stockbit-movements" => schemars::schema_for!(StockbitMovementsEnvelope),
         "screen" => schemars::schema_for!(ScreenEnvelope),
         "news" => schemars::schema_for!(NewsEnvelope),
         "sentiment" => schemars::schema_for!(SentimentEnvelope),
+        "insights" => schemars::schema_for!(InsightsEnvelope),
         "ownership-holders" => schemars::schema_for!(OwnershipHoldersEnvelope),
         "ownership-entity" => schemars::schema_for!(OwnershipEntityEnvelope),
         "ownership-changes" => schemars::schema_for!(OwnershipChangesEnvelope),
@@ -246,6 +336,21 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "ownership-foreign-flow" => schemars::schema_for!(OwnershipForeignFlowEnvelope),
         "ownership-import" => schemars::schema_for!(OwnershipImportEnvelope),
         "ownership-discover" => schemars::schema_for!(OwnershipDiscoverEnvelope),
+        "ownership-search" => schemars::schema_for!(OwnershipSearchEnvelope),
+        "ownership-cross-holders" => schemars::schema_for!(OwnershipCrossHoldersEnvelope),
+        "ownership-concentration" => schemars::schema_for!(OwnershipConcentrationEnvelope),
+        "ownership-graph" => schemars::schema_for!(OwnershipGraphEnvelope),
+        "ownership-resolve-candidates" => {
+            schemars::schema_for!(OwnershipResolveCandidatesEnvelope)
+        }
+        "ownership-resolution" => schemars::schema_for!(OwnershipResolutionEnvelope),
+        "ownership-resolutions" => schemars::schema_for!(OwnershipResolutionsEnvelope),
+        "ownership-composition" => schemars::schema_for!(OwnershipCompositionEnvelope),
+        "ownership-snapshot-sync" => schemars::schema_for!(OwnershipSnapshotSyncEnvelope),
+        "ownership-status" => schemars::schema_for!(OwnershipStatusEnvelope),
+        "ownership-snapshot" => schemars::schema_for!(OwnershipSnapshotEnvelope),
+        "ownership-institutions" => schemars::schema_for!(OwnershipInstitutionsEnvelope),
+        "stockbit-status" => schemars::schema_for!(crate::providers::stockbit::Status),
         "error" => schemars::schema_for!(ErrorEnvelope),
         "quote" => schemars::schema_for!(Quote),
         "candle" => schemars::schema_for!(crate::model::Candle),
@@ -276,8 +381,31 @@ mod tests {
         assert_eq!(v["provider"], "yahoo");
         assert_eq!(v["cached"], false);
         assert!(v.get("warnings").is_none(), "empty warnings are omitted");
+        assert!(v.get("stale_reason").is_none(), "fresh data has no reason");
         assert_eq!(v["data"][0]["symbol"], "BBCA");
         assert!(v["data"][0]["price"].is_null());
+    }
+
+    #[test]
+    fn stale_envelope_says_why() {
+        let mut s = Sourced::fresh(Vec::<Quote>::new(), "yahoo");
+        s.cached = true;
+        s.stale = true;
+        s.stale_reason = Some(StaleReason::FetchFailed);
+        s.warnings
+            .push(crate::providers::fetch_failed_warning("connection refused"));
+        let text = to_pretty(&Envelope::from_sourced(SCHEMA_QUOTES, s)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["stale_reason"], "fetch_failed");
+        assert_eq!(
+            v["warnings"][0],
+            "live fetch failed (connection refused); showing cached copy"
+        );
+        let stale = text.find("\"stale\"").unwrap();
+        let reason = text.find("\"stale_reason\"").unwrap();
+        assert!(stale < reason && reason < text.find("\"warnings\"").unwrap());
+        let schema = schema_for("quotes").unwrap().to_string();
+        assert!(schema.contains("stale_reason") && schema.contains("fetch_failed"));
     }
 
     #[test]
@@ -295,5 +423,12 @@ mod tests {
         let env = ErrorEnvelope::from(&e);
         assert_eq!(env.exit_code, 4);
         assert_eq!(env.error.code, "not_found");
+        let e = IdxError::blocked(
+            "idx",
+            crate::http::cloudflare::Refusal::Block,
+            "www.idx.co.id answered with a Cloudflare block page (HTTP 403)",
+        );
+        let env = ErrorEnvelope::from(&e);
+        assert_eq!((env.error.code.as_str(), env.exit_code), ("blocked", 3));
     }
 }

@@ -1,11 +1,12 @@
 //! Pure parsers for Yahoo responses. No I/O here, so every function is unit
 //! tested against the recorded fixtures in `tests/fixtures/yahoo/`.
 
+use chrono::{FixedOffset, NaiveDate};
 use serde_json::Value;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    wib_from_unix, Candle, DividendEvent, DividendHistory, History, Interval, Period, Quote,
+    wib, wib_from_unix, Candle, DividendEvent, DividendHistory, History, Interval, Period, Quote,
     SplitEvent, Symbol,
 };
 
@@ -72,12 +73,18 @@ fn chart_result(body: &str) -> Result<Value> {
         .ok_or_else(|| IdxError::provider(NAME, "chart response has no result"))
 }
 
-/// Parses a `v8/finance/chart` body into candles.
+/// Parses a `v8/finance/chart` body into candles. The interval is the bar
+/// size Yahoo reports (`meta.dataGranularity`) when it is one idx knows and
+/// differs from the one asked for; otherwise the requested one.
 pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<History> {
     let r = chart_result(body)?;
     let meta = r.get("meta").cloned().unwrap_or(Value::Null);
     let m = J(&meta);
     let symbol = Symbol::from_yahoo(&m.str("symbol").unwrap_or_default());
+    let interval = m
+        .str("dataGranularity")
+        .and_then(|g| granularity(&g))
+        .unwrap_or(interval);
 
     let ts: Vec<Option<i64>> = r
         .get("timestamp")
@@ -107,6 +114,15 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
         .map(|a| a.iter().map(Value::as_f64).collect())
         .unwrap_or_default();
 
+    // In session, and in multi-day windows after the close, an intraday window
+    // ends with a row stamped at the last trade time (09:02:16, 16:14:43): a
+    // snapshot (volume 0, open = high = low = close), not a bar. Bars start on
+    // the minute and on the interval's grid, counted from the window's first
+    // row (09:00 on IDX), so a row off that grid is the snapshot. A snapshot
+    // that lands on the grid repeats the time of the row before it (the
+    // in-progress or last bar), so such a repeat is dropped too.
+    let step = interval.bar_seconds();
+    let anchor = ts.iter().flatten().next().copied();
     let mut candles = Vec::with_capacity(ts.len());
     for (i, t) in ts.iter().enumerate() {
         let (Some(t), Some(o), Some(h), Some(l), Some(c)) = (
@@ -118,6 +134,13 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
         ) else {
             continue; // holiday / missing bar
         };
+        if let (Some(step), Some(anchor)) = (step, anchor) {
+            let off_grid = t % 60 != 0 || (t - anchor).rem_euclid(step) != 0;
+            let repeat = i > 0 && ts[i - 1] == Some(t);
+            if off_grid || repeat {
+                continue;
+            }
+        }
         let Some(time) = wib_from_unix(t) else {
             continue;
         };
@@ -149,14 +172,40 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
     })
 }
 
+/// The exchange's UTC offset (`meta.gmtoffset`, WIB when it is missing).
+/// Dates of a session are taken in it: a daily bar is stamped at its local
+/// open and `regularMarketTime` at the last trade, and in WIB a Toronto close
+/// (16:00 EST) already falls on the next day. For IDX it is WIB.
+fn exchange_offset(m: &J) -> FixedOffset {
+    m.i64("gmtoffset")
+        .and_then(|s| i32::try_from(s).ok())
+        .and_then(FixedOffset::east_opt)
+        .unwrap_or_else(wib)
+}
+
+/// The exchange's calendar date of a unix time.
+fn local_date(secs: i64, offset: FixedOffset) -> Option<NaiveDate> {
+    wib_from_unix(secs).map(|t| t.with_timezone(&offset).date_naive())
+}
+
+/// Yahoo's `dataGranularity` as an [`Interval`] (`60m` is its other name for `1h`).
+fn granularity(g: &str) -> Option<Interval> {
+    match g {
+        "60m" => Some(Interval::Hour1),
+        g => g.parse().ok(),
+    }
+}
+
 /// Parses the `events` block of a chart response (`events=div,splits`) into
-/// the raw dividend history; computed fields stay empty.
+/// the raw dividend history; computed fields stay empty. Dates are the
+/// exchange's own (see [`exchange_offset`]).
 pub fn parse_events(body: &str) -> Result<DividendHistory> {
     let r = chart_result(body)?;
     let meta = r.get("meta").cloned().unwrap_or(Value::Null);
     let m = J(&meta);
     let symbol = Symbol::from_yahoo(&m.str("symbol").unwrap_or_default());
-    let day = |secs: Option<i64>| secs.and_then(wib_from_unix).map(|t| t.date_naive());
+    let offset = exchange_offset(&m);
+    let day = |secs: Option<i64>| secs.and_then(|s| local_date(s, offset));
 
     let mut dividends: Vec<DividendEvent> = r
         .pointer("/events/dividends")
@@ -232,6 +281,8 @@ pub fn parse_chart_quote(body: &str) -> Result<Quote> {
     // Previous close and today's open come from the bars themselves. The
     // current session's bar may be incomplete (null close) so we take the last
     // close strictly before the market-time date rather than "second to last".
+    // Both dates are the exchange's own, not WIB's (see `exchange_offset`).
+    let offset = exchange_offset(&m);
     let ts: Vec<Option<i64>> = r
         .get("timestamp")
         .and_then(Value::as_array)
@@ -242,13 +293,13 @@ pub fn parse_chart_quote(body: &str) -> Result<Quote> {
         .and_then(Value::as_array)
         .map(|a| a.iter().map(Value::as_f64).collect())
         .unwrap_or_default();
-    let market_date = q.market_time.map(|t| t.date_naive());
+    let market_date = q.market_time.map(|t| t.with_timezone(&offset).date_naive());
     q.previous_close = match market_date {
         Some(md) => ts
             .iter()
             .zip(closes.iter())
             .filter_map(|(t, c)| Some(((*t)?, (*c)?)))
-            .filter(|(t, _)| wib_from_unix(*t).is_some_and(|d| d.date_naive() < md))
+            .filter(|(t, _)| local_date(*t, offset).is_some_and(|d| d < md))
             .map(|(_, c)| c)
             .next_back(),
         None => {
@@ -376,6 +427,190 @@ mod tests {
         assert_eq!(h.candles[0].time.to_rfc3339(), "2026-10-12T09:00:00+07:00");
     }
 
+    const CHART_MAX_DAILY: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_period1_max_1d.json");
+    const CHART_RANGE_MAX: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_range_max_1d.json");
+
+    #[test]
+    fn chart_max_daily_from_period1() {
+        let h = parse_chart(CHART_MAX_DAILY, Period::Max, Interval::Day1).unwrap();
+        assert_eq!(h.symbol.as_str(), "^JKSE");
+        assert_eq!(h.interval, Interval::Day1);
+        // 9,221 rows; holidays and the unfinished last session have null prices.
+        assert_eq!(h.candles.len(), 8905);
+        assert_eq!(h.candles[0].date().to_string(), "1990-04-06");
+        assert!(h
+            .candles
+            .windows(2)
+            .all(|w| (w[1].date() - w[0].date()).num_days() < 15));
+    }
+
+    #[test]
+    fn chart_range_max_is_labelled_with_the_granularity_yahoo_returned() {
+        // `range=max&interval=1d` comes back monthly (dataGranularity 1mo).
+        let h = parse_chart(CHART_RANGE_MAX, Period::Max, Interval::Day1).unwrap();
+        assert_eq!(h.interval, Interval::Month1);
+        assert_eq!(h.candles.len(), 440);
+        assert_eq!(granularity("60m"), Some(Interval::Hour1));
+        assert_eq!(granularity("3mo"), None);
+    }
+
+    #[test]
+    fn chart_one_minute_session() {
+        let h = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(h.interval, Interval::Min1);
+        // 435 rows; the null ones (lunch break, quiet minutes) are dropped.
+        assert_eq!(h.candles.len(), 333);
+        let first = &h.candles[0];
+        assert_eq!(first.time.to_rfc3339(), "2026-11-05T09:00:00+07:00");
+        assert_eq!(first.volume, 0, "the opening auction is in no bar");
+        assert_eq!(
+            h.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        let hm = |c: &Candle| c.time.format("%H:%M").to_string();
+        assert!(!h
+            .candles
+            .iter()
+            .any(|c| ("12:00".."13:30").contains(&hm(c).as_str())));
+        let closing = h.candles.iter().find(|c| hm(c) == "16:00").unwrap();
+        assert!(closing.volume > 20_000_000, "pre-closing auction bar");
+
+        let ix = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_jkse_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(ix.symbol.as_str(), "^JKSE");
+        assert_eq!(ix.candles.len(), 320);
+        assert!(ix.candles.iter().all(|c| c.volume == 0));
+        assert_eq!(hm(ix.candles.last().unwrap()), "16:00");
+    }
+
+    #[test]
+    fn chart_at_the_open_and_over_five_days() {
+        let empty = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m_open_empty.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert!(empty.candles.is_empty() && empty.summary.is_none());
+        assert_eq!(empty.symbol.as_str(), "BBCA");
+
+        let five = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json"),
+            Period::D5,
+            Interval::Min1,
+        )
+        .unwrap();
+        // 1,335 priced rows; the 16:14:43 last-trade snapshot is not a bar.
+        assert_eq!(five.candles.len(), 1_334);
+        assert!(five.candles.iter().all(|c| c.time.timestamp() % 60 == 0));
+        assert_eq!(
+            five.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        assert_eq!(
+            five.candles[0].time.to_rfc3339(),
+            "2026-11-02T09:00:00+07:00"
+        );
+    }
+
+    /// A chart body from (unix time, price, volume) rows; a `None` price is a
+    /// null row. Open, high, low and close all take the price.
+    fn chart_body(rows: &[(i64, Option<f64>, u64)]) -> String {
+        let ts: Vec<i64> = rows.iter().map(|r| r.0).collect();
+        let px: Vec<Option<f64>> = rows.iter().map(|r| r.1).collect();
+        let vol: Vec<Option<u64>> = rows.iter().map(|r| r.1.map(|_| r.2)).collect();
+        serde_json::json!({"chart": {"result": [{
+            "meta": {"symbol": "BBCA.JK", "currency": "IDR"},
+            "timestamp": ts,
+            "indicators": {"quote": [{
+                "open": px, "high": px, "low": px, "close": px, "volume": vol
+            }]}
+        }], "error": null}})
+        .to_string()
+    }
+
+    #[test]
+    fn last_trade_snapshot_on_a_whole_minute_is_not_a_bar() {
+        let hm = |h: &History| -> Vec<String> {
+            h.candles
+                .iter()
+                .map(|c| c.time.format("%H:%M").to_string())
+                .collect()
+        };
+        // After the close, the five-day window's snapshot stamped 16:14:00
+        // instead of 16:14:43: one 16:14 bar, the real one.
+        let five = parse_chart(
+            &include_str!("../../../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json")
+                .replace(",1793870083]", ",1793870040]"),
+            Period::D5,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(five.candles.len(), 1_334);
+        let last = five.candles.last().unwrap();
+        assert_eq!(last.time.to_rfc3339(), "2026-11-05T16:14:00+07:00");
+        assert_eq!(last.volume, 20_200);
+
+        // In session at 1m: a null 09:02 row, then the snapshot at 09:02:00.
+        let session = parse_chart(
+            &include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m_session.json")
+                .replace(",1793930536]", ",1793930520]"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(hm(&session), ["09:00", "09:01"]);
+
+        // In session at 5m (2026-11-06 from 09:00): the in-progress 09:25 bar,
+        // then a snapshot at 09:28:00 (off the grid) or 09:25:00 (a repeat).
+        let open = 1_793_930_400;
+        for snap in [open + 28 * 60, open + 25 * 60, open + 28 * 60 + 41] {
+            let body = chart_body(&[
+                (open + 20 * 60, Some(5025.0), 1_000),
+                (open + 25 * 60, Some(5050.0), 500),
+                (snap, Some(5050.0), 0),
+            ]);
+            let h = parse_chart(&body, Period::D1, Interval::Min5).unwrap();
+            assert_eq!(hm(&h), ["09:20", "09:25"], "snapshot at {snap}");
+            assert_eq!(h.candles[1].volume, 500);
+        }
+
+        // The grid is counted from the window's first row, so hourly bars that
+        // start on the half hour (an index elsewhere) are all kept.
+        let half = open + 30 * 60;
+        let body = chart_body(&[
+            (half, Some(100.0), 10),
+            (half + 3600, Some(101.0), 10),
+            (half + 2 * 3600 + 1800, Some(101.0), 0),
+        ]);
+        let h = parse_chart(&body, Period::D1, Interval::Hour1).unwrap();
+        assert_eq!(hm(&h), ["09:30", "10:30"]);
+
+        // Daily bars are left alone.
+        let body = chart_body(&[(open, Some(1.0), 1), (open + 1234, Some(2.0), 1)]);
+        let h = parse_chart(&body, Period::M1, Interval::Day1).unwrap();
+        assert_eq!(h.candles.len(), 2);
+    }
+
+    #[test]
+    fn chart_window_too_long_for_one_minute_bars() {
+        let body = include_str!("../../../tests/fixtures/yahoo/chart_bbca_1mo_1m_error.json");
+        let e = parse_chart(body, Period::M1, Interval::Min1).unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        assert!(chart_error(body).starts_with("Unprocessable Entity: 1m data not available"));
+    }
+
     #[test]
     fn chart_not_found_maps_to_not_found() {
         let e = parse_chart(CHART_404, Period::M1, Interval::Day1).unwrap_err();
@@ -407,6 +642,38 @@ mod tests {
             q.market_time.unwrap().to_rfc3339(),
             "2026-10-16T16:14:58+07:00"
         );
+    }
+
+    #[test]
+    fn chart_quote_fallback_dates_sessions_on_the_exchanges_clock() {
+        // RY.TO recorded after Toronto's close on 2026-11-05: the last trade
+        // (16:00 EST) is 04:00 WIB on 2026-11-06, while that session's bar is
+        // stamped 09:30 EST (21:30 WIB on the 5th). In WIB the session's own
+        // bar would count as "before", giving today's close as the previous.
+        let body = include_str!("../../../tests/fixtures/yahoo/chart_ryto_5d_1d.json");
+        let q = parse_chart_quote(body).unwrap();
+        assert_eq!(q.symbol.as_str(), "RY.TO");
+        assert_eq!(q.currency.as_deref(), Some("CAD"));
+        assert_eq!(q.price, Some(285.86));
+        assert_eq!(q.previous_close, Some(292.57000732421875));
+        assert_eq!(q.change, Some(-6.71));
+        // change (from meta) and previous_close (from the bars) agree.
+        let implied = q.price.unwrap() - q.previous_close.unwrap();
+        assert!((implied - q.change.unwrap()).abs() < 1e-4, "{implied}");
+        assert_eq!(
+            q.market_time.unwrap().to_rfc3339(),
+            "2026-11-06T04:00:00+07:00",
+            "the instant stays in WIB"
+        );
+        // Same rule for the dividends' price date.
+        let h = parse_events(body).unwrap();
+        assert_eq!(h.price_date.unwrap().to_string(), "2026-11-05");
+        // IDX is unchanged: WIB is its own clock.
+        let bbca = parse_events(include_str!(
+            "../../../tests/fixtures/yahoo/chart_events_bbca_max.json"
+        ))
+        .unwrap();
+        assert_eq!(bbca.price_date.unwrap().to_string(), "2026-10-16");
     }
 
     #[test]

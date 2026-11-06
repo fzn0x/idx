@@ -6,6 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate};
+use futures::stream::{self, StreamExt};
 
 use crate::brokers;
 use crate::error::{IdxError, Result};
@@ -18,7 +19,8 @@ use crate::model::{
 };
 use crate::model::{CorporateActions, Symbol};
 use crate::model::{
-    ForeignDay, ForeignFlow, ForeignRow, ForeignSort, ForeignTotals, MarketForeign,
+    ForeignDay, ForeignFlow, ForeignRow, ForeignSort, ForeignTotals, ForeignValueDay,
+    ForeignValueFlow, ForeignValueTotals, MarketForeign,
 };
 use crate::providers::idx::{self, CalendarRange, StockDay};
 use crate::providers::ipot;
@@ -404,8 +406,122 @@ pub async fn calendar(
 
 /// Sessions `foreign_flow` shows by default.
 pub const FOREIGN_DEFAULT_DAYS: usize = 20;
-/// Most sessions `foreign_flow` fetches in one call.
+/// Most sessions `foreign_flow` fetches in one call (idx.co.id).
 pub const FOREIGN_MAX_DAYS: usize = 250;
+/// Most sessions `foreign_flow_ipot` reads: two requests each.
+pub const FOREIGN_IPOT_MAX_SESSIONS: usize = 60;
+/// Sessions `foreign_flow_ipot` reads at once.
+const FOREIGN_IPOT_CONCURRENCY: usize = 4;
+
+/// Which sessions a stock's foreign flow covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignRange {
+    /// The latest `n` sessions.
+    Latest(usize),
+    /// Every session from `from` to `to`, both included.
+    Dates { from: NaiveDate, to: NaiveDate },
+}
+
+impl ForeignRange {
+    /// From the CLI's `--days`/`--from`/`--to` or the MCP and web
+    /// `days`/`from`/`to`. Neither: the latest [`FOREIGN_DEFAULT_DAYS`]. `to`
+    /// defaults to `today` and may not pass it; each source checks `days`
+    /// against its own maximum.
+    pub fn from_args(
+        days: Option<usize>,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+        today: NaiveDate,
+    ) -> Result<Self> {
+        if days.is_some() && (from.is_some() || to.is_some()) {
+            return Err(IdxError::Usage(
+                "give either the latest days or a from/to range, not both".into(),
+            ));
+        }
+        match (from, to) {
+            (None, None) => Ok(ForeignRange::Latest(days.unwrap_or(FOREIGN_DEFAULT_DAYS))),
+            (None, Some(_)) => Err(IdxError::Usage(
+                "to needs from, the first session of the range".into(),
+            )),
+            (Some(from), to) => {
+                let to = to.unwrap_or(today);
+                if from > to {
+                    return Err(IdxError::Usage(format!(
+                        "the range starts ({from}) after it ends ({to})"
+                    )));
+                }
+                if to > today {
+                    return Err(IdxError::Usage(format!(
+                        "{to} is in the future (today is {today} in WIB)"
+                    )));
+                }
+                Ok(ForeignRange::Dates { from, to })
+            }
+        }
+    }
+}
+
+/// Trading days from `from` to `to` by the bundled holiday list, oldest first.
+fn trading_days_between(from: NaiveDate, to: NaiveDate) -> Vec<NaiveDate> {
+    from.iter_days()
+        .take_while(|d| *d <= to)
+        .filter(|d| holidays::is_trading_day(*d))
+        .collect()
+}
+
+fn stock_only(symbol: &Symbol) -> Result<()> {
+    if symbol.is_index() {
+        return Err(IdxError::Usage(format!(
+            "{symbol} is an index; foreign flow is per stock (see `idx market foreign`)"
+        )));
+    }
+    Ok(())
+}
+
+/// idx.co.id refused the request: point at the source that answers the same
+/// question in rupiah from anywhere.
+fn with_ipot_hint(e: IdxError) -> IdxError {
+    const HINT: &str = "; or ask for source ipot (Indo Premier: rupiah across all boards)";
+    match e {
+        // A Cloudflare refusal keeps its JSON code `blocked`.
+        IdxError::Blocked {
+            provider,
+            refusal,
+            message,
+        } if provider == idx::NAME => IdxError::Blocked {
+            provider,
+            refusal,
+            message: format!("{message}{HINT}"),
+        },
+        IdxError::Provider { provider, message }
+            if provider == idx::NAME && message.starts_with(idx::BLOCKED_HINT) =>
+        {
+            IdxError::Provider {
+                provider,
+                message: format!("{message}{HINT}"),
+            }
+        }
+        other => other,
+    }
+}
+
+/// `+1` net buying, `-1` net selling, `0` flat or unknown.
+fn net_sign(net: Option<f64>) -> i32 {
+    match net {
+        Some(n) if n > 0.0 => 1,
+        Some(n) if n < 0.0 => -1,
+        _ => 0,
+    }
+}
+
+/// Sessions on the latest session's side, in a row: `+3`, `-2`, or `0`
+/// when the latest was flat.
+fn streak(signs: &[i32]) -> i32 {
+    match signs.last().copied().filter(|s| *s != 0) {
+        Some(last) => signs.iter().rev().take_while(|s| **s == last).count() as i32 * last,
+        None => 0,
+    }
+}
 
 fn net(buy: Option<f64>, sell: Option<f64>) -> Option<f64> {
     Some(buy? - sell?)
@@ -433,50 +549,66 @@ fn foreign_day(r: &StockDay) -> Option<ForeignDay> {
 /// Sums and the same-side streak over `days` (oldest first).
 pub fn foreign_totals(days: &[ForeignDay]) -> ForeignTotals {
     let sum = |f: fn(&ForeignDay) -> Option<f64>| days.iter().filter_map(f).sum::<f64>();
-    let sign = |d: &ForeignDay| match d.foreign_net {
-        Some(n) if n > 0.0 => 1,
-        Some(n) if n < 0.0 => -1,
-        _ => 0,
-    };
-    let mut streak = 0i32;
-    if let Some(last) = days.last().map(sign).filter(|s| *s != 0) {
-        streak = days.iter().rev().take_while(|d| sign(d) == last).count() as i32 * last;
-    }
+    let signs: Vec<i32> = days.iter().map(|d| net_sign(d.foreign_net)).collect();
     ForeignTotals {
         sessions: days.len(),
         foreign_buy: sum(|d| d.foreign_buy),
         foreign_sell: sum(|d| d.foreign_sell),
         foreign_net: sum(|d| d.foreign_net),
         foreign_net_value_at_close: sum(|d| d.foreign_net_value_at_close),
-        net_buy_sessions: days.iter().filter(|d| sign(d) > 0).count(),
-        net_sell_sessions: days.iter().filter(|d| sign(d) < 0).count(),
-        streak,
+        net_buy_sessions: signs.iter().filter(|s| **s > 0).count(),
+        net_sell_sessions: signs.iter().filter(|s| **s < 0).count(),
+        streak: streak(&signs),
     }
 }
 
-/// Foreign buying and selling of one stock over its latest `days`
-/// sessions (idx.co.id daily stock summary), oldest first.
+/// Foreign buying and selling of one stock (idx.co.id daily stock summary),
+/// oldest first: its latest sessions, or the sessions of a date range among
+/// the latest [`FOREIGN_MAX_DAYS`].
 pub async fn foreign_flow(
     fetcher: &Arc<Fetcher>,
     universe: &[Issuer],
     symbol: &Symbol,
-    days: usize,
+    range: ForeignRange,
+    today: NaiveDate,
 ) -> Result<Sourced<ForeignFlow>> {
-    if symbol.is_index() {
-        return Err(IdxError::Usage(format!(
-            "{symbol} is an index; foreign flow is per stock (see `idx market foreign`)"
-        )));
-    }
-    if days == 0 || days > FOREIGN_MAX_DAYS {
-        return Err(IdxError::Usage(format!(
-            "days must be between 1 and {FOREIGN_MAX_DAYS}"
-        )));
-    }
-    let s = idx::trading_history(fetcher, symbol, days).await?;
+    stock_only(symbol)?;
+    let length = match range {
+        ForeignRange::Latest(days) => {
+            if days == 0 || days > FOREIGN_MAX_DAYS {
+                return Err(IdxError::Usage(format!(
+                    "days must be between 1 and {FOREIGN_MAX_DAYS}"
+                )));
+            }
+            days
+        }
+        ForeignRange::Dates { from, .. } => {
+            // The source serves the latest N sessions: enough to reach `from`,
+            // with a little room for a closure the bundled list lacks.
+            let sessions = trading_days_between(from, today).len();
+            if sessions > FOREIGN_MAX_DAYS {
+                return Err(IdxError::Usage(format!(
+                    "idx.co.id serves the latest {FOREIGN_MAX_DAYS} sessions; {from} is older"
+                )));
+            }
+            (sessions + 2).min(FOREIGN_MAX_DAYS)
+        }
+    };
+    let s = idx::trading_history(fetcher, symbol, length)
+        .await
+        .map_err(with_ipot_hint)?;
     let stock_name = s.data.iter().find_map(|r| r.stock_name.clone());
     let mut list: Vec<ForeignDay> = s.data.iter().filter_map(foreign_day).collect();
     list.sort_by_key(|d| d.date);
     list.dedup_by_key(|d| d.date);
+    if let ForeignRange::Dates { from, to } = range {
+        list.retain(|d| d.date >= from && d.date <= to);
+        if list.is_empty() {
+            return Err(IdxError::NotFound(format!(
+                "idx.co.id has no sessions for {symbol} from {from} to {to}"
+            )));
+        }
+    }
     let (Some(from), Some(to)) = (list.first().map(|d| d.date), list.last().map(|d| d.date)) else {
         return Err(IdxError::NotFound(format!(
             "no dated sessions for {symbol}"
@@ -495,6 +627,212 @@ pub async fn foreign_flow(
         to,
         days: list,
         totals,
+    }))
+}
+
+/// Sums over `days` (oldest first), the foreign share of all their trading
+/// and the same-side streak.
+pub fn foreign_value_totals(days: &[ForeignValueDay]) -> ForeignValueTotals {
+    let sum = |f: fn(&ForeignValueDay) -> Option<f64>| days.iter().filter_map(f).sum::<f64>();
+    let signs: Vec<i32> = days.iter().map(|d| net_sign(d.foreign_net_value)).collect();
+    // The share over the sessions that carry all three figures.
+    let (mut sides, mut traded) = (0.0, 0.0);
+    for d in days {
+        if let (Some(b), Some(s), Some(v)) = (d.foreign_buy_value, d.foreign_sell_value, d.value) {
+            sides += b + s;
+            traded += v;
+        }
+    }
+    ForeignValueTotals {
+        sessions: days.len(),
+        value: sum(|d| d.value),
+        foreign_buy_value: sum(|d| d.foreign_buy_value),
+        foreign_sell_value: sum(|d| d.foreign_sell_value),
+        foreign_net_value: sum(|d| d.foreign_net_value),
+        foreign_share_pct: (traded > 0.0).then(|| sides / (2.0 * traded) * 100.0),
+        net_buy_sessions: signs.iter().filter(|s| **s > 0).count(),
+        net_sell_sessions: signs.iter().filter(|s| **s < 0).count(),
+        streak: streak(&signs),
+    }
+}
+
+/// When the WIB clock passes this, today's session is over (post-trading
+/// ends 16:15).
+const SESSION_DONE: (u32, u32) = (16, 15);
+
+type IpotDay = (NaiveDate, Result<Sourced<ipot::ForeignSession>>);
+
+async fn ipot_days(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    days: &[NaiveDate],
+    today: NaiveDate,
+) -> Vec<IpotDay> {
+    stream::iter(days.iter().copied())
+        .map(|d| async move { (d, ipot::foreign_day(fetcher, symbol, d, today).await) })
+        .buffered(FOREIGN_IPOT_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// Foreign buying, selling and net of one stock in rupiah across all boards
+/// (IPOT broker summary), oldest first: its latest sessions with trades, or
+/// every session of a date range. Two single-session pages per trading day,
+/// cached; a day without trades is skipped, a session the source has not
+/// published yet and a day that fails are left out with a warning. When no
+/// session with trades is left, a failure is the error (that day may have
+/// traded), then a session not yet published. At most
+/// [`FOREIGN_IPOT_MAX_SESSIONS`].
+pub async fn foreign_flow_ipot(
+    fetcher: &Arc<Fetcher>,
+    universe: &[Issuer],
+    symbol: &Symbol,
+    range: ForeignRange,
+    today: NaiveDate,
+) -> Result<Sourced<ForeignValueFlow>> {
+    stock_only(symbol)?;
+    let max = FOREIGN_IPOT_MAX_SESSIONS;
+    let mut got: Vec<IpotDay> = Vec::new();
+    let (first, last) = match range {
+        ForeignRange::Latest(n) => {
+            if n == 0 || n > max {
+                return Err(IdxError::Usage(format!(
+                    "days must be between 1 and {max} with source ipot (two requests per session)"
+                )));
+            }
+            // Newest first, back far enough for n sessions around holidays
+            // and a suspension; each round asks only for what is missing.
+            let oldest = today - chrono::Days::new(2 * n as u64 + 10);
+            let mut candidates = trading_days_between(oldest, today);
+            candidates.reverse();
+            let (mut traded, mut next) = (0, 0);
+            while traded < n && next < candidates.len() {
+                let take = (n - traded).min(candidates.len() - next);
+                let round = ipot_days(fetcher, symbol, &candidates[next..next + take], today).await;
+                next += take;
+                traded += round
+                    .iter()
+                    .filter(|(_, r)| {
+                        matches!(r, Ok(s) if matches!(s.data, ipot::ForeignSession::Traded { .. }))
+                    })
+                    .count();
+                let stop = round
+                    .iter()
+                    .any(|(_, r)| matches!(r, Err(IdxError::NotFound(_))))
+                    || round.iter().all(|(_, r)| r.is_err()) && !got.iter().any(|(_, r)| r.is_ok());
+                got.extend(round);
+                // An unknown code, or nothing but failures so far: no use
+                // walking further back.
+                if stop {
+                    break;
+                }
+            }
+            (oldest, today)
+        }
+        ForeignRange::Dates { from, to } => {
+            let days = trading_days_between(from, to.min(today));
+            if days.len() > max {
+                return Err(IdxError::Usage(format!(
+                    "a foreign flow from ipot covers at most {max} sessions; {from} to {to} has {}",
+                    days.len()
+                )));
+            }
+            got = ipot_days(fetcher, symbol, &days, today).await;
+            (from, to)
+        }
+    };
+
+    let mut prov: Option<Sourced<()>> = None;
+    let mut warnings = Vec::new();
+    let mut first_err: Option<IdxError> = None;
+    let mut pending: Option<NaiveDate> = None;
+    let mut list: Vec<ForeignValueDay> = Vec::new();
+    let mut rounded = false;
+    for (date, r) in got {
+        match r {
+            Ok(s) => {
+                if let Some(p) = &mut prov {
+                    p.absorb(&s);
+                }
+                match &s.data {
+                    ipot::ForeignSession::Traded { day, rounded: r } => {
+                        rounded |= r;
+                        list.push(day.clone());
+                    }
+                    ipot::ForeignSession::Pending => {
+                        pending = pending.max(Some(date));
+                        warnings.push(if date >= today {
+                            format!("{symbol}: today's session ({date}) is left out: the source publishes the foreign figures after the close")
+                        } else {
+                            format!("{symbol}: the session of {date} is left out: the source shows its totals but has not published its broker lists and foreign figures yet")
+                        });
+                    }
+                    ipot::ForeignSession::NoTrades => {}
+                }
+                if prov.is_none() {
+                    prov = Some(s.map(|_| ()));
+                }
+            }
+            Err(e @ IdxError::NotFound(_)) => return Err(e),
+            Err(e) => {
+                warnings.push(format!("{symbol}: the session of {date} failed: {e}"));
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    let Some(mut s) = prov.filter(|_| !list.is_empty()) else {
+        // A session that failed may have traded: say it failed, not that
+        // nothing traded.
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+        return Err(IdxError::NotFound(match pending {
+            Some(date) if date >= today => format!(
+                "no published session with trades for {symbol} from {first} to {last}: today's session ({date}) is published after the close"
+            ),
+            Some(date) => format!(
+                "no published session with trades for {symbol} from {first} to {last}: the source has not published the session of {date} yet"
+            ),
+            None => format!("no sessions with trades for {symbol} from {first} to {last}"),
+        }));
+    };
+    list.sort_by_key(|d| d.date);
+    if let ForeignRange::Latest(n) = range {
+        let extra = list.len().saturating_sub(n);
+        list.drain(..extra);
+        if list.len() < n {
+            warnings.push(format!(
+                "{symbol}: {} sessions with trades from {first} to {last}, fewer than the {n} asked for",
+                list.len()
+            ));
+        }
+    }
+    let (from, to) = (list[0].date, list[list.len() - 1].date);
+    let now = chrono::Utc::now().with_timezone(&crate::model::wib());
+    let done = chrono::NaiveTime::from_hms_opt(SESSION_DONE.0, SESSION_DONE.1, 0).expect("time");
+    if to == today && now.date_naive() == today && now.time() < done {
+        warnings.push(format!(
+            "{symbol}: today's session ({today}) is still trading; its figures will change"
+        ));
+    }
+    for w in warnings {
+        if !s.warnings.contains(&w) {
+            s.warnings.push(w);
+        }
+    }
+    let name = universe
+        .iter()
+        .find(|i| &i.symbol == symbol)
+        .and_then(|i| i.name.clone());
+    let totals = foreign_value_totals(&list);
+    Ok(s.map(|_| ForeignValueFlow {
+        symbol: symbol.clone(),
+        name,
+        from,
+        to,
+        days: list,
+        totals,
+        rounded,
     }))
 }
 
@@ -916,7 +1254,10 @@ mod tests {
         let (f, be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 200, HISTORY));
         let list = universe::load(None).unwrap();
         let sym = Symbol::parse("BBCA").unwrap();
-        let s = foreign_flow(&f, &list, &sym, 30).await.unwrap();
+        let today = d(2026, 10, 18);
+        let s = foreign_flow(&f, &list, &sym, ForeignRange::Latest(30), today)
+            .await
+            .unwrap();
         assert!(be.calls.lock().unwrap()[0].contains("code=BBCA&start=0&length=30"));
         let flow = &s.data;
         assert_eq!(flow.days.len(), 30);
@@ -937,10 +1278,409 @@ mod tests {
         assert!(t.streak < 0, "the last session was net selling");
         assert!(flow.name.as_deref().unwrap().contains("CENTRAL ASIA"));
 
-        assert!(foreign_flow(&f, &list, &sym, 0).await.is_err());
-        assert!(foreign_flow(&f, &list, &Symbol::parse("^JKSE").unwrap(), 5)
+        assert!(
+            foreign_flow(&f, &list, &sym, ForeignRange::Latest(0), today)
+                .await
+                .is_err()
+        );
+        let index = Symbol::parse("^JKSE").unwrap();
+        assert!(
+            foreign_flow(&f, &list, &index, ForeignRange::Latest(5), today)
+                .await
+                .is_err()
+        );
+
+        // A range: enough of the latest sessions to reach `from`, then cut.
+        let range = ForeignRange::Dates {
+            from: d(2026, 10, 1),
+            to: d(2026, 10, 9),
+        };
+        let s = foreign_flow(&f, &list, &sym, range, d(2026, 10, 16))
             .await
-            .is_err());
+            .unwrap();
+        // 12 trading days from 10-01 to 10-16, and two to spare.
+        assert!(be.calls.lock().unwrap()[1].contains("code=BBCA&start=0&length=14"));
+        assert_eq!((s.data.from, s.data.to), (d(2026, 10, 1), d(2026, 10, 9)));
+        assert_eq!(s.data.days.len(), 7);
+        assert_eq!(s.data.totals.sessions, 7);
+        let old = ForeignRange::Dates {
+            from: d(2025, 1, 2),
+            to: d(2025, 1, 31),
+        };
+        let err = foreign_flow(&f, &list, &sym, old, today).await.unwrap_err();
+        assert!(err.to_string().contains("latest 250 sessions"), "{err}");
+        let empty = ForeignRange::Dates {
+            from: d(2026, 10, 17),
+            to: d(2026, 10, 18),
+        };
+        let err = foreign_flow(&f, &list, &sym, empty, today)
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_idx_co_id_points_at_ipot() {
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let sym = Symbol::parse("BBCA").unwrap();
+        let err = foreign_flow(&f, &[], &sym, ForeignRange::Latest(5), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        assert_eq!(err.code(), "blocked");
+        assert!(err.to_string().contains("Cloudflare"), "{err}");
+        assert!(err.to_string().contains("source ipot"), "{err}");
+    }
+
+    #[test]
+    fn foreign_ranges_from_the_arguments() {
+        let today = d(2026, 11, 6);
+        let r = |days, from, to| ForeignRange::from_args(days, from, to, today);
+        assert_eq!(
+            r(None, None, None).unwrap(),
+            ForeignRange::Latest(FOREIGN_DEFAULT_DAYS)
+        );
+        assert_eq!(r(Some(5), None, None).unwrap(), ForeignRange::Latest(5));
+        assert_eq!(
+            r(None, Some(d(2026, 11, 2)), None).unwrap(),
+            ForeignRange::Dates {
+                from: d(2026, 11, 2),
+                to: today
+            }
+        );
+        for (days, from, to, says) in [
+            (Some(3), Some(d(2026, 11, 2)), None, "not both"),
+            (Some(3), None, Some(d(2026, 11, 2)), "not both"),
+            (None, None, Some(d(2026, 11, 2)), "to needs from"),
+            (None, Some(d(2026, 11, 5)), Some(d(2026, 11, 2)), "starts"),
+            (
+                None,
+                Some(d(2026, 1, 1)),
+                Some(d(2099, 1, 1)),
+                "2099-01-01 is in the future (today is 2026-11-06 in WIB)",
+            ),
+        ] {
+            let err = r(days, from, to).unwrap_err();
+            assert_eq!(err.exit_code(), 2);
+            assert!(err.to_string().contains(says), "{err}");
+        }
+        // A holiday and a weekend cost no request.
+        assert_eq!(
+            trading_days_between(d(2026, 8, 14), d(2026, 8, 18)),
+            [d(2026, 8, 14), d(2026, 8, 18)]
+        );
+    }
+
+    /// BBCA's ten pages of 10-12..10-16 (all investors and foreign), the two
+    /// of 11-02..11-05, and ZZZZ unknown.
+    fn ipot_sessions() -> FixtureBackend {
+        let mut be = FixtureBackend::new().route(
+            "code=ZZZZ",
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_zzzz_invalid.html"),
+        );
+        for day in [
+            "20261012", "20261013", "20261014", "20261015", "20261016", "20261102", "20261103",
+            "20261104", "20261105",
+        ] {
+            let mdy = format!("{}/{}/{}", &day[4..6], &day[6..8], &day[..4]);
+            let file = |suffix: &str| {
+                std::fs::read_to_string(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/ipot")
+                        .join(format!("brokersummary_bbca_{day}{suffix}.html")),
+                )
+                .unwrap()
+            };
+            be = be
+                .route(
+                    &format!("code=BBCA&start={mdy}&end={mdy}&fd=all&"),
+                    200,
+                    &file(""),
+                )
+                .route(
+                    &format!("code=BBCA&start={mdy}&end={mdy}&fd=F&"),
+                    200,
+                    &file("_foreign"),
+                );
+        }
+        be
+    }
+
+    #[tokio::test]
+    async fn foreign_flow_from_ipot_in_rupiah() {
+        let (f, be, _d) = fetcher(ipot_sessions());
+        let list = universe::load(None).unwrap();
+        let sym = Symbol::parse("BBCA").unwrap();
+        let week = ForeignRange::Dates {
+            from: d(2026, 10, 12),
+            to: d(2026, 10, 16),
+        };
+        let s = foreign_flow_ipot(&f, &list, &sym, week, d(2026, 10, 17))
+            .await
+            .unwrap();
+        assert_eq!(s.provider, "ipot");
+        let fl = &s.data;
+        assert!(fl.name.as_deref().unwrap().contains("CENTRAL ASIA"));
+        assert_eq!((fl.from, fl.to), (d(2026, 10, 12), d(2026, 10, 16)));
+        assert_eq!(fl.days.len(), 5);
+        assert!(fl.rounded);
+        assert!(fl.days.windows(2).all(|w| w[0].date < w[1].date));
+        let t = &fl.totals;
+        // Only single sessions: the week's own page would say -4.1 T.
+        assert_eq!(t.foreign_buy_value, 4_364_700_000_000.0);
+        assert_eq!(t.foreign_sell_value, 6_187_800_000_000.0);
+        assert_eq!(t.foreign_net_value, -1_823_100_000_000.0);
+        assert_eq!(t.value, 9_937_300_000_000.0);
+        let share = t.foreign_share_pct.unwrap();
+        assert!((share - 53.095).abs() < 0.001, "{share}");
+        assert_eq!(
+            (t.net_buy_sessions, t.net_sell_sessions, t.streak),
+            (3, 2, -1)
+        );
+        assert_eq!(be.call_count(), 10, "two pages per session");
+        assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+
+        // 11-02..11-05 read before the open on 11-06.
+        let nov = ForeignRange::Dates {
+            from: d(2026, 11, 2),
+            to: d(2026, 11, 5),
+        };
+        let t = foreign_flow_ipot(&f, &list, &sym, nov, d(2026, 11, 6))
+            .await
+            .unwrap()
+            .data
+            .totals;
+        assert_eq!(t.foreign_buy_value, 3_314_700_000_000.0);
+        assert_eq!(t.foreign_net_value, 292_300_000_000.0);
+        assert_eq!(t.foreign_sell_value, 3_022_400_000_000.0);
+        assert_eq!(t.value, 4_848_300_000_000.0);
+        assert!((t.foreign_share_pct.unwrap() - 65.35).abs() < 0.01);
+        assert_eq!(t.streak, 2);
+    }
+
+    #[tokio::test]
+    async fn a_session_still_trading_is_left_out_with_a_warning() {
+        let be = ipot_sessions()
+            .route(
+                "code=BBCA&start=11/06/2026&end=11/06/2026&fd=all&",
+                200,
+                include_str!(
+                    "../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html"
+                ),
+            )
+            .route(
+                "code=BBCA&start=11/06/2026&end=11/06/2026&fd=F&",
+                200,
+                include_str!(
+                    "../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession_foreign.html"
+                ),
+            );
+        let (f, _be, _d) = fetcher(be);
+        let sym = Symbol::parse("BBCA").unwrap();
+        let s = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(3), d(2026, 11, 6))
+            .await
+            .unwrap();
+        let dates: Vec<NaiveDate> = s.data.days.iter().map(|x| x.date).collect();
+        assert_eq!(dates, [d(2026, 11, 3), d(2026, 11, 4), d(2026, 11, 5)]);
+        assert!(
+            s.warnings.iter().any(|w| w.contains(
+                "today's session (2026-11-06) is left out: the source publishes the foreign figures after the close"
+            )),
+            "{:?}",
+            s.warnings
+        );
+
+        // Only today, still trading: said so, not "no sessions with trades".
+        let only_today = ForeignRange::Dates {
+            from: d(2026, 11, 6),
+            to: d(2026, 11, 6),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, only_today, d(2026, 11, 6))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string().contains(
+                "no published session with trades for BBCA from 2026-11-06 to 2026-11-06: today's session (2026-11-06) is published after the close"
+            ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_past_session_not_yet_published_is_left_out_with_a_warning() {
+        let sym = Symbol::parse("BBCA").unwrap();
+        let day5 = d(2026, 11, 5);
+        // 11-05 as if read before the source published it: totals, no broker
+        // lists (the shape of 11-06 at 09:15 WIB).
+        let be = ipot_sessions().route(
+            &ipot::url(
+                &sym,
+                day5,
+                day5,
+                crate::model::BrokerInvestor::All,
+                crate::model::BrokerBoard::All,
+            ),
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html"),
+        );
+        let (f, be, _d) = fetcher(be);
+        let range = ForeignRange::Dates {
+            from: d(2026, 11, 4),
+            to: day5,
+        };
+        let s = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 11, 6))
+            .await
+            .unwrap();
+        let dates: Vec<NaiveDate> = s.data.days.iter().map(|x| x.date).collect();
+        assert_eq!(dates, [d(2026, 11, 4)]);
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "BBCA: the session of 2026-11-05 is left out: the source shows its totals but has not published its broker lists and foreign figures yet"),
+            "{:?}",
+            s.warnings
+        );
+        assert_eq!(be.calls_matching("start=11/05/2026&end=11/05/2026&fd=F"), 0);
+
+        let only = ForeignRange::Dates {
+            from: day5,
+            to: day5,
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, only, d(2026, 11, 6))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string()
+                .contains("the source has not published the session of 2026-11-05 yet"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fewer_latest_ipot_sessions_than_asked_is_a_warning() {
+        // Every BBCA day besides the recorded ones has no trades.
+        let (f, _be, _d) = fetcher(ipot_sessions().route(
+            "code=BBCA&start=",
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html"),
+        ));
+        let sym = Symbol::parse("BBCA").unwrap();
+        let s = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(7), d(2026, 10, 17))
+            .await
+            .unwrap();
+        assert_eq!(s.data.days.len(), 5);
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "BBCA: 5 sessions with trades from 2026-09-23 to 2026-10-17, fewer than the 7 asked for"),
+            "{:?}",
+            s.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn the_latest_ipot_sessions_walk_back_past_the_weekend() {
+        let (f, be, _d) = fetcher(ipot_sessions());
+        let sym = Symbol::parse("BBCA").unwrap();
+        // Saturday: the weekend costs nothing, Friday to Wednesday do.
+        let s = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(3), d(2026, 10, 17))
+            .await
+            .unwrap();
+        let dates: Vec<NaiveDate> = s.data.days.iter().map(|x| x.date).collect();
+        assert_eq!(dates, [d(2026, 10, 14), d(2026, 10, 15), d(2026, 10, 16)]);
+        assert_eq!(be.call_count(), 6);
+        assert_eq!(s.data.totals.sessions, 3);
+
+        let err = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(61), d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        let long = ForeignRange::Dates {
+            from: d(2026, 6, 1),
+            to: d(2026, 10, 16),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, long, d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("at most 60 sessions"), "{err}");
+        assert_eq!(be.call_count(), 6, "usage errors cost no request");
+    }
+
+    #[tokio::test]
+    async fn a_failed_ipot_session_is_a_warning_and_an_unknown_code_not_found() {
+        let (f, _be, _d) = fetcher(ipot_sessions());
+        let sym = Symbol::parse("BBCA").unwrap();
+        // 10-09 has no recorded page: the network fails for it.
+        let range = ForeignRange::Dates {
+            from: d(2026, 10, 9),
+            to: d(2026, 10, 12),
+        };
+        let s = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 10, 17))
+            .await
+            .unwrap();
+        assert_eq!(s.data.days.len(), 1);
+        assert!(
+            s.warnings[0].starts_with("BBCA: the session of 2026-10-09 failed"),
+            "{:?}",
+            s.warnings
+        );
+        let zzzz = Symbol::parse("ZZZZ").unwrap();
+        let err = foreign_flow_ipot(&f, &[], &zzzz, ForeignRange::Latest(3), d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        // Nothing read at all: the failure itself.
+        let range = ForeignRange::Dates {
+            from: d(2026, 9, 1),
+            to: d(2026, 9, 2),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+
+        // 10-08 read without trades, 10-09 failed: the failure, since that
+        // day may have traded.
+        let (f, _be, _d) = fetcher(ipot_sessions().route(
+            "code=BBCA&start=10/08/2026&end=10/08/2026&",
+            200,
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html"),
+        ));
+        let range = ForeignRange::Dates {
+            from: d(2026, 10, 8),
+            to: d(2026, 10, 9),
+        };
+        let err = foreign_flow_ipot(&f, &[], &sym, range, d(2026, 10, 17))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3, "{err}");
+    }
+
+    #[test]
+    fn ipot_totals_count_present_values_only() {
+        let day = |net: Option<f64>, value: Option<f64>| ForeignValueDay {
+            date: d(2026, 10, 1),
+            value,
+            lots: None,
+            average_price: None,
+            foreign_buy_value: Some(10.0),
+            foreign_sell_value: net.map(|n| 10.0 - n),
+            foreign_net_value: net,
+            foreign_share_pct: None,
+        };
+        let t = foreign_value_totals(&[
+            day(Some(-2.0), Some(20.0)),
+            day(Some(4.0), Some(20.0)),
+            day(None, Some(20.0)),
+        ]);
+        assert_eq!(t.sessions, 3);
+        assert_eq!(t.value, 60.0);
+        assert_eq!(t.foreign_net_value, 2.0);
+        // (10 + 12 + 10 + 6) / (2 * 40): the third session has no selling.
+        assert_eq!(t.foreign_share_pct, Some(38.0 / 80.0 * 100.0));
+        assert_eq!(t.streak, 0, "the latest session has no net");
+        assert_eq!(foreign_value_totals(&[]).foreign_share_pct, None);
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub struct McpArgs {
 pub enum McpCmd {
     /// Print the registration command or config snippet for an agent, with this binary's absolute path filled in.
     #[command(
-        after_help = "Examples:\n  idx mcp setup --list\n  idx mcp setup codex\n  idx mcp setup muse\n  idx mcp setup cursor --npx                       # launch through npx instead of a path\n  idx mcp setup chatgpt --http https://x.trycloudflare.com/mcp --token s3cret\n  idx -o json mcp setup claude-code                # machine-readable steps"
+        after_help = "Examples:\n  idx mcp setup --list\n  idx mcp setup codex\n  idx mcp setup muse\n  idx mcp setup cursor --npx                       # launch through npx (npm package ihsg-mcp) instead of a path\n  idx mcp setup chatgpt --http https://x.trycloudflare.com/mcp --token s3cret\n  idx -o json mcp setup claude-code                # machine-readable steps"
     )]
     Setup {
         /// Client id or alias (see --list): claude-code, codex, muse, antigravity, gemini, copilot-cli, vscode, cursor, windsurf, kiro, jetbrains, zed, cline, continue, opencode, goose, warp, droid, vibe, qwen, crush, trae, augment, chatgpt.
@@ -51,7 +51,7 @@ pub enum McpCmd {
         /// Bearer token to embed in the remote form.
         #[arg(long, value_name = "TOKEN", requires = "http")]
         token: Option<String>,
-        /// Use `npx -y ihsg-cli mcp` as the command instead of this binary's path.
+        /// Use `npx -y ihsg-mcp` (the npm MCP package; `cmd /c npx -y ihsg-mcp` on Windows) as the command instead of this binary's path.
         #[arg(long, conflicts_with = "http")]
         npx: bool,
     },
@@ -72,10 +72,10 @@ pub async fn run(global: &GlobalOpts, args: McpArgs) -> Result<()> {
                         .into(),
                 ));
             }
-            let json = global.output == Some(output::OutputFormat::Json);
+            let format = super::requested_format(global);
             if list {
-                if json {
-                    return output::print_stdout(&output::json::to_pretty(&clients::CLIENTS)?);
+                if output::print_value(format, &clients::CLIENTS)? {
+                    return Ok(());
                 }
                 return output::print_stdout(&clients::list_text());
             }
@@ -91,25 +91,25 @@ pub async fn run(global: &GlobalOpts, args: McpArgs) -> Result<()> {
                 (None, false) => Launcher::Binary(current_binary()),
             };
             let s = clients::setup(c, &launcher);
-            if json {
-                return output::print_stdout(&output::json::to_pretty(&s)?);
+            if output::print_value(format, &s)? {
+                return Ok(());
             }
             output::print_stdout(&clients::render(&s))
         }
         None => {
             let ctx = build_context(global)?;
-            let stockbit = crate::mcp::StockbitConfig {
-                options: crate::providers::StockbitOptions {
+            let stockbit = crate::mcp::StockbitConfig::new(
+                crate::providers::StockbitOptions {
                     session_path: ctx.settings.stockbit_session.clone(),
                     access_seed: ctx.settings.stockbit_access_seed.clone(),
                     refresh_seed: ctx.settings.stockbit_refresh_seed.clone(),
                 },
-                ttls: crate::providers::Ttls {
+                crate::providers::Ttls {
                     quote: ctx.settings.quote_ttl(),
                     history: ctx.settings.history_ttl(),
                     ..crate::providers::Ttls::default()
                 },
-            };
+            );
             match args.http {
                 Some(bind) => {
                     crate::mcp::http::serve_http(

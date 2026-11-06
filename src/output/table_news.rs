@@ -2,7 +2,10 @@
 
 use comfy_table::{Attribute, Cell, Color};
 
-use crate::model::{NewsItem, NewsReport, ScreenReport, SentimentLabel, SentimentReport};
+use crate::analysis::screen::{split_clause, Key};
+use crate::model::{
+    NewsItem, NewsReport, ScreenReport, ScreenRow, SentimentLabel, SentimentReport,
+};
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
 
@@ -11,14 +14,41 @@ fn pct_opt(v: Option<f64>) -> String {
         .unwrap_or_else(|| f::DASH.into())
 }
 
+/// Keys of the filter clauses, in order.
+fn filter_keys(r: &ScreenReport) -> Vec<Key> {
+    r.filters
+        .iter()
+        .filter_map(|c| split_clause(c).ok().and_then(|(k, _, _)| Key::parse(k)))
+        .collect()
+}
+
+/// The return window to show: the sort key's, else the first one filtered
+/// on, else one year.
+fn return_column(r: &ScreenReport) -> (&'static str, fn(&ScreenRow) -> Option<f64>) {
+    let sort = Key::parse(&r.sort).filter(Key::needs_returns);
+    let key = sort
+        .or_else(|| filter_keys(r).into_iter().find(Key::needs_returns))
+        .unwrap_or(Key::Ret1y);
+    match key {
+        Key::Ret1w => ("1W %", |x| x.return_1w_pct),
+        Key::Ret1m => ("1M %", |x| x.return_1m_pct),
+        Key::Ret3m => ("3M %", |x| x.return_3m_pct),
+        Key::Ret6m => ("6M %", |x| x.return_6m_pct),
+        Key::RetYtd => ("YTD %", |x| x.return_ytd_pct),
+        _ => ("1Y %", |x| x.return_1y_pct),
+    }
+}
+
 pub fn screen(r: &ScreenReport, color: bool) -> String {
+    let what = match (&r.preset, r.filters.is_empty()) {
+        (Some(p), true) => p.clone(),
+        (Some(p), false) => format!("{p}: {}", r.filters.join(", ")),
+        (None, true) => "(no filters)".to_string(),
+        (None, false) => r.filters.join(", "),
+    };
     let mut out = format!(
         "Screen {} · {} of {} tickers quoted · {} passed quote filters{} · {} match{}\n",
-        if r.filters.is_empty() {
-            "(no filters)".to_string()
-        } else {
-            r.filters.join(", ")
-        },
+        what,
         r.quoted,
         r.universe,
         r.matched_quote_level,
@@ -39,9 +69,18 @@ pub fn screen(r: &ScreenReport, color: bool) -> String {
         if r.total_matches == 1 { "" } else { "es" }
     );
     let with_f = r.rows.iter().any(|x| x.fundamentals_checked);
+    let ret = r.returns_source.as_ref().map(|_| return_column(r));
+    let with_range =
+        Key::parse(&r.sort) == Some(Key::Range) || filter_keys(r).contains(&Key::Range);
     let mut cols = vec![
         "Symbol", "Name", "Price", "Chg %", "Mkt Cap", "P/E", "P/B", "Div %",
     ];
+    if let Some((label, _)) = ret {
+        cols.push(label);
+    }
+    if with_range {
+        cols.push("52w pos");
+    }
     if with_f {
         cols.extend(["ROE", "Net mgn", "D/E", "Sector"]);
     }
@@ -58,6 +97,16 @@ pub fn screen(r: &ScreenReport, color: bool) -> String {
             right(f::ratio(x.price_to_book)),
             right(pct_opt(x.dividend_yield_pct)),
         ];
+        if let Some((_, get)) = ret {
+            cells.push(signed(f::pct(get(x)), get(x), color));
+        }
+        if with_range {
+            cells.push(right(
+                x.range_52w_pct
+                    .map(|v| f::num(v, 1))
+                    .unwrap_or_else(|| f::DASH.into()),
+            ));
+        }
         if with_f {
             cells.push(right(pct_opt(x.roe_pct)));
             cells.push(right(pct_opt(x.net_margin_pct)));
@@ -80,10 +129,20 @@ pub fn screen(r: &ScreenReport, color: bool) -> String {
         ));
     }
     out.push_str(&format!(
-        "Sorted by {} {}. Filter keys: pe fpe pb ps peg mcap price div eps volume chg roe roa margin opmargin de growth epsgrowth sector industry.\n",
+        "Sorted by {} {}. Filter keys: pe fpe pb ps peg mcap price div eps volume chg range ret1w ret1m ret3m ret6m retytd ret1y roe roa margin opmargin de growth epsgrowth sector industry.\n",
         r.sort,
-        if r.descending { "desc" } else { "asc" }
+        if r.descending { "desc" } else { "asc" },
     ));
+    if let Some(src) = &r.returns_source {
+        out.push_str(&format!(
+            "Return windows: price return % as reported by {src}.\n"
+        ));
+    }
+    if with_range {
+        out.push_str(
+            "52w pos: where the price sits in its 52-week range, 0 at the low, 100 at the high.\n",
+        );
+    }
     out
 }
 

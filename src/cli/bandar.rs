@@ -10,7 +10,7 @@ use crate::output::table_bandar as tb;
 use crate::service::{self, BandarQuery, BandarScreenOptions, BrokerActivityOptions};
 use crate::universe;
 
-use super::{emit, Context};
+use super::{emit, input, Context};
 
 const DETECT_HELP: &str = "Examples:
   idx bandar detect BBCA                     # last week, top 5 buyers vs top 5 sellers
@@ -20,13 +20,16 @@ const DETECT_HELP: &str = "Examples:
   idx bandar detect BBCA --from 2026-09-01 --to 2026-09-30
   idx bandar detect TLKM --investor foreign
   idx -o json bandar detect BBCA | jq '.data[0] | {signal, phase, net_pct}'
+  idx -o json market foreign | jq -r '.data.net_buy[:5][].symbol' | idx bandar detect -
 
 Reading: for N = 1, 3, 5 and 10 the top N buyers' value minus the top N sellers' value (the
 bandar value; in lots the bandar volume), as a share of all value traded. +15% or more reads
 big accumulation, +5% accumulation, -5% distribution, -15% big distribution. The phase sets
 that against the price move: accumulation with the price within +2% is quiet accumulation,
 distribution with the price within -2% quiet distribution. The top buyers' average price
-against the last price says whether they sit on a gain. Heuristic, not advice.";
+against the last price says whether they sit on a gain. With --investor foreign or domestic the
+brokers are that side's, and the percentages stay shares of the stock's value traded (one more
+request). Heuristic, not advice.";
 
 const SCREEN_HELP: &str = "Examples:
   idx bandar screen --preset big-accumulation          # last week, 100 most traded stocks
@@ -36,6 +39,7 @@ const SCREEN_HELP: &str = "Examples:
   idx bandar screen --preset accumulation --symbols BBCA,BBRI,BMRI,BBNI
   idx bandar screen --sort fnet --limit 10
   idx -o json bandar screen --preset below-bandar | jq '.data.rows[].symbol'
+  idx -o jsonl watch list | idx bandar screen --symbols -   # scan your watchlist
 
 Presets: big-accumulation (acc>=15), accumulation (acc>=5), distribution (acc<=-5),
 big-distribution (acc<=-15), quiet-accumulation (phase=quiet_accumulation),
@@ -47,7 +51,9 @@ turnover (value traded), conc (top buyers' share of value, %), price, signal=...
 Operators < <= > >= = !=; numbers accept K/M/B/T and %.
 
 One broker-summary request per scanned stock (cached; closed sessions for a week), and on
-1w/1m/3m one history request per row the other filters leave.";
+1w/1m/3m usually three more for its foreign net, up to six when the latest sessions had no
+trades (the source counts its latest session twice over a range, so the net is rebuilt from
+single sessions), and one history request per row the other filters leave.";
 
 const BROKER_HELP: &str = "Examples:
   idx bandar broker YP                       # last week, the 100 most traded stocks
@@ -90,14 +96,14 @@ pub struct BrokerArgs {
     /// How many of the most traded stocks (by value, latest session) to scan.
     #[arg(long, default_value_t = service::BANDAR_SCAN_DEFAULT)]
     pub scan: usize,
-    /// Scan these tickers instead of the most traded.
+    /// Scan these tickers instead of the most traded (`-` reads them from stdin).
     #[arg(long, value_name = "SYMBOLS", value_delimiter = ',')]
     pub symbols: Vec<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct DetectArgs {
-    /// One or more IDX tickers (up to 10; 3 with --daily), comma or space separated.
+    /// One or more IDX tickers (up to 10; 3 with --daily), comma or space separated; `-` reads them from stdin.
     #[arg(value_name = "SYMBOL", required = true, num_args = 1..)]
     pub symbols: Vec<String>,
     /// Look-back ending at the latest session with trades.
@@ -155,7 +161,7 @@ pub struct ScreenArgs {
     /// How many of the most traded stocks (by value, latest session) to scan.
     #[arg(long, default_value_t = service::BANDAR_SCAN_DEFAULT)]
     pub scan: usize,
-    /// Scan these tickers instead of the most traded.
+    /// Scan these tickers instead of the most traded (`-` reads them from stdin).
     #[arg(long, value_name = "SYMBOLS", value_delimiter = ',')]
     pub symbols: Vec<String>,
 }
@@ -165,7 +171,7 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
     let today = service::today_wib();
     match cmd {
         BandarCmd::Detect(a) => {
-            let symbols = Symbol::parse_list(&a.symbols)?;
+            let symbols = Symbol::parse_list(input::symbol_args(&a.symbols)?)?;
             let (from, to) = match a.date {
                 Some(d) => (Some(d), Some(d)),
                 None => (a.from, a.to),
@@ -209,7 +215,7 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
                 symbols: if a.symbols.is_empty() {
                     Vec::new()
                 } else {
-                    Symbol::parse_list(&a.symbols)?
+                    Symbol::parse_list(input::symbol_args(&a.symbols)?)?
                 },
             };
             let result =
@@ -227,7 +233,7 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
                 symbols: if a.symbols.is_empty() {
                     Vec::new()
                 } else {
-                    Symbol::parse_list(&a.symbols)?
+                    Symbol::parse_list(input::symbol_args(&a.symbols)?)?
                 },
                 limit: a.limit,
             };

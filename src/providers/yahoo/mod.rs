@@ -2,7 +2,12 @@
 //!
 //! Endpoints (all unofficial, no key):
 //! - `GET https://query1.finance.yahoo.com/v8/finance/chart/{SYM}.JK?range=..&interval=..`
-//!   No auth. Used for `history` and as the quote fallback.
+//!   No auth. Used for `history`, `stocks intraday` and as the quote fallback.
+//!   One-minute bars cover at most 8 days per request and two-minute bars the
+//!   last 60 days (HTTP 422 beyond); `Interval::check_period` keeps requests
+//!   inside both. Minutes without a trade come back as null rows. Full daily or
+//!   weekly history uses `period1=0&period2=9999999999` instead of
+//!   `range=max`, which Yahoo answers with monthly bars.
 //! - `GET https://query1.finance.yahoo.com/v7/finance/quote?symbols=A.JK,B.JK&crumb=..`
 //!   Needs the `A3` cookie from `https://fc.yahoo.com` plus the crumb from
 //!   `https://query2.finance.yahoo.com/v1/test/getcrumb`. Returns the rich quote
@@ -12,6 +17,9 @@
 //!   statement modules are empty nowadays, so `financials` does not.
 //! - `GET https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{SYM}.JK?type=..`
 //!   No auth. Annual, quarterly and trailing statement items.
+//!
+//! `{SYM}.JK` is an IDX ticker; a ticker from another market keeps its own
+//! suffix (`D05.SI`, from `Symbol::parse_on`), and index codes their caret.
 //!
 //! Recorded responses live in `tests/fixtures/yahoo/`.
 
@@ -46,6 +54,8 @@ const TIMESERIES_BASE: &str =
     "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/";
 /// Intraday candles move constantly; cache them briefly regardless of config.
 const INTRADAY_TTL: Duration = Duration::from_secs(120);
+/// End of the `period=max` window for daily and weekly bars (year 2286).
+const MAX_PERIOD2: u64 = 9_999_999_999;
 
 pub struct Yahoo {
     fetcher: Arc<Fetcher>,
@@ -58,6 +68,17 @@ impl Yahoo {
     }
 
     pub fn chart_url(symbol: &Symbol, period: Period, interval: Interval) -> String {
+        // Yahoo answers `range=max` with monthly bars whatever interval is
+        // asked for (`dataGranularity: "1mo"`), so full daily or weekly
+        // history asks for the whole epoch instead. The fixed `period2`
+        // keeps the URL, and with it the cache key, stable.
+        if period == Period::Max && matches!(interval, Interval::Day1 | Interval::Week1) {
+            return format!(
+                "{CHART_BASE}{}?period1=0&period2={MAX_PERIOD2}&interval={}&includePrePost=false",
+                symbol.yahoo(),
+                interval.as_str()
+            );
+        }
         format!(
             "{CHART_BASE}{}?range={}&interval={}&includePrePost=false",
             symbol.yahoo(),
@@ -138,14 +159,7 @@ impl Yahoo {
     }
 
     fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
-        Sourced {
-            data,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        }
+        Sourced::from_fetched(data, NAME, f)
     }
 
     fn quote_cache_key(symbols: &[Symbol]) -> String {
@@ -201,14 +215,9 @@ impl Yahoo {
                     list.join(", ")
                 )));
             }
-            return Ok(Sourced {
-                data: quotes,
-                provider: NAME,
-                cached: fetched.cached,
-                stale: fetched.stale,
-                fetched_at: fetched.fetched_at,
-                warnings,
-            });
+            let mut out = Self::sourced(quotes, &fetched);
+            out.warnings.extend(warnings);
+            return Ok(out);
         }
         unreachable!("loop returns on the second attempt")
     }
@@ -227,8 +236,7 @@ impl Yahoo {
                     format!("chart endpoint HTTP {}", f.status),
                 ));
             }
-            let q = parse_chart_quote(&f.body)?;
-            Ok::<_, IdxError>((q, f.cached, f.stale, f.fetched_at))
+            Ok::<_, IdxError>(Self::sourced(parse_chart_quote(&f.body)?, &f))
         });
         let results = join_all(futs).await;
 
@@ -237,11 +245,9 @@ impl Yahoo {
         let mut first_err: Option<IdxError> = None;
         for (sym, r) in symbols.iter().zip(results) {
             match r {
-                Ok((q, cached, stale, at)) => {
-                    out.cached &= cached;
-                    out.stale |= stale;
-                    out.fetched_at = out.fetched_at.min(at);
-                    out.data.push(q);
+                Ok(q) => {
+                    out.absorb(&q);
+                    out.data.push(q.data);
                 }
                 Err(IdxError::NotFound(_)) => out.warnings.push(format!("no data for {sym}")),
                 Err(e) => {
@@ -334,14 +340,16 @@ impl Provider for Yahoo {
             ));
         }
         let history = parse_chart(&f.body, period, interval)?;
-        Ok(Sourced {
-            data: history,
-            provider: NAME,
-            cached: f.cached,
-            stale: f.stale,
-            fetched_at: f.fetched_at,
-            warnings: vec![],
-        })
+        let mut warnings = vec![];
+        if history.interval != interval {
+            warnings.push(format!(
+                "Yahoo returned {} bars for {period}/{interval}; the candles are labelled {}",
+                history.interval, history.interval
+            ));
+        }
+        let mut out = Self::sourced(history, &f);
+        out.warnings.extend(warnings);
+        Ok(out)
     }
 
     async fn profile(&self, symbol: &Symbol) -> Result<Sourced<Profile>> {
@@ -465,6 +473,7 @@ mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
+    use crate::model::StaleReason;
 
     const V7: &str = include_str!("../../../tests/fixtures/yahoo/quote_v7_bbca_bbri_tlkm.json");
     const V7_PARTIAL: &str =
@@ -522,6 +531,35 @@ mod tests {
         let again = y.quotes(&syms(&["BBCA", "BBRI", "TLKM"])).await.unwrap();
         assert!(again.cached);
         assert_eq!(be.call_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn stale_quote_says_why_without_the_crumb() {
+        // A session but no quote route: the live request fails like a
+        // refused connection, and the URL it names carries the crumb.
+        let be = session_routes(FixtureBackend::new());
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let symbols = syms(&["BBCA", "BBRI", "TLKM"]);
+        cache
+            .put_at(
+                &Yahoo::quote_cache_key(&symbols),
+                200,
+                V7,
+                chrono::Utc::now() - chrono::Duration::hours(1),
+            )
+            .unwrap();
+        let fetcher = Arc::new(Fetcher::new(Arc::new(be), cache, CacheMode::Normal));
+        let y = Yahoo::new(fetcher, Ttls::default());
+        let got = y.quotes(&symbols).await.unwrap();
+        assert_eq!(got.data.len(), 3);
+        assert!(got.cached && got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(got.warnings.len(), 1, "{:?}", got.warnings);
+        let w = &got.warnings[0];
+        assert!(w.starts_with("live fetch failed ("), "{w}");
+        assert!(w.contains("v7/finance/quote"), "{w}");
+        assert!(!w.contains("crumb") && !w.contains("symbols="), "{w}");
     }
 
     #[tokio::test]
@@ -590,6 +628,79 @@ mod tests {
         assert!(err.to_string().contains("delisted"), "{err}");
     }
 
+    const CHART_MAX_DAILY: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_period1_max_1d.json");
+    const CHART_RANGE_MAX: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_range_max_1d.json");
+
+    #[tokio::test]
+    async fn max_daily_history_asks_for_period1() {
+        let be = FixtureBackend::new().route(
+            "^JKSE?period1=0&period2=9999999999&interval=1d",
+            200,
+            CHART_MAX_DAILY,
+        );
+        let (y, be, _d) = yahoo(be, CacheMode::Normal);
+        let h = y
+            .history(
+                &Symbol::parse("^JKSE").unwrap(),
+                Period::Max,
+                Interval::Day1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.data.interval, Interval::Day1);
+        assert_eq!(h.data.candles.len(), 8905);
+        assert!(h.warnings.is_empty(), "{:?}", h.warnings);
+        assert_eq!(be.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn coarser_bars_than_asked_are_relabelled_with_a_warning() {
+        let be = FixtureBackend::new().route("^JKSE?period1=0", 200, CHART_RANGE_MAX);
+        let (y, _be, _d) = yahoo(be, CacheMode::Normal);
+        let h = y
+            .history(
+                &Symbol::parse("^JKSE").unwrap(),
+                Period::Max,
+                Interval::Day1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.data.interval, Interval::Month1);
+        assert_eq!(
+            h.warnings,
+            ["Yahoo returned 1mo bars for max/1d; the candles are labelled 1mo"]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_minute_history_and_the_422_beyond_eight_days() {
+        let be = FixtureBackend::new()
+            .route(
+                "BBCA.JK?range=1d&interval=1m",
+                200,
+                include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m.json"),
+            )
+            .route(
+                "BBCA.JK?range=1mo&interval=1m",
+                422,
+                include_str!("../../../tests/fixtures/yahoo/chart_bbca_1mo_1m_error.json"),
+            );
+        let (y, _be, _d) = yahoo(be, CacheMode::Normal);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        let h = y.history(&bbca, Period::D1, Interval::Min1).await.unwrap();
+        assert_eq!(h.data.candles.len(), 333);
+        // A caller that skips Interval::check_period sees Yahoo's reason.
+        let err = y
+            .history(&bbca, Period::M1, Interval::Min1)
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        assert!(err.to_string().contains("HTTP 422"), "{err}");
+        assert!(err.to_string().contains("Only 8 days"), "{err}");
+    }
+
     #[tokio::test]
     async fn offline_without_cache_is_exit_5() {
         let (y, _be, _d) = yahoo(FixtureBackend::new(), CacheMode::Offline);
@@ -640,12 +751,85 @@ mod tests {
         assert!(!calls[0].contains("crumb"));
     }
 
+    const CHART_D05: &str = include_str!("../../../tests/fixtures/yahoo/chart_d05si_5d_1d.json");
+    const CHART_BBCA_SI_404: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_bbca_si_404.json");
+
+    #[tokio::test]
+    async fn another_market_keeps_its_suffix() {
+        let be = FixtureBackend::new()
+            .route("v8/finance/chart/D05.SI", 200, CHART_D05)
+            .route("v8/finance/chart/BBCA.SI", 404, CHART_BBCA_SI_404);
+        let (y, be, _d) = yahoo(be, CacheMode::Normal);
+        let d05 = Symbol::parse_on("D05.SI", "JK").unwrap();
+        let h = y.history(&d05, Period::D5, Interval::Day1).await.unwrap();
+        assert_eq!(h.data.symbol, d05);
+        assert_eq!(h.data.currency.as_deref(), Some("SGD"));
+        assert_eq!(h.data.name.as_deref(), Some("DBS Group Holdings Ltd"));
+        assert_eq!(h.data.candles.len(), 5);
+        // Times stay in WIB: the instant is right, the wall clock is Jakarta's.
+        assert_eq!(h.data.candles[0].time.offset().local_minus_utc(), 7 * 3600);
+        {
+            let calls = be.calls.lock().unwrap();
+            assert!(
+                calls[0].ends_with("chart/D05.SI?range=5d&interval=1d&includePrePost=false"),
+                "{}",
+                calls[0]
+            );
+        }
+        // A bare IDX code under the wrong suffix is a clean not-found.
+        let wrong = Symbol::parse_on("BBCA", "SI").unwrap();
+        let e = y
+            .history(&wrong, Period::D5, Interval::Day1)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, IdxError::NotFound(_)), "{e}");
+    }
+
+    #[test]
+    fn quote_key_carries_each_symbols_own_suffix() {
+        let list = vec![
+            Symbol::parse("BBCA").unwrap(),
+            Symbol::parse_on("D05.SI", "JK").unwrap(),
+            Symbol::parse("^JKSE").unwrap(),
+        ];
+        assert_eq!(
+            Yahoo::quote_cache_key(&list),
+            "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,D05.SI,^JKSE"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&list[1], Period::D5, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/D05.SI?range=5d&interval=1d&includePrePost=false"
+        );
+    }
+
     #[test]
     fn url_building() {
         let u = Yahoo::chart_url(&Symbol::parse("bbca").unwrap(), Period::Y1, Interval::Week1);
         assert_eq!(
             u,
             "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1y&interval=1wk&includePrePost=false"
+        );
+        assert!(
+            Yahoo::chart_url(&Symbol::parse("^jkse").unwrap(), Period::D1, Interval::Min1)
+                .ends_with("/^JKSE?range=1d&interval=1m&includePrePost=false")
+        );
+        let jkse = Symbol::parse("^JKSE").unwrap();
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1d&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Week1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1wk&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Month1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=max&interval=1mo&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Y2, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=2y&interval=1d&includePrePost=false"
         );
         assert_eq!(urlencode("a/b c"), "a%2Fb%20c");
     }

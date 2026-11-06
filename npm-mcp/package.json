@@ -1,0 +1,46 @@
+{
+  "name": "ihsg-mcp",
+  "version": "0.8.2",
+  "description": "MCP server for the Indonesian stock market (IDX / IHSG): quotes, fundamentals, technicals, broker flow, KSEI ownership and news as typed tools. `npx -y ihsg-mcp` runs `idx mcp`; the first run downloads the SHA-256 verified idx binary.",
+  "license": "MIT",
+  "homepage": "https://ihsg.midoriresearch.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fzn0x/idx.git",
+    "directory": "npm-mcp"
+  },
+  "bugs": "https://github.com/fzn0x/idx/issues",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ihsg",
+    "idx",
+    "stocks",
+    "indonesia",
+    "saham",
+    "finance",
+    "ai-agents"
+  ],
+  "bin": {
+    "ihsg-mcp": "bin/ihsg-mcp.js"
+  },
+  "files": [
+    "bin/ihsg-mcp.js",
+    "lib/",
+    "README.md"
+  ],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Midori Research <desk@midoriresearch.com>"
+}

@@ -44,6 +44,11 @@ pub struct MarketOverview {
     pub as_of: Option<DateTime<FixedOffset>>,
     /// Market state reported for the index quote (`REGULAR`, `CLOSED`, ...).
     pub market_state: Option<String>,
+    /// `true` when even the newest quote (`as_of`) is dated before the latest
+    /// IDX session that has ended: the source has not caught up with the
+    /// close. `null` when `as_of` is unknown.
+    #[serde(default)]
+    pub behind_session: Option<bool>,
     /// The benchmark index quote (`^JKSE`), `null` when unavailable.
     pub index: Option<MarketRow>,
     /// Tickers in the universe walked.

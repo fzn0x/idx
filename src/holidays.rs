@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, Timelike, Utc, Weekday};
 
 use crate::error::{IdxError, Result};
 use crate::model::Holiday;
@@ -134,6 +134,26 @@ pub fn last_trading_day(date: NaiveDate) -> NaiveDate {
     d
 }
 
+/// When an IDX trading day's session is over, in seconds after midnight WIB:
+/// 16:15:00, the end of post-closing on the regular market, Monday to Friday
+/// (IDX trading hours, Decree Kep-00158/BEI/10-2026; the web terminal's
+/// clock shows the same timetable). Closing quotes carry 16:14 to 16:15.
+pub const SESSION_END_SECS: u32 = 16 * 3600 + 15 * 60;
+
+/// The latest trading day whose session has ended by `now`: today from
+/// 16:15 WIB on a trading day, otherwise the trading day before. Weekends
+/// and listed holidays are skipped, so a holiday never counts as a missed
+/// session; for a year the list does not cover, only weekends are.
+pub fn latest_session(now: DateTime<Utc>) -> NaiveDate {
+    let local = now.with_timezone(&crate::model::wib());
+    let today = local.date_naive();
+    if is_trading_day(today) && local.time().num_seconds_from_midnight() >= SESSION_END_SECS {
+        today
+    } else {
+        last_trading_day(today.pred_opt().expect("date in range"))
+    }
+}
+
 /// Trading days in `year`: weekdays minus listed holidays.
 pub fn trading_days(year: i32) -> u32 {
     let mut d = NaiveDate::from_ymd_opt(year, 1, 1).expect("valid year");
@@ -185,6 +205,70 @@ mod tests {
         assert_eq!(last_trading_day(d(2026, 8, 17)), d(2026, 8, 14));
         // Idul Fitri 2026: Friday 20 March through Tuesday 24 March.
         assert_eq!(next_trading_day(d(2026, 3, 19)), d(2026, 3, 25));
+    }
+
+    #[test]
+    fn latest_session_skips_weekends_holidays_and_waits_for_the_close() {
+        let at = |s: &str| {
+            DateTime::parse_from_rfc3339(&format!("{s}+07:00"))
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        for (now, want, why) in [
+            (
+                "2026-11-06T06:52:00",
+                d(2026, 11, 5),
+                "Friday before the open",
+            ),
+            (
+                "2026-11-06T10:00:00",
+                d(2026, 11, 5),
+                "Friday during the session",
+            ),
+            (
+                "2026-11-06T16:14:59",
+                d(2026, 11, 5),
+                "one second before the end",
+            ),
+            ("2026-11-06T16:15:00", d(2026, 11, 6), "post-closing over"),
+            ("2026-11-07T12:00:00", d(2026, 11, 6), "Saturday"),
+            ("2026-11-08T23:59:59", d(2026, 11, 6), "Sunday night"),
+            (
+                "2026-11-09T00:30:00",
+                d(2026, 11, 6),
+                "Monday after midnight",
+            ),
+            (
+                "2026-11-09T16:15:00",
+                d(2026, 11, 9),
+                "Monday after the close",
+            ),
+            ("2026-08-17T17:00:00", d(2026, 8, 14), "Independence Day"),
+            (
+                "2026-08-18T08:00:00",
+                d(2026, 8, 14),
+                "the morning after it",
+            ),
+            (
+                "2026-03-25T08:00:00",
+                d(2026, 3, 17),
+                "after Nyepi and Idul Fitri",
+            ),
+            ("2026-12-24T17:00:00", d(2026, 12, 23), "cuti bersama Natal"),
+            (
+                "2027-01-04T08:00:00",
+                d(2026, 12, 30),
+                "12-31 and 01-01 closed",
+            ),
+            ("2027-01-05T17:00:00", d(2027, 1, 4), "Isra Mikraj"),
+        ] {
+            assert_eq!(latest_session(at(now)), want, "{now}: {why}");
+        }
+        // The same instant written in UTC: 09:15Z is 16:15 WIB.
+        let utc = DateTime::parse_from_rfc3339("2026-11-06T09:15:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(latest_session(utc), d(2026, 11, 6));
     }
 
     #[test]

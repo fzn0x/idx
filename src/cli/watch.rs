@@ -9,13 +9,17 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::error::{IdxError, Result};
-use crate::model::{Symbol, Watchlist};
+use crate::model::{Symbol, Watchlist, IDX_EXCHANGE};
 use crate::output::json::{SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_WATCHLIST};
 use crate::output::{table, table_reports as reports};
 use crate::providers::Sourced;
 use crate::service;
 
-use super::{emit, Context};
+use super::{emit, input, Context};
+
+/// How the watchlist file starts. `-` input that starts with it is read as
+/// saved entries (a bare code is IDX), see `cli/input.rs`.
+pub const HEADER_TAG: &str = "# idx watchlist";
 
 #[derive(Debug, Args)]
 pub struct WatchArgs {
@@ -25,12 +29,12 @@ pub struct WatchArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WatchCmd {
-    /// Add tickers to the list.
+    /// Add tickers to the list (`-` reads them from stdin).
     Add {
         #[arg(required = true, value_name = "SYMBOLS")]
         symbols: Vec<String>,
     },
-    /// Remove tickers from the list.
+    /// Remove tickers from the list (`-` reads them from stdin).
     #[command(alias = "rm")]
     Remove {
         #[arg(required = true, value_name = "SYMBOLS")]
@@ -68,7 +72,9 @@ pub fn load(path: &std::path::Path) -> Result<Vec<Symbol>> {
         if line.is_empty() {
             continue;
         }
-        let sym = Symbol::parse(line)
+        // Entries are stored canonically (BBCA, D05.SI), so a later
+        // IDX_EXCHANGE never changes what a saved line means.
+        let sym = Symbol::parse_on(line, IDX_EXCHANGE)
             .map_err(|e| IdxError::Config(format!("watchlist line {}: {e}", i + 1)))?;
         if !out.contains(&sym) {
             out.push(sym);
@@ -81,7 +87,7 @@ fn save(path: &std::path::Path, symbols: &[Symbol]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut text = String::from("# idx watchlist: one ticker per line\n");
+    let mut text = format!("{HEADER_TAG}: one ticker per line\n");
     for s in symbols {
         text.push_str(s.as_str());
         text.push('\n');
@@ -121,7 +127,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
     let mut symbols = load(&file)?;
     match args.cmd {
         Some(WatchCmd::Add { symbols: raw }) => {
-            for s in Symbol::parse_list(&raw)? {
+            for s in Symbol::parse_list_on(input::symbol_args(&raw)?, &ctx.settings.exchange)? {
                 if !symbols.contains(&s) {
                     symbols.push(s);
                 }
@@ -130,7 +136,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
         }
         Some(WatchCmd::Remove { symbols: raw }) => {
-            let drop = Symbol::parse_list(&raw)?;
+            let drop = Symbol::parse_list_on(input::symbol_args(&raw)?, &ctx.settings.exchange)?;
             symbols.retain(|s| !drop.contains(s));
             save(&file, &symbols)?;
             emit(ctx, SCHEMA_WATCHLIST, report(&file, symbols), list_table)
@@ -150,7 +156,7 @@ pub async fn run(ctx: &Context, args: WatchArgs) -> Result<()> {
         }
         None => {
             let symbols = non_empty(symbols, &file)?;
-            let result = ctx.provider.quotes(&symbols).await?;
+            let result = service::quotes(ctx.provider.as_ref(), &symbols).await?;
             emit(ctx, SCHEMA_QUOTES, result, |d| table::quotes(d, ctx.color))
         }
     }
@@ -200,5 +206,20 @@ mod tests {
         std::fs::write(&file, "BB CA\n").unwrap();
         assert!(load(&file).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn other_markets_are_stored_with_their_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("watchlist.txt");
+        let syms = vec![
+            Symbol::parse_on("D05", "SI").unwrap(),
+            Symbol::parse_on("BBCA.JK", "SI").unwrap(),
+        ];
+        save(&file, &syms).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.ends_with("D05.SI\nBBCA\n"), "{text}");
+        // Loaded the same way whatever IDX_EXCHANGE says later.
+        assert_eq!(load(&file).unwrap(), syms);
     }
 }

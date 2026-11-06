@@ -5,10 +5,13 @@
 // broker summary over 1d, 1w, 1m and 3m ending on that session and the daily
 // candles for the price move, one D1 row per stock and period in
 // `bandar_scan`. /api/bandar/screen then answers from D1 alone with the same
-// rules as the CLI (src/bandar.js). A tick costs PER_TICK x 5 requests and one
-// D1 batch, well inside a Worker invocation's limits; a stock whose fetch
-// failed is tried once more at the end of the pass. Holidays are noticed by a
-// probe and skipped.
+// rules as the CLI (src/bandar.js). The foreign net of 1w, 1m and 3m is
+// rebuilt from single sessions (the range page counts the latest session
+// twice): the session before the scanned one and each period's rest, so a
+// stock costs 9 requests (a chart, four period pages, one more session,
+// three rests) and a tick PER_TICK x 9 and one D1 batch, inside a Worker
+// invocation's 50 subrequests; a stock whose fetch failed is tried once more
+// at the end of the pass. Holidays are noticed by a probe and skipped.
 
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
@@ -53,23 +56,38 @@ async function kvPut(env, k, v) {
 const named = (symbol, p, from, to) => ({
   symbol, name: NAMES.get(symbol) || null, from: p.from || from, to: p.to || to, investor: "all", board: "all",
   buyers: p.buyers.map((f) => ({ ...f, name: BROKERS[f.code] ?? null })), sellers: p.sellers.map((f) => ({ ...f, name: BROKERS[f.code] ?? null })),
-  total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: p.foreign_net_value, average_price: p.average_price, rounded: p.rounded,
+  total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: p.foreign_net_value, average_price: p.average_price,
+  buy_value: p.total_value, sell_value: p.total_value, rounded: p.rounded,
 });
 
-/** One stock: a row per period, or why there is none. */
-export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetchPage, fetchChart = y.fetchChart } = {}) {
+/**
+ * One stock: a row per period, or why there is none. `today` is the date in
+ * Jakarta when the scan runs; pages are read fresh, so it is also the day
+ * they were fetched.
+ */
+export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetchPage, fetchChart = y.fetchChart, today = session } = {}) {
   let candles = [];
   try {
     const res = await fetchChart(symbol, "6mo", "1d");
     if (!res.notFound) candles = y.parseChart(res.body, "6mo", "1d").candles;
   } catch { /* no price move then; the reading itself does not need it */ }
+  // Each page once per stock: the 1d page is the scanned session the
+  // rebuilds start from.
+  const pages = new Map();
+  const get = async (from, to) => {
+    const k = `${from}:${to}`;
+    if (!pages.has(k)) pages.set(k, ipot.parse(await fetchPage(ipot.url(symbol, from, to))));
+    return { page: pages.get(k), fetchedOn: today };
+  };
   const rows = [];
   for (const period of bd.PERIODS) {
     const from = bd.periodStart(period, session);
-    const p = ipot.parse(await fetchPage(ipot.url(symbol, from, session)));
+    const { page: p } = await get(from, session);
     if (p.invalid) return { invalid: true, rows: [] };
+    const summary = named(symbol, p, from, session);
+    if (ipot.rangeNetSuspect(from, session, p, today, today)) summary.foreign_net_value = await ipot.rebuildNet(from, session, today, get);
     const move = bd.priceMove(candles, from, session, quote);
-    rows.push({ period, v: { summary: named(symbol, p, from, session), price: move.price ?? quote?.price ?? null, chg: move.chg } });
+    rows.push({ period, v: { summary, price: move.price ?? quote?.price ?? null, chg: move.chg } });
   }
   return { rows };
 }
@@ -104,7 +122,7 @@ export async function bandarScanStep(env, { now = new Date(), force = false } = 
   const batch = st.symbols.slice(st.next, st.next + PER_TICK);
   for (const symbol of batch) {
     try {
-      const r = await scanSymbol(symbol, session, bySym.get(symbol));
+      const r = await scanSymbol(symbol, session, bySym.get(symbol), { today: new Date(now.getTime() + 7 * 3600e3).toISOString().slice(0, 10) });
       if (r.invalid) st.failed.push(symbol);
       else {
         await store(env, session, symbol, r.rows);

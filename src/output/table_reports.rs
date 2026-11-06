@@ -6,9 +6,9 @@ use comfy_table::{Attribute, Cell, Color, Table};
 
 use crate::analysis::fundamental::summary_line;
 use crate::model::{
-    Brief, DividendHistory, Earnings, FinancialPeriod, Financials, Fundamentals, MarketOverview,
-    MarketRow, Performance, Profile, ReturnWindows, SignalLabel, StatementPeriod, Technical, Trend,
-    VerdictLabel,
+    Brief, DividendHistory, Earnings, EarningsEstimate, EarningsScope, FinancialPeriod, Financials,
+    Fundamentals, MarketOverview, MarketRow, Performance, Profile, ReturnWindows, SignalLabel,
+    StatementPeriod, Technical, Trend, VerdictLabel,
 };
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
@@ -21,6 +21,35 @@ fn pct_opt(v: Option<f64>) -> String {
 fn ratio_x(v: Option<f64>) -> String {
     v.map(|x| format!("{}x", f::num(x, 2)))
         .unwrap_or_else(|| f::DASH.into())
+}
+
+/// Marks a multiple that divides the price by statement figures in another
+/// currency (see `Fundamentals::mixed_currency`).
+fn mixed(s: String, fd: &Fundamentals) -> String {
+    if fd.mixed_currency() && s != f::DASH {
+        format!("{s}*")
+    } else {
+        s
+    }
+}
+
+/// Names the currency of an amount taken from the statements when it is not
+/// the price's.
+fn in_statement_currency(s: String, fd: &Fundamentals) -> String {
+    match &fd.financial_currency {
+        Some(c) if fd.mixed_currency() && s != f::DASH => format!("{s} {c}"),
+        _ => s,
+    }
+}
+
+/// `(statements, price)` currencies when they differ.
+fn currency_pair(fd: &Fundamentals) -> Option<(&str, &str)> {
+    match (&fd.financial_currency, &fd.currency) {
+        (Some(statements), Some(price)) if fd.mixed_currency() => {
+            Some((statements.as_str(), price.as_str()))
+        }
+        _ => None,
+    }
 }
 
 fn date_opt(d: Option<chrono::NaiveDate>) -> String {
@@ -62,7 +91,7 @@ pub fn wrap(text: &str, width: usize) -> String {
     out
 }
 
-fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
+pub(crate) fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
     let mut t = base_table(color);
     t.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS);
@@ -72,7 +101,7 @@ fn kv_table(color: bool, rows: Vec<(String, Cell)>) -> Table {
     t
 }
 
-fn section(color: bool, name: &str) -> Cell {
+pub(crate) fn section(color: bool, name: &str) -> Cell {
     let c = Cell::new(name.to_uppercase()).add_attribute(Attribute::Bold);
     if color {
         c.fg(Color::Cyan)
@@ -204,10 +233,16 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("P/E (trailing)".into(), right(f::ratio(v.pe_trailing))),
         ("P/E (forward)".into(), right(f::ratio(v.pe_forward))),
         ("PEG".into(), right(f::ratio(v.peg))),
-        ("P/B".into(), right(f::ratio(v.price_to_book))),
-        ("P/S".into(), right(f::ratio(v.price_to_sales))),
-        ("EV/EBITDA".into(), right(f::ratio(v.ev_to_ebitda))),
-        ("EV/Revenue".into(), right(f::ratio(v.ev_to_revenue))),
+        ("P/B".into(), right(mixed(f::ratio(v.price_to_book), fd))),
+        ("P/S".into(), right(mixed(f::ratio(v.price_to_sales), fd))),
+        (
+            "EV/EBITDA".into(),
+            right(mixed(f::ratio(v.ev_to_ebitda), fd)),
+        ),
+        (
+            "EV/Revenue".into(),
+            right(mixed(f::ratio(v.ev_to_revenue), fd)),
+        ),
         ("".into(), section(color, "profitability")),
         ("ROE".into(), right(pct_opt(p.roe_pct))),
         ("ROA".into(), right(pct_opt(p.roa_pct))),
@@ -221,8 +256,14 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("Debt / equity".into(), right(ratio_x(h.debt_to_equity))),
         ("Current ratio".into(), right(f::ratio(h.current_ratio))),
         ("Quick ratio".into(), right(f::ratio(h.quick_ratio))),
-        ("Total debt".into(), right(f::compact(h.total_debt))),
-        ("Total cash".into(), right(f::compact(h.total_cash))),
+        (
+            "Total debt".into(),
+            right(in_statement_currency(f::compact(h.total_debt), fd)),
+        ),
+        (
+            "Total cash".into(),
+            right(in_statement_currency(f::compact(h.total_cash), fd)),
+        ),
         ("".into(), section(color, "growth")),
         (
             "Revenue growth (yoy)".into(),
@@ -247,8 +288,14 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
         ("".into(), section(color, "per share")),
         ("EPS (ttm)".into(), right(f::price(ps.eps_ttm))),
         ("EPS (forward)".into(), right(f::price(ps.eps_forward))),
-        ("Book value".into(), right(f::price(ps.book_value))),
-        ("Revenue".into(), right(f::price(ps.revenue))),
+        (
+            "Book value".into(),
+            right(in_statement_currency(f::price(ps.book_value), fd)),
+        ),
+        (
+            "Revenue".into(),
+            right(in_statement_currency(f::price(ps.revenue), fd)),
+        ),
         ("".into(), section(color, "analysts")),
         (
             "Recommendation".into(),
@@ -281,6 +328,13 @@ pub fn fundamentals(fd: &Fundamentals, color: bool) -> String {
     ];
     out.push_str(&kv_table(color, rows).to_string());
     out.push('\n');
+    if let Some((c, price)) = currency_pair(fd) {
+        out.push_str(&format!(
+            "* Statements in {c}, price in {price}: P/B, P/S and EV multiples divide the price \
+             by {c} figures, so they are not comparable, and the verdict does not score P/B. \
+             Amounts marked {c} come from the statements.\n"
+        ));
+    }
     if let Some(v) = &fd.verdict {
         out.push_str(&summary_line(fd));
         out.push('\n');
@@ -325,14 +379,17 @@ pub fn compare(list: &[Fundamentals], color: bool) -> String {
         fd.valuation.pe_forward
     )));
     row!("PEG", |fd: &Fundamentals| right(f::ratio(fd.valuation.peg)));
-    row!("P/B", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.price_to_book
+    row!("P/B", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.price_to_book),
+        fd
     )));
-    row!("P/S", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.price_to_sales
+    row!("P/S", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.price_to_sales),
+        fd
     )));
-    row!("EV/EBITDA", |fd: &Fundamentals| right(f::ratio(
-        fd.valuation.ev_to_ebitda
+    row!("EV/EBITDA", |fd: &Fundamentals| right(mixed(
+        f::ratio(fd.valuation.ev_to_ebitda),
+        fd
     )));
     row!("ROE", |fd: &Fundamentals| right(pct_opt(
         fd.profitability.roe_pct
@@ -387,6 +444,20 @@ pub fn compare(list: &[Fundamentals], color: bool) -> String {
 
     let mut out = t.to_string();
     out.push('\n');
+    let mixed: Vec<String> = list
+        .iter()
+        .filter_map(|fd| {
+            currency_pair(fd)
+                .map(|(c, price)| format!("{} (statements in {c}, price in {price})", fd.symbol))
+        })
+        .collect();
+    if !mixed.is_empty() {
+        out.push_str(&format!(
+            "* P/B, P/S and EV/EBITDA divide the price by statement figures in another \
+             currency, so they are not comparable: {}.\n",
+            mixed.join("; ")
+        ));
+    }
     out.push_str("Verdicts are heuristics from public ratios, not investment advice.\n");
     out
 }
@@ -518,14 +589,92 @@ pub fn financials(fin: &Financials, flags: &StatementFlags, color: bool) -> Stri
     out
 }
 
+/// `0q` -> "this quarter (0q)" and so on; other labels as the source wrote them.
+fn estimate_label(period: &str) -> String {
+    let name = match period {
+        "0q" => "this quarter",
+        "+1q" => "next quarter",
+        "0y" => "this year",
+        "+1y" => "next year",
+        other => return other.to_string(),
+    };
+    format!("{name} ({period})")
+}
+
+/// Analyst consensus per period: EPS average with its range and analyst
+/// count, growth on a year earlier, and the revenue consensus.
+fn estimates_table(rows: &[EarningsEstimate], color: bool) -> String {
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "Consensus",
+        "Period end",
+        "EPS avg",
+        "EPS range",
+        "Analysts",
+        "EPS growth",
+        "Revenue avg",
+        "Revenue growth",
+    ]));
+    for r in rows {
+        let range = match (r.eps_low, r.eps_high) {
+            (None, None) => f::DASH.to_string(),
+            (lo, hi) => format!("{} – {}", f::price(lo), f::price(hi)),
+        };
+        t.add_row(vec![
+            Cell::new(estimate_label(&r.period)).add_attribute(Attribute::Bold),
+            Cell::new(date_opt(r.end_date)),
+            right(f::price(r.eps_avg)),
+            right(range),
+            right(
+                r.eps_analysts
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| f::DASH.into()),
+            ),
+            signed(f::pct(r.eps_growth_pct), r.eps_growth_pct, color),
+            money(r.revenue_avg),
+            signed(f::pct(r.revenue_growth_pct), r.revenue_growth_pct, color),
+        ]);
+    }
+    let mut out = t.to_string();
+    out.push('\n');
+    out
+}
+
+/// "showing annual estimates" and the like, for a filtered earnings call.
+fn scope_label(s: &EarningsScope) -> String {
+    let period = match (s.annual, s.quarterly) {
+        (true, false) => "annual ",
+        (false, true) => "quarterly ",
+        _ => "",
+    };
+    let kind = match (s.reported, s.estimates) {
+        (true, false) => "reported figures",
+        (false, true) => "estimates",
+        _ => "rows",
+    };
+    format!("showing {period}{kind}")
+}
+
 pub fn earnings(e: &Earnings, color: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "{} · {} · EPS in {}\n",
+        "{} · {} · EPS in {}{}\n",
         e.symbol,
         e.name.clone().unwrap_or_else(|| f::DASH.into()),
-        e.currency.clone().unwrap_or_default()
+        e.currency.clone().unwrap_or_default(),
+        e.scope
+            .as_ref()
+            .map(|s| format!(" · {}", scope_label(s)))
+            .unwrap_or_default()
     ));
+    let nothing = e.quarters.is_empty()
+        && e.yearly.is_empty()
+        && e.quarterly.is_empty()
+        && e.estimates.is_empty()
+        && e.next.is_none();
+    if e.scope.is_some() && nothing {
+        out.push_str("The source has no rows of this kind for this ticker.\n");
+    }
     if !e.quarters.is_empty() {
         let mut t = base_table(color);
         t.set_header(header(&[
@@ -568,6 +717,9 @@ pub fn earnings(e: &Earnings, color: bool) -> String {
         }
         out.push_str(&t.to_string());
         out.push('\n');
+    }
+    if !e.estimates.is_empty() {
+        out.push_str(&estimates_table(&e.estimates, color));
     }
     if let Some(n) = &e.next {
         out.push_str(&format!(
@@ -614,13 +766,18 @@ pub fn brief(b: &Brief, color: bool) -> String {
             f::text(&f.industry),
             f::ratio(f.valuation.pe_trailing),
             f::ratio(f.valuation.pe_forward),
-            f::ratio(f.valuation.price_to_book),
-            f::ratio(f.valuation.ev_to_ebitda),
+            mixed(f::ratio(f.valuation.price_to_book), f),
+            mixed(f::ratio(f.valuation.ev_to_ebitda), f),
             pct_opt(f.profitability.roe_pct),
             pct_opt(f.profitability.net_margin_pct),
             ratio_x(f.health.debt_to_equity),
             pct_opt(f.dividend.yield_pct),
         ));
+        if let Some((c, price)) = currency_pair(f) {
+            out.push_str(&format!(
+                "    * Statements in {c}, price in {price}: P/B and EV/EBITDA are not comparable\n"
+            ));
+        }
         if let Some(v) = &f.verdict {
             for r in v.reasons.iter().take(4) {
                 out.push_str(&format!("    - {r}\n"));
@@ -781,9 +938,16 @@ pub fn market(m: &MarketOverview, color: bool) -> String {
                 .unwrap_or_else(|| "state unknown".into()),
             m.as_of
                 .map(|t| format!(" · last trade {}", t.format("%Y-%m-%d %H:%M WIB")))
-                .unwrap_or_default()
+                .unwrap_or_default(),
         )),
         None => out.push_str("Index quote unavailable\n"),
+    }
+    // The board's own flag, so it shows even without the index quote.
+    if let (Some(true), Some(t)) = (m.behind_session, m.as_of) {
+        out.push_str(&format!(
+            "Behind the latest IDX session: the newest quote is from {}\n",
+            t.format("%Y-%m-%d")
+        ));
     }
     out.push_str(&format!(
         "Breadth · {} advancing · {} declining · {} unchanged · {} of {} quoted · turnover {}\n",
@@ -1198,6 +1362,84 @@ mod tests {
         assert!(s.contains("21.80%"));
         assert!(s.contains("insufficient data"));
         assert!(s.contains(f::DASH));
+    }
+
+    #[test]
+    fn mixed_currency_multiples_are_marked() {
+        let mut fd = Fundamentals::empty(Symbol::parse("ITMG").unwrap(), "t");
+        fd.currency = Some("IDR".into());
+        fd.financial_currency = Some("USD".into());
+        fd.valuation.price_to_book = Some(14103.308);
+        fd.valuation.pe_trailing = Some(7.46);
+        fd.per_share.book_value = Some(1.723);
+        fd.health.total_cash = Some(804_017_024.0);
+        let s = fundamentals(&fd, false);
+        assert!(s.contains("14,103.31*"), "{s}");
+        assert!(s.contains("1.72 USD"), "{s}");
+        assert!(s.contains("804.0M USD"), "{s}");
+        assert!(!s.contains("7.46*"), "P/E is consistent: {s}");
+        assert!(
+            s.contains("* Statements in USD, price in IDR: P/B, P/S and EV multiples"),
+            "{s}"
+        );
+        let c = compare(&[fd.clone()], false);
+        assert!(c.contains("14,103.31*"), "{c}");
+        assert!(c.contains("ITMG (statements in USD, price in IDR)"), "{c}");
+
+        // Same currency: no marks, no note.
+        fd.financial_currency = Some("IDR".into());
+        let s = fundamentals(&fd, false);
+        assert!(!s.contains('*'), "{s}");
+        assert!(!s.contains("USD"), "{s}");
+    }
+
+    #[test]
+    fn market_line_says_when_the_board_lags_the_session() {
+        let ix = crate::model::MarketRow {
+            symbol: Symbol::parse("^JKSE").unwrap(),
+            name: Some("IDX COMPOSITE".into()),
+            price: Some(8_000.0),
+            change: Some(10.0),
+            change_pct: Some(0.13),
+            volume: None,
+            value: None,
+            market_cap: None,
+        };
+        let mut m = MarketOverview {
+            as_of: Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T16:14:59+07:00").unwrap()),
+            market_state: Some("PREPRE".into()),
+            behind_session: Some(true),
+            index: Some(ix),
+            universe: 1,
+            quoted: 0,
+            advancing: 0,
+            declining: 0,
+            unchanged: 0,
+            turnover: 0.0,
+            liquid_min_market_cap: 1e12,
+            gainers: vec![],
+            losers: vec![],
+            most_active: vec![],
+            heavyweights: vec![],
+        };
+        let s = market(&m, false);
+        assert!(
+            s.contains(
+                "PREPRE · last trade 2026-11-05 16:14 WIB\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
+            "{s}"
+        );
+        // Without the index quote the board still says it lags.
+        m.index = None;
+        let s = market(&m, false);
+        assert!(
+            s.starts_with(
+                "Index quote unavailable\nBehind the latest IDX session: the newest quote is from 2026-11-05\n"
+            ),
+            "{s}"
+        );
+        m.behind_session = Some(false);
+        assert!(!market(&m, false).contains("Behind the latest"));
     }
 
     #[test]

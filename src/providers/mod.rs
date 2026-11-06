@@ -8,8 +8,9 @@
 //!
 //! Adding a provider: see `AGENTS.md`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -18,12 +19,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{IdxError, Result};
-use crate::http::Fetcher;
+use crate::http::{Fetched, Fetcher};
 use crate::model::{
-    DividendHistory, Earnings, Financials, Fundamentals, History, Interval, Period, Profile, Quote,
-    StatementPeriod, Symbol,
+    DividendHistory, Earnings, Financials, Fundamentals, History, Insights, InstitutionalOwnership,
+    Interval, MarketReturns, Period, Profile, Quote, StaleReason, StatementPeriod, Symbol,
 };
 
+pub mod history;
 pub mod idx;
 pub mod ipot;
 pub mod msn;
@@ -38,8 +40,24 @@ pub struct Sourced<T> {
     pub provider: &'static str,
     pub cached: bool,
     pub stale: bool,
+    /// Why `stale` is true; `None` when it is not.
+    pub stale_reason: Option<StaleReason>,
     pub fetched_at: DateTime<Utc>,
     pub warnings: Vec<String>,
+}
+
+/// The warning a stale copy served after a failed fetch carries; news and
+/// the web Worker use the same words.
+pub fn fetch_failed_warning(why: &str) -> String {
+    format!("live fetch failed ({why}); showing cached copy")
+}
+
+/// The cause inside a [`fetch_failed_warning`], or `None` for any other
+/// warning.
+pub fn fetch_failed_cause(warning: &str) -> Option<&str> {
+    warning
+        .strip_prefix("live fetch failed (")?
+        .strip_suffix("); showing cached copy")
 }
 
 impl<T> Sourced<T> {
@@ -49,8 +67,24 @@ impl<T> Sourced<T> {
             provider,
             cached: false,
             stale: false,
+            stale_reason: None,
             fetched_at: Utc::now(),
             warnings: vec![],
+        }
+    }
+
+    /// `data` with the provenance of the response it was parsed from. A
+    /// stale copy served after a failed fetch also gets a warning naming
+    /// the failure.
+    pub fn from_fetched(data: T, provider: &'static str, f: &Fetched) -> Self {
+        Sourced {
+            data,
+            provider,
+            cached: f.cached,
+            stale: f.stale,
+            stale_reason: f.stale_reason,
+            fetched_at: f.fetched_at,
+            warnings: f.failure.iter().map(|w| fetch_failed_warning(w)).collect(),
         }
     }
 
@@ -60,16 +94,26 @@ impl<T> Sourced<T> {
             provider: self.provider,
             cached: self.cached,
             stale: self.stale,
+            stale_reason: self.stale_reason,
             fetched_at: self.fetched_at,
             warnings: self.warnings,
         }
     }
 
-    /// Folds another response's provenance into this one (earliest fetch,
-    /// cached only if both were, stale if either was).
-    pub fn absorb<U>(&mut self, other: &Sourced<U>) {
+    /// Folds another response's freshness into this one: cached only if
+    /// both were, stale if either was (keeping the first reason found).
+    pub fn absorb_freshness<U>(&mut self, other: &Sourced<U>) {
         self.cached &= other.cached;
         self.stale |= other.stale;
+        if self.stale_reason.is_none() {
+            self.stale_reason = other.stale_reason;
+        }
+    }
+
+    /// Folds another response's provenance into this one: its freshness,
+    /// the earliest fetch time and its warnings (each once).
+    pub fn absorb<U>(&mut self, other: &Sourced<U>) {
+        self.absorb_freshness(other);
         self.fetched_at = self.fetched_at.min(other.fetched_at);
         for w in &other.warnings {
             if !self.warnings.contains(w) {
@@ -84,7 +128,7 @@ impl<T> Sourced<T> {
 pub struct Ttls {
     pub quote: Duration,
     pub history: Duration,
-    /// Profile, ratios, earnings.
+    /// Profile, ratios, earnings, institutional holders, MSN insights.
     pub fundamentals: Duration,
     /// Financial statements.
     pub financials: Duration,
@@ -113,6 +157,8 @@ pub struct ProviderOptions {
     /// Stockbit session file and env-seed tokens. The path is empty only in
     /// tests that never select the Stockbit provider.
     pub stockbit: StockbitOptions,
+    /// Where candles come from (`history_provider`); see [`history`].
+    pub history: HistoryProviderKind,
 }
 
 /// Where the Stockbit session lives and what seeds it. The file is authoritative;
@@ -126,13 +172,35 @@ pub struct StockbitOptions {
 }
 
 impl StockbitOptions {
-    /// Builds the shared session store this process will read and refresh.
+    /// The session store this process reads and refreshes. There is one per
+    /// session file (and seed) per process: the provider, the history router
+    /// and the MCP Stockbit tools all get the same store, so its refresh lock
+    /// really serialises the rotating refresh token instead of two stores each
+    /// spending it. A store nobody holds any more is rebuilt on the next call.
     pub fn store(&self) -> Arc<stockbit::SessionStore> {
-        Arc::new(stockbit::SessionStore::new(
+        type Key = (PathBuf, Option<String>, Option<String>);
+        static STORES: OnceLock<Mutex<HashMap<Key, Weak<stockbit::SessionStore>>>> =
+            OnceLock::new();
+        let key = (
             self.session_path.clone(),
             self.access_seed.clone(),
             self.refresh_seed.clone(),
-        ))
+        );
+        let mut stores = STORES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(store) = stores.get(&key).and_then(Weak::upgrade) {
+            return store;
+        }
+        stores.retain(|_, w| w.strong_count() > 0);
+        let store = Arc::new(stockbit::SessionStore::new(
+            self.session_path.clone(),
+            self.access_seed.clone(),
+            self.refresh_seed.clone(),
+        ));
+        stores.insert(key, Arc::downgrade(&store));
+        store
     }
 }
 
@@ -152,6 +220,14 @@ pub trait Provider: Send + Sync {
         interval: Interval,
     ) -> Result<Sourced<History>>;
 
+    /// Whether `history` returns bars of `interval` over `period`. A source
+    /// that picks its own bar size per window (Stockbit's five-day window is
+    /// hourly) answers `false` where the two differ, so a caller that needs
+    /// the size asked for can skip that window.
+    fn serves_interval(&self, _period: Period, _interval: Interval) -> bool {
+        true
+    }
+
     async fn profile(&self, _symbol: &Symbol) -> Result<Sourced<Profile>> {
         Err(IdxError::unsupported(self.name(), "company profiles"))
     }
@@ -159,6 +235,20 @@ pub trait Provider: Send + Sync {
     /// Ratios without the verdict; `analysis::fundamental::verdict` adds it.
     async fn fundamentals(&self, _symbol: &Symbol) -> Result<Sourced<Fundamentals>> {
         Err(IdxError::unsupported(self.name(), "fundamentals"))
+    }
+
+    /// Rule-based statements about one company (MSN Money insights).
+    async fn insights(&self, _symbol: &Symbol) -> Result<Sourced<Insights>> {
+        Err(IdxError::unsupported(self.name(), "insights"))
+    }
+
+    /// Price returns (1w to 1y, YTD) for every listed stock in one call, for
+    /// the screener's return-window keys.
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        Err(IdxError::unsupported(
+            self.name(),
+            "market-wide return windows",
+        ))
     }
 
     async fn financials(
@@ -178,6 +268,12 @@ pub trait Provider: Send + Sync {
     async fn dividends(&self, _symbol: &Symbol) -> Result<Sourced<DividendHistory>> {
         Err(IdxError::unsupported(self.name(), "dividend history"))
     }
+
+    /// Institutional and fund holders with their latest changes (MSN's
+    /// ownership data); the signal and flow counts are computed by idx.
+    async fn institutions(&self, _symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        Err(IdxError::unsupported(self.name(), "institutional holders"))
+    }
 }
 
 #[derive(
@@ -189,7 +285,7 @@ pub enum ProviderKind {
     Auto,
     /// Yahoo Finance (chart, quote, quoteSummary, fundamentals timeseries).
     Yahoo,
-    /// MSN Money (quotes, profile, fundamentals).
+    /// MSN Money (quotes, profile, fundamentals, institutional holders, insights).
     Msn,
     /// Stockbit realtime (your own session; `idx stockbit login` first).
     Stockbit,
@@ -223,6 +319,50 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+/// Where price history (candles) comes from, apart from `--provider`
+/// (`--history-provider`, `IDX_HISTORY_PROVIDER`, config `history_provider`).
+/// The routing itself lives in [`history`].
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryProviderKind {
+    /// Follow --provider: Yahoo, or under --provider stockbit Stockbit where its bars match the request and Yahoo otherwise or when Stockbit fails.
+    #[default]
+    Auto,
+    /// Yahoo Finance charts, whatever --provider says.
+    Yahoo,
+    /// Stockbit charts from your own session, whatever --provider says; no fallback.
+    Stockbit,
+}
+
+impl HistoryProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HistoryProviderKind::Auto => "auto",
+            HistoryProviderKind::Yahoo => "yahoo",
+            HistoryProviderKind::Stockbit => "stockbit",
+        }
+    }
+}
+
+impl std::str::FromStr for HistoryProviderKind {
+    type Err = IdxError;
+    fn from_str(s: &str) -> Result<Self> {
+        <HistoryProviderKind as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            IdxError::Config(format!(
+                "unknown history provider {s:?}; use auto, yahoo or stockbit"
+            ))
+        })
+    }
+}
+
+impl std::fmt::Display for HistoryProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Tries providers in order. Returns the first success. If every provider
 /// fails, surfaces a `NotFound` if any provider said so (the symbol is probably
 /// wrong), otherwise the first real error, otherwise `Unsupported`.
@@ -235,7 +375,7 @@ impl Chain {
         Chain { providers }
     }
 
-    fn pick(errors: Vec<IdxError>) -> IdxError {
+    pub(crate) fn pick(errors: Vec<IdxError>) -> IdxError {
         let mut errors = errors;
         if let Some(pos) = errors
             .iter()
@@ -293,6 +433,13 @@ impl Provider for Chain {
         interval: Interval,
     ) -> Result<Sourced<History>> {
         first_ok!(self, p => p.history(symbol, period, interval))
+    }
+
+    /// Any link may answer, so every link has to serve the size.
+    fn serves_interval(&self, period: Period, interval: Interval) -> bool {
+        self.providers
+            .iter()
+            .all(|p| p.serves_interval(period, interval))
     }
 
     /// First provider's profile, with the board and founding year filled from
@@ -355,6 +502,14 @@ impl Provider for Chain {
         base.ok_or_else(|| Self::pick(errors))
     }
 
+    async fn insights(&self, symbol: &Symbol) -> Result<Sourced<Insights>> {
+        first_ok!(self, p => p.insights(symbol))
+    }
+
+    async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+        first_ok!(self, p => p.market_returns())
+    }
+
     async fn financials(
         &self,
         symbol: &Symbol,
@@ -370,23 +525,38 @@ impl Provider for Chain {
     async fn dividends(&self, symbol: &Symbol) -> Result<Sourced<DividendHistory>> {
         first_ok!(self, p => p.dividends(symbol))
     }
+
+    async fn institutions(&self, symbol: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+        first_ok!(self, p => p.institutions(symbol))
+    }
 }
 
 /// Names of the providers `auto` tries, in order.
 pub const AUTO_ORDER: &[&str] = &[yahoo::NAME, msn::NAME];
 
-/// Builds the provider for `kind`.
+/// Builds the provider for `kind`, with candles routed by `opts.history`
+/// (see [`history::route`]; the default routing leaves it untouched).
 pub fn build(
     kind: ProviderKind,
     fetcher: Arc<Fetcher>,
     opts: ProviderOptions,
+) -> Result<Box<dyn Provider>> {
+    let selected = build_selected(kind, fetcher.clone(), &opts)?;
+    Ok(history::route(kind, selected, fetcher, &opts))
+}
+
+/// The provider `--provider` names, before any history routing.
+fn build_selected(
+    kind: ProviderKind,
+    fetcher: Arc<Fetcher>,
+    opts: &ProviderOptions,
 ) -> Result<Box<dyn Provider>> {
     match kind {
         ProviderKind::Yahoo => Ok(Box::new(yahoo::Yahoo::new(fetcher, opts.ttls))),
         ProviderKind::Msn => Ok(Box::new(msn::Msn::new(
             fetcher,
             opts.ttls,
-            opts.msn_api_key,
+            opts.msn_api_key.clone(),
         ))),
         // Stockbit stands alone: it needs a credential and is never folded into
         // the keyless `auto` chain.
@@ -397,7 +567,7 @@ pub fn build(
         ))),
         ProviderKind::Auto => Ok(Box::new(Chain::new(vec![
             Box::new(yahoo::Yahoo::new(fetcher.clone(), opts.ttls)),
-            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key)),
+            Box::new(msn::Msn::new(fetcher, opts.ttls, opts.msn_api_key.clone())),
         ]))),
     }
 }
@@ -405,6 +575,23 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_session_store_per_file_per_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = |p: &str, seed: Option<&str>| StockbitOptions {
+            session_path: dir.path().join(p),
+            access_seed: None,
+            refresh_seed: seed.map(String::from),
+        };
+        let a = opts("a.json", None).store();
+        assert!(Arc::ptr_eq(&a, &opts("a.json", None).store()));
+        assert!(!Arc::ptr_eq(&a, &opts("b.json", None).store()));
+        // Other env seeds for the same file: a store that carries them.
+        let seeded = opts("a.json", Some("eyJ0.x.y")).store();
+        assert!(!Arc::ptr_eq(&a, &seeded));
+        assert_eq!(seeded.load().refresh, "eyJ0.x.y");
+    }
 
     struct Failing(&'static str, fn() -> IdxError);
     struct Ok1;
@@ -440,6 +627,25 @@ mod tests {
             let mut f = Fundamentals::empty(s.clone(), "ok");
             f.valuation.pe_trailing = Some(9.0);
             Ok(Sourced::fresh(f, "ok"))
+        }
+        async fn insights(&self, s: &Symbol) -> Result<Sourced<Insights>> {
+            Ok(Sourced::fresh(
+                Insights {
+                    symbol: s.clone(),
+                    name: None,
+                    updated: None,
+                    good: 0,
+                    bad: 0,
+                    neutral: 0,
+                    not_rated: 0,
+                    peers: vec![],
+                    insights: vec![],
+                },
+                "ok",
+            ))
+        }
+        async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+            Ok(Sourced::fresh(vec![], "ok"))
         }
     }
 
@@ -504,6 +710,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chain_forwards_msn_only_capabilities() {
+        let chain = Chain::new(vec![
+            Box::new(Failing("yahoo", || IdxError::unsupported("yahoo", "x"))),
+            Box::new(Ok1),
+        ]);
+        assert_eq!(chain.insights(&sym()).await.unwrap().provider, "ok");
+        assert_eq!(chain.market_returns().await.unwrap().provider, "ok");
+        // A provider without the capability alone: exit 6.
+        let chain = Chain::new(vec![Box::new(Ok2)]);
+        assert_eq!(chain.insights(&sym()).await.unwrap_err().exit_code(), 6);
+        assert_eq!(chain.market_returns().await.unwrap_err().exit_code(), 6);
+    }
+
+    #[tokio::test]
     async fn fundamentals_merge_fills_gaps_only() {
         let chain = Chain::new(vec![Box::new(Ok1), Box::new(Ok2)]);
         let got = chain.fundamentals(&sym()).await.unwrap();
@@ -511,6 +731,141 @@ mod tests {
         assert_eq!(got.data.valuation.pe_trailing, Some(9.0));
         assert_eq!(got.data.valuation.price_to_book, Some(2.0));
         assert_eq!(got.data.sources, vec!["ok".to_string(), "ok2".to_string()]);
+    }
+
+    fn fetched(stale_reason: Option<StaleReason>, failure: Option<&str>) -> Fetched {
+        Fetched {
+            status: 200,
+            body: String::new(),
+            headers: vec![],
+            cached: stale_reason.is_some(),
+            stale: stale_reason.is_some(),
+            stale_reason,
+            fetched_at: Utc::now(),
+            failure: failure.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn from_fetched_names_the_failure() {
+        let s = Sourced::from_fetched(
+            1,
+            "t",
+            &fetched(Some(StaleReason::FetchFailed), Some("boom")),
+        );
+        assert!(s.cached && s.stale);
+        assert_eq!(s.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (boom); showing cached copy"]
+        );
+        assert_eq!(fetch_failed_cause(&s.warnings[0]), Some("boom"));
+        assert_eq!(fetch_failed_cause("no data for BBCA"), None);
+        let off = Sourced::from_fetched(1, "t", &fetched(Some(StaleReason::Offline), None));
+        assert!(off.stale && off.warnings.is_empty());
+        assert_eq!(off.stale_reason, Some(StaleReason::Offline));
+        let live = Sourced::from_fetched(1, "t", &fetched(None, None));
+        assert!(!live.stale && !live.cached && live.warnings.is_empty());
+        assert_eq!(live.stale_reason, None);
+        assert_eq!(live.map(|n| n + 1).data, 2);
+    }
+
+    #[test]
+    fn absorb_keeps_the_first_reason() {
+        let mut acc = Sourced::fresh((), "t");
+        acc.cached = true;
+        let fresh_hit = Sourced::from_fetched((), "t", &{
+            let mut f = fetched(None, None);
+            f.cached = true;
+            f
+        });
+        acc.absorb(&fresh_hit);
+        assert!(acc.cached && !acc.stale && acc.stale_reason.is_none());
+        let failed = Sourced::from_fetched(
+            (),
+            "t",
+            &fetched(Some(StaleReason::FetchFailed), Some("boom")),
+        );
+        acc.absorb(&failed);
+        acc.absorb(&failed);
+        acc.absorb(&Sourced::from_fetched(
+            (),
+            "t",
+            &fetched(Some(StaleReason::Offline), None),
+        ));
+        assert!(acc.stale);
+        assert_eq!(acc.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(acc.warnings.len(), 1, "{:?}", acc.warnings);
+        let mut only = Sourced::fresh((), "t");
+        only.absorb_freshness(&failed);
+        assert!(only.stale && only.warnings.is_empty());
+        assert!(!only.cached, "fresh data absorbed stays uncached");
+    }
+
+    #[tokio::test]
+    async fn chain_finds_the_provider_with_institutional_holders() {
+        struct Holders;
+        #[async_trait]
+        impl Provider for Holders {
+            fn name(&self) -> &'static str {
+                "holders"
+            }
+            async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+                unimplemented!()
+            }
+            async fn history(
+                &self,
+                _: &Symbol,
+                _: Period,
+                _: Interval,
+            ) -> Result<Sourced<History>> {
+                unimplemented!()
+            }
+            async fn institutions(&self, s: &Symbol) -> Result<Sourced<InstitutionalOwnership>> {
+                Ok(Sourced::fresh(
+                    InstitutionalOwnership::empty(s.clone()),
+                    "holders",
+                ))
+            }
+        }
+        let chain = Chain::new(vec![Box::new(Ok1), Box::new(Holders)]);
+        let got = chain.institutions(&sym()).await.unwrap();
+        assert_eq!(got.provider, "holders");
+        // A provider without the capability alone: exit 6, pointing at auto.
+        let err = Chain::new(vec![Box::new(Ok1)])
+            .institutions(&sym())
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 6);
+        assert!(err.to_string().contains("institutional holders"), "{err}");
+    }
+
+    #[test]
+    fn one_session_store_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = StockbitOptions {
+            session_path: dir.path().join("stockbit-session.json"),
+            access_seed: None,
+            refresh_seed: None,
+        };
+        let a = opts.store();
+        let b = opts.clone().store();
+        assert!(Arc::ptr_eq(&a, &b), "same file, same store");
+        let other = StockbitOptions {
+            session_path: dir.path().join("other.json"),
+            ..opts.clone()
+        }
+        .store();
+        assert!(!Arc::ptr_eq(&a, &other));
+        // The registry holds no strong reference: a store nobody uses is freed
+        // and the next call builds a fresh one.
+        let weak = Arc::downgrade(&a);
+        drop((a, b));
+        assert!(weak.upgrade().is_none());
+        assert_eq!(
+            opts.store().path(),
+            dir.path().join("stockbit-session.json")
+        );
     }
 
     #[test]

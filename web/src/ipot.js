@@ -2,9 +2,12 @@
 // src/providers/ipot. Same endpoints and parsing rules, tested on the same
 // tests/fixtures/ipot pages. Figures of a million and more arrive abbreviated
 // to one decimal (1.6 M); they keep that precision and set `rounded`. A
-// spurious nginx 404 is retried.
+// spurious nginx 404 is retried. Over a range that reaches the latest
+// session the footer's foreign net counts that session twice; rebuildNet
+// sums single sessions instead, like ipot::broker_summary_range.
 
 import { fetchWithin } from "./net.js";
+import * as hol from "./holidays.js";
 
 export const NAME = "ipot";
 const ENDPOINT = "https://www.indopremier.com/module/saham/include/data-brokersummary.php";
@@ -62,6 +65,134 @@ export function parse(html) {
     average_price: total_lots > 0 ? avg : null,
     rounded,
   };
+}
+
+// ---- what the footer means ----------------------------------------------
+
+/** What the selected investors sold, like ipot::parse::sell_value: all investors what they bought, foreign their buying less the net, domestic plus it. */
+export function sellValue(investor, buy, net) {
+  if (investor === "all") return buy;
+  if (buy == null || net == null) return null;
+  return investor === "foreign" ? buy - net : buy + net;
+}
+
+/**
+ * The footer read like ipot::parse::Parsed::into_summary: for one investor
+ * side T. Val, T.Lot and Avg are that side's buying, so the totals are null
+ * and T. Val is buy_value; the foreign net covers every board, so a board
+ * filter leaves it out.
+ */
+export function totals(p, investor = "all", board = "all") {
+  const all = investor === "all";
+  const net = board === "all" ? p.foreign_net_value : null;
+  return {
+    total_value: all ? p.total_value : null, total_lots: all ? p.total_lots : null, foreign_net_value: net,
+    average_price: all ? p.average_price : null, buy_value: p.total_value, sell_value: sellValue(investor, p.total_value, net),
+  };
+}
+
+// ---- per-session foreign flow (idx.foreign.value.v1) ---------------------
+
+/**
+ * Like ipot::unpublished: the footer shows trades but there are no broker
+ * lists, so the source has not published the range yet (seen for a session
+ * still trading; a past date read that way is treated the same).
+ */
+export const unpublished = (p) => !traded(p) && p.total_value > 0;
+
+/**
+ * One session from its all-investor and foreign pages, like
+ * ipot::foreign_day: { session: "none" } when the stock did not trade,
+ * "pending" while the source has not published the session (trades without
+ * broker lists on any date; today, an empty foreign page too), else
+ * "traded" with the day and whether a figure was rounded. `foreign` is only
+ * read for a traded day.
+ */
+export function foreignDay(date, all, foreign, today) {
+  if (!traded(all)) return { session: unpublished(all) ? "pending" : "none" };
+  if (date >= today && !traded(foreign)) return { session: "pending" };
+  const f = totals(foreign, "foreign"), value = all.total_value;
+  const share = f.buy_value != null && f.sell_value != null && value > 0 ? ((f.buy_value + f.sell_value) / (2 * value)) * 100 : null;
+  return {
+    session: "traded", rounded: all.rounded || foreign.rounded,
+    day: {
+      date, value, lots: all.total_lots, average_price: all.average_price,
+      foreign_buy_value: f.buy_value, foreign_sell_value: f.sell_value, foreign_net_value: f.foreign_net_value, foreign_share_pct: share,
+    },
+  };
+}
+
+/** Sums over the sessions (oldest first), the foreign share and the streak, like service::foreign_value_totals. */
+export function foreignTotals(days) {
+  const sum = (k) => days.reduce((t, d) => t + (d[k] ?? 0), 0);
+  const sign = (d) => (d.foreign_net_value > 0 ? 1 : d.foreign_net_value < 0 ? -1 : 0);
+  let sides = 0, value = 0;
+  for (const d of days) if (d.foreign_buy_value != null && d.foreign_sell_value != null && d.value != null) { sides += d.foreign_buy_value + d.foreign_sell_value; value += d.value; }
+  const last = days.length ? sign(days[days.length - 1]) : 0;
+  let streak = 0;
+  if (last) for (let i = days.length - 1; i >= 0 && sign(days[i]) === last; i--) streak += last;
+  return {
+    sessions: days.length, value: sum("value"), foreign_buy_value: sum("foreign_buy_value"), foreign_sell_value: sum("foreign_sell_value"),
+    foreign_net_value: sum("foreign_net_value"), foreign_share_pct: value > 0 ? (sides / (2 * value)) * 100 : null,
+    net_buy_sessions: days.filter((d) => sign(d) > 0).length, net_sell_sessions: days.filter((d) => sign(d) < 0).length, streak,
+  };
+}
+
+// ---- range foreign net -------------------------------------------------
+
+const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+const traded = (p) => p.buyers.length > 0 || p.sellers.length > 0;
+/** Trading days the rebuild reads one by one from the end of a range. */
+const REBUILD_WALK = 5;
+
+/** The trading day before `d` (bundled holiday list). */
+export function prevTradingDay(d) {
+  let x = addDays(d, -1);
+  while (!hol.isTradingDay(x)) x = addDays(x, -1);
+  return x;
+}
+const lastTradingDay = (d) => (hol.isTradingDay(d) ? d : prevTradingDay(d));
+
+/** Unix seconds to the date in Jakarta. */
+export const wibDate = (secs) => new Date(secs * 1000 + 7 * 3600e3).toISOString().slice(0, 10);
+
+/**
+ * Like ipot::range_net_suspect: a page of several days with trades whose
+ * range, on the day it was fetched (`fetchedOn`), reached one of the last
+ * two trading days. Its foreign net may count the latest session twice.
+ */
+export function rangeNetSuspect(from, to, p, fetchedOn, today) {
+  if (from >= to || !traded(p) || p.foreign_net_value == null) return false;
+  const on = fetchedOn < today ? fetchedOn : today;
+  return to >= prevTradingDay(lastTradingDay(on));
+}
+
+/**
+ * The foreign net of from..to from pages that hold, like the Rust rebuild:
+ * single sessions walked back from the end until two had trades, plus the
+ * rest of the range (split again if that page is itself suspect). `get(from,
+ * to)` resolves to { page, fetchedOn }; null when a page carries no net.
+ */
+export async function rebuildNet(from, to, today, get) {
+  let net = 0, end = to < today ? to : today;
+  for (;;) {
+    let walked = 0, trades = 0, earliest = null;
+    for (let d = end; d >= from && trades < 2 && walked < REBUILD_WALK; d = addDays(d, -1)) {
+      if (!hol.isTradingDay(d)) continue;
+      const { page } = await get(d, d);
+      if (page.foreign_net_value == null) return null;
+      net += page.foreign_net_value;
+      if (traded(page)) trades++;
+      walked++;
+      earliest = d;
+    }
+    if (!earliest) return null;
+    const restEnd = prevTradingDay(earliest);
+    if (restEnd < from) return net;
+    const { page: rest, fetchedOn } = await get(from, restEnd);
+    if (!rangeNetSuspect(from, restEnd, rest, fetchedOn, today)) return rest.foreign_net_value == null ? null : net + rest.foreign_net_value;
+    end = restEnd;
+  }
 }
 
 /** GET with the source's spurious 404 retried (up to 5 tries, doubling pauses); each try has a deadline. */

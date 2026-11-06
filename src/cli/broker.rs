@@ -11,11 +11,11 @@ use crate::output::{self, OutputFormat};
 use crate::service::{self, BrokerQuery};
 use crate::universe;
 
-use super::{emit, notices, Context};
+use super::{emit, input, notices, Context};
 
 #[derive(Debug, clap::Args)]
 pub struct BrokerArgs {
-    /// One or more IDX tickers (up to 10), comma or space separated.
+    /// One or more IDX tickers (up to 10), comma or space separated; `-` reads them from stdin.
     #[arg(value_name = "SYMBOL", required = true, num_args = 1..)]
     pub symbols: Vec<String>,
     /// One trading day, YYYY-MM-DD. Default: the latest session with trades.
@@ -33,7 +33,7 @@ pub struct BrokerArgs {
     /// Market board to count.
     #[arg(long, value_enum, default_value_t = BrokerBoard::All)]
     pub board: BrokerBoard,
-    /// Rows per side in table mode (JSON and CSV carry all the source published).
+    /// Rows per side in table mode (JSON, JSONL and CSV carry all the source published).
     #[arg(long, short = 'n', default_value_t = 10)]
     pub top: usize,
 }
@@ -66,7 +66,7 @@ fn csv_rows(list: &[BrokerSummary]) -> Value {
 }
 
 pub async fn run(ctx: &Context, a: BrokerArgs) -> Result<()> {
-    let symbols = Symbol::parse_list(&a.symbols)?;
+    let symbols = Symbol::parse_list(input::symbol_args(&a.symbols)?)?;
     let (from, to) = match a.date {
         Some(d) => (Some(d), Some(d)),
         None => (a.from, a.to),

@@ -1,6 +1,9 @@
 // Pure analysis shared by the Worker API and (bundled) the browser terminal.
 // Ports of src/analysis/{technical,fundamental,screen,sentiment}.rs; the
-// rules and thresholds are identical so web and CLI agree.
+// rules and thresholds are identical so web and CLI agree. The lenses also
+// port src/analysis/lens.rs and use the price statistics of extras.js.
+
+import * as ex from "./extras.js";
 
 // ---- indicators ------------------------------------------------------------
 
@@ -180,9 +183,28 @@ export function isFinancial(f) {
   const s = (f.sector || "").toLowerCase(), i = (f.industry || "").toLowerCase();
   return s.includes("financ") || i.includes("bank") || i.includes("insurance");
 }
+// Shareholders' equity below zero, read from the signs the sources report:
+// true when book value per share, P/B or debt/equity is negative, false when
+// one of them is reported and none is, null when none is. Port of
+// Fundamentals::negative_equity.
+export function negativeEquity(f) {
+  const signs = [f.per_share?.book_value, f.valuation?.price_to_book, f.health?.debt_to_equity].filter((x) => x != null);
+  return signs.length ? signs.some((x) => x < 0) : null;
+}
+// Statements in another currency than the price, both known (USD statements,
+// IDR price). Port of Fundamentals::mixed_currency.
+export function mixedCurrency(f) {
+  return !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
+}
+export const NEGATIVE_EQUITY_REASON = "negative shareholders' equity (book value below zero): P/B, ROE and debt/equity rules skipped";
 export function verdict(f) {
   let score = 0, inputs = 0; const reasons = [];
   const v = f.valuation, p = f.profitability, bank = isFinancial(f);
+  // Negative equity scores -2 and sets P/B, ROE and debt/equity aside (they
+  // still count as inputs); a P/B over statements in another currency is
+  // neither scored, counted nor listed as a reason.
+  const neg = negativeEquity(f) === true;
+  const mixed = mixedCurrency(f);
   if (v.pe_trailing != null) {
     inputs++; const pe = v.pe_trailing;
     if (pe <= 0) { score--; reasons.push("negative trailing earnings"); }
@@ -192,12 +214,24 @@ export function verdict(f) {
     else if (pe > 25) { score--; reasons.push(`trailing P/E ${pe.toFixed(1)} is elevated (over 25)`); }
     else reasons.push(`trailing P/E ${pe.toFixed(1)} is in a normal range`);
   }
-  if (v.price_to_book != null) { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
+  if (neg) { inputs++; score -= 2; reasons.push(NEGATIVE_EQUITY_REASON); }
+  if (v.price_to_book != null) {
+    if (neg) inputs++;
+    else if (!mixed) { inputs++; if (v.price_to_book < 1) { score++; reasons.push(`trades below book value (P/B ${v.price_to_book.toFixed(2)})`); } else if (v.price_to_book > 4) { score--; reasons.push(`P/B ${v.price_to_book.toFixed(2)} is rich (over 4)`); } }
+  }
   if (v.peg != null) { inputs++; if (v.peg > 0 && v.peg < 1) { score++; reasons.push(`PEG ${v.peg.toFixed(2)} under 1: growth is cheap`); } else if (v.peg > 2) { score--; reasons.push(`PEG ${v.peg.toFixed(2)} over 2: paying up for growth`); } }
-  if (p.roe_pct != null) { inputs++; if (p.roe_pct > 15) { score++; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is strong (over 15%)`); } else if (p.roe_pct < 5) { score--; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is weak (under 5%)`); } }
+  if (p.roe_pct != null) {
+    inputs++;
+    const loss = (p.net_margin_pct != null && p.net_margin_pct < 0) || (f.per_share?.eps_ttm != null && f.per_share.eps_ttm < 0);
+    if (!neg) {
+      if (p.roe_pct > 15 && loss) reasons.push(`ROE ${p.roe_pct.toFixed(1)}% alongside a net loss: rule skipped`);
+      else if (p.roe_pct > 15) { score++; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is strong (over 15%)`); }
+      else if (p.roe_pct < 5) { score--; reasons.push(`ROE ${p.roe_pct.toFixed(1)}% is weak (under 5%)`); }
+    }
+  }
   if (p.net_margin_pct != null) { inputs++; if (p.net_margin_pct > 20) { score++; reasons.push(`net margin ${p.net_margin_pct.toFixed(1)}% is wide`); } else if (p.net_margin_pct < 5) { score--; reasons.push(`net margin ${p.net_margin_pct.toFixed(1)}% is thin`); } }
   if (!bank) {
-    if (f.health.debt_to_equity != null) { inputs++; const de = f.health.debt_to_equity; if (de > 2) { score--; reasons.push(`debt is ${de.toFixed(1)}x equity: heavily leveraged`); } else if (de < 0.5) { score++; reasons.push(`debt is ${de.toFixed(2)}x equity: conservative balance sheet`); } }
+    if (f.health.debt_to_equity != null) { inputs++; const de = f.health.debt_to_equity; if (neg) { /* set aside above */ } else if (de > 2) { score--; reasons.push(`debt is ${de.toFixed(1)}x equity: heavily leveraged`); } else if (de < 0.5) { score++; reasons.push(`debt is ${de.toFixed(2)}x equity: conservative balance sheet`); } }
   } else reasons.push("leverage and margin rules relaxed for a financial company");
   const g = f.growth;
   if (g.revenue_growth_pct != null) { inputs++; if (g.revenue_growth_pct > 10) { score++; reasons.push(`revenue growing ${g.revenue_growth_pct.toFixed(1)}% year on year`); } else if (g.revenue_growth_pct < 0) { score--; reasons.push(`revenue shrinking ${(-g.revenue_growth_pct).toFixed(1)}% year on year`); } }
@@ -212,19 +246,320 @@ export function verdict(f) {
   return { label, score, reasons, inputs_available: inputs };
 }
 
+// ---- growth, valuation and risk lenses ---------------------------------------
+// Ports of src/analysis/lens.rs: same rule ids, points, reasons, labels and
+// rounding. Valuation and growth points favour cheapness and growth; risk
+// points add risk. Every rule that ran is in `rules`, every rule that could
+// not run is in `notes`.
+
+export const LENS_BENCHMARK = "^JKSE";
+const LENS_MIN_RULES = 3;
+const LENS_MIN_PRICE_RETURNS = 20;
+const lr2 = (v) => Math.round(v * 100) / 100 + 0;
+/**
+ * `v.toFixed(d)` as Rust's `{:.d}` prints it: an exact tie (a double exactly
+ * halfway at `d` decimals, such as 12.5, 4.25 or 0.125) rounds to even, where
+ * toFixed rounds it away from zero. A double is such a tie exactly when
+ * |v| * 2^(d+1) is an odd integer; |v| * 10^d is then exact.
+ */
+export function fixed(v, d) {
+  const m = Math.abs(v) * 2 ** (d + 1);
+  if (!Number.isInteger(m) || m % 2 === 0) return v.toFixed(d);
+  const n = Math.floor(Math.abs(v) * 10 ** d);
+  const even = n % 2 === 0 ? n : n + 1;
+  return `${v < 0 ? "-" : ""}${(even / 10 ** d).toFixed(d)}`;
+}
+const signed = (v, d) => `${v >= 0 ? "+" : ""}${fixed(v, d)}`;
+const nz = (v) => (v === undefined ? null : v);
+
+function lensRules() {
+  const r = { rules: [], notes: [] };
+  r.add = (rule, points, reason) => r.rules.push({ rule, points, reason });
+  r.note = (n) => r.notes.push(n);
+  return r;
+}
+function lensReading(r, label) {
+  const score = r.rules.reduce((s, x) => s + x.points, 0);
+  return { label: label(score, r.rules), score, inputs_available: r.rules.length, rules: r.rules, notes: r.notes };
+}
+const currencyPair = (f) => (mixedCurrency(f) ? `statements in ${f.financial_currency}, price in ${f.currency}` : null);
+
+/** Mirrors analysis::lens::valuation: an idx.valuation.v1 payload. */
+export function valuationLens(f) {
+  const r = lensRules();
+  const v = f.valuation || {}, d = f.dividend || {}, a = f.analyst || {};
+  const financial = isFinancial(f), neg = negativeEquity(f), mixed = currencyPair(f);
+  const pe = nz(v.pe_trailing), pf = nz(v.pe_forward);
+  if (pe != null) {
+    const [p, why] = pe <= 0 ? [0, "is not positive: it says nothing about value"] : pe < 10 ? [2, "is low (under 10)"] : pe < 15 ? [1, "is moderate (10 to 15)"] : pe > 35 ? [-2, "is high (over 35)"] : pe > 25 ? [-1, "is elevated (over 25)"] : [0, "is in a normal range (15 to 25)"];
+    r.add("pe_trailing", p, `trailing P/E ${fixed(pe, 1)} ${why}`);
+  } else if (pf != null && pf > 0) {
+    const [p, why] = pf < 10 ? [1, "is low (under 10)"] : pf > 25 ? [-1, "is high (over 25)"] : [0, "is in a normal range (10 to 25)"];
+    r.add("pe_forward", p, `forward P/E ${fixed(pf, 1)} ${why}; no trailing P/E`);
+  } else if (pf != null) r.note(`P/E: no trailing P/E, and the forward P/E ${fixed(pf, 1)} is not positive`);
+  else r.note("P/E: no trailing or forward P/E reported");
+
+  const peg = nz(v.peg);
+  if (peg != null && peg > 0) {
+    const [p, why] = peg < 1 ? [1, "is under 1: growth is cheap"] : peg > 2 ? [-1, "is over 2: paying up for growth"] : [0, "is between 1 and 2"];
+    r.add("peg", p, `PEG ${fixed(peg, 2)} ${why}`);
+  } else if (peg != null) r.note(`PEG ${fixed(peg, 2)} is not meaningful (shrinking or negative earnings)`);
+  else r.note("PEG: not reported");
+
+  const pb = nz(v.price_to_book);
+  if (neg === true) r.note("P/B: shareholders' equity is negative, so price-to-book says nothing");
+  else if (pb == null) r.note("P/B: not reported");
+  else if (mixed) r.note(`P/B ${fixed(pb, 2)} not scored: ${mixed}`);
+  else {
+    const [p, why] = pb < 1 ? [1, "is below book value (under 1)"] : pb > 4 ? [-1, "is rich (over 4)"] : [0, "is between 1 and 4"];
+    r.add("price_to_book", p, `P/B ${fixed(pb, 2)} ${why}`);
+  }
+
+  if (financial) r.note("P/S and EV/EBITDA: not scored for a financial company");
+  else {
+    const ps = nz(v.price_to_sales);
+    if (ps == null) r.note("P/S: not reported");
+    else if (mixed) r.note(`P/S ${fixed(ps, 2)} not scored: ${mixed}`);
+    else {
+      const [p, why] = ps < 1 ? [1, "is low (under 1)"] : ps > 5 ? [-1, "is high (over 5)"] : [0, "is between 1 and 5"];
+      r.add("price_to_sales", p, `P/S ${fixed(ps, 2)} ${why}`);
+    }
+    const ev = nz(v.ev_to_ebitda);
+    if (ev == null) r.note("EV/EBITDA: not reported");
+    else if (mixed) r.note(`EV/EBITDA ${fixed(ev, 1)} not scored: ${mixed}`);
+    else if (ev <= 0) r.note(`EV/EBITDA ${fixed(ev, 1)} is not meaningful (negative EBITDA or enterprise value)`);
+    else {
+      const [p, why] = ev < 6 ? [1, "is low (under 6)"] : ev > 15 ? [-1, "is high (over 15)"] : [0, "is between 6 and 15"];
+      r.add("ev_to_ebitda", p, `EV/EBITDA ${fixed(ev, 1)} ${why}`);
+    }
+  }
+
+  const y = nz(d.yield_pct), po = nz(d.payout_ratio_pct);
+  if (y != null && y >= 4) {
+    if (po != null && po > 100) r.add("dividend_yield", 0, `dividend yield ${fixed(y, 1)}% is high, but the payout (${fixed(po, 0)}%) exceeds earnings`);
+    else r.add("dividend_yield", 1, `dividend yield ${fixed(y, 1)}% is generous (4% or more)`);
+  } else if (y != null) r.add("dividend_yield", 0, `dividend yield ${fixed(y, 1)}% is under 4%`);
+  else r.note("dividend yield: not reported");
+
+  const price = nz(f.price), target = nz(a.target_mean), n = nz(a.analysts);
+  const upside = price != null && target != null && price > 0 ? lr2((target / price - 1) * 100) : null;
+  if (upside != null && n != null && n >= 3) {
+    const [p, why] = upside > 20 ? [1, "over +20%"] : upside < -10 ? [-1, "under -10%"] : [0, "-10% to +20%"];
+    r.add("analyst_target", p, `mean target of ${n} analysts is ${signed(upside, 0)}% from the price (${why})`);
+  } else if (upside != null) {
+    const who = n === 1 ? "1 analyst" : n != null ? `${n} analysts` : "an unknown number of analysts";
+    r.note(`analyst target ${signed(upside, 0)}% from the price, from ${who}: fewer than 3, not scored`);
+  } else r.note("analyst target: no mean target or price");
+
+  const reading = lensReading(r, (score, rules) => (rules.length < LENS_MIN_RULES ? "insufficient_data" : score >= 3 ? "cheap" : score <= -3 ? "expensive" : "fair"));
+  return {
+    symbol: f.symbol, name: nz(f.name), currency: nz(f.currency), financial_currency: nz(f.financial_currency),
+    financial_company: financial, negative_equity: neg, price,
+    pe_trailing: pe, pe_forward: pf, peg, price_to_book: pb, price_to_sales: nz(v.price_to_sales),
+    ev_to_ebitda: nz(v.ev_to_ebitda), ev_to_revenue: nz(v.ev_to_revenue),
+    dividend_yield_pct: y, payout_ratio_pct: po, target_mean: target, analysts: n, target_upside_pct: upside,
+    reading, sources: [...(f.sources || [])],
+  };
+}
+
+function growthBand(v, hi, lo) {
+  const s = (x) => (x > 0 ? `+${x}` : `${x}`);
+  return v > hi ? [1, `over ${s(hi)}%`] : v < lo ? [-1, `below ${s(lo)}%`] : [0, `${s(lo)}% to ${s(hi)}%`];
+}
+const lensCagr = (first, last, years) => (first > 0 && last > 0 && years > 0 ? lr2(((last / first) ** (1 / years) - 1) * 100) : null);
+const changePct = (prev, cur) => (prev != null && cur != null && prev > 0 ? lr2((cur / prev - 1) * 100) : null);
+
+/** Mirrors analysis::lens::growth: an idx.growth.v1 payload. `f` or `fin` may be null. */
+export function growthLens(symbol, f, fin) {
+  const r = lensRules();
+  const g = f?.growth || {}, ps = f?.per_share || {};
+  for (const [rule, what, v] of [["revenue_growth", "revenue", nz(g.revenue_growth_pct)], ["earnings_growth", "earnings", nz(g.earnings_growth_pct)]]) {
+    if (v == null) { r.note(`${what} growth in the latest quarter: not reported`); continue; }
+    const [p, band] = growthBand(v, 10, 0);
+    r.add(rule, p, `${what} ${signed(v, 1)}% year on year in the latest quarter (${band})${Math.abs(v) > 100 ? ", from a small or negative base" : ""}`);
+  }
+  const et = nz(ps.eps_ttm), ef = nz(ps.eps_forward);
+  const fg = et != null && ef != null && et > 0 && ef > 0 ? lr2((ef / et - 1) * 100) : null;
+  if (fg != null) {
+    const [p, band] = growthBand(fg, 10, -10);
+    r.add("eps_forward_growth", p, `forward EPS ${fixed(ef, 2)} is ${signed(fg, 1)}% against trailing ${fixed(et, 2)} (${band})`);
+  } else if (et != null && ef != null) r.note(`forward vs trailing EPS: needs both above zero (trailing ${fixed(et, 2)}, forward ${fixed(ef, 2)})`);
+  else r.note("forward vs trailing EPS: not reported");
+
+  const periods = fin?.periods || [];
+  const annual = periods.map((p, i) => {
+    const prev = i > 0 ? periods[i - 1].income || {} : {};
+    const inc = p.income || {};
+    return {
+      end_date: p.end_date, revenue: nz(inc.total_revenue), net_income: nz(inc.net_income),
+      revenue_change_pct: changePct(nz(prev.total_revenue), nz(inc.total_revenue)),
+      net_income_change_pct: changePct(nz(prev.net_income), nz(inc.net_income)),
+    };
+  });
+  const yearOf = (d) => +String(d).slice(0, 4);
+  const revenue = annual.filter((y) => y.revenue != null).map((y) => [yearOf(y.end_date), y.revenue]);
+  const income = annual.filter((y) => y.net_income != null).map((y) => [yearOf(y.end_date), y.net_income]);
+
+  let revenueCagr = null;
+  if (revenue.length >= 3) {
+    const [[a, first], [b, last]] = [revenue[0], revenue[revenue.length - 1]];
+    revenueCagr = lensCagr(first, last, b - a);
+    if (revenueCagr != null) { const [p, band] = growthBand(revenueCagr, 10, 0); r.add("revenue_cagr", p, `revenue CAGR ${signed(revenueCagr, 1)}% over FY${a} to FY${b} (${band})`); }
+    else r.note(`revenue CAGR: needs revenue above zero in FY${a} and FY${b}`);
+    const k = revenue.length - 1;
+    let ups = 0;
+    for (let i = 1; i < revenue.length; i++) if (revenue[i][1] > revenue[i - 1][1]) ups++;
+    if (ups === k) r.add("revenue_consistency", 1, `revenue grew in each of the last ${k} fiscal years`);
+    else if (ups * 2 < k) r.add("revenue_consistency", -1, `revenue grew in only ${ups} of the last ${k} fiscal years (under half)`);
+    else r.add("revenue_consistency", 0, `revenue grew in ${ups} of the last ${k} fiscal years`);
+  } else {
+    const c = nz(g.revenue_cagr_5y_pct);
+    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("revenue_cagr_5y", p, `revenue 5-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
+    else r.note("revenue CAGR: fewer than three fiscal years and no 5-year figure from the source");
+    r.note("revenue consistency: fewer than three fiscal years");
+  }
+
+  let incomeCagr = null;
+  if (income.length >= 3) {
+    const [[a, first], [b, last]] = [income[0], income[income.length - 1]];
+    incomeCagr = lensCagr(first, last, b - a);
+    if (incomeCagr != null) { const [p, band] = growthBand(incomeCagr, 10, 0); r.add("net_income_cagr", p, `net income CAGR ${signed(incomeCagr, 1)}% over FY${a} to FY${b} (${band})`); }
+    else if (first > 0) r.add("net_income_cagr", -1, `net income turned from a profit in FY${a} to a loss in FY${b}`);
+    else if (last > 0) r.add("net_income_cagr", 1, `net income turned from a loss in FY${a} to a profit in FY${b}`);
+    else r.note(`net income CAGR: losses in both FY${a} and FY${b}`);
+  } else {
+    const c = nz(g.eps_growth_3y_pct);
+    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("eps_growth_3y", p, `EPS 3-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
+    else r.note("net income CAGR: fewer than three fiscal years and no 3-year EPS figure from the source");
+  }
+
+  const reading = lensReading(r, (score, rules) => (rules.length < LENS_MIN_RULES ? "insufficient_data" : score >= 2 ? "growing" : score <= -2 ? "shrinking" : rules.some((x) => x.points > 0) && rules.some((x) => x.points < 0) ? "mixed" : "stable"));
+  const sources = [...(f?.sources || [])];
+  if (fin?.source && !sources.includes(fin.source)) sources.push(fin.source);
+  return {
+    symbol, name: nz(f?.name), statements_currency: nz(fin?.currency), most_recent_quarter: nz(f?.most_recent_quarter),
+    revenue_growth_pct: nz(g.revenue_growth_pct), earnings_growth_pct: nz(g.earnings_growth_pct),
+    revenue_cagr_5y_pct: nz(g.revenue_cagr_5y_pct), eps_growth_3y_pct: nz(g.eps_growth_3y_pct),
+    eps_ttm: et, eps_forward: ef, eps_forward_growth_pct: fg, annual,
+    revenue_cagr_pct: revenueCagr, net_income_cagr_pct: incomeCagr, reading, sources,
+  };
+}
+
+/** Mirrors analysis::lens::risk: an idx.risk.v1 payload. `h` is the stock's history, `b` IHSG's; any may be null. */
+export function riskLens(symbol, f, h, b) {
+  const r = lensRules();
+  const neg = f ? negativeEquity(f) : null;
+  const financial = !!f && isFinancial(f);
+  if (!f) r.note("balance sheet and earnings: fundamentals unavailable");
+  else {
+    if (neg === true) r.add("negative_equity", 2, "shareholders' equity is negative (book value below zero): liabilities exceed assets");
+    if (financial) r.note("leverage and liquidity: not scored for a financial company");
+    else {
+      const de = nz(f.health?.debt_to_equity), cr = nz(f.health?.current_ratio);
+      if (neg === true) r.note("leverage: debt/equity says nothing with negative equity");
+      else if (de != null) { const [p, why] = de > 2 ? [1, "over 2x"] : de < 0.5 ? [-1, "under 0.5x"] : [0, "0.5x to 2x"]; r.add("leverage", p, `debt is ${fixed(de, 2)}x equity (${why})`); }
+      else r.note("leverage: debt/equity not reported");
+      if (cr != null) { const [p, why] = cr < 1 ? [1, "is under 1"] : cr >= 1.5 ? [-1, "is 1.5 or more"] : [0, "is between 1 and 1.5"]; r.add("liquidity", p, `current ratio ${fixed(cr, 2)} ${why}`); }
+      else r.note("liquidity: current ratio not reported");
+    }
+    const nm = nz(f.profitability?.net_margin_pct), eps = nz(f.per_share?.eps_ttm);
+    const detail = [nm != null ? `net margin ${fixed(nm, 1)}%` : null, eps != null ? `EPS ${fixed(eps, 2)}` : null].filter(Boolean);
+    if (!detail.length) r.note("losses: no net margin or EPS reported");
+    else if ((nm != null && nm < 0) || (eps != null && eps < 0)) r.add("losses", 1, `loss-making over the trailing twelve months (${detail.join(", ")})`);
+    else r.add("losses", 0, `profitable over the trailing twelve months (${detail.join(", ")})`);
+  }
+
+  const own = h ? ex.series(h.candles || []) : [];
+  const benchmark = b?.symbol || LENS_BENCHMARK;
+  let price = null;
+  if (!own.length) r.note("price risk: no daily candles for the stock");
+  else {
+    const [cs, cb] = ex.common(own, b ? ex.series(b.candles || []) : []);
+    if (cs.length < 2) {
+      r.note(b ? `beta, volatility and drawdown against IHSG: no sessions in common with ${benchmark}` : `beta, volatility and drawdown against IHSG: benchmark ${benchmark} unavailable`);
+      price = { benchmark, from: own[0][0], to: own[own.length - 1][0], observations: 0, zero_returns: null, beta: null, correlation: null, volatility_pct: ex.volatility(own), benchmark_volatility_pct: null, max_drawdown: ex.maxDrawdown(own), benchmark_max_drawdown_pct: null };
+    } else {
+      const st = ex.beta(cs, cb), n = st.observations;
+      // Over the same pairs as the beta: the stock's close equals the one before.
+      let zero = 0;
+      for (let i = 1; i < Math.min(cs.length, cb.length); i++) if (cs[i - 1][1] > 0 && cb[i - 1][1] > 0 && cs[i][1] === cs[i - 1][1]) zero++;
+      const vs = ex.volatility(cs), vb = ex.volatility(cb);
+      const ds = ex.maxDrawdown(cs), db = ex.maxDrawdown(cb)?.pct ?? null;
+      if (n >= LENS_MIN_PRICE_RETURNS && zero * 2 > n) {
+        // Suspended, stuck at the floor price or barely traded: a flat price would look calm on all three.
+        r.add("illiquidity", 1, `${zero} of ${n} daily returns are zero (more than half): the stock was suspended or barely traded`);
+        r.note(`beta, volatility and drawdown: not scored, ${zero} of ${n} daily returns are zero`);
+      } else {
+        if (st.beta != null) { const bt = st.beta; const [p, why] = bt > 1.3 ? [1, "over 1.3"] : bt < 0.7 ? [-1, "under 0.7"] : [0, "0.7 to 1.3"]; r.add("beta", p, `beta ${fixed(bt, 2)} against IHSG over ${n} daily returns (${why})`); }
+        else if (n < ex.MIN_BETA_OBSERVATIONS) r.note(`beta: ${n} matched daily returns with IHSG, needs ${ex.MIN_BETA_OBSERVATIONS}`);
+        else r.note("beta: IHSG did not move over the window");
+        if (vs != null && vb != null && vb > 0) {
+          const rel = vs / vb;
+          const [p, why] = rel > 1.5 ? [1, "over 1.5x"] : rel < 0.8 ? [-1, "under 0.8x"] : [0, "0.8x to 1.5x"];
+          r.add("volatility", p, `volatility ${fixed(vs, 1)}% a year is ${fixed(rel, 2)}x IHSG's ${fixed(vb, 1)}% (${why})`);
+        } else r.note(`volatility against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched daily returns`);
+        if (cs.length > LENS_MIN_PRICE_RETURNS) {
+          const s = ds ? ds.pct : 0, bb = db ?? 0, gap = s - bb;
+          const [p, why] = gap <= -15 ? [1, "15 points or more deeper"] : gap >= 15 ? [-1, "15 points or more shallower"] : [0, "within 15 points"];
+          r.add("drawdown", p, `largest fall ${fixed(s, 1)}% against IHSG's ${fixed(bb, 1)}% over the same sessions (${why})`);
+        } else r.note(`drawdown against IHSG: fewer than ${LENS_MIN_PRICE_RETURNS} matched daily returns`);
+      }
+      price = { benchmark, from: cs[0][0], to: cs[cs.length - 1][0], observations: n, zero_returns: zero, beta: st.beta, correlation: st.correlation, volatility_pct: vs, benchmark_volatility_pct: vb, max_drawdown: ds, benchmark_max_drawdown_pct: db };
+    }
+  }
+
+  const reading = lensReading(r, (score, rules) => (rules.length < LENS_MIN_RULES ? "insufficient_data" : score >= 3 ? "high" : score <= -2 ? "low" : "moderate"));
+  return {
+    symbol, name: nz(f?.name) ?? nz(h?.name), currency: nz(f?.currency) ?? nz(h?.currency),
+    financial_company: financial, negative_equity: neg,
+    debt_to_equity: nz(f?.health?.debt_to_equity), current_ratio: nz(f?.health?.current_ratio), quick_ratio: nz(f?.health?.quick_ratio),
+    net_margin_pct: nz(f?.profitability?.net_margin_pct), eps_ttm: nz(f?.per_share?.eps_ttm),
+    price, reading, sources: [...(f?.sources || [])],
+  };
+}
+
+
 // ---- screener DSL ----------------------------------------------------------
 
 const KEYS = {
   pe: "pe_trailing", "p/e": "pe_trailing", per: "pe_trailing", fpe: "pe_forward", forwardpe: "pe_forward",
   pb: "price_to_book", pbv: "price_to_book", "p/b": "price_to_book", mcap: "market_cap", marketcap: "market_cap", cap: "market_cap",
   price: "price", close: "price", div: "dividend_yield_pct", yield: "dividend_yield_pct", dividend: "dividend_yield_pct",
-  eps: "eps_ttm", volume: "avg_volume_3m", vol: "avg_volume_3m", chg: "change_pct", change: "change_pct",
+  eps: "eps_ttm", volume: "avg_volume_3m", vol: "avg_volume_3m", avgvolume: "avg_volume_3m", chg: "change_pct", change: "change_pct",
+  range: "range_52w_pct", pos52: "range_52w_pct", "52w": "range_52w_pct",
+  ret1w: "return_1w_pct", ret1m: "return_1m_pct", ret3m: "return_3m_pct", ret6m: "return_6m_pct",
+  retytd: "return_ytd_pct", ytd: "return_ytd_pct", ret1y: "return_1y_pct",
   roe: "roe_pct", roa: "roa_pct", margin: "net_margin_pct", npm: "net_margin_pct", opmargin: "operating_margin_pct", opm: "operating_margin_pct",
   de: "debt_to_equity", der: "debt_to_equity", debt: "debt_to_equity", growth: "revenue_growth_pct", revgrowth: "revenue_growth_pct",
   epsgrowth: "earnings_growth_pct", peg: "peg", ps: "price_to_sales", "p/s": "price_to_sales", sector: "sector", industry: "industry",
 };
 export const FUNDAMENTAL_FIELDS = new Set(["roe_pct","roa_pct","net_margin_pct","operating_margin_pct","debt_to_equity","revenue_growth_pct","earnings_growth_pct","peg","price_to_sales","sector","industry"]);
-export const KEY_NAMES = "pe, fpe, pb, ps, peg, mcap, price, div, eps, volume, chg, roe, roa, margin, opmargin, de, growth, epsgrowth, sector, industry";
+// The return windows: joined from MSN's whole-market list (one request).
+export const RETURN_FIELDS = new Set(["return_1w_pct","return_1m_pct","return_3m_pct","return_6m_pct","return_ytd_pct","return_1y_pct"]);
+export const KEY_NAMES = "pe, fpe, pb, ps, peg, mcap, price, div, eps, volume, chg, range, ret1w, ret1m, ret3m, ret6m, retytd, ret1y, roe, roa, margin, opmargin, de, growth, epsgrowth, sector, industry";
+
+// idx's ready-made screens, the same table as analysis::screen::ScreenPreset.
+export const PRESETS = {
+  "top-performers": { filter: "", sort: "ret1y", descending: true },
+  "worst-performers": { filter: "", sort: "ret1y", descending: false },
+  "high-dividend": { filter: "div>0", sort: "div", descending: true },
+  "low-pe": { filter: "pe>0", sort: "pe", descending: false },
+  "52w-high": { filter: "range>=95", sort: "range", descending: true },
+  "52w-low": { filter: "range<=5", sort: "range", descending: false },
+  "high-volume": { filter: "", sort: "volume", descending: true },
+  "large-cap": { filter: "", sort: "mcap", descending: true },
+};
+export const PRESET_NAMES = Object.keys(PRESETS).join(", ");
+/** Preset name (case and _ forgiven) to its canonical name, or a usage error. */
+export function parsePreset(raw) {
+  const name = String(raw).trim().toLowerCase().replace(/_/g, "-");
+  if (!PRESETS[name]) throw new UsageError(`unknown preset "${raw}"; use ${PRESET_NAMES}`);
+  return name;
+}
+/** Where the price sits in its 52-week range, 0 at the low, 100 at the high (not clamped). */
+export function rangePosition(price, low, high) {
+  return price != null && low != null && high != null && high > low ? ((price - low) / (high - low)) * 100 : null;
+}
 
 export function parseNumber(s) {
   let t = String(s).trim().replace(/%$/, "").trim().replace(/[_,]/g, "");
@@ -256,6 +591,9 @@ export function parseFilters(spec) {
   return out;
 }
 export function sortField(name) { return KEYS[String(name || "mcap").toLowerCase()] || null; }
+const NAME_BY_FIELD = Object.fromEntries(KEY_NAMES.split(", ").map((k) => [KEYS[k], k]));
+/** Canonical key name, as the CLI reports it (`ytd` -> `retytd`, `pbv` -> `pb`). */
+export function keyName(name) { const k = String(name).toLowerCase(); return NAME_BY_FIELD[KEYS[k]] || k; }
 export function matches(row, filters) {
   return filters.every((f) => {
     const v = row[f.field];

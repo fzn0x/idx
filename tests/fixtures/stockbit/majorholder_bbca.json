@@ -1,0 +1,430 @@
+{
+  "message": "Successfully majorholder data",
+  "data": {
+    "is_more": true,
+    "movement": [
+      {
+        "id": "1000000439",
+        "name": "HENDRA TANUMIHARDJA",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "193,206",
+          "percentage": "0.0002",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "341,139",
+          "percentage": "0.0003",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+147,933",
+          "percentage": "+0.0001",
+          "formatted_value": "147,933"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "1032868206"
+          },
+          "formatted": "1.03B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "1000000438",
+        "name": "A. WIDODO MULYONO",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "440,838",
+          "percentage": "0.0004",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "681,407",
+          "percentage": "0.0006",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+240,569",
+          "percentage": "+0.0002",
+          "formatted_value": "240,569"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "1679652758"
+          },
+          "formatted": "1.68B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "1000000437",
+        "name": "GREGORY HENDRA LEMBONG",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "1,531,282",
+          "percentage": "0.0012",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "2,666,921",
+          "percentage": "0.0022",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+1,135,639",
+          "percentage": "+0.0010",
+          "formatted_value": "1,135,639"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "7929031498"
+          },
+          "formatted": "7.93B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "1000000209",
+        "name": "SANTOSO",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "3,269,028",
+          "percentage": "0.0027",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "3,764,062",
+          "percentage": "0.0031",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+495,034",
+          "percentage": "+0.0004",
+          "formatted_value": "495,034"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "3456327388"
+          },
+          "formatted": "3.46B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "14421",
+        "name": "TONNY KUSNADI",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "7,502,058",
+          "percentage": "0.0061",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "7,819,950",
+          "percentage": "0.0063",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+317,892",
+          "percentage": "+0.0002",
+          "formatted_value": "317,892"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_KOMISARIS"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "2219521944"
+          },
+          "formatted": "2.22B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "14418",
+        "name": "FRENGKY CHANDRA KUSUMA",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "2,429,926",
+          "percentage": "0.0020",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "2,835,916",
+          "percentage": "0.0023",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+405,990",
+          "percentage": "+0.0003",
+          "formatted_value": "405,990"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "2834622180"
+          },
+          "formatted": "2.83B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "14417",
+        "name": "HARYANTO TIARA BUDIMAN",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "1,057,378",
+          "percentage": "0.0009",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "1,436,806",
+          "percentage": "0.0012",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+379,428",
+          "percentage": "+0.0003",
+          "formatted_value": "379,428"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "2649166296"
+          },
+          "formatted": "2.65B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      },
+      {
+        "id": "14416",
+        "name": "VERA EVE LIM",
+        "symbol": "BBCA",
+        "date": "25 Mar 26",
+        "previous": {
+          "value": "2,731,601",
+          "percentage": "0.0022",
+          "formatted_value": ""
+        },
+        "current": {
+          "value": "3,281,460",
+          "percentage": "0.0027",
+          "formatted_value": ""
+        },
+        "changes": {
+          "value": "+549,859",
+          "percentage": "+0.0005",
+          "formatted_value": "549,859"
+        },
+        "marker": "",
+        "is_posted": false,
+        "cmh_id": "0",
+        "nationality": "NATIONALITY_TYPE_LOCAL",
+        "action_type": "ACTION_TYPE_BUY",
+        "data_source": {
+          "label": "Sumber: IDX",
+          "type": "SOURCE_TYPE_IDX"
+        },
+        "price_formatted": "6,982",
+        "broker_detail": {
+          "code": "",
+          "group": "BROKER_GROUP_UNSPECIFIED"
+        },
+        "badges": [
+          "SHAREHOLDER_BADGE_DIREKTUR"
+        ],
+        "price": {
+          "raw": {
+            "value": "6982"
+          },
+          "formatted": "6,982"
+        },
+        "value": {
+          "raw": {
+            "value": "3839115538"
+          },
+          "formatted": "3.84B"
+        },
+        "is_estimated_price": false,
+        "purpose": "",
+        "icon_url": "https://assets.stockbit.com/logos/companies/BBCA.png"
+      }
+    ]
+  }
+}

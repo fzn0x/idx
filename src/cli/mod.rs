@@ -10,19 +10,22 @@ use crate::cache::Cache;
 use crate::config::{self, CliOverrides, FileConfig, Settings};
 use crate::error::{IdxError, Result};
 use crate::http::{Fetcher, ReqwestBackend};
-use crate::output::{self, ColorMode, OutputFormat};
+use crate::output::{self, ColorMode, OutputFormat, OutputSetting};
 use crate::progress;
 use crate::providers::{
-    self, Provider, ProviderKind, ProviderOptions, Sourced, StockbitOptions, Ttls,
+    self, HistoryProviderKind, Provider, ProviderKind, ProviderOptions, Sourced, StockbitOptions,
+    Ttls,
 };
 
 pub mod bandar;
 pub mod broker;
 pub mod cache_cmd;
 pub mod config_cmd;
+pub mod input;
 pub mod market;
 pub mod mcp_cmd;
 pub mod ownership;
+pub mod ownership_analytics;
 pub mod stockbit;
 pub mod stocks;
 pub mod watch;
@@ -31,13 +34,16 @@ const LONG_ABOUT: &str = "\
 Indonesian stock market (IDX / IHSG) analysis for humans and AI agents.
 
 Tables go to stdout for people; add `-o json` for a stable, schema-documented
-envelope that scripts and agents can parse. Errors go to stderr with a
-meaningful exit code. Data comes from free public endpoints, cached locally.
+envelope that scripts and agents can parse (`-o jsonl` for one record per line,
+`-o auto` for a table on a terminal and JSON when piped). Errors go to stderr
+with a meaningful exit code; `-q` keeps stderr to errors. Data comes from free
+public endpoints, cached locally.
 
 Examples:
   idx stocks quote BBCA,BBRI,TLKM
   idx stocks history TLKM --period 1y --interval 1wk
   idx stocks fundamental BBCA              # ratios plus a plain-language verdict
+  idx stocks risk TLKM                     # beta, volatility and drawdown against IHSG
   idx stocks technical BBRI                # RSI, MACD, moving averages, signal
   idx stocks compare BBCA BBRI BMRI        # side-by-side fundamentals
   idx stocks screen -f 'pe<10,div>5,mcap>5T' # screener over ~950 IDX tickers
@@ -48,16 +54,18 @@ Examples:
   idx stocks actions BBCA                  # dividends, splits, rights, RUPS
   idx market foreign                       # top foreign net buying and selling
   idx market calendar --type dividend      # cum, ex and payment dates ahead
+  idx market astro --backtest              # lunar phase, Mercury, weton vs IHSG returns
   idx ownership import --latest            # KSEI >1% holders into local SQLite
   idx ownership ticker BBCA                # who holds more than 1%
   idx mcp                                  # MCP server over stdio for agents
   idx -o json stocks quote BBCA | jq '.data[0].price'
+  idx -o jsonl stocks screen -f 'pe<10' -n 5 | idx stocks compare -   # one record per line, - reads stdin
   idx --offline stocks quote BBCA        # serve from cache, never touch the network
   idx schema quotes                      # JSON Schema of the quote envelope";
 
 const AFTER_HELP: &str = "\
-Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider · 4 not found · 5 offline cache miss · 6 config
-Env: IDX_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
+Exit codes: 0 ok · 1 internal · 2 usage · 3 network/provider (JSON code blocked: bot protection refused this network) · 4 not found · 5 offline cache miss · 6 config
+Env: IDX_PROVIDER, IDX_HISTORY_PROVIDER, IDX_OUTPUT, IDX_COLOR / NO_COLOR, IDX_PROGRESS, IDX_QUIET, IDX_EXCHANGE, IDX_TIMEOUT_SECS, IDX_CACHE_DIR, IDX_OFFLINE, IDX_NO_CACHE, IDX_CONFIG, IDX_MSN_API_KEY, IDX_OWNERSHIP_DB, IDX_HOLIDAYS
 Docs: https://github.com/fzn0x/idx";
 
 #[derive(Debug, Parser)]
@@ -79,13 +87,17 @@ pub struct Cli {
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct GlobalOpts {
-    /// Output format: table for people, json for scripts and agents, csv for spreadsheets.
+    /// Output format: table for people, json for scripts and agents, jsonl for one record per line, csv for spreadsheets, auto for a table on a terminal and json when piped.
     #[arg(short = 'o', long, global = true, value_enum, value_name = "FORMAT")]
-    pub output: Option<OutputFormat>,
+    pub output: Option<OutputSetting>,
 
     /// Data provider. `auto` tries each one in turn.
     #[arg(long, global = true, value_enum, value_name = "NAME")]
     pub provider: Option<ProviderKind>,
+
+    /// Where candles come from (history, technical, returns, brief, bandar price moves): auto follows --provider; yahoo or stockbit pin it.
+    #[arg(long, global = true, value_enum, value_name = "NAME")]
+    pub history_provider: Option<HistoryProviderKind>,
 
     /// Never touch the network; serve from the local cache even if stale.
     #[arg(long, global = true, conflicts_with = "no_cache")]
@@ -114,19 +126,23 @@ pub struct GlobalOpts {
     /// Verbose diagnostics on stderr (-v info, -vv debug, -vvv trace).
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Hide warnings, notes and the loading line on stderr (also IDX_QUIET=1). Errors still print, and -o json keeps warnings in the envelope.
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Quotes, history, profile, financials, earnings, fundamentals, technicals, compare, corporate actions, foreign flow.
+    /// Quotes, history, profile, financials, earnings, fundamentals, growth/valuation/risk lenses, technicals, compare, corporate actions, foreign flow.
     #[command(subcommand)]
     Stocks(stocks::StocksCmd),
 
-    /// KSEI shareholder register (holders above 1 %): import monthly files, query holders, entities, changes.
+    /// Who owns a stock: KSEI's register of holders above 1 % and its investor-type composition (import monthly files; holders, entities, search, cross-holders, concentration, network graph, changes, composition; resolve spellings) and institutional and fund holders from MSN.
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 
-    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members.
+    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members, astro.
     #[command(subcommand)]
     Market(market::MarketCmd),
 
@@ -139,27 +155,33 @@ pub enum Command {
   idx broker BBCA --board regular -n 5
   idx -o json broker BBCA | jq '.data[0].buyers[0]'
   idx -o csv broker BBCA BBRI > brokers.csv   # one row per broker per side
+  echo BBCA BBRI | idx broker -               # tickers from stdin
 
 Source: Indo Premier (IPOT) broker summary, the top 10 buyers and sellers ranked by lots, with
 lots, value, average price and each broker's class (local, foreign, BUMN). Broker names come from
 the IDX member list bundled with idx. The source rounds figures of a million and more to one
-decimal (1.6 M); JSON marks those summaries with rounded=true.")]
+decimal (1.6 M); JSON marks those summaries with rounded=true.
+
+With --investor foreign or domestic the source's totals are that side's buying, so idx prints what
+the side bought and sold (buy_value, sell_value) instead of the value traded. The source's foreign
+net covers every board, so a --board filter leaves it out. Over a range that reaches the latest
+sessions the foreign net is rebuilt from single sessions (the source counts the latest one twice).")]
     Broker(broker::BrokerArgs),
 
     /// Bandarmology: are the top brokers accumulating or distributing? `detect` per ticker, `screen` across the most traded, `broker` for one broker.
     #[command(subcommand)]
     Bandar(bandar::BandarCmd),
 
-    /// Realtime via your own Stockbit session: `login` in the browser, `status`, `logout`, live `orderbook`.
+    /// Your own Stockbit session: `login` (in a browser, or through a local page), `status`, `logout`; live `orderbook`; corporate `actions` and `calendar`; holder `movements`.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
+        after_help = "Examples:\n  idx stockbit login                 # sign in once in your browser\n  idx stockbit login --page          # over SSH or with Google sign-in: a page on 127.0.0.1\n  idx stockbit status\n  idx stockbit orderbook BBCA        # live depth ladder + foreign flow\n  idx stockbit actions BBCA          # a stock's corporate actions since listing\n  idx stockbit calendar --kind dividend --days 30\n  idx stockbit movements BBCA        # insider and 5 % holder movements\n  idx --provider stockbit stocks quote BBCA   # realtime quote\n  idx --provider stockbit stocks history BBCA --period 1mo\n\nOpt-in realtime from Stockbit's own backend, carrying your Stockbit session\n(the one exception to idx's free-public-data rule). Keep this session separate\nfrom any other tool's: a refresh rotates the token and retires the old one."
     )]
     #[command(subcommand)]
     Stockbit(stockbit::StockbitCmd),
 
     /// Quote your watchlist, or manage it (add, remove, list, clear, returns).
     #[command(
-        after_help = "Examples:\n  idx watch add BBCA BBRI TLKM\n  idx watch                 # quotes for the list\n  idx watch returns         # 1w..5y returns vs IHSG\n  idx watch rm TLKM\n\nStored as plain text next to the config file (or $IDX_WATCHLIST)."
+        after_help = "Examples:\n  idx watch add BBCA BBRI TLKM\n  idx -o jsonl stocks screen -f \"div>6\" | idx watch add -   # the screen's tickers\n  idx watch                 # quotes for the list\n  idx watch returns         # 1w..5y returns vs IHSG\n  idx watch rm TLKM\n\nStored as plain text next to the config file (or $IDX_WATCHLIST)."
     )]
     Watch(watch::WatchArgs),
 
@@ -173,13 +195,14 @@ decimal (1.6 M); JSON marks those summaries with rounded=true.")]
 
     /// MCP server over stdio (default) or HTTP; `mcp setup <client>` prints the registration recipe for any agent.
     #[command(
-        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n36 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker, idx_ownership_ticker|entity|changes|foreign|releases,\nand the realtime Stockbit tools idx_orderbook, idx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
+        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n47 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_intraday, idx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_insights, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_astro, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
+idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|composition|snapshot|institutions,\nand the Stockbit tools on your own session: idx_orderbook, idx_stockbit_actions, idx_stockbit_movements,\nidx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
     )]
     Mcp(mcp_cmd::McpArgs),
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
+        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | astro | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
         name: Option<String>,
     },
 
@@ -207,22 +230,41 @@ impl Context {
     }
 }
 
-/// Prints warnings and the stale notice to stderr (table and csv modes;
-/// JSON carries them in the envelope).
+/// Prints warnings and the stale notice to stderr (table, csv and jsonl
+/// modes; JSON carries them in the envelope). The notice says when the copy was
+/// fetched; after a failed fetch the cause is in the warnings above it.
 pub fn notices<T>(ctx: &Context, s: &Sourced<T>) {
     if ctx.json() {
         return;
     }
     for w in &s.warnings {
-        output::print_stderr(&format!("warning: {w}"));
+        output::print_notice(&format!("warning: {w}"));
     }
-    if s.stale {
-        output::print_stderr("warning: showing stale cached data");
+    if let Some(line) = stale_notice(s) {
+        output::print_notice(&line);
     }
 }
 
-/// Writes a result in the chosen format: the JSON envelope, CSV rows of the
-/// payload's main list, or the given table.
+fn stale_notice<T>(s: &Sourced<T>) -> Option<String> {
+    if !s.stale {
+        return None;
+    }
+    let when = s
+        .fetched_at
+        .with_timezone(&crate::model::wib())
+        .format("%Y-%m-%d %H:%M WIB");
+    let why = match s.stale_reason {
+        Some(crate::model::StaleReason::Offline) => " (--offline)",
+        _ => "",
+    };
+    Some(format!(
+        "warning: showing stale cached data from {when}{why}"
+    ))
+}
+
+/// Writes a result in the chosen format: the JSON envelope, one JSON line per
+/// record (the schema's row rule), CSV rows of the payload's main list, or the
+/// given table.
 pub fn emit<T: serde::Serialize>(
     ctx: &Context,
     schema: &str,
@@ -233,6 +275,11 @@ pub fn emit<T: serde::Serialize>(
         OutputFormat::Json => {
             let env = output::json::Envelope::from_sourced(schema, s);
             output::print_stdout(&output::json::to_pretty(&env)?)
+        }
+        OutputFormat::Jsonl => {
+            notices(ctx, &s);
+            let v = serde_json::to_value(&s.data)?;
+            output::print_stdout(&output::jsonl::render(schema, &v)?)
         }
         OutputFormat::Csv => {
             notices(ctx, &s);
@@ -254,7 +301,9 @@ pub fn resolve_settings(global: &GlobalOpts) -> Result<Settings> {
     let file = FileConfig::load(&config_path)?;
     let overrides = CliOverrides {
         provider: global.provider,
+        history_provider: global.history_provider,
         output: global.output,
+        stdout_is_terminal: std::io::IsTerminal::is_terminal(&std::io::stdout()),
         no_color: global.no_color,
         offline: global.offline,
         no_cache: global.no_cache,
@@ -286,6 +335,7 @@ pub fn build_context(global: &GlobalOpts) -> Result<Context> {
             access_seed: settings.stockbit_access_seed.clone(),
             refresh_seed: settings.stockbit_refresh_seed.clone(),
         },
+        history: settings.history_provider,
     };
     let provider: Arc<dyn Provider> =
         Arc::from(providers::build(settings.provider, fetcher.clone(), opts)?);
@@ -301,16 +351,31 @@ pub fn build_context(global: &GlobalOpts) -> Result<Context> {
 }
 
 /// The loading line on stderr while a network command waits; see
-/// [`progress`](crate::progress). Never offline, never under `-v`, never when
-/// stderr is not a terminal (scripts, agents).
+/// [`progress`](crate::progress). Never offline, never with `--quiet`, never
+/// under `-v`, never when stderr is not a terminal (scripts, agents).
 fn spinner(ctx: &Context, global: &GlobalOpts) -> Option<progress::Spinner> {
     let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
-    if ctx.fetcher.is_offline()
-        || !progress::wanted(terminal, global.verbose, &|k| std::env::var(k).ok())
-    {
+    if !wants_spinner(
+        ctx.fetcher.is_offline(),
+        output::is_quiet(),
+        terminal,
+        global.verbose,
+        &|k| std::env::var(k).ok(),
+    ) {
         return None;
     }
     progress::start()
+}
+
+/// Whether to show the loading line; `--quiet` wins over `IDX_PROGRESS=always`.
+fn wants_spinner(
+    offline: bool,
+    quiet: bool,
+    stderr_is_terminal: bool,
+    verbose: u8,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    !offline && !quiet && progress::wanted(stderr_is_terminal, verbose, env)
 }
 
 /// Entry point used by `main`. Returns the error for `main` to print and map
@@ -343,8 +408,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             bandar::run(&ctx, cmd).await
         }
         Command::Stockbit(cmd) => {
-            // No spinner: `login` drives a browser and prints its own prompts.
+            // The data commands show the loading line; `login` prints its
+            // own prompts and `status`/`logout` are instant.
             let ctx = build_context(&cli.global)?;
+            let _spinner = cmd
+                .shows_progress()
+                .then(|| spinner(&ctx, &cli.global))
+                .flatten();
             stockbit::run(&ctx, cmd).await
         }
         Command::Watch(args) => {
@@ -356,21 +426,24 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Config(cmd) => config_cmd::run(&cli.global, cmd),
         Command::Cache(cmd) => cache_cmd::run(&cli.global, cmd),
         Command::Schema { name } => {
+            let format = requested_format(&cli.global);
             let names = output::json::schema_names();
             match name {
                 None => {
-                    let json = cli.global.output == Some(OutputFormat::Json);
-                    if json {
-                        output::print_stdout(&output::json::to_pretty(&names)?)
-                    } else {
-                        output::print_stdout(&format!(
-                            "Available schemas: {}\nUsage: idx schema <name>\n",
-                            names.join(", ")
-                        ))
+                    if output::print_value(format, &names)? {
+                        return Ok(());
                     }
+                    output::print_stdout(&format!(
+                        "Available schemas: {}\nUsage: idx schema <name>\n",
+                        names.join(", ")
+                    ))
                 }
                 Some(n) => {
                     let schema = output::json::schema_for(&n)?;
+                    // A JSON Schema is JSON in every format; jsonl makes it one line.
+                    if output::print_value(format, &schema)? {
+                        return Ok(());
+                    }
                     output::print_stdout(&output::json::to_pretty(&schema)?)
                 }
             }
@@ -382,10 +455,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             output::print_stdout(&String::from_utf8_lossy(&buf))
         }
         Command::Version => {
-            let json = cli.global.output == Some(OutputFormat::Json);
             let info = VersionInfo::current();
-            if json {
-                output::print_stdout(&output::json::to_pretty(&info)?)
+            if output::print_value(requested_format(&cli.global), &info)? {
+                Ok(())
             } else {
                 output::print_stdout(&format!(
                     "idx {} ({} {})\nproviders: {}\nconfig: {}\ncache:  {}\n",
@@ -424,13 +496,32 @@ impl VersionInfo {
     }
 }
 
-/// Prints an error the way the chosen output format expects.
+/// The output format of commands that build no [`Context`] (`version`,
+/// `schema`, `config`, `mcp setup`) and of error reports: the flag,
+/// `IDX_OUTPUT`, then the config file's `output`, skipping a layer that does
+/// not parse ([`config::requested_output`]), with `auto` resolved.
+pub fn requested_format(global: &GlobalOpts) -> OutputFormat {
+    lenient_format(global.output, global.config.clone())
+}
+
+fn lenient_format(flag: Option<OutputSetting>, config: Option<PathBuf>) -> OutputFormat {
+    let path = config.unwrap_or_else(config::default_config_path);
+    config::requested_output(
+        flag,
+        &path,
+        &|k| std::env::var(k).ok(),
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    )
+}
+
+/// Prints an error the way the chosen output format expects: one JSON line
+/// in json and jsonl modes, `error:` (and a `hint:`) otherwise.
 pub fn report_error(global: Option<&GlobalOpts>, err: &IdxError) {
-    let json = global
-        .map(|g| g.output == Some(OutputFormat::Json))
-        .unwrap_or(false)
-        || std::env::var("IDX_OUTPUT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
-    if json {
+    let format = match global {
+        Some(g) => requested_format(g),
+        None => lenient_format(None, std::env::var_os("IDX_CONFIG").map(PathBuf::from)),
+    };
+    if format.is_json() {
         let env = output::json::ErrorEnvelope::from(err);
         output::print_stderr(&serde_json::to_string(&env).unwrap_or_default());
     } else {
@@ -457,13 +548,57 @@ mod tests {
     #[test]
     fn parses_global_flags_anywhere() {
         let cli = Cli::parse_from(["idx", "stocks", "quote", "BBCA", "-o", "json", "--offline"]);
-        assert_eq!(cli.global.output, Some(OutputFormat::Json));
+        assert_eq!(cli.global.output, Some(OutputSetting::Json));
         assert!(cli.global.offline);
         let cli = Cli::parse_from([
             "idx", "-o", "table", "stocks", "history", "TLKM", "--period", "5y",
         ]);
-        assert_eq!(cli.global.output, Some(OutputFormat::Table));
+        assert_eq!(cli.global.output, Some(OutputSetting::Table));
         assert!(matches!(cli.command, Command::Stocks(_)));
+        for (v, want) in [
+            ("auto", OutputSetting::Auto),
+            ("jsonl", OutputSetting::Jsonl),
+        ] {
+            let cli = Cli::parse_from(["idx", "-o", v, "version"]);
+            assert_eq!(cli.global.output, Some(want));
+        }
+    }
+
+    #[test]
+    fn quiet_flag_parses_and_conflicts_with_verbose() {
+        let cli = Cli::parse_from(["idx", "stocks", "quote", "BBCA", "-q"]);
+        assert!(cli.global.quiet);
+        let cli = Cli::parse_from(["idx", "--quiet", "version"]);
+        assert!(cli.global.quiet);
+        assert!(Cli::try_parse_from(["idx", "-q", "-v", "version"]).is_err());
+        assert!(Cli::try_parse_from(["idx", "--quiet", "-vv", "version"]).is_err());
+    }
+
+    #[test]
+    fn quiet_hides_the_loading_line_even_when_forced() {
+        let always = |k: &str| (k == "IDX_PROGRESS").then(|| "always".to_string());
+        assert!(wants_spinner(false, false, false, 0, &always));
+        assert!(!wants_spinner(false, true, false, 0, &always));
+        assert!(!wants_spinner(false, true, true, 0, &|_| None));
+        assert!(wants_spinner(false, false, true, 0, &|_| None));
+        assert!(!wants_spinner(true, false, true, 0, &always), "offline");
+    }
+
+    #[test]
+    fn history_provider_is_a_global_flag() {
+        let cli = Cli::parse_from([
+            "idx",
+            "stocks",
+            "history",
+            "BBCA",
+            "--history-provider",
+            "stockbit",
+        ]);
+        assert_eq!(
+            cli.global.history_provider,
+            Some(HistoryProviderKind::Stockbit)
+        );
+        assert!(Cli::try_parse_from(["idx", "--history-provider", "msn", "version"]).is_err());
     }
 
     #[test]

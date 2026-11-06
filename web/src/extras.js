@@ -1,5 +1,6 @@
-// Ports of src/analysis/{returns,dividends}.rs and the news ordering in
-// src/service.rs, plus the ownership changes summary. Pure; shared by the
+// Ports of src/analysis/{returns,dividends,intraday}.rs, the news ordering in
+// src/service.rs and the earnings filter in src/model/fundamentals.rs, plus
+// the ownership changes summary. Pure; shared by the
 // Worker API and tests so the web terminal agrees with the CLI.
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -8,6 +9,39 @@ const dateOnly = (iso) => String(iso).slice(0, 10);
 const addMonths = (d, n) => { const x = new Date(d + "T00:00:00Z"); const day = x.getUTCDate(); x.setUTCDate(1); x.setUTCMonth(x.getUTCMonth() + n); const last = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate(); x.setUTCDate(Math.min(day, last)); return x.toISOString().slice(0, 10); };
 const addDays = (d, n) => new Date(Date.parse(d + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+
+// ---- intraday --------------------------------------------------------------
+
+/** The candles of the last WIB date, oldest first (analysis::intraday::session_bars). */
+export function sessionBars(candles) {
+  if (!candles.length) return [];
+  const day = dateOnly(candles[candles.length - 1].time);
+  let i = candles.length;
+  while (i > 0 && dateOnly(candles[i - 1].time) === day) i--;
+  return candles.slice(i);
+}
+
+/**
+ * Summary of one session's bars (analysis::intraday::summary): first bar's
+ * open, highest high, lowest low, last close, the bars' volume and a VWAP of
+ * each bar's typical price (high + low + close) / 3, null without volume.
+ */
+export function intradaySummary(bars) {
+  if (!bars.length) return null;
+  const first = bars[0], last = bars[bars.length - 1];
+  let high = -Infinity, low = Infinity, volume = 0, weighted = 0;
+  for (const c of bars) {
+    high = Math.max(high, c.high);
+    low = Math.min(low, c.low);
+    volume += c.volume;
+    weighted += ((c.high + c.low + c.close) / 3) * c.volume;
+  }
+  return {
+    first_bar: first.time, last_bar: last.time, bars: bars.length,
+    open: first.open, high, low, close: last.close,
+    bars_volume: volume, vwap: volume > 0 ? r2(weighted / volume) : null,
+  };
+}
 
 // ---- returns ---------------------------------------------------------------
 
@@ -81,6 +115,35 @@ export function volatility(s) {
   const v = r.reduce((a, x) => a + (x - mean) ** 2, 0) / (r.length - 1);
   return r2(Math.sqrt(v) * Math.sqrt(252) * 100);
 }
+/** Mirrors analysis::returns::MIN_BETA_OBSERVATIONS. */
+export const MIN_BETA_OBSERVATIONS = 120;
+const r3 = (v) => Math.round(v * 1000) / 1000 + 0;
+/** Mirrors analysis::returns::common: the dates both series share, oldest first, as two aligned series. */
+export function common(a, b) {
+  const outA = [], outB = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i][0] < b[j][0]) i++;
+    else if (a[i][0] > b[j][0]) j++;
+    else { outA.push(a[i]); outB.push(b[j]); i++; j++; }
+  }
+  return [outA, outB];
+}
+/** Mirrors analysis::returns::beta over two aligned series (see common). */
+export function beta(s, b) {
+  const pairs = [];
+  for (let i = 1; i < Math.min(s.length, b.length); i++) {
+    if (s[i - 1][1] > 0 && b[i - 1][1] > 0) pairs.push([s[i][1] / s[i - 1][1] - 1, b[i][1] / b[i - 1][1] - 1]);
+  }
+  const n = pairs.length, none = { beta: null, correlation: null, observations: n };
+  if (n < MIN_BETA_OBSERVATIONS) return none;
+  const ms = pairs.reduce((a, p) => a + p[0], 0) / n, mb = pairs.reduce((a, p) => a + p[1], 0) / n;
+  const cov = pairs.reduce((a, p) => a + (p[0] - ms) * (p[1] - mb), 0) / (n - 1);
+  const varB = pairs.reduce((a, p) => a + (p[1] - mb) ** 2, 0) / (n - 1);
+  const varS = pairs.reduce((a, p) => a + (p[0] - ms) ** 2, 0) / (n - 1);
+  if (varB <= 0) return none;
+  return { beta: r3(cov / varB), correlation: varS > 0 ? r3(cov / Math.sqrt(varB * varS)) : null, observations: n };
+}
 function extremes(s) {
   let best = null, worst = null;
   for (let i = 1; i < s.length; i++) {
@@ -143,6 +206,43 @@ export function enrichDividends(h, today) {
   return h;
 }
 
+// ---- earnings filter -----------------------------------------------------------
+
+/**
+ * Mirrors EarningsFilter::from_names: period annual | quarterly, kind
+ * reported | estimates; empty or "all" keeps both. Throws a RangeError with
+ * the CLI's message on anything else.
+ */
+export function earningsFilter(period, kind) {
+  const norm = (v) => (v == null ? "" : String(v).trim().toLowerCase());
+  const f = { annual: false, quarterly: false, reported: false, estimates: false };
+  const p = norm(period), k = norm(kind);
+  if (p === "annual" || p === "quarterly") f[p] = true;
+  else if (p && p !== "all") throw new RangeError(`invalid period "${p}"; use annual or quarterly (or leave it out for both)`);
+  if (k === "reported" || k === "estimates") f[k] = true;
+  else if (k && k !== "all") throw new RangeError(`invalid kind "${k}"; use reported or estimates (or leave it out for both)`);
+  return f;
+}
+
+/** What a filter keeps, each unset pair widened to both (EarningsFilter::scope). */
+export function earningsScope(f) {
+  const periods = !f.annual && !f.quarterly, kinds = !f.reported && !f.estimates;
+  return { annual: f.annual || periods, quarterly: f.quarterly || periods, reported: f.reported || kinds, estimates: f.estimates || kinds };
+}
+
+/** Mirrors EarningsFilter::apply: the rows the filter keeps and data.scope, or e untouched. */
+export function filterEarnings(e, f) {
+  const s = earningsScope(f);
+  if (s.annual && s.quarterly && s.reported && s.estimates) return e;
+  const out = { ...e };
+  if (!(s.reported && s.quarterly)) { out.quarters = []; out.quarterly = []; }
+  if (!(s.reported && s.annual)) out.yearly = [];
+  out.estimates = s.estimates ? (e.estimates || []).filter((x) => (x.period_type === "annual" ? s.annual : s.quarterly)) : [];
+  if (!(s.estimates && s.quarterly)) out.next = null;
+  out.scope = s;
+  return out;
+}
+
 // ---- news ordering -------------------------------------------------------------
 
 /** Mirrors service::arrange: company items first, then market context up to limit. */
@@ -167,6 +267,44 @@ export function arrangeNews(items, symbol, matchedName, limit, companyOnly, item
 }
 
 // ---- ownership changes summary ---------------------------------------------------
+
+/** The `entity_key` a name search matches (ownership::normalize::entity_key, ASCII). */
+export function entitySearchKey(query) {
+  const toks = String(query ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(" ").filter(Boolean);
+  const kept = toks.filter((t) => !["PT", "TBK", "PERSERO"].includes(t));
+  return (kept.length ? kept : toks).join(" ");
+}
+
+/**
+ * Mirrors the pairing in ownership::db::changes: holders matched by symbol and
+ * entity_key across two releases (each row a holder's accounts already summed),
+ * before the min-change filter and the sort. With the same shares on both sides
+ * a holder is skipped when the percent did not move, or, when a side has
+ * several register lines, moved within their rounding (0.005 pp per line).
+ */
+export function diffPositions(before, after) {
+  const key = (r) => `${r.symbol}|${r.entity_key}`;
+  const was = new Map(before.map((r) => [key(r), r]));
+  const now = new Map(after.map((r) => [key(r), r]));
+  const row = (x, kind, from, to) => ({
+    symbol: x.symbol, holder: x.holder, entity_key: x.entity_key, investor_type: x.investor_type ?? null, local_foreign: x.local_foreign ?? null, kind,
+    pct_from: from ? from.pct : null, pct_to: to ? to.pct : null, pct_change: r4((to ? to.pct : 0) - (from ? from.pct : 0)),
+    shares_from: from ? from.shares_total : null, shares_to: to ? to.shares_total : null, shares_change: (to ? to.shares_total : 0) - (from ? from.shares_total : 0),
+    accounts_from: from ? from.accounts ?? null : null, accounts_to: to ? to.accounts ?? null : null, controller_or_affiliate: x.controller_or_affiliate ?? null,
+  });
+  const out = [];
+  for (const [k, a] of now) {
+    const b = was.get(k);
+    if (!b) { out.push(row(a, "new", null, a)); continue; }
+    if (a.shares_total === b.shares_total) {
+      const d = Math.abs(a.pct - b.pct), lines = (b.accounts ?? 1) + (a.accounts ?? 1);
+      if (d < 1e-9 || (lines > 2 && d <= 0.005 * lines + 1e-9)) continue;
+    }
+    out.push(row(a, "changed", b, a));
+  }
+  for (const [k, b] of was) if (!now.has(k)) out.push(row(b, "exited", b, null));
+  return out;
+}
 
 /** Mirrors ownership::db::summarise over sorted changes (largest |pct_change| first). */
 export function summariseChanges(changes) {

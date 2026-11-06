@@ -10,24 +10,43 @@ use futures::stream::{self, StreamExt};
 
 use crate::analysis;
 use crate::analysis::bandar::{self as bd, Preset};
-use crate::analysis::screen::{self as scr, Filter, Key};
+use crate::analysis::screen::{self as scr, Filter, Key, ScreenPreset};
 use crate::brokers;
 use crate::error::{IdxError, Result};
+use crate::holidays;
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
-    BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Fundamentals,
-    History, Interval, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary,
-    OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow, SentimentReport, Symbol,
-    Technical,
+    BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Earnings,
+    EarningsFilter, Fundamentals, History, Interval, Intraday, MarketOverview, MarketRow, NewsItem,
+    NewsReport, NewsSummary, OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow,
+    SentimentReport, StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
 use crate::providers::{Provider, Sourced};
 use crate::universe::Issuer;
 
+mod astro;
 mod exchange;
+mod lenses;
+mod stockbit;
+pub use astro::*;
 pub use exchange::*;
+pub use lenses::*;
+pub use stockbit::*;
+
+/// Earnings with the rows `filter` leaves out dropped (and `data.scope` set
+/// when it drops any).
+pub async fn earnings(
+    p: &dyn Provider,
+    symbol: &Symbol,
+    filter: EarningsFilter,
+) -> Result<Sourced<Earnings>> {
+    let mut result = p.earnings(symbol).await?;
+    filter.apply(&mut result.data);
+    Ok(result)
+}
 
 /// Ratios plus the rule-based verdict.
 pub async fn fundamentals(p: &dyn Provider, symbol: &Symbol) -> Result<Sourced<Fundamentals>> {
@@ -46,14 +65,7 @@ pub async fn technical(
     let Some(report) = analysis::technical::analyse(&hist.data) else {
         return Err(IdxError::NotFound(format!("no daily candles for {symbol}")));
     };
-    Ok(Sourced {
-        data: report,
-        provider: hist.provider,
-        cached: hist.cached,
-        stale: hist.stale,
-        fetched_at: hist.fetched_at,
-        warnings: hist.warnings,
-    })
+    Ok(hist.map(|_| report))
 }
 
 /// Fundamentals for several symbols, fetched concurrently. Symbols that fail
@@ -98,18 +110,28 @@ pub async fn compare(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<Vec
 /// Screener settings.
 #[derive(Debug, Clone)]
 pub struct ScreenOptions {
+    /// Ready-made screen: its clauses come first, its sort and direction are
+    /// the defaults.
+    pub preset: Option<ScreenPreset>,
+    /// Clauses on top of the preset's.
     pub filters: Vec<Filter>,
-    pub sort: Key,
-    pub descending: bool,
+    /// Default: the preset's, else mcap.
+    pub sort: Option<Key>,
+    /// Default: the preset's direction, else descending.
+    pub descending: Option<bool>,
     /// 0 = all rows.
     pub limit: usize,
     /// Upper bound on per-symbol fundamentals calls (largest market caps first).
     pub max_fundamentals: usize,
     /// Fetch fundamentals even when no filter needs them.
     pub with_fundamentals: bool,
+    /// Join the market-wide return windows even when no filter or the sort
+    /// needs them.
+    pub with_returns: bool,
 }
 
-/// Quote-level screen over the universe, then a capped fundamentals pass.
+/// Quote-level screen over the universe (with the market-wide return
+/// windows joined when a key needs them), then a capped fundamentals pass.
 pub async fn screen(
     p: &dyn Provider,
     universe: &[Issuer],
@@ -118,6 +140,18 @@ pub async fn screen(
     if universe.is_empty() {
         return Err(IdxError::Usage("the ticker universe is empty".into()));
     }
+    let mut filters = match opts.preset {
+        Some(pr) => scr::parse_filters(pr.filter())?,
+        None => Vec::new(),
+    };
+    filters.extend(opts.filters.iter().cloned());
+    let sort = opts
+        .sort
+        .or(opts.preset.map(|pr| pr.sort()))
+        .unwrap_or(Key::Mcap);
+    let descending = opts
+        .descending
+        .unwrap_or_else(|| opts.preset.is_none_or(|pr| pr.descending()));
     let names: std::collections::HashMap<&Symbol, Option<&str>> = universe
         .iter()
         .map(|i| (&i.symbol, i.name.as_deref()))
@@ -154,10 +188,32 @@ pub async fn screen(
         ));
     }
 
-    let (quote_filters, fund_filters): (Vec<&Filter>, Vec<&Filter>) = opts
-        .filters
-        .iter()
-        .partition(|f| !f.key.needs_fundamentals());
+    // Return windows: one market-wide request. When a filter or the sort needs
+    // them a failure is fatal (a silently empty screen would mislead).
+    let returns_required = filters.iter().any(|f| f.key.needs_returns()) || sort.needs_returns();
+    let mut returns_source = None;
+    if returns_required || opts.with_returns {
+        match p.market_returns().await {
+            Ok(m) => {
+                let by_symbol: std::collections::HashMap<&Symbol, &crate::model::MarketReturns> =
+                    m.data.iter().map(|r| (&r.symbol, r)).collect();
+                for row in out.data.iter_mut() {
+                    if let Some(r) = by_symbol.get(&row.symbol) {
+                        scr::apply_returns(row, r);
+                    }
+                }
+                returns_source = m.data.first().map(|r| r.source.to_string());
+                out.absorb(&m);
+            }
+            Err(e) if returns_required => return Err(e),
+            Err(e) => out
+                .warnings
+                .push(format!("return windows unavailable: {e}")),
+        }
+    }
+
+    let (quote_filters, fund_filters): (Vec<&Filter>, Vec<&Filter>) =
+        filters.iter().partition(|f| !f.key.needs_fundamentals());
     let quote_filters: Vec<Filter> = quote_filters.into_iter().cloned().collect();
     let fund_filters: Vec<Filter> = fund_filters.into_iter().cloned().collect();
     let mut rows: Vec<ScreenRow> = out
@@ -168,9 +224,10 @@ pub async fn screen(
         .collect();
     let matched_quote_level = rows.len();
 
-    let need_fund =
-        opts.with_fundamentals || !fund_filters.is_empty() || opts.sort.needs_fundamentals();
+    let need_fund = opts.with_fundamentals || !fund_filters.is_empty() || sort.needs_fundamentals();
     let mut checked = 0usize;
+    let mut failed_live = 0usize;
+    let mut cause: Option<String> = None;
     let mut capped = false;
     if need_fund && !rows.is_empty() {
         scr::sort_rows(&mut rows, Key::Mcap, true);
@@ -192,8 +249,19 @@ pub async fn screen(
             match r {
                 Ok(f) => {
                     checked += 1;
-                    out.cached &= f.cached;
-                    out.stale |= f.stale;
+                    // Freshness only: one summary line below instead of a
+                    // failure warning per company.
+                    out.absorb_freshness(&f);
+                    if f.stale_reason == Some(StaleReason::FetchFailed) {
+                        failed_live += 1;
+                        if cause.is_none() {
+                            cause = f
+                                .warnings
+                                .iter()
+                                .find_map(|w| crate::providers::fetch_failed_cause(w))
+                                .map(str::to_string);
+                        }
+                    }
                     if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
                         scr::apply_fundamentals(row, &f.data);
                     }
@@ -202,6 +270,12 @@ pub async fn screen(
             }
         }
         rows.retain(|r| scr::matches(r, &fund_filters));
+        if failed_live > 0 {
+            out.warnings.push(format!(
+                "fundamentals for {failed_live} of {checked} companies are stale cached copies: the live fetch failed{}",
+                cause.map(|c| format!(" ({c})")).unwrap_or_default()
+            ));
+        }
         if capped {
             out.warnings.push(format!(
                 "fundamentals were fetched for the {cap} largest companies that passed the quote filters; raise --max-fundamentals to widen"
@@ -209,23 +283,41 @@ pub async fn screen(
         }
     }
 
-    scr::sort_rows(&mut rows, opts.sort, opts.descending);
+    scr::sort_rows(&mut rows, sort, descending);
     let total = rows.len();
     if opts.limit > 0 {
         rows.truncate(opts.limit);
     }
     Ok(out.map(|_| ScreenReport {
-        filters: opts.filters.iter().map(|f| f.raw.clone()).collect(),
-        sort: opts.sort.name().to_string(),
-        descending: opts.descending,
+        preset: opts.preset.map(|pr| pr.name().to_string()),
+        filters: filters.iter().map(|f| f.raw.clone()).collect(),
+        sort: sort.name().to_string(),
+        descending,
         universe: symbols.len(),
         quoted,
         matched_quote_level,
         fundamentals_checked: checked,
         fundamentals_capped: capped,
+        returns_source,
         total_matches: total,
         rows,
     }))
+}
+
+/// Quotes with `behind_session` set against the latest IDX session that has
+/// ended. The flag is computed on every call, never cached.
+pub async fn quotes(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+    let mut s = p.quotes(symbols).await?;
+    mark_behind(&mut s.data, holidays::latest_session(chrono::Utc::now()));
+    Ok(s)
+}
+
+/// Sets each quote's `behind_session` against `latest`, the latest IDX
+/// session that has ended ([`holidays::latest_session`]).
+pub fn mark_behind(quotes: &mut [Quote], latest: NaiveDate) {
+    for q in quotes {
+        q.behind_session = q.behind(latest);
+    }
 }
 
 /// Quotes for a whole universe in batches. Batches that fail with NotFound
@@ -334,6 +426,10 @@ pub async fn market_overview(
     let data = MarketOverview {
         as_of,
         market_state,
+        behind_session: crate::model::behind_session(
+            as_of,
+            holidays::latest_session(chrono::Utc::now()),
+        ),
         index: index_row,
         universe: symbols.len(),
         quoted: rows.len(),
@@ -453,6 +549,26 @@ impl Sections {
     }
 }
 
+/// The brief's "Valuation verdict" key point, `None` without a verdict. A P/B
+/// over statements in another currency is not a ratio, so it is left out.
+fn valuation_key_point(f: &Fundamentals) -> Option<String> {
+    let v = f.verdict.as_ref()?;
+    Some(format!(
+        "Valuation verdict: {} (score {:+}, {} inputs){}",
+        v.label.as_str(),
+        v.score,
+        v.inputs_available,
+        match (
+            f.valuation.pe_trailing,
+            f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
+        ) {
+            (Some(pe), Some(pb)) => format!("; P/E {pe:.1}, P/B {pb:.2}"),
+            (Some(pe), None) => format!("; P/E {pe:.1}"),
+            _ => String::new(),
+        }
+    ))
+}
+
 /// One call, every section: quote, fundamentals with verdict, technicals,
 /// returns against IHSG, dividend facts, the local ownership register and
 /// company headlines with sentiment. Sections fetch concurrently; a failed
@@ -467,7 +583,7 @@ pub async fn brief(
 ) -> Result<Sourced<Brief>> {
     let bench = Symbol::parse("^JKSE")?;
     let (quote, fund, tech, rets, divs, headlines) = futures::join!(
-        p.quotes(std::slice::from_ref(symbol)),
+        quotes(p, std::slice::from_ref(symbol)),
         fundamentals(p, symbol),
         technical(p, symbol, Period::Y1),
         returns(p, std::slice::from_ref(symbol), Some(&bench)),
@@ -513,31 +629,48 @@ pub async fn brief(
         )));
     }
 
-    let ownership = match crate::ownership::OwnershipDb::open(ownership_db) {
-        Ok(db) if ownership_db.exists() => match db.holders(symbol.as_str(), None) {
-            Ok(h) => Some(OwnershipSummary {
-                as_of: h.as_of,
-                listed_pct: h.listed_pct,
-                // `+ 0.0` turns the -0.0 an empty f64 sum yields into 0.0.
-                foreign_pct: h
-                    .holders
-                    .iter()
-                    .filter(|x| x.local_foreign.as_deref() == Some("A"))
-                    .map(|x| x.pct)
-                    .sum::<f64>()
-                    + 0.0,
-                holders_listed: h.holders.len(),
-                top_holders: h.holders.into_iter().take(5).collect(),
-            }),
-            Err(e) => {
-                out.warnings.push(format!("ownership: {e}"));
-                failed.push("ownership".into());
-                None
+    // Only an existing file is opened: opening creates (and migrates) it.
+    let ownership = match ownership_db
+        .exists()
+        .then(|| crate::ownership::OwnershipDb::open(ownership_db))
+    {
+        Some(Ok(db)) => {
+            match crate::ownership::holders(&db, symbol.as_str(), None) {
+                Ok(s) => {
+                    // Notes about the release read (imported by an old idx, rows dated otherwise).
+                    out.warnings
+                        .extend(s.warnings.iter().map(|w| format!("ownership: {w}")));
+                    let h = s.data;
+                    Some(OwnershipSummary {
+                        as_of: h.as_of,
+                        listed_pct: h.listed_pct,
+                        // `+ 0.0` turns the -0.0 an empty f64 sum yields into 0.0.
+                        foreign_pct: h
+                            .holders
+                            .iter()
+                            .filter(|x| x.local_foreign.as_deref() == Some("A"))
+                            .map(|x| x.pct)
+                            .sum::<f64>()
+                            + 0.0,
+                        holders_listed: h.holders.len(),
+                        top_holders: h.holders.into_iter().take(5).collect(),
+                    })
+                }
+                Err(e) => {
+                    out.warnings.push(format!("ownership: {e}"));
+                    failed.push("ownership".into());
+                    None
+                }
             }
-        },
-        _ => {
+        }
+        Some(Err(e)) => {
+            out.warnings.push(format!("ownership: {e}"));
+            failed.push("ownership".into());
+            None
+        }
+        None => {
             out.warnings
-                .push("ownership: no register imported (idx ownership import --latest)".into());
+                .push("ownership: no register imported (idx ownership sync)".into());
             failed.push("ownership".into());
             None
         }
@@ -568,21 +701,15 @@ pub async fn brief(
                     .unwrap_or_default()
             ));
         }
-    }
-    if let Some(f) = &fundamentals {
-        if let Some(v) = &f.verdict {
+        if let (Some(true), Some(t)) = (q.behind_session, q.market_time) {
             key_points.push(format!(
-                "Valuation verdict: {} (score {:+}, {} inputs){}",
-                v.label.as_str(),
-                v.score,
-                v.inputs_available,
-                match (f.valuation.pe_trailing, f.valuation.price_to_book) {
-                    (Some(pe), Some(pb)) => format!("; P/E {pe:.1}, P/B {pb:.2}"),
-                    (Some(pe), None) => format!("; P/E {pe:.1}"),
-                    _ => String::new(),
-                }
+                "Last trade {}, before the latest IDX session: suspended, not traded since, or the source lags",
+                t.with_timezone(&crate::model::wib()).format("%Y-%m-%d")
             ));
         }
+    }
+    if let Some(k) = fundamentals.as_ref().and_then(valuation_key_point) {
+        key_points.push(k);
     }
     if let Some(t) = &technical {
         key_points.push(format!(
@@ -726,7 +853,8 @@ pub async fn news(
     company_only: bool,
 ) -> Result<Sourced<NewsReport>> {
     let feeds = newsfeed::select(sources)?;
-    let (items, warnings, cached, stale) = newsfeed::fetch(fetcher, &feeds).await?;
+    let batch = newsfeed::fetch(fetcher, &feeds).await?;
+    let items = batch.items;
     let scanned = items.len();
     let matched_name = symbol.and_then(|s| {
         universe
@@ -753,9 +881,11 @@ pub async fn news(
         },
         newsfeed::NAME,
     );
-    s.cached = cached;
-    s.stale = stale;
-    s.warnings = warnings;
+    s.cached = batch.cached;
+    s.stale = batch.stale_reason.is_some();
+    s.stale_reason = batch.stale_reason;
+    s.fetched_at = batch.fetched_at;
+    s.warnings = batch.warnings;
     Ok(s)
 }
 
@@ -890,7 +1020,7 @@ async fn broker_one(
         return latest_broker_day(fetcher, &symbol, q, today).await;
     };
     let mut s =
-        ipot::broker_summary(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
+        ipot::broker_summary_range(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
     if s.data.is_empty() {
         s.warnings
             .push(format!("{symbol}: no trades from {from} to {to}"));
@@ -1090,7 +1220,7 @@ async fn bandar_one(
                 latest
             } else {
                 let end = latest.data.to;
-                let mut r = ipot::broker_summary(
+                let mut r = ipot::broker_summary_range(
                     fetcher,
                     &symbol,
                     q.period.start(end),
@@ -1105,11 +1235,20 @@ async fn bandar_one(
             }
         }
     };
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        let (from, to) = (s.data.from, s.data.to);
+        if let Err(e) = with_value_traded(fetcher, &symbol, from, to, q.board, today, &mut s).await
+        {
+            s.warnings.push(format!(
+                "{symbol}: no value traded from {from} to {to}, so no percentages ({e})"
+            ));
+        }
+    }
     let mut sessions = Vec::new();
     if q.daily {
         let days = bd::weekdays(s.data.from, s.data.to);
         let got: Vec<Result<Sourced<BrokerSummary>>> = stream::iter(days)
-            .map(|d| ipot::broker_summary(fetcher, &symbol, d, d, q.investor, q.board, today))
+            .map(|d| bandar_session(fetcher, &symbol, d, q, today))
             .buffered(3)
             .collect()
             .await;
@@ -1126,6 +1265,42 @@ async fn bandar_one(
         }
     }
     Ok((s, sessions))
+}
+
+/// For one investor side the source publishes that side's buying, not the
+/// value traded, while bandar's percentages are shares of the stock's value
+/// traded: take `total_value` and `total_lots` from the all-investor summary
+/// of the same range and board (one more request, cached).
+async fn with_value_traded(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    from: NaiveDate,
+    to: NaiveDate,
+    board: BrokerBoard,
+    today: NaiveDate,
+    side: &mut Sourced<BrokerSummary>,
+) -> Result<()> {
+    let all =
+        ipot::broker_summary(fetcher, symbol, from, to, BrokerInvestor::All, board, today).await?;
+    side.absorb(&all);
+    side.data.total_value = all.data.total_value;
+    side.data.total_lots = all.data.total_lots;
+    Ok(())
+}
+
+/// One session of the daily series, with the value traded for one side.
+async fn bandar_session(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    day: NaiveDate,
+    q: BandarQuery,
+    today: NaiveDate,
+) -> Result<Sourced<BrokerSummary>> {
+    let mut s = ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today).await?;
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        with_value_traded(fetcher, symbol, day, day, q.board, today, &mut s).await?;
+    }
+    Ok(s)
 }
 
 /// Bandarmology for each ticker: the top 1/3/5/10 buyers against the top
@@ -1251,24 +1426,23 @@ pub struct BandarScreenOptions {
 }
 
 /// One scanned ticker's range summary; owned arguments keep the stream's
-/// future general over lifetimes.
+/// future general over lifetimes. `foreign_net`: rebuild the range's foreign
+/// net from single sessions (see `ipot::broker_summary_range`); a caller
+/// that never shows the net reads the range page alone.
 async fn screen_summary(
     fetcher: &Arc<Fetcher>,
     symbol: Symbol,
     from: NaiveDate,
     to: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> (Symbol, Result<Sourced<BrokerSummary>>) {
-    let r = ipot::broker_summary(
-        fetcher,
-        &symbol,
-        from,
-        to,
-        BrokerInvestor::All,
-        BrokerBoard::All,
-        today,
-    )
-    .await;
+    let (investor, board) = (BrokerInvestor::All, BrokerBoard::All);
+    let r = if foreign_net {
+        ipot::broker_summary_range(fetcher, &symbol, from, to, investor, board, today).await
+    } else {
+        ipot::broker_summary(fetcher, &symbol, from, to, investor, board, today).await
+    };
     (symbol, r)
 }
 
@@ -1366,17 +1540,19 @@ async fn scan_end(
 }
 
 /// Every candidate's summary over `from..=end`, three at a time, then one
-/// sequential pass over provider failures (not unknown codes).
+/// sequential pass over provider failures (not unknown codes). `foreign_net`
+/// as for [`screen_summary`].
 async fn scan_summaries(
     fetcher: &Arc<Fetcher>,
     candidates: &[Symbol],
     from: NaiveDate,
     end: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> Vec<(Symbol, Result<Sourced<BrokerSummary>>)> {
     let mut fetched: Vec<(Symbol, Result<Sourced<BrokerSummary>>)> =
         stream::iter(candidates.to_vec())
-            .map(|s| screen_summary(fetcher, s, from, end, today))
+            .map(|s| screen_summary(fetcher, s, from, end, today, foreign_net))
             .buffer_unordered(3)
             .collect()
             .await;
@@ -1388,7 +1564,7 @@ async fn scan_summaries(
     if !retry.is_empty() {
         tokio::time::sleep(ipot::RECOVER_PAUSE).await;
         for sym in retry {
-            let again = screen_summary(fetcher, sym.clone(), from, end, today).await;
+            let again = screen_summary(fetcher, sym.clone(), from, end, today, foreign_net).await;
             if let Some(slot) = fetched.iter_mut().find(|(s, _)| *s == sym) {
                 *slot = again;
             }
@@ -1400,8 +1576,10 @@ async fn scan_summaries(
 /// Bandarmology screener: reads the most traded stocks (or the given ones)
 /// over the period ending on the latest session and keeps those matching
 /// the preset and filters. One broker-summary request per scanned ticker;
-/// on multi-day periods one history request per row the other filters
-/// left.
+/// on multi-day periods usually three more for the rebuilt foreign net (up
+/// to six when the latest sessions had no trades; see
+/// `ipot::broker_summary_range`) and one history request per row the other
+/// filters left.
 pub async fn bandar_screen(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
@@ -1423,7 +1601,7 @@ pub async fn bandar_screen(
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
     let period = opts.period.as_str();
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, true).await;
     let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
     let mut failed = 0usize;
     let mut reports: Vec<BandarReport> = Vec::new();
@@ -1589,7 +1767,8 @@ pub async fn bandar_broker(
     }
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    // The rows carry no foreign net: the range pages alone.
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, false).await;
 
     let mut failed = 0usize;
     let mut checked = 0usize;
@@ -1660,10 +1839,155 @@ pub async fn bandar_broker(
     Ok(out)
 }
 
+/// The latest session of one stock or index by `interval` (1m to 1h): the
+/// provider's bars for `Period::D1` (today's session while the market trades,
+/// otherwise the last one), the quote fetched alongside and a summary of the
+/// bars. A failed quote is a warning, not an error; no bars is a warning too.
+/// The name is the source's, else the bundled universe's.
+///
+/// Yahoo's one-day window is empty for the first minutes after the open
+/// (observed from 09:00 until about 09:10 WIB on 2026-11-06) while its five-day window
+/// still ends with the previous session, and a stock that has not traded today
+/// has none either, so an empty one-day answer is retried over five days and
+/// the last session there is shown, with a warning. A source whose five-day
+/// window has another bar size (Stockbit's is hourly) is not retried
+/// (`Provider::serves_interval`).
+pub async fn intraday(
+    p: &dyn Provider,
+    universe: &[Issuer],
+    symbol: &Symbol,
+    interval: Interval,
+) -> Result<Sourced<Intraday>> {
+    if !interval.is_intraday() {
+        return Err(IdxError::Usage(format!(
+            "intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not {interval}; use history (stocks history, idx_history) for daily bars"
+        )));
+    }
+    let wanted = std::slice::from_ref(symbol);
+    let (history, quotes) = tokio::join!(p.history(symbol, Period::D1, interval), p.quotes(wanted));
+    let mut history = history?;
+    let mut warnings = Vec::new();
+    let mut window = "the latest session";
+    if history.data.candles.is_empty() && p.serves_interval(Period::D5, interval) {
+        match p.history(symbol, Period::D5, interval).await {
+            Ok(wider) => match wider.data.candles.last().map(|c| c.date()) {
+                Some(day) => {
+                    warnings.push(format!(
+                        "no {interval} bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, {day}"
+                    ));
+                    history = wider;
+                }
+                None => window = "the last 5 days",
+            },
+            Err(e) => warnings.push(format!("retrying over 5 days failed: {e}")),
+        }
+    }
+    let quote = match quotes {
+        Ok(q) => {
+            let found = q.data.iter().find(|x| &x.symbol == symbol).cloned();
+            if found.is_none() {
+                warnings.push(format!("no quote for {symbol}"));
+            }
+            Some((found, q))
+        }
+        Err(e) => {
+            warnings.push(format!("no quote for {symbol}: {e}"));
+            None
+        }
+    };
+
+    let bars = analysis::intraday::session_bars(&history.data.candles).to_vec();
+    let summary = analysis::intraday::summary(&bars);
+    let session = bars.last().map(|c| c.date());
+    let mut out = Sourced {
+        data: (),
+        provider: history.provider,
+        cached: history.cached,
+        stale: history.stale,
+        stale_reason: history.stale_reason,
+        fetched_at: history.fetched_at,
+        warnings: history.warnings,
+    };
+    let quote = match quote {
+        Some((found, q)) => {
+            out.absorb(&q);
+            found
+        }
+        None => None,
+    };
+    out.warnings.extend(warnings);
+    if bars.is_empty() {
+        out.warnings.push(format!(
+            "no bars for {symbol}: it did not trade in {window}, or the source has none outside trading hours"
+        ));
+    }
+    let quote_day = quote
+        .as_ref()
+        .and_then(|q| q.market_time)
+        .map(|t| t.date_naive());
+    if let (Some(day), Some(qd)) = (session, quote_day) {
+        if day != qd {
+            out.warnings.push(format!(
+                "the bars are from {day} but the quote's last trade is from {qd}; the source updates them separately"
+            ));
+        }
+    }
+    // The source's name first, as `brief` does; the bundled list fills gaps.
+    let name = history
+        .data
+        .name
+        .or_else(|| quote.as_ref().and_then(|q| q.name.clone()))
+        .or_else(|| {
+            universe
+                .iter()
+                .find(|i| &i.symbol == symbol)
+                .and_then(|i| i.name.clone())
+        });
+    Ok(out.map(|_| Intraday {
+        symbol: symbol.clone(),
+        name,
+        session,
+        interval,
+        quote,
+        bars,
+        summary,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{History, Quote};
+
+    #[test]
+    fn valuation_key_point_leaves_out_a_mixed_currency_pb() {
+        let parse = |body: &str, s: &str| {
+            let mut f = crate::providers::yahoo::summary::parse_fundamentals(
+                body,
+                &Symbol::parse(s).unwrap(),
+            )
+            .unwrap();
+            f.verdict = Some(analysis::fundamental::verdict(&f));
+            f
+        };
+        // ITMG on 2026-11-06: USD statements, IDR price, P/B 14103.31.
+        let mut itmg = parse(
+            include_str!("../tests/fixtures/yahoo/quote_summary_fundamentals_itmg.json"),
+            "ITMG",
+        );
+        assert_eq!(
+            valuation_key_point(&itmg).as_deref(),
+            Some("Valuation verdict: undervalued (score +7, 8 inputs); P/E 7.5")
+        );
+        let bbca = parse(
+            include_str!("../tests/fixtures/yahoo/quote_summary_fundamentals_bbca.json"),
+            "BBCA",
+        );
+        let k = valuation_key_point(&bbca).unwrap();
+        assert!(k.contains(", P/B "), "same currency keeps P/B: {k}");
+        itmg.verdict = None;
+        assert_eq!(valuation_key_point(&itmg), None);
+    }
 
     #[test]
     fn match_names_and_items() {
@@ -1785,6 +2109,431 @@ mod tests {
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
+
+    /// Fresh quotes; fundamentals only as stale copies after a failed fetch.
+    struct StaleFundamentals;
+
+    #[async_trait]
+    impl Provider for StaleFundamentals {
+        fn name(&self) -> &'static str {
+            "stale"
+        }
+        async fn quotes(&self, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let rows = symbols
+                .iter()
+                .map(|s| {
+                    let mut q = Quote::empty(s.clone(), "stale");
+                    q.price = Some(1_000.0);
+                    q.market_cap = Some(1e13);
+                    q
+                })
+                .collect();
+            Ok(Sourced::fresh(rows, "stale"))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+        async fn fundamentals(&self, s: &Symbol) -> Result<Sourced<Fundamentals>> {
+            let mut out = Sourced::fresh(Fundamentals::empty(s.clone(), "stale"), "stale");
+            out.cached = true;
+            out.stale = true;
+            out.stale_reason = Some(StaleReason::FetchFailed);
+            out.warnings = vec![crate::providers::fetch_failed_warning(
+                "error sending request for url (https://x.test/q): refused",
+            )];
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn screen_on_stale_fundamentals_names_the_failure_once() {
+        let universe: Vec<Issuer> = syms(&["BBCA", "BBRI"])
+            .into_iter()
+            .map(|symbol| Issuer { symbol, name: None })
+            .collect();
+        let opts = ScreenOptions {
+            preset: None,
+            filters: vec![],
+            sort: Some(Key::Mcap),
+            descending: Some(true),
+            limit: 0,
+            max_fundamentals: 10,
+            with_fundamentals: true,
+            with_returns: false,
+        };
+        let got = screen(&StaleFundamentals, &universe, &opts).await.unwrap();
+        assert_eq!(got.data.fundamentals_checked, 2);
+        // Live quotes, cached fundamentals: not all cached, but stale.
+        assert!(got.stale && !got.cached);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            got.warnings,
+            ["fundamentals for 2 of 2 companies are stale cached copies: the live fetch failed (error sending request for url (https://x.test/q): refused)"]
+        );
+    }
+    /// Quotes with fixed last-trade times, whatever is asked.
+    struct Stamped;
+
+    #[async_trait]
+    impl Provider for Stamped {
+        fn name(&self) -> &'static str {
+            "stamped"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let q = |sym: &str, at: Option<&str>| {
+                let mut q = Quote::empty(Symbol::from_yahoo(sym), "stamped");
+                q.market_time = at.map(|t| chrono::DateTime::parse_from_rfc3339(t).unwrap());
+                q
+            };
+            Ok(Sourced::fresh(
+                vec![
+                    q("WIKA.JK", Some("2025-02-17T16:14:58+07:00")),
+                    q("^GSPC", Some("2025-02-17T04:00:00+07:00")),
+                    q("BBCA.JK", None),
+                    q("BBRI.JK", Some("2099-01-02T16:00:00+07:00")),
+                ],
+                "stamped",
+            ))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn quotes_mark_the_session() {
+        // Holds on any run date: 2025-02-17 is past, 2099 is not.
+        let got = quotes(&Stamped, &syms(&["WIKA"])).await.unwrap();
+        let flags: Vec<Option<bool>> = got.data.iter().map(|q| q.behind_session).collect();
+        assert_eq!(flags, [Some(true), None, None, Some(false)]);
+        // Against a fixed session: the WIB date decides, not the instant.
+        let mut rows = got.data;
+        rows[3].market_time =
+            Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T17:30:00Z").unwrap());
+        mark_behind(&mut rows, NaiveDate::from_ymd_opt(2026, 11, 6).unwrap());
+        assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
+    }
+
+    #[tokio::test]
+    async fn cached_news_keeps_the_original_fetch_time() {
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let at = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let kontan = include_str!("../tests/fixtures/news/kontan_investasi.xml");
+        let cnbc = include_str!("../tests/fixtures/news/cnbc_market_excerpt.xml");
+        for f in newsfeed::select(&[]).unwrap() {
+            let body = if f.url.contains("kontan") {
+                kontan
+            } else {
+                cnbc
+            };
+            cache.put_at(f.url, 200, body, at).unwrap();
+        }
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache,
+            CacheMode::Normal,
+        ));
+        let n = news(&fetcher, &[], None, &[], 0, false).await.unwrap();
+        assert!(n.cached && !n.stale && n.stale_reason.is_none());
+        assert_eq!(n.fetched_at, at, "not the time of this call");
+    }
+
+    mod intraday {
+        use super::super::*;
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        use crate::model::{wib_from_unix, Candle};
+        use crate::providers::yahoo::Yahoo;
+        use crate::providers::Ttls;
+        use async_trait::async_trait;
+        use std::sync::Mutex;
+
+        const CHART: &str = include_str!("../tests/fixtures/yahoo/chart_bbca_1d_1m.json");
+        const EMPTY: &str =
+            include_str!("../tests/fixtures/yahoo/chart_bbca_1d_1m_open_empty.json");
+        const FIVE_DAYS: &str = include_str!("../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json");
+        const QUOTE: &str = include_str!("../tests/fixtures/yahoo/quote_v7_bbca.json");
+
+        /// History from a list of candles (the same for every window), a
+        /// quote dated `quote_secs` or an error; records the windows asked for.
+        /// `hourly_week` makes the five-day window another bar size, as
+        /// Stockbit's is.
+        struct Stub {
+            hourly_week: bool,
+            candles: Vec<Candle>,
+            quote_secs: Option<i64>,
+            asked: Mutex<Vec<Period>>,
+        }
+
+        fn stub(candles: Vec<Candle>, quote_secs: Option<i64>) -> Stub {
+            Stub {
+                hourly_week: false,
+                candles,
+                quote_secs,
+                asked: Mutex::new(vec![]),
+            }
+        }
+
+        #[async_trait]
+        impl Provider for Stub {
+            fn name(&self) -> &'static str {
+                "stub"
+            }
+            fn serves_interval(&self, p: Period, i: Interval) -> bool {
+                !(self.hourly_week && p == Period::D5 && i != Interval::Hour1)
+            }
+            async fn quotes(&self, s: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+                let Some(secs) = self.quote_secs else {
+                    return Err(IdxError::provider("stub", "quote endpoint down"));
+                };
+                let mut q = Quote::empty(s[0].clone(), "stub");
+                q.price = Some(5_020.0);
+                q.name = Some("From the quote".into());
+                q.market_time = wib_from_unix(secs);
+                let mut out = Sourced::fresh(vec![q], "stub");
+                out.cached = true;
+                Ok(out)
+            }
+            async fn history(
+                &self,
+                s: &Symbol,
+                p: Period,
+                i: Interval,
+            ) -> Result<Sourced<History>> {
+                self.asked.lock().unwrap().push(p);
+                let mut out = Sourced::fresh(
+                    History {
+                        symbol: s.clone(),
+                        name: None,
+                        currency: None,
+                        period: p,
+                        interval: i,
+                        summary: History::summarise(&self.candles),
+                        candles: self.candles.clone(),
+                    },
+                    "stub",
+                );
+                out.cached = true;
+                Ok(out)
+            }
+        }
+
+        fn bar(secs: i64, close: f64) -> Candle {
+            Candle {
+                time: wib_from_unix(secs).unwrap(),
+                open: close,
+                high: close,
+                low: close,
+                close,
+                adj_close: None,
+                volume: 1_000,
+            }
+        }
+
+        // 2026-11-05 09:00 WIB.
+        const DAY: i64 = 1_793_844_000;
+
+        fn issuers() -> Vec<Issuer> {
+            vec![Issuer {
+                symbol: Symbol::parse("BBCA").unwrap(),
+                name: Some("BANK CENTRAL ASIA Tbk".into()),
+            }]
+        }
+
+        fn bbca() -> Symbol {
+            Symbol::parse("BBCA").unwrap()
+        }
+
+        #[tokio::test]
+        async fn bars_quote_and_summary() {
+            let p = stub(
+                vec![
+                    bar(DAY - 86_400, 4_900.0),
+                    bar(DAY, 5_000.0),
+                    bar(DAY + 60, 5_020.0),
+                ],
+                Some(DAY + 7_200),
+            );
+            let r = intraday(&p, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+            assert!(r.cached, "both parts came from the cache");
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1]);
+            let d = &r.data;
+            assert_eq!(d.session.unwrap().to_string(), "2026-11-05");
+            assert_eq!(d.bars.len(), 2, "only the latest date");
+            assert_eq!(d.name.as_deref(), Some("From the quote"));
+            assert_eq!(d.quote.as_ref().unwrap().price, Some(5_020.0));
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!((s.open, s.close, s.bars_volume), (5_000.0, 5_020.0, 2_000));
+            assert_eq!(s.vwap, Some(5_010.0));
+        }
+
+        #[tokio::test]
+        async fn quote_failure_and_lagging_bars_are_warnings() {
+            let p = stub(vec![bar(DAY, 5_000.0)], None);
+            let r = intraday(&p, &issuers(), &bbca(), Interval::Min5)
+                .await
+                .unwrap();
+            assert!(r.data.quote.is_none());
+            assert_eq!(r.data.interval, Interval::Min5);
+            assert_eq!(r.data.name.as_deref(), Some("BANK CENTRAL ASIA Tbk"));
+            assert_eq!(
+                r.warnings,
+                ["no quote for BBCA: stub: quote endpoint down"],
+                "{:?}",
+                r.warnings
+            );
+
+            // The quote has moved on to the next session; the bars have not.
+            let p = stub(vec![bar(DAY, 5_000.0)], Some(DAY + 86_400));
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(
+                r.warnings,
+                ["the bars are from 2026-11-05 but the quote's last trade is from 2026-11-06; the source updates them separately"]
+            );
+        }
+
+        #[tokio::test]
+        async fn no_bars_is_a_warning_after_the_five_day_retry() {
+            let p = stub(vec![], Some(DAY));
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1, Period::D5]);
+            assert!(r.data.bars.is_empty() && r.data.summary.is_none());
+            assert!(r.data.session.is_none());
+            assert_eq!(
+                r.warnings,
+                ["no bars for BBCA: it did not trade in the last 5 days, or the source has none outside trading hours"]
+            );
+
+            // A five-day window of another bar size (Stockbit's is hourly):
+            // no retry, whatever the provider is called.
+            let mut p = stub(vec![], Some(DAY));
+            p.hourly_week = true;
+            let r = intraday(&p, &[], &bbca(), Interval::Min1).await.unwrap();
+            assert_eq!(*p.asked.lock().unwrap(), [Period::D1]);
+            assert_eq!(
+                r.warnings,
+                ["no bars for BBCA: it did not trade in the latest session, or the source has none outside trading hours"]
+            );
+            // Hourly bars are what that window holds, so 1h is retried.
+            let r = intraday(&p, &[], &bbca(), Interval::Hour1).await.unwrap();
+            assert_eq!(
+                *p.asked.lock().unwrap(),
+                [Period::D1, Period::D1, Period::D5]
+            );
+            assert!(
+                r.warnings[0].contains("the last 5 days"),
+                "{:?}",
+                r.warnings
+            );
+
+            // Behind a chain, one link with another bar size stops the retry.
+            let mut hourly = stub(vec![], Some(DAY));
+            hourly.hourly_week = true;
+            let chain = crate::providers::Chain::new(vec![
+                Box::new(stub(vec![], Some(DAY))),
+                Box::new(hourly),
+            ]);
+            assert!(chain.serves_interval(Period::D5, Interval::Hour1));
+            assert!(!chain.serves_interval(Period::D5, Interval::Min1));
+            assert!(chain.serves_interval(Period::D1, Interval::Min1));
+        }
+
+        #[tokio::test]
+        async fn daily_and_longer_bars_are_a_usage_error() {
+            let p = stub(vec![], None);
+            for i in [Interval::Day1, Interval::Week1, Interval::Month1] {
+                let e = intraday(&p, &[], &bbca(), i).await.unwrap_err();
+                assert_eq!(e.exit_code(), 2, "{i}");
+            }
+            assert!(p.asked.lock().unwrap().is_empty());
+        }
+
+        fn yahoo(one_day: &str) -> (Yahoo, Arc<FixtureBackend>, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let be = Arc::new(
+                FixtureBackend::new()
+                    .route_with_headers(
+                        "https://fc.yahoo.com",
+                        404,
+                        "",
+                        &[("set-cookie", "A3=d=abc; Domain=.yahoo.com")],
+                    )
+                    .route("v1/test/getcrumb", 200, "crumb123")
+                    .route("v7/finance/quote?symbols=BBCA.JK", 200, QUOTE)
+                    .route("BBCA.JK?range=1d&interval=1m", 200, one_day)
+                    .route("BBCA.JK?range=5d&interval=1m", 200, FIVE_DAYS),
+            );
+            let fetcher = Arc::new(Fetcher::new(
+                be.clone(),
+                Cache::new(dir.path()),
+                CacheMode::Normal,
+            ));
+            (Yahoo::new(fetcher, Ttls::default()), be, dir)
+        }
+
+        #[tokio::test]
+        async fn yahoo_end_to_end_from_recorded_responses() {
+            let (y, be, _dir) = yahoo(CHART);
+            let r = intraday(&y, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert_eq!(r.provider, "yahoo");
+            assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+            let d = &r.data;
+            assert_eq!(d.name.as_deref(), Some("PT Bank Central Asia Tbk"));
+            assert_eq!(d.bars.len(), 333);
+            let q = d.quote.as_ref().unwrap();
+            assert_eq!(
+                (q.previous_close, q.price, q.volume),
+                (Some(4_930.0), Some(5_125.0), Some(166_336_900))
+            );
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!(s.bars_volume, 155_142_100);
+            assert_eq!(s.vwap, Some(5_089.98));
+            assert!(!be
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| u.contains("range=5d")));
+        }
+
+        #[tokio::test]
+        async fn yahoo_just_after_the_open_shows_the_last_session() {
+            // 09:00:40 WIB: the 1-day window is empty, the 5-day one still
+            // ends with 11-05, whose bars match the 1-day recording exactly.
+            let (y, be, _dir) = yahoo(EMPTY);
+            let r = intraday(&y, &issuers(), &bbca(), Interval::Min1)
+                .await
+                .unwrap();
+            assert_eq!(
+                r.warnings,
+                ["no 1m bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, 2026-11-05"]
+            );
+            let d = &r.data;
+            assert_eq!(d.session.unwrap().to_string(), "2026-11-05");
+            assert_eq!(d.bars.len(), 333);
+            assert_eq!(
+                d.bars.last().unwrap().time.to_rfc3339(),
+                "2026-11-05T16:14:00+07:00"
+            );
+            let s = d.summary.as_ref().unwrap();
+            assert_eq!((s.bars_volume, s.vwap), (155_142_100, Some(5_089.98)));
+            assert!(be
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| u.contains("range=5d")));
+        }
+    }
+
     mod broker {
         use super::super::*;
         use crate::cache::Cache;
@@ -2040,10 +2789,58 @@ mod tests {
             list.iter().map(|s| Symbol::parse(s).unwrap()).collect()
         }
 
+        /// BRPT and TLKM over the week: the range page (its foreign net
+        /// counts the 16th twice), plus the pages the net is rebuilt from.
+        fn others(be: FixtureBackend) -> FixtureBackend {
+            be.route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
+                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM)
+                .route(
+                    "code=BRPT&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_brpt_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=BRPT&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261015.html"),
+                )
+                .route(
+                    "code=BRPT&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_brpt_20261016.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_tlkm_20261012_20261014.html"
+                    ),
+                )
+                .route(
+                    "code=TLKM&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261015.html"),
+                )
+                .route(
+                    "code=TLKM&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!("../tests/fixtures/ipot/brokersummary_tlkm_20261016.html"),
+                )
+        }
+
         fn days() -> FixtureBackend {
             let mut be = FixtureBackend::new()
                 .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK);
+                .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
+                .route(
+                    "code=BBCA&start=10/12/2026&end=10/14/2026",
+                    200,
+                    include_str!(
+                        "../tests/fixtures/ipot/brokersummary_bbca_20261012_20261014.html"
+                    ),
+                );
             for (day, html) in [
                 (
                     "12",
@@ -2103,6 +2900,18 @@ mod tests {
                 Some("CLSA SEKURITAS INDONESIA")
             );
             assert!(r.daily.is_none());
+            // The week page says -4.1 T (the 16th counted twice); the five
+            // sessions one by one give -1.82 T, -18.4% of the 9.9 T traded.
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -1_823.1 / 9_900.0 * 100.0).abs() < 1e-9, "{fpct}");
+            assert!(
+                r.reasons
+                    .iter()
+                    .any(|x| x == "Foreign investors net sold 1.82T (-18.4% of value)."),
+                "{:?}",
+                r.reasons
+            );
 
             // One session: the quote's previous close is the base.
             let got = super::super::bandar(
@@ -2136,9 +2945,61 @@ mod tests {
             assert_eq!(daily.days.len(), 5);
             assert_eq!(daily.days[4].date, d(10, 16));
             assert!(daily.streak < 0);
-            assert_eq!(be.call_count(), 6, "range + five sessions");
+            assert_eq!(
+                be.call_count(),
+                7,
+                "the range, the 16th, the 15th and the rest for the foreign net, then the three other sessions"
+            );
+            assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
             // Base for a range that starts on the 12th is the close of the 9th.
             assert!((r.price_change_pct.unwrap() - (5_175.0 / 6_050.0 - 1.0) * 100.0).abs() < 1e-9);
+        }
+
+        #[tokio::test]
+        async fn one_investor_side_reads_against_the_value_traded() {
+            let (f, be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=F&",
+                        200,
+                        include_str!(
+                            "../tests/fixtures/ipot/brokersummary_bbca_20261016_foreign.html"
+                        ),
+                    )
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=all&",
+                        200,
+                        DAY,
+                    ),
+            );
+            let mut query = q(BandarPeriod::Day1);
+            query.investor = BrokerInvestor::Foreign;
+            query.daily = true;
+            let got = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), query, d(10, 17))
+                .await
+                .unwrap();
+            let r = &got.data[0];
+            assert_eq!(r.investor, BrokerInvestor::Foreign);
+            // The foreign page's T. Val (1.7 T) is their buying; the
+            // percentages are of the 6.6 T BBCA traded.
+            assert_eq!(r.total_value, Some(6_600_000_000_000.0));
+            assert_eq!(r.total_lots, Some(12_600_000.0));
+            let head = r.tiers.iter().find(|t| t.top == 5).unwrap();
+            let pct = head.net_pct.unwrap();
+            assert!(
+                (pct - head.net_value / 6.6e12 * 100.0).abs() < 1e-9,
+                "{pct}"
+            );
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -2.3 / 6.6 * 100.0).abs() < 1e-9, "{fpct}");
+            let daily = r.daily.as_ref().unwrap();
+            assert_eq!(daily.days[0].total_value, Some(6_600_000_000_000.0));
+            assert_eq!(
+                be.call_count(),
+                2,
+                "the side's page and the all-investor page, cached"
+            );
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
         }
 
         #[tokio::test]
@@ -2168,13 +3029,7 @@ mod tests {
 
         #[tokio::test]
         async fn the_screen_keeps_big_distribution_heaviest_first() {
-            let (f, be, _d) = fetcher(
-                FixtureBackend::new()
-                    .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, DAY)
-                    .route("code=BBCA&start=10/12/2026&end=10/16/2026", 200, WEEK)
-                    .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                    .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM),
-            );
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BandarScreenOptions {
                 period: BandarPeriod::Week1,
                 top: 5,
@@ -2197,6 +3052,15 @@ mod tests {
             let order: Vec<&str> = s.rows.iter().map(|r| r.symbol.as_str()).collect();
             assert_eq!(order, ["BBCA", "TLKM"]);
             assert_eq!(s.rows[0].phase, Some(BandarPhase::Markdown));
+            // Rebuilt from single sessions: TLKM -96.6 B - 17.9 B - 90.2 B
+            // where its week page says -319.8 B.
+            assert_eq!(s.rows[0].foreign_net_value, Some(-1_823_100_000_000.0));
+            assert_eq!(s.rows[1].foreign_net_value, Some(-204_700_000_000.0));
+            assert!(
+                !got.warnings.iter().any(|w| w.contains("no foreign net")),
+                "{:?}",
+                got.warnings
+            );
             assert!(
                 got.warnings
                     .iter()
@@ -2222,10 +3086,7 @@ mod tests {
 
         #[tokio::test]
         async fn broker_activity_finds_one_member_across_the_scan() {
-            let be = days()
-                .route("code=BRPT&start=10/12/2026&end=10/16/2026", 200, BRPT)
-                .route("code=TLKM&start=10/12/2026&end=10/16/2026", 200, TLKM);
-            let (f, _be, _d) = fetcher(be);
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BrokerActivityOptions {
                 code: " yp ".into(),
                 period: BandarPeriod::Week1,
@@ -2273,6 +3134,11 @@ mod tests {
             assert_eq!(tb.net_value, Some(v(tb) - v(ts)));
             let total: f64 = a.bought.iter().map(v).sum();
             assert!((a.bought_value - total).abs() < 1e-6);
+            // No foreign net in these rows: the week pages alone, none of the
+            // pages the screen rebuilds its net from.
+            assert_eq!(be.calls_matching("start=10/12/2026&end=10/14/2026"), 0);
+            assert_eq!(be.calls_matching("start=10/15/2026&end=10/15/2026"), 0);
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
 
             let bad = BrokerActivityOptions {
                 code: "MIRAE".into(),
@@ -2295,5 +3161,211 @@ mod tests {
                 "sums cover every row"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+    use crate::model::{History, MarketReturns};
+    use async_trait::async_trait;
+
+    /// Quotes for BBCA, BBRI and TLKM, plus return windows unless told to fail.
+    struct Stub {
+        returns: Option<fn() -> IdxError>,
+    }
+
+    fn quote(s: &str, price: f64, low: f64, high: f64, mcap: f64, pe: f64) -> Quote {
+        let mut q = Quote::empty(Symbol::parse(s).unwrap(), "stub");
+        (q.price, q.week52_low, q.week52_high) = (Some(price), Some(low), Some(high));
+        (q.market_cap, q.pe_trailing) = (Some(mcap), Some(pe));
+        q
+    }
+
+    fn ret(s: &str, m3: f64, y1: f64) -> MarketReturns {
+        MarketReturns {
+            symbol: Symbol::parse(s).unwrap(),
+            source: "stub:screener",
+            w1: None,
+            m1: None,
+            m3: Some(m3),
+            m6: None,
+            ytd: None,
+            y1: Some(y1),
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Stub {
+        fn name(&self) -> &'static str {
+            "stub"
+        }
+        async fn quotes(&self, _: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            Ok(Sourced::fresh(
+                vec![
+                    quote("BBCA", 5125.0, 4740.0, 8700.0, 6.3e14, 10.9),
+                    quote("BBRI", 2710.0, 2460.0, 4050.0, 4.0e14, 6.5),
+                    quote("TLKM", 1990.0, 1770.0, 3990.0, 1.9e14, 11.0),
+                ],
+                "stub",
+            ))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+        async fn market_returns(&self) -> Result<Sourced<Vec<MarketReturns>>> {
+            if let Some(e) = self.returns {
+                return Err(e());
+            }
+            let mut s = Sourced::fresh(
+                vec![
+                    ret("BBCA", -20.5426, -41.092),
+                    ret("BBRI", -10.2649, -31.9095),
+                    ret("TLKM", -26.5683, -43.7853),
+                ],
+                "msn",
+            );
+            s.warnings.push("MSN listed 3 of 887 stocks".into());
+            Ok(s)
+        }
+    }
+
+    fn universe() -> Vec<Issuer> {
+        ["BBCA", "BBRI", "TLKM"]
+            .iter()
+            .map(|s| Issuer {
+                symbol: Symbol::parse(s).unwrap(),
+                name: None,
+            })
+            .collect()
+    }
+
+    fn opts(preset: Option<ScreenPreset>, filter: &str) -> ScreenOptions {
+        ScreenOptions {
+            preset,
+            filters: scr::parse_filters(filter).unwrap(),
+            sort: None,
+            descending: None,
+            limit: 0,
+            max_fundamentals: 10,
+            with_fundamentals: false,
+            with_returns: false,
+        }
+    }
+
+    fn order(r: &ScreenReport) -> Vec<&str> {
+        r.rows.iter().map(|x| x.symbol.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn top_performers_join_the_return_windows() {
+        let ok = Stub { returns: None };
+        let got = screen(
+            &ok,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap();
+        let r = &got.data;
+        assert_eq!(order(r), ["BBRI", "BBCA", "TLKM"]);
+        assert_eq!(r.preset.as_deref(), Some("top-performers"));
+        assert_eq!(r.returns_source.as_deref(), Some("stub:screener"));
+        assert_eq!((r.sort.as_str(), r.descending), ("ret1y", true));
+        assert!(r.filters.is_empty());
+        assert_eq!(r.rows[0].return_1y_pct, Some(-31.9095));
+        assert!(got
+            .warnings
+            .iter()
+            .any(|w| w.contains("MSN listed 3 of 887")));
+
+        let mut o = opts(Some(ScreenPreset::WorstPerformers), "");
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(order(&got.data), ["TLKM", "BBCA", "BBRI"]);
+        assert!(!got.data.descending);
+        o.descending = Some(true);
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(
+            order(&got.data),
+            ["BBRI", "BBCA", "TLKM"],
+            "--desc overrides"
+        );
+
+        // A ret filter alone pulls the windows in too; the sort key can be any window.
+        let mut o = opts(None, "ret1y>-42");
+        o.sort = Some(Key::Ret3m);
+        let got = screen(&ok, &universe(), &o).await.unwrap();
+        assert_eq!(order(&got.data), ["BBRI", "BBCA"]);
+        assert_eq!(got.data.matched_quote_level, 2);
+    }
+
+    #[tokio::test]
+    async fn presets_combine_with_filters() {
+        let ok = Stub { returns: None };
+        let got = screen(
+            &ok,
+            &universe(),
+            &opts(Some(ScreenPreset::LowPe), "mcap>3T"),
+        )
+        .await
+        .unwrap();
+        let r = &got.data;
+        assert_eq!(r.filters, ["pe>0", "mcap>3T"]);
+        assert_eq!((r.sort.as_str(), r.descending), ("pe", false));
+        assert_eq!(order(r), ["BBRI", "BBCA", "TLKM"]);
+        assert_eq!(r.returns_source, None, "no return key, no MSN request");
+        assert_eq!(r.rows[0].return_1y_pct, None);
+
+        let got = screen(&ok, &universe(), &opts(Some(ScreenPreset::Low52w), ""))
+            .await
+            .unwrap();
+        // BBCA 9.7 %, BBRI 15.7 %, TLKM 9.9 % of their ranges: none at or under 5.
+        assert_eq!(got.data.total_matches, 0);
+        assert_eq!(got.data.filters, ["range<=5"]);
+        let got = screen(&ok, &universe(), &opts(None, "range<10"))
+            .await
+            .unwrap();
+        assert_eq!(order(&got.data), ["BBCA", "TLKM"], "by mcap");
+    }
+
+    #[tokio::test]
+    async fn missing_return_windows_fail_only_when_needed() {
+        let down = Stub {
+            returns: Some(|| IdxError::Network("screener down".into())),
+        };
+        let err = screen(&down, &universe(), &opts(None, "ret1y>0"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        let err = screen(
+            &down,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("screener down"), "{err}");
+
+        let mut o = opts(None, "pe<20");
+        o.with_returns = true;
+        let got = screen(&down, &universe(), &o).await.unwrap();
+        assert_eq!(got.data.rows.len(), 3);
+        assert_eq!(got.data.returns_source, None);
+        assert!(got
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("return windows unavailable")));
+
+        let none = Stub {
+            returns: Some(|| IdxError::unsupported("yahoo", "market-wide return windows")),
+        };
+        let err = screen(
+            &none,
+            &universe(),
+            &opts(Some(ScreenPreset::TopPerformers), ""),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.exit_code(), 6);
     }
 }

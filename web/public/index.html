@@ -74,7 +74,7 @@
   <nav class="nav" aria-label="Site">
     <a href="/" aria-current="page">Monitor</a>
     <a href="/terminal">Terminal</a>
-    <a href="https://github.com/fzn0x/idx#readme">Docs</a>
+    <a href="/docs/">Docs</a>
   </nav>
   <a class="star" id="star" href="https://github.com/fzn0x/idx" aria-label="Star fzn0x/idx on GitHub"><span class="star-l"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6L9.7 6.25 14.66 6.44 10.76 9.5 12.11 14.26 8 11.5 3.89 14.26 5.24 9.5 1.34 6.44 6.3 6.25Z"/></svg>Star</span><span class="star-n" id="star-n" hidden></span></a>
 </header>
@@ -206,26 +206,28 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For agents<small>idx mcp · 36 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 47 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
             <tr><td>idx_market</td><td>IHSG, breadth, movers</td></tr>
-            <tr><td>idx_quote · idx_history</td><td>quotes, OHLCV candles</td></tr>
-            <tr><td>idx_fundamental · idx_technical</td><td>verdict, signal</td></tr>
+            <tr><td>idx_quote · idx_history · idx_intraday</td><td>quotes, OHLCV candles, the session by the minute</td></tr>
+            <tr><td>idx_fundamental · idx_technical</td><td>verdict, lenses, signal</td></tr>
             <tr><td>idx_returns · idx_dividends</td><td>vs IHSG, TTM yield</td></tr>
             <tr><td>idx_screen · idx_news · idx_sentiment</td><td>filter, headlines, lexicon</td></tr>
+            <tr><td>idx_insights</td><td>MSN's rated statements</td></tr>
             <tr><td>idx_broker</td><td>who bought and sold</td></tr>
             <tr><td>idx_bandar · idx_bandar_screen · idx_bandar_broker</td><td>bandarmology, screener, one broker</td></tr>
             <tr><td>idx_foreign · idx_market_foreign</td><td>foreign buying and selling</td></tr>
             <tr><td>idx_market_brokers · idx_indices</td><td>top brokers, every index</td></tr>
             <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividends, rights, RUPS, holidays</td></tr>
             <tr><td>idx_instruments · idx_members</td><td>listed stocks, broker codes</td></tr>
-            <tr><td>idx_ownership_*</td><td>holders, changes, foreign flow</td></tr>
-            <tr><td>idx_orderbook · idx_stockbit_*</td><td>realtime book, Stockbit login (opt-in)</td></tr>
+            <tr><td>idx_astro</td><td>sky, weton, shio, backtest</td></tr>
+            <tr><td>idx_ownership_*</td><td>holders, search, rankings, networks, changes, foreign flow, composition, snapshot sync, institutions</td></tr>
+            <tr><td>idx_orderbook · idx_stockbit_*</td><td>Stockbit, your login (opt-in): book, corporate actions, holder movements</td></tr>
           </tbody>
         </table>
-        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 36 tools with their CLI and web commands</a></p>
+        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 47 tools with their CLI and web commands</a></p>
       </div>
     </div>
     <p class="mline"><span class="sr-only">One envelope behind the table, the JSON and the MCP tool.</span><span aria-hidden="true">TABLE&lt;&lt;JSON&lt;&lt;MCP&lt;&lt;ONE&lt;ENVELOPE&lt;&lt;2026-10-16</span></p>
@@ -234,8 +236,8 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   <section class="panel" id="catatan" aria-labelledby="notes-h" tabindex="-1">
     <header class="ph"><span class="no">05</span><h2 id="notes-h">Catatan</h2><p class="sub">Notes to the statements · what this tool does and does not do</p><p class="age">Static</p></header>
     <div class="notes">
-      <p><b>Scope.</b> <code>stocks quote · history · profile · financials · earnings · dividends · returns · fundamental · technical · brief · compare · screen · news · sentiment</code>, <code>market overview</code>, <code>broker</code>, <code>bandar detect · screen</code>, <code>ownership import · ticker · entity · changes · foreign</code> and <code>watch</code>, plus <code>mcp</code>, <code>schema</code>, <code>config</code>, <code>cache</code>. Output as a table, <code>-o json</code> or <code>-o csv</code>. Every command works on IDX tickers such as <code>BBCA</code>; <code>^JKSE</code> is IHSG.</p>
-      <p><b>Sources.</b> Yahoo Finance for prices, history, profiles, ratios, earnings and statements; MSN Money for a second opinion on ratios and analyst targets; IDX's monthly KSEI file for holders above 1 %; the exchange's own idx.co.id summaries for foreign flow, member activity, indices and the corporate-action calendar (CLI and MCP: the exchange refuses requests from data centres, this page's host included); Indo Premier for broker summaries and corporate actions; Kontan and CNBC Indonesia feeds for news; and, opt-in, Stockbit for realtime quotes, history and a live order book carrying your own Stockbit session (CLI and MCP only, via <code>idx stockbit login</code>). Every response names its <code>provider</code>, <code>fetched_at</code>, and whether it came from cache.</p>
+      <p><b>Scope.</b> <code>stocks quote · history · profile · financials · earnings · dividends · returns · fundamental · technical · brief · compare · screen · news · sentiment</code>, <code>market overview</code>, <code>broker</code>, <code>bandar detect · screen</code>, <code>ownership import · ticker · entity · changes · foreign</code> and <code>watch</code>, plus <code>mcp</code>, <code>schema</code>, <code>config</code>, <code>cache</code>. Output as a table, <code>-o json</code>, <code>-o jsonl</code> or <code>-o csv</code>. Every command works on IDX tickers such as <code>BBCA</code>; <code>^JKSE</code> is IHSG.</p>
+      <p><b>Sources.</b> Yahoo Finance for prices, history, profiles, ratios, earnings and statements; MSN Money for a second opinion on ratios and analyst targets, and for the institutions and funds holding a stock (CLI and MCP); IDX's monthly KSEI file for holders above 1 %; KSEI's monthly composition archive from ksei.co.id for local and foreign holders by investor type (CLI and MCP); the exchange's own idx.co.id summaries for foreign flow, member activity, indices and the corporate-action calendar (CLI and MCP: the exchange refuses requests from data centres, this page's host included); Indo Premier for broker summaries, foreign flow per stock in rupiah and corporate actions; Kontan and CNBC Indonesia feeds for news; and, opt-in, Stockbit for realtime quotes, history, a live order book, corporate actions and insider and major-holder movements carrying your own Stockbit session (CLI and MCP only, via <code>idx stockbit login</code>). Every response names its <code>provider</code>, <code>fetched_at</code>, and whether it came from cache.</p>
       <p><b>Provenance over polish.</b> When two sources disagree they are never averaged: the first answers, the second fills blanks, and <code>sources</code> lists who contributed. Yahoo publishes gross margin as 0 for banks; idx publishes <code>null</code>, because it means not applicable.</p>
       <p><b>Ownership.</b> Since March 2026 KSEI compiles, and IDX publishes monthly, every holder above 1 % of a listed company. The CLI imports the XLSX (or the earlier PDF) into local SQLite with normalised entity names, so <em>who holds more than 1 % of BBCA</em> and <em>what did this fund change last month</em> are one command each. idx.co.id sits behind Cloudflare; the import explains the manual path when a download is refused.</p>
       <p><b>Heuristics are labelled.</b> The fundamentals verdict, the technical signal and the news sentiment are rule scores. Every rule that fired is listed in plain language, and none of them is advice.</p>
@@ -245,7 +247,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 36 MCP tools, the CLI command behind each, and 28 that run in the web terminal</p><p class="age">Static</p></header>
+    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 47 MCP tools, the CLI command behind each, and 35 that run in the web terminal</p><p class="age">Static</p></header>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -254,19 +256,21 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_market</td><td><code>idx market overview</code></td><td><a href="/terminal?cmd=market">market</a></td><td class="muted">IHSG, breadth, gainers, losers, most traded</td></tr>
             <tr><td>idx_quote</td><td><code>idx stocks quote BBCA,BBRI</code></td><td><a href="/terminal?cmd=quote%20BBCA">quote BBCA</a></td><td class="muted">delayed quotes; one symbol adds a price chart</td></tr>
             <tr><td>idx_history</td><td><code>idx stocks history BBCA --period 3mo</code></td><td><a href="/terminal?cmd=history%20BBCA%203mo">history BBCA 3mo</a></td><td class="muted">OHLCV candles</td></tr>
+            <tr><td>idx_intraday</td><td><code>idx stocks intraday BBCA</code></td><td><a href="/terminal?cmd=intraday%20BBCA">intraday BBCA</a></td><td class="muted">the latest session by the minute: OHLCV bars, VWAP, change vs the previous close</td></tr>
             <tr><td>idx_profile</td><td><code>idx stocks profile TLKM</code></td><td><a href="/terminal?cmd=profile%20TLKM">profile TLKM</a></td><td class="muted">sector, industry, description, management</td></tr>
             <tr><td>idx_financials</td><td><code>idx stocks financials ASII</code></td><td><a href="/terminal?cmd=financials%20ASII">financials ASII</a></td><td class="muted">income statement, balance sheet, cash flow</td></tr>
             <tr><td>idx_earnings</td><td><code>idx stocks earnings TLKM</code></td><td><a href="/terminal?cmd=earnings%20TLKM">earnings TLKM</a></td><td class="muted">EPS vs estimates, next earnings date</td></tr>
             <tr><td>idx_dividends</td><td><code>idx stocks dividends TLKM</code></td><td><a href="/terminal?cmd=dividends%20TLKM">dividends TLKM</a></td><td class="muted">payments, yearly totals, TTM yield, streak</td></tr>
             <tr><td>idx_returns</td><td><code>idx stocks returns BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=returns%20BBCA%20BBRI%20BMRI">returns BBCA BBRI BMRI</a></td><td class="muted">1w..5y returns, CAGR, drawdown, excess over IHSG</td></tr>
-            <tr><td>idx_fundamental</td><td><code>idx stocks fundamental BBCA</code></td><td><a href="/terminal?cmd=fundamental%20BBCA">fundamental BBCA</a></td><td class="muted">ratios with a plain-language verdict</td></tr>
+            <tr><td>idx_fundamental</td><td><code>idx stocks fundamental BBCA</code></td><td><a href="/terminal?cmd=fundamental%20BBCA">fundamental BBCA</a></td><td class="muted">ratios with a plain-language verdict; lens growth, valuation or risk for a focused reading</td></tr>
             <tr><td>idx_technical</td><td><code>idx stocks technical BBRI</code></td><td><a href="/terminal?cmd=technical%20BBRI">technical BBRI</a></td><td class="muted">RSI, MACD, averages, levels, signal</td></tr>
             <tr><td>idx_compare</td><td><code>idx stocks compare BBCA BBRI BMRI</code></td><td><a href="/terminal?cmd=compare%20BBCA%20BBRI%20BMRI">compare BBCA BBRI BMRI</a></td><td class="muted">side-by-side fundamentals</td></tr>
             <tr><td>idx_screen</td><td><code>idx stocks screen -f 'pe&lt;10,div&gt;5,mcap&gt;5T'</code></td><td><a href="/terminal?cmd=screen%20pe%3C10%2Cdiv%3E5%2Cmcap%3E5T%20--sort%20div">screen pe&lt;10,div&gt;5,mcap&gt;5T --sort div</a></td><td class="muted">screener over ~950 tickers</td></tr>
             <tr><td>idx_news</td><td><code>idx stocks news TLKM</code></td><td><a href="/terminal?cmd=news%20TLKM">news TLKM</a></td><td class="muted">Kontan and CNBC Indonesia headlines</td></tr>
             <tr><td>idx_sentiment</td><td><code>idx stocks sentiment BBRI</code></td><td><a href="/terminal?cmd=sentiment%20BBRI">sentiment BBRI</a></td><td class="muted">lexicon sentiment over the headlines</td></tr>
+            <tr><td>idx_insights</td><td><code>idx stocks insights BBCA</code></td><td><a href="/terminal?cmd=insights%20BBCA">insights BBCA</a></td><td class="muted">MSN Money's rated statements vs peers and industry</td></tr>
             <tr><td>idx_corporate_actions</td><td><code>idx stocks actions BBCA</code></td><td><a href="/terminal?cmd=actions%20BBCA">actions BBCA</a></td><td class="muted">dividends, splits, bonus, rights, RUPS, warrants</td></tr>
-            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">foreign buying and selling per session</td></tr>
+            <tr><td>idx_foreign</td><td><code>idx stocks foreign BBCA</code></td><td><a href="/terminal?cmd=foreign%20BBCA">foreign BBCA</a></td><td class="muted">foreign buying and selling per session (the web reads IPOT, in rupiah)</td></tr>
             <tr><td>idx_instruments</td><td><code>idx stocks list --search bank</code></td><td><a href="/terminal?cmd=list%20--search%20bank">list --search bank</a></td><td class="muted">listed stocks (the web lists codes and names)</td></tr>
             <tr><td>idx_market_foreign</td><td><code>idx market foreign</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">top foreign net buying and selling</td></tr>
             <tr><td>idx_market_brokers</td><td><code>idx market brokers</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">exchange members ranked by the day's value</td></tr>
@@ -274,6 +278,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_calendar</td><td><code>idx market calendar</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">dividend and rights dates, RUPS, public exposes</td></tr>
             <tr><td>idx_holidays</td><td><code>idx market holidays --upcoming</code></td><td><a href="/terminal?cmd=holidays%20--upcoming">holidays --upcoming</a></td><td class="muted">trading holidays and the next trading day</td></tr>
             <tr><td>idx_members</td><td><code>idx market members</code></td><td><a href="/terminal?cmd=members">members</a></td><td class="muted">exchange members: broker codes and names</td></tr>
+            <tr><td>idx_astro</td><td><code>idx market astro</code></td><td><a href="/terminal?cmd=astro">astro</a></td><td class="muted">planets, Moon phase, Mercury retrograde, weton and shio for IHSG, with a returns backtest</td></tr>
             <tr><td>idx_broker</td><td><code>idx broker BBCA</code></td><td><a href="/terminal?cmd=broker%20BBCA">broker BBCA</a></td><td class="muted">top 10 buyers and sellers of a stock</td></tr>
             <tr><td>idx_bandar</td><td><code>idx bandar detect BBCA --daily</code></td><td><a href="/terminal?cmd=bandar%20BBCA%20--daily">bandar BBCA --daily</a></td><td class="muted">bandarmology: accumulation or distribution</td></tr>
             <tr><td>idx_bandar_screen</td><td><code>idx bandar screen --preset big-accumulation</code></td><td><a href="/terminal?cmd=bandar%20screen%20--preset%20big-accumulation">bandar screen --preset big-accumulation</a></td><td class="muted">the most traded stocks the top brokers accumulate</td></tr>
@@ -283,13 +288,21 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_ownership_changes</td><td><code>idx ownership changes --from 2026-08-31 --to 2026-09-30</code></td><td><a href="/terminal?cmd=ownership%20changes%202026-08-31%202026-09-30">ownership changes 2026-08-31 2026-09-30</a></td><td class="muted">monthly changes with a summary</td></tr>
             <tr><td>idx_ownership_foreign</td><td><code>idx ownership foreign</code></td><td><a href="/terminal?cmd=ownership%20foreign">ownership foreign</a></td><td class="muted">disclosed foreign vs local stakes</td></tr>
             <tr><td>idx_ownership_releases</td><td><code>idx ownership releases</code></td><td><a href="/terminal?cmd=ownership%20releases">ownership releases</a></td><td class="muted">imported monthly registers</td></tr>
+            <tr><td>idx_ownership_search</td><td><code>idx ownership search salim</code></td><td><a href="/terminal?cmd=ownership%20search%20salim">ownership search salim</a></td><td class="muted">find a holder by name: key, spellings, issuers held</td></tr>
+            <tr><td>idx_ownership_rankings</td><td><code>idx ownership cross-holders</code></td><td><a href="/terminal?cmd=ownership%20cross-holders">ownership cross-holders</a></td><td class="muted">holders in the most issuers, or issuers by concentration (HHI)</td></tr>
+            <tr><td>idx_ownership_graph</td><td><code>idx ownership graph BBCA</code></td><td><a href="/terminal?cmd=ownership%20graph%20BBCA">ownership graph BBCA</a></td><td class="muted">network of holders and issuers around a ticker or holder</td></tr>
+            <tr><td>idx_ownership_composition</td><td><code>idx ownership composition BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">local vs foreign shares by investor type (KSEI monthly archive)</td></tr>
+            <tr><td>idx_ownership_snapshot</td><td><code>idx ownership sync</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">install or check the prebuilt ownership database (action sync or status)</td></tr>
+            <tr><td>idx_ownership_institutions</td><td><code>idx ownership institutions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">institutions and funds holding it: buying, selling, new, exited (MSN)</td></tr>
             <tr><td>idx_orderbook</td><td><code>idx stockbit orderbook BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">realtime order book: full depth ladder and foreign flow (your Stockbit session)</td></tr>
             <tr><td>idx_stockbit_status</td><td><code>idx stockbit status</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">is a Stockbit session stored, and when its tokens expire</td></tr>
-            <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in your browser, once</td></tr>
+            <tr><td>idx_stockbit_login</td><td><code>idx stockbit login</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">sign in to Stockbit in a browser or through a local page, once</td></tr>
+            <tr><td>idx_stockbit_actions</td><td><code>idx stockbit actions BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">a stock's corporate actions since listing, or the market's calendar, by kind (your Stockbit session)</td></tr>
+            <tr><td>idx_stockbit_movements</td><td><code>idx stockbit movements BBCA</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">insider and 5 % holder movements: who bought or sold, how many shares, at what price (your Stockbit session)</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="tools-foot"><span>The 5 idx.co.id tools (foreign flow, top brokers, indices, the exchange calendar) and the 3 Stockbit realtime tools (live order book, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
+    <p class="tools-foot"><span>The 4 idx.co.id tools (market-wide foreign flow, top brokers, indices, the exchange calendar), the KSEI composition and ownership snapshot tools, MSN's institutional holders and the 5 Stockbit tools (live order book, corporate actions and calendar, holder movements, login, session status) run in the CLI and the MCP server only: idx.co.id refuses requests from this site's host, the composition archive and the snapshot live in the CLI's local database, MSN has not been checked from this host yet, and Stockbit carries your own account session.</span> <a href="/terminal?cmd=tools">All tools in the terminal</a></p>
     <p class="mline" id="tools-m"><span class="sr-only">The MCP tools, the CLI command behind each and the web terminal command.</span><span aria-hidden="true">IDX&lt;MCP&lt;&lt;TOOLS&lt;&lt;CLI&lt;&lt;WEB</span></p>
   </section>
 </div>
@@ -297,7 +310,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 <footer class="sign">
   <div>
     <p class="place">Jakarta, <span id="today">2026</span>. <b>Midori Research</b> · MIT licence · <a href="mailto:desk@midoriresearch.com">desk@midoriresearch.com</a></p>
-    <p class="links"><a href="https://github.com/fzn0x/idx">Source on GitHub</a> <a href="/terminal">Web terminal</a> <a href="https://github.com/fzn0x/idx/blob/main/docs/json-output.md">JSON contract</a> <a href="https://github.com/fzn0x/idx/blob/main/docs/mcp.md">MCP tools</a> <a href="https://github.com/fzn0x/idx/blob/main/docs/ownership.md">Ownership data</a> <a href="https://github.com/fzn0x/idx/blob/main/CHANGELOG.md">Changelog</a></p>
+    <p class="links"><a href="https://github.com/fzn0x/idx">Source on GitHub</a> <a href="/terminal">Web terminal</a> <a href="/docs/">Docs</a> <a href="/docs/json-output">JSON contract</a> <a href="/docs/mcp#tools">MCP tools</a> <a href="/docs/ownership">Ownership data</a> <a href="/llms.txt">llms.txt</a> <a href="https://github.com/fzn0x/idx/blob/main/CHANGELOG.md">Changelog</a></p>
   </div>
   <p class="disc">Prices are delayed as published by their sources; idx is research tooling, not investment advice, and is not affiliated with IDX, KSEI, Yahoo or Microsoft.</p>
 </footer>

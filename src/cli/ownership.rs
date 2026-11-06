@@ -1,36 +1,48 @@
-//! `idx ownership ...`: KSEI's monthly ">1 % holders" register in local SQLite.
+//! `idx ownership ...`: KSEI's monthly ">1 % holders" register and KSEI's
+//! monthly composition archive ("Kepemilikan Efek") in local SQLite, plus
+//! `institutions`, which asks MSN live for institutional and fund holders.
 
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Args, Subcommand};
+use serde_json::{json, Value};
 
 use crate::error::{IdxError, Result};
-use crate::model::Symbol;
+use crate::model::{CompositionReport, HolderKind, InstitutionalHolder, Symbol};
 use crate::output::json::{
-    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_DISCOVER, SCHEMA_OWNERSHIP_ENTITY,
-    SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_HOLDERS,
-    SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_RELEASES,
+    SCHEMA_OWNERSHIP_CHANGES, SCHEMA_OWNERSHIP_COMPOSITION, SCHEMA_OWNERSHIP_DISCOVER,
+    SCHEMA_OWNERSHIP_ENTITY, SCHEMA_OWNERSHIP_FOREIGN, SCHEMA_OWNERSHIP_FOREIGN_FLOW,
+    SCHEMA_OWNERSHIP_HOLDERS, SCHEMA_OWNERSHIP_IMPORT, SCHEMA_OWNERSHIP_INSTITUTIONS,
+    SCHEMA_OWNERSHIP_RELEASES, SCHEMA_OWNERSHIP_SNAPSHOT, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC,
+    SCHEMA_OWNERSHIP_STATUS,
 };
-use crate::output::{self, table_ownership as tbl};
-use crate::ownership::{self, OwnershipDb};
+use crate::output::{
+    self, table_composition, table_institutions, table_ownership as tbl,
+    table_ownership_sync as tbl_sync, OutputFormat,
+};
+use crate::ownership::discover::Family;
+use crate::ownership::{self, composition, ksei, snapshot, OwnershipDb};
 use crate::providers::Sourced;
 
-use super::{emit, Context};
+use super::ownership_analytics::{
+    self as analytics, ConcentrationArgs, CrossHoldersArgs, GraphArgs, ResolveCmd, SearchArgs,
+};
+use super::{emit, notices, Context};
 
 pub const LOCAL: &str = "local-db";
 
 #[derive(Debug, Subcommand)]
 pub enum OwnershipCmd {
-    /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) into the local database.
+    /// Import a monthly "Pemegang Saham di Atas 1%" file (XLSX or PDF) or a KSEI composition archive (ZIP or TXT) into the local database.
     #[command(
-        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror."
+        after_help = "Examples:\n  idx ownership import --latest                 # newest monthly file\n  idx ownership import --all                    # every month not imported yet\n  idx ownership import --file peng-2026-08-00017-satu-persen.xlsx\n  idx ownership import --url https://www.idx.co.id/Media/.../satu-persen.xlsx\n  idx ownership import --latest --family composition    # KSEI's newest Kepemilikan Efek archive\n  idx ownership import --file BalanceposEfek20261030.zip   # or the Balancepos20261030.txt inside\n  idx ownership import --url https://www.ksei.co.id/storage/Download/BalanceposEfek20261030.zip\n\nidx.co.id is behind Cloudflare. --latest/--all try idx.co.id (browser-like request, then\ncurl-impersonate if installed) and otherwise use the GitHub mirror that CI refreshes three\ntimes a day with the same IDX files, checking each file's SHA-256. IDX_OWNERSHIP_MIRROR=off\ndisables the mirror. A refusal by Cloudflare is the JSON error code `blocked` (exit 3).\nFor a fresh install `idx ownership sync` is faster: one download of the prebuilt database.\n\n--file and --url tell the family from the content: a KSEI composition archive goes to its own\ntables (see `idx ownership composition`), never into the register of holders above 1%."
     )]
     Import(ImportArgs),
 
     /// Holders above 1 % of one ticker.
     #[command(
-        after_help = "Examples:\n  idx ownership ticker BBCA\n  idx ownership ticker BBRI --as-of 2026-07-31"
+        after_help = "Examples:\n  idx ownership ticker BBCA\n  idx ownership ticker BBRI --as-of 2026-07-31\n  idx -o json ownership ticker KREN      # accounts, controller_or_affiliate per holder\n\nKSEI lists a holder once per SID and once per scrip account without one; those lines are\nsummed into one row (Accts column, `accounts` in JSON). From the 30 Oct 2026 register a\nControl column shows CONTROLLER / AFFILIATE OF THE CONTROLLER as the issuer reported it to IDX\nfor the previous month. Rows dated other than the release are kept but not listed."
     )]
     Ticker {
         #[arg(value_name = "SYMBOL")]
@@ -42,18 +54,53 @@ pub enum OwnershipCmd {
 
     /// Every position of a person or institution (substring match on the normalised name).
     #[command(
-        after_help = "Examples:\n  idx ownership entity \"Dwimuria Investama\"\n  idx ownership entity \"statens pensjonsfond\" --as-of 2026-08-31"
+        after_help = "Examples:\n  idx ownership entity \"Dwimuria Investama\"\n  idx ownership entity \"statens pensjonsfond\" --as-of 2026-08-31\n  idx ownership entity --exact \"T PERMADI RACHMAT\"   # one holder, by a key from `ownership search`"
     )]
     Entity {
         #[arg(value_name = "NAME")]
         name: String,
         #[arg(long, value_name = "YYYY-MM-DD")]
         as_of: Option<NaiveDate>,
+        /// Only the holder whose key is NAME once normalised (a key from `ownership search`).
+        #[arg(long)]
+        exact: bool,
     },
+
+    /// Find holders by name: every spelling KSEI printed, words in any order, every imported month.
+    #[command(
+        after_help = "Examples:\n  idx ownership search salim\n  idx ownership search \"lo kheng hong\"\n  idx ownership search \"uob kay hian\" --limit 5\n  idx -o json ownership search permadi | jq '.data.matches[].entity_key'\n\nMatches the normalised name and every spelling KSEI printed, case-insensitively; words may come\nin any order. Exact and spelling matches come first, then holders listed in the release (issuers\ncounted as of --as-of, default newest), then prefix, contains and word matches. Then\n`idx ownership entity --exact \"<key>\"` lists that holder's positions."
+    )]
+    Search(SearchArgs),
+
+    /// Holders ranked by the number of issuers they own more than 1 % of.
+    #[command(
+        name = "cross-holders",
+        after_help = "Examples:\n  idx ownership cross-holders                      # holders above 1 % in at least 2 issuers\n  idx ownership cross-holders --type individual    # people only\n  idx ownership cross-holders --origin foreign --min-issuers 5\n  idx ownership cross-holders --as-of 2026-08-31 --limit 0\n\nA holder's accounts in one issuer are summed first. Total % adds stakes in different companies:\na breadth measure, not a share of anything. Custodian and nominee accounts (securities companies,\nprivate banks) hold for their clients. A holder printed two ways is counted twice: see\n`idx ownership resolve candidates`."
+    )]
+    CrossHolders(CrossHoldersArgs),
+
+    /// Issuers ranked by ownership concentration: HHI, the largest and the top-3 stakes.
+    #[command(
+        after_help = "Examples:\n  idx ownership concentration                     # most concentrated first, by HHI\n  idx ownership concentration --ascending         # most widely held first\n  idx ownership concentration --by top1 --limit 50\n  idx ownership concentration BBCA BBRI TLKM\n\nHHI is the sum of the squared stakes of the holders listed above 1 % (0 to 10,000; 10,000 means\none holder owns everything), each holder's accounts summed first. Holders at or below 1 % are not\npublished, so HHI covers the listed holders only (a lower bound of the full figure) and\nUndisclosed is what the register does not show (not IDX's free float). From the 30 Oct 2026\nregister, Control % adds the stakes flagged CONTROLLER or AFFILIATE OF THE CONTROLLER."
+    )]
+    Concentration(ConcentrationArgs),
+
+    /// Holder-issuer network around a ticker or a holder, as a table, JSON or Graphviz DOT.
+    #[command(
+        after_help = "Examples:\n  idx ownership graph BBCA                       # holders of BBCA and their other holdings\n  idx ownership graph \"Anthoni Salim\" --depth 3\n  idx ownership graph AADI --min-pct 5           # major stakes only\n  idx ownership graph BBRI --dot | dot -Tsvg -o bbri.svg\n\nROOT is a ticker, or a holder's name or key (--holder forces a name). One hop links a holder to an\nissuer it owns more than 1 % of; the walk follows the strongest links first and stops at --depth\nhops or --max-nodes nodes. Node ids are ticker:<SYMBOL> and holder:<entity_key>."
+    )]
+    Graph(GraphArgs),
+
+    /// Suggest, merge and split holder spellings (writes the local database).
+    #[command(
+        subcommand,
+        after_help = "Examples:\n  idx ownership resolve candidates\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\" --dry-run\n  idx ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\"\n  idx ownership resolve map \"IR. T. PERMADI RACHMAT\" \"T PERMADI RACHMAT\"\n  idx ownership resolve list\n  idx ownership resolve undo 1\n\nKSEI sometimes prints one holder differently from month to month (DRS SURONO SUBEKTI, SURONO\nSUBEKTI), which shows up in `changes` as an exit plus a new holder. A merge moves every month\nalready imported and every later import; `undo` reverts it. Holders are named by key or display\nname (see `idx ownership search`). If both are listed in the same issuer in one month (often two\ndifferent people, sometimes one holder's two accounts) the merge stops unless you pass --fold.\nThe rules live in the ownership database; the web terminal and the mirror keep the automatic\ngrouping."
+    )]
+    Resolve(ResolveCmd),
 
     /// Month-over-month changes: new holders, exits and position changes, with a summary.
     #[command(
-        after_help = "Examples:\n  idx ownership changes --from 2026-07-31 --to 2026-08-31\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --symbol BBCA\n  idx ownership changes --from 2026-02-27 --to 2026-08-31 --min-change 1 --limit 100\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --limit 100 --offset 100   # page 2\n\nThe summary (counts, net percentage points by foreign/local and investor type, issuer flow,\nlargest rises and falls) always covers every match; --limit/--offset page the rows."
+        after_help = "Examples:\n  idx ownership changes --from 2026-07-31 --to 2026-08-31\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --symbol BBCA\n  idx ownership changes --from 2026-02-27 --to 2026-08-31 --min-change 1 --limit 100\n  idx ownership changes --from 2026-07-31 --to 2026-08-31 --limit 100 --offset 100   # page 2\n\nThe summary (counts, net percentage points by foreign/local and investor type, issuer flow,\nlargest rises and falls) always covers every match; --limit/--offset page the rows.\n\nA holder's register lines (one per account, e.g. scrip and scripless) are summed before\ncomparing; `accounts_from`/`accounts_to` show how many. With the same shares on both sides, a\nmove within the rounding of summed lines (0.005 pp per line) is not a change."
     )]
     Changes {
         #[arg(long, value_name = "YYYY-MM-DD")]
@@ -92,42 +139,206 @@ pub enum OwnershipCmd {
         limit: usize,
     },
 
+    /// Institutional and fund holders from MSN Money (live): positions, change since each holder's last report, new/buyer/seller/exited.
+    #[command(after_help = "Examples:
+  idx ownership institutions BBCA
+  idx -o json ownership institutions TLKM | jq '.data.flow'
+  idx -o json ownership institutions BBCA | jq '.data.holders[] | select(.signal == \"exited\")'
+  idx -o csv ownership institutions BBRI > holders.csv
+
+From MSN Money's ownership data (its vendor's fund and institution filings), not the KSEI
+register: up to 15 institutions and 20 funds, each as of its own report date, with the change
+since that holder's previous report. The signal is computed by idx: new (position opened),
+buyer, seller, exited (sold out), unchanged. Funds are part of their managers' institutional
+positions, so never add the two lists. Needs no import; MSN's response is cached with the
+fundamentals TTL (6 hours by default). With no holders, -o csv prints the holder header alone.")]
+    Institutions {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+    },
+
     /// Imported releases in the local database.
+    #[command(
+        after_help = "Examples:\n  idx ownership releases\n  idx -o json ownership releases\n\n`rows` counts register lines, `positions` the holders per ticker after summing each holder's\naccounts, `other_date_rows` the lines dated other than the release (kept, left out of its\nholdings), `controller_column` whether the file has CONTROLLER_OR_AFFILIATE. Releases imported\nby idx 0.8.1 or older show no positions and are named in a warning until\n`idx ownership import --all --force` re-imports them."
+    )]
     Releases,
 
-    /// List the monthly files currently published on idx.co.id (needs network).
-    Discover,
+    /// List the files currently published on idx.co.id and ksei.co.id (needs network).
+    #[command(
+        after_help = "Examples:\n  idx ownership discover                                 # monthly >1% registers on idx.co.id\n  idx ownership discover --family all --limit 2           # every family, newest two each\n  idx ownership discover --family composition --limit 24  # KSEI Kepemilikan Efek archives (ksei.co.id)\n  idx -o json ownership discover --family above5          # family and importable on every entry\n\nFamilies: above1 (importable), above5, investor-type, classification (idx.co.id, listed only),\ncomposition (KSEI \"Kepemilikan Efek\" ZIP on ksei.co.id, importable). --limit counts per\nfamily; without it every idx.co.id file is listed and one ksei.co.id page (8 months); 0 lists\nall (the composition walks up to 10 pages). A family that fails is a warning while the others\nanswer; when every family fails the command fails, with JSON code `blocked` if Cloudflare\nrefused idx.co.id."
+    )]
+    Discover(DiscoverArgs),
+
+    /// KSEI's monthly composition of one stock: local and foreign shares by investor type.
+    #[command(
+        after_help = "Examples:\n  idx ownership composition BBCA\n  idx ownership composition TLKM --as-of 2026-09-30\n  idx -o json ownership composition BBCA | jq '.data.foreign_pct'\n\nKSEI's monthly \"Kepemilikan Efek\" archive (ksei.co.id) splits every share held in KSEI\naccounts (scripless) between local and foreign holders in nine investor types: insurance,\ncorporate, pension fund, financial institution, individual, mutual fund, securities company,\nfoundation, others. Percentages are of the scripless shares; shares still held as\ncertificates (scrip) are outside the archive, so scripless_pct can be far below 100 (BBCA,\n30 Oct 2026: 42.55 %, its controlling holder's stake is scrip). It covers every holder, not\nonly those above 1 %, and names none.\n\nThe first call downloads the newest month (about 125 KB) into the local database; later\ncalls read it and ask ksei.co.id again only once a newer month can exist. --as-of imports a\nlisted month that is missing. --offline never downloads."
+    )]
+    Composition {
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Month (the archive's date, e.g. 2026-10-30; default: newest).
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        as_of: Option<NaiveDate>,
+    },
+
+    /// Bring the local database up to date from the GitHub mirror: install the prebuilt snapshot, or import the missing months.
+    #[command(
+        after_help = "Examples:\n  idx ownership sync                  # one download (a few MB), SHA-256 checked\n  idx ownership sync --force          # replace a database holding months the snapshot lacks (a .bak copy is kept)\n  idx -o json ownership sync | jq .data.action\n\nCI builds the snapshot from the same IDX files as the mirror. Sync installs it when the local\ndatabase is empty, older or a subset of it, then imports any newer monthly file. A database\nholding months (or other data) the snapshot lacks is kept, and only the missing months are\nimported, unless --force. The swap is one SQLite transaction, safe while idx mcp reads the file.\nIDX_OWNERSHIP_MIRROR points at another mirror; off disables sync."
+    )]
+    Sync {
+        /// Replace a database that holds months or data the snapshot lacks (a .bak copy is kept).
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// The local database, the snapshot it came from, what the mirror holds and what sync would do.
+    #[command(
+        after_help = "Examples:\n  idx ownership status\n  idx --offline ownership status      # the local database only\n  idx -o json ownership status | jq .data.sync\n\nNever creates the database. `sync` is up_to_date, install, update or import (null when the\nmirror was not checked)."
+    )]
+    Status,
 
     /// Print the database path.
     Path,
+
+    /// Maintainer tool: write the snapshot of the local database (scripts/ownership_mirror.py publishes it).
+    #[command(
+        hide = true,
+        after_help = "Examples:\n  IDX_OWNERSHIP_DB=build/ownership/ownership.sqlite idx ownership build-snapshot --out build/snap --sources build/ownership/out/index.json\n\nWrites ownership-v{V}-{newest}-{sha12}.sqlite.gz and snapshot-v{V}.json into --out and prints the\nmanifest. --sources (the mirror's index.json) records each release's idx.co.id URL; every\nimported_at becomes --generated-at (default: now). The database itself is not changed: one of another
+schema version is refused, not migrated."
+    )]
+    BuildSnapshot {
+        /// Directory for the two files.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// The mirror's index.json, for each release's idx.co.id URL.
+        #[arg(long, value_name = "FILE")]
+        sources: Option<PathBuf>,
+        /// Build time recorded in the snapshot (RFC 3339, UTC).
+        #[arg(long, value_name = "TIME")]
+        generated_at: Option<DateTime<Utc>>,
+    },
 }
 
 #[derive(Debug, Args)]
-#[group(id = "mode", required = true, multiple = false)]
+// The mode group names its four arguments: a struct-level `#[group]` would
+// take in every field, `--force` and `--family` too, and refuse
+// `--all --force` (idx 0.8.1 did).
+#[command(group(
+    clap::ArgGroup::new("mode")
+        .required(true)
+        .multiple(false)
+        .args(["file", "url", "latest", "all"])
+))]
 pub struct ImportArgs {
-    /// Local XLSX or PDF file.
-    #[arg(long, value_name = "PATH", group = "mode")]
+    /// Local file: a register (XLSX or PDF) or a KSEI composition archive (ZIP or TXT).
+    #[arg(long, value_name = "PATH")]
     pub file: Option<PathBuf>,
-    /// Direct URL of an XLSX or PDF file.
-    #[arg(long, value_name = "URL", group = "mode")]
+    /// Direct URL of a register (XLSX or PDF) or a KSEI composition archive (ZIP or TXT).
+    #[arg(long, value_name = "URL")]
     pub url: Option<String>,
-    /// Newest file on the IDX page that is not imported yet.
-    #[arg(long, group = "mode")]
+    /// Newest listed file that is not imported yet.
+    #[arg(long)]
     pub latest: bool,
-    /// Every file on the IDX page that is not imported yet.
-    #[arg(long, group = "mode")]
+    /// Every listed file that is not imported yet.
+    #[arg(long)]
     pub all: bool,
+    /// What --latest/--all import: the register of holders above 1 % (idx.co.id or the mirror) or KSEI's composition archive (ksei.co.id). --file and --url detect it from the content.
+    #[arg(long, value_enum, value_name = "FAMILY", conflicts_with_all = ["file", "url"])]
+    pub family: Option<ImportFamily>,
     /// Re-import even when the release date already exists (with --latest/--all).
     #[arg(long)]
     pub force: bool,
 }
 
-fn open(ctx: &Context) -> Result<OwnershipDb> {
+/// The families `import --latest/--all` can fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ImportFamily {
+    /// The register of holders above 1 % (default).
+    Above1,
+    /// KSEI's composition archive.
+    Composition,
+}
+
+#[derive(Debug, Args)]
+pub struct DiscoverArgs {
+    /// Which files to list.
+    #[arg(long, value_enum, value_name = "FAMILY", default_value_t = Family::Above1)]
+    pub family: Family,
+    /// Entries per family, newest first; 0 for all. Default: every idx.co.id file, 8 composition months.
+    #[arg(long, short = 'n', value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+/// The `provider` of a discovery envelope: where the files came from.
+fn discovery_provider(files: &[crate::model::DiscoveredFile]) -> &'static str {
+    let has = |o: &str| files.iter().any(|f| f.origin == o);
+    match (
+        has("idx.co.id"),
+        has(ownership::mirror::ORIGIN),
+        has(ksei::ORIGIN),
+    ) {
+        (false, true, false) => ownership::mirror::ORIGIN,
+        (false, false, true) => ksei::PROVIDER,
+        (true, false, true) => "idx+ksei",
+        (false, true, true) => "github-mirror+ksei",
+        _ => "idx",
+    }
+}
+
+/// `-o csv` of `ownership composition`: one row per investor type, whatever
+/// the number of imported months (the generic rule would switch to
+/// `history` once it is the longer list).
+fn composition_csv(r: &CompositionReport) -> Value {
+    Value::Array(
+        r.by_type
+            .iter()
+            .map(|t| {
+                json!({
+                    "symbol": r.symbol,
+                    "as_of": r.as_of,
+                    "code": t.code,
+                    "investor_type": t.investor_type,
+                    "local_shares": t.local_shares,
+                    "foreign_shares": t.foreign_shares,
+                    "local_pct": t.local_pct,
+                    "foreign_pct": t.foreign_pct,
+                })
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn open(ctx: &Context) -> Result<OwnershipDb> {
     OwnershipDb::open(&ctx.settings.ownership_db)
 }
 
 fn local<T>(data: T) -> Sourced<T> {
-    Sourced::fresh(data, LOCAL)
+    Sourced::fresh(data, ownership::PROVIDER)
+}
+
+/// `-o csv` of `ownership institutions` for a stock without holders: the
+/// holder header alone, so files for several symbols share one layout (the
+/// generic CSV rule would print the report itself as one summary row). The
+/// columns come from a blank holder, so they follow the struct.
+fn holders_csv_header() -> Result<String> {
+    let blank = InstitutionalHolder {
+        kind: HolderKind::Institution,
+        rank: 1,
+        name: String::new(),
+        shares: None,
+        shares_change: None,
+        pct_outstanding: None,
+        pct_outstanding_change: None,
+        pct_portfolio: None,
+        report_date: None,
+        signal: None,
+    };
+    let csv = output::csv::render(&serde_json::to_value([blank])?);
+    Ok(csv
+        .lines()
+        .next()
+        .map(|h| format!("{h}\n"))
+        .unwrap_or_default())
 }
 
 pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
@@ -136,23 +347,28 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         OwnershipCmd::Ticker { symbol, as_of } => {
             let sym = Symbol::parse(&symbol)?;
             let db = open(ctx)?;
-            let report = db.holders(sym.as_str(), as_of)?;
-            emit(ctx, SCHEMA_OWNERSHIP_HOLDERS, local(report), |r| {
+            let report = ownership::holders(&db, sym.as_str(), as_of)?;
+            emit(ctx, SCHEMA_OWNERSHIP_HOLDERS, report, |r| {
                 tbl::holders(r, ctx.color)
             })
         }
-        OwnershipCmd::Entity { name, as_of } => {
+        OwnershipCmd::Entity { name, as_of, exact } => {
             if name.trim().len() < 3 {
                 return Err(IdxError::Usage(
                     "entity name needs at least 3 characters".into(),
                 ));
             }
             let db = open(ctx)?;
-            let report = db.entity(&name, as_of)?;
-            emit(ctx, SCHEMA_OWNERSHIP_ENTITY, local(report), |r| {
+            let report = ownership::entity(&db, &name, as_of, exact)?;
+            emit(ctx, SCHEMA_OWNERSHIP_ENTITY, report, |r| {
                 tbl::entity(r, ctx.color)
             })
         }
+        OwnershipCmd::Search(a) => analytics::search(ctx, a).await,
+        OwnershipCmd::CrossHolders(a) => analytics::cross_holders(ctx, a).await,
+        OwnershipCmd::Concentration(a) => analytics::concentration(ctx, a).await,
+        OwnershipCmd::Graph(a) => analytics::graph(ctx, a).await,
+        OwnershipCmd::Resolve(cmd) => analytics::resolve(ctx, cmd).await,
         OwnershipCmd::Changes {
             from,
             to,
@@ -163,7 +379,8 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
         } => {
             let sym = symbol.map(|s| Symbol::parse(&s)).transpose()?;
             let db = open(ctx)?;
-            let report = db.changes(
+            let report = ownership::changes(
+                &db,
                 from,
                 to,
                 sym.as_ref().map(Symbol::as_str),
@@ -171,7 +388,7 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
                 if limit == 0 { None } else { Some(limit) },
                 offset,
             )?;
-            emit(ctx, SCHEMA_OWNERSHIP_CHANGES, local(report), |r| {
+            emit(ctx, SCHEMA_OWNERSHIP_CHANGES, report, |r| {
                 tbl::changes(r, ctx.color)
             })
         }
@@ -185,77 +402,162 @@ pub async fn run(ctx: &Context, cmd: OwnershipCmd) -> Result<()> {
             match symbol {
                 Some(s) => {
                     let sym = Symbol::parse(&s)?;
-                    let report = db.foreign_trend(sym.as_str())?;
-                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN, local(report), |r| {
+                    let report = ownership::foreign_trend(&db, sym.as_str())?;
+                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN, report, |r| {
                         tbl::foreign(r, ctx.color)
                     })
                 }
                 None => {
-                    let report =
-                        db.foreign_flow(from, to, if limit == 0 { None } else { Some(limit) })?;
-                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN_FLOW, local(report), |r| {
+                    let report = ownership::foreign_flow(
+                        &db,
+                        from,
+                        to,
+                        if limit == 0 { None } else { Some(limit) },
+                    )?;
+                    emit(ctx, SCHEMA_OWNERSHIP_FOREIGN_FLOW, report, |r| {
                         tbl::foreign_flow(r, ctx.color)
                     })
                 }
             }
         }
+        OwnershipCmd::Institutions { symbol } => {
+            let sym = Symbol::parse(&symbol)?;
+            let report = ctx.provider.institutions(&sym).await?;
+            if ctx.settings.output == OutputFormat::Csv && report.data.holders.is_empty() {
+                notices(ctx, &report);
+                return output::print_stdout(&holders_csv_header()?);
+            }
+            emit(ctx, SCHEMA_OWNERSHIP_INSTITUTIONS, report, |r| {
+                table_institutions::institutions(r, ctx.color)
+            })
+        }
         OwnershipCmd::Releases => {
             let db = open(ctx)?;
-            let list = db.releases()?;
-            let mut s = local(list);
-            if s.data.is_empty() {
-                s.warnings.push(
-                    "no ownership data imported yet; run `idx ownership import --latest`".into(),
-                );
-            }
+            let s = ownership::releases(&db)?;
             emit(ctx, SCHEMA_OWNERSHIP_RELEASES, s, |r| {
                 tbl::releases(r, &ctx.settings.ownership_db, ctx.color)
             })
         }
-        OwnershipCmd::Discover => {
-            if ctx.settings.cache_mode == crate::http::CacheMode::Offline {
-                return Err(IdxError::OfflineMiss("discover needs the network".into()));
-            }
-            let (files, notes) = ownership::discover::discover(ctx.settings.timeout()).await?;
-            let via_mirror = files
-                .first()
-                .is_some_and(|f| f.origin == ownership::mirror::ORIGIN);
-            let mut s = Sourced::fresh(
-                files,
-                if via_mirror {
-                    ownership::mirror::ORIGIN
-                } else {
-                    "idx"
-                },
-            );
+        OwnershipCmd::Discover(args) => {
+            let offline = ctx.settings.cache_mode == crate::http::CacheMode::Offline;
+            let (files, notes) = ownership::discover::discover_families(
+                &ctx.fetcher,
+                args.family,
+                args.limit,
+                offline,
+                ctx.settings.timeout(),
+            )
+            .await?;
+            let provider = discovery_provider(&files);
+            let mut s = Sourced::fresh(files, provider);
             s.warnings.extend(notes);
-            let have: Vec<NaiveDate> = open(ctx)?.releases()?.iter().map(|r| r.as_of).collect();
-            let missing: Vec<String> = s
-                .data
-                .iter()
-                .filter(|f| !have.contains(&f.as_of))
-                .map(|f| f.as_of.to_string())
-                .collect();
-            if !missing.is_empty() {
-                s.warnings
-                    .push(format!("not imported yet: {}", missing.join(", ")));
+            let db = open(ctx)?;
+            let have: Vec<NaiveDate> = db.releases()?.iter().map(|r| r.as_of).collect();
+            let have_composition = composition::months(&db)?;
+            for (family, list) in [("above1", &have), ("composition", &have_composition)] {
+                let missing: Vec<String> = s
+                    .data
+                    .iter()
+                    .filter(|f| f.family == family && !list.contains(&f.as_of))
+                    .map(|f| f.as_of.to_string())
+                    .collect();
+                if !missing.is_empty() {
+                    s.warnings.push(format!(
+                        "{}not imported yet: {}",
+                        if family == "above1" {
+                            ""
+                        } else {
+                            "composition "
+                        },
+                        missing.join(", ")
+                    ));
+                }
             }
+            let show_family = args.family != Family::Above1;
             emit(ctx, SCHEMA_OWNERSHIP_DISCOVER, s, |r| {
-                tbl::discovered(r, &have, ctx.color)
+                tbl::discovered(r, &have, &have_composition, show_family, ctx.color)
+            })
+        }
+        OwnershipCmd::Composition { symbol, as_of } => {
+            let sym = Symbol::parse(&symbol)?;
+            let mut db = open(ctx)?;
+            let s = composition::report(
+                &mut db,
+                &ctx.fetcher,
+                sym.as_str(),
+                as_of,
+                download_timeout(ctx),
+                crate::service::today_wib(),
+            )
+            .await?;
+            if ctx.settings.output == OutputFormat::Csv {
+                notices(ctx, &s);
+                return output::print_stdout(&output::csv::render(&composition_csv(&s.data)));
+            }
+            emit(ctx, SCHEMA_OWNERSHIP_COMPOSITION, s, |r| {
+                table_composition::composition(r, ctx.color)
             })
         }
         OwnershipCmd::Path => {
             output::print_stdout(&format!("{}\n", ctx.settings.ownership_db.display()))
         }
+        OwnershipCmd::Sync { force } => {
+            let base = snapshot::mirror_base(ctx.fetcher.is_offline())?;
+            let s = snapshot::sync(
+                &ctx.settings.ownership_db,
+                &base,
+                force,
+                ctx.settings.timeout(),
+            )
+            .await?;
+            emit(ctx, SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, s, tbl_sync::sync)
+        }
+        OwnershipCmd::Status => {
+            let (base, note) = snapshot::status_mirror(ctx.fetcher.is_offline());
+            let mut s = snapshot::status(
+                &ctx.settings.ownership_db,
+                base.as_deref(),
+                ctx.settings.timeout(),
+            )
+            .await?;
+            s.warnings.splice(0..0, note);
+            emit(ctx, SCHEMA_OWNERSHIP_STATUS, s, tbl_sync::status)
+        }
+        OwnershipCmd::BuildSnapshot {
+            out,
+            sources,
+            generated_at,
+        } => {
+            let index = match &sources {
+                Some(p) => {
+                    let bytes = std::fs::read(p).map_err(|e| {
+                        IdxError::Usage(format!("cannot read {}: {e}", p.display()))
+                    })?;
+                    Some(ownership::mirror::parse_index(&bytes)?)
+                }
+                None => None,
+            };
+            let m = snapshot::build(
+                &ctx.settings.ownership_db,
+                &out,
+                index.as_ref(),
+                generated_at.unwrap_or_else(Utc::now),
+            )?;
+            emit(ctx, SCHEMA_OWNERSHIP_SNAPSHOT, local(m), tbl_sync::built)
+        }
     }
+}
+
+/// Downloads get at least a minute whatever `--timeout` says.
+fn download_timeout(ctx: &Context) -> std::time::Duration {
+    ctx.settings
+        .timeout()
+        .max(std::time::Duration::from_secs(60))
 }
 
 async fn import(ctx: &Context, args: ImportArgs) -> Result<()> {
     let mut db = open(ctx)?;
-    let timeout = ctx
-        .settings
-        .timeout()
-        .max(std::time::Duration::from_secs(60));
+    let timeout = download_timeout(ctx);
     let (reports, warnings) = if let Some(path) = &args.file {
         let (r, w) = ownership::import_file(&mut db, path)?;
         (vec![r], w)
@@ -271,7 +573,15 @@ async fn import(ctx: &Context, args: ImportArgs) -> Result<()> {
                 "--latest/--all need the network".into(),
             ));
         }
-        let (files, notes) = ownership::discover::discover(timeout).await?;
+        let (files, notes) = match args.family.unwrap_or(ImportFamily::Above1) {
+            ImportFamily::Above1 => ownership::discover::discover(timeout).await?,
+            ImportFamily::Composition => {
+                // --latest needs the first listing page only; --all walks them.
+                let s =
+                    ksei::list(&ctx.fetcher, if args.latest { ksei::PER_PAGE } else { 0 }).await?;
+                (s.data, s.warnings)
+            }
+        };
         let (reports, mut warnings) =
             ownership::import_discovered(&mut db, &files, args.latest, args.force, timeout).await?;
         warnings.splice(0..0, notes.clone());

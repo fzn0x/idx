@@ -72,6 +72,8 @@ pub fn router(
     } else {
         config.allowed_hosts.extend(allowed_hosts);
     }
+    // One session store for every HTTP session's server.
+    let stockbit = stockbit.resolved();
     let service = StreamableHttpService::new(
         move || {
             Ok(IdxServer::new(

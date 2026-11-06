@@ -1,7 +1,7 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
 import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse } from "/app.js";
 import { priceChart } from "/chart.js";
-import { TOOLS, CLI_ONLY_REASON, byName } from "/tools.js";
+import { TOOLS, cliOnlyReason, byName } from "/tools.js";
 import { SHOW_MS, SLOW_MS, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
@@ -15,28 +15,35 @@ const input = document.getElementById("cmd");
 
 const COMMANDS = [
   { name: "quote", usage: "quote <SYMBOLS>", help: "delayed quotes, e.g. quote BBCA,BBRI; one symbol adds a price chart (1D to 5Y)" },
-  { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 5m 15m 30m 1h 1d 1wk 1mo" },
+  { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 1m 2m 5m 15m 30m 1h 1d 1wk 1mo (1m up to 5d, 2m up to 1mo)" },
+  { name: "intraday", usage: "intraday <SYMBOL> [interval]", help: "the latest session by the minute: OHLCV bars, VWAP, change against the previous close (Yahoo, about 10 minutes behind); intervals 1m 2m 5m 15m 30m 1h" },
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
-  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm]", help: "income statement, balance sheet, cash flow" },
-  { name: "earnings", usage: "earnings <SYMBOL>", help: "quarterly EPS vs estimates, next date" },
-  { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
+  { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm] [--statement income,balance,cash]", help: "income statement, balance sheet, cash flow; --statement shows only those" },
+  { name: "earnings", usage: "earnings <SYMBOL> [--annual|--quarterly] [--reported|--estimates]", help: "quarterly EPS vs estimates, revenue and earnings, analyst consensus, next date; the flags keep only those rows (--history and --forecast work too)" },
+  { name: "fundamental", usage: "fundamental <SYMBOL> [--lens growth|valuation|risk]", help: "ratios with a plain-language verdict; --lens gives one of the readings below instead" },
+  { name: "growth", usage: "growth <SYMBOL>", help: "growth lens: latest quarter, forward EPS, fiscal-year revenue and net income, each rule with its points" },
+  { name: "valuation", usage: "valuation <SYMBOL>", help: "valuation lens: P/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and analyst target, each scored" },
+  { name: "risk", usage: "risk <SYMBOL>", help: "risk lens: negative equity, leverage, liquidity, losses, and beta, volatility and largest fall against IHSG" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
   { name: "compare", usage: "compare <SYMBOLS>", help: "side-by-side fundamentals" },
-  { name: "screen", usage: "screen <FILTER> [--sort KEY] [--limit N]", help: 'e.g. screen pe<10,div>5,mcap>5T --sort div' },
+  { name: "screen", usage: "screen [FILTER] [--preset P] [--sort KEY] [--asc|--desc] [--returns] [--limit N]", help: "e.g. screen pe<10,div>5,mcap>5T --sort div; --returns adds the return windows when no filter or sort needs them; presets: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include range (52-week position, 0 to 100) and ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it)" },
   { name: "news", usage: "news [SYMBOL] [--limit N] [--company-only]", help: "headlines; with a symbol the company's first, then market context" },
   { name: "dividends", usage: "dividends <SYMBOL>", help: "payments, yearly totals, TTM yield, streak, splits" },
   { name: "returns", usage: "returns <SYMBOLS> [--benchmark ^JKSE|none]", help: "1w..5y returns, CAGR, volatility, drawdown, excess over IHSG" },
   { name: "brief", usage: "brief <SYMBOL>", help: "one page: quote, verdict, signal, returns, dividends, holders, headlines" },
   { name: "sentiment", usage: "sentiment <SYMBOL>", help: "lexicon sentiment over matching headlines" },
+  { name: "insights", usage: "insights <SYMBOL> [--all]", help: "MSN Money's rated statements on valuation, earnings, growth, performance and health, against peers, the industry and the company's own history; --all adds the ones MSN could not rate" },
   { name: "broker", usage: "broker <SYMBOLS> [--date D | --from D --to D] [--investor foreign|domestic] [--board regular|cash|negotiated]", help: "which brokers bought and sold it: top 10 per side ranked by lots (IPOT), latest session by default" },
+  { name: "foreign", usage: "foreign <SYMBOL> [--days N | --from D --to D]", help: "foreign buying and selling per session in rupiah across all boards (IPOT): value, foreign share, totals and the net-buy/net-sell streak; 10 sessions by default, at most 20" },
   { name: "bandar", usage: "bandar <SYMBOLS> [--period 1d|1w|1m|3m] [--top 1|3|5|10] [--daily] [--date D | --from D --to D] | bandar screen [--preset P] [--filter F] [--period P] [--sort KEY] [--limit N] | bandar broker <CODE> [--period P] [--limit N]", help: "bandarmology: are the top brokers accumulating or distributing? screen presets: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: where one broker (YP, CC, ...) is a top-10 buyer or seller of the session's 100 most traded stocks" },
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
   { name: "market", usage: "market", help: "IHSG, breadth, gainers, losers, most traded" },
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
+  { name: "astro", usage: "astro [DATE] [--days N] [--natal launch|base|none] [--backtest] [--period 1y|2y|5y|10y]", help: "IHSG astrology: planets, Moon phase, Mercury retrograde, weton and shio for a date (16:00 WIB), upcoming phases and ingresses, transits to IHSG's chart; --backtest tests them on IHSG's daily returns (5y by default). Traditional astrology, not a forecast" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
   { name: "tools", usage: "tools [idx_TOOL]", help: "the MCP tools with their CLI and web commands; tools idx_quote runs one" },
-  { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, monthly changes with a summary, foreign vs local" },
+  { name: "ownership", usage: "ownership ticker <SYMBOL> | entity <NAME> | search <NAME> | cross-holders [--type T] [--origin foreign|local] [--min-issuers N] | concentration [SYMBOLS] [--by hhi|top1|top3] [--asc] | graph <ROOT> [--depth N] [--min-pct P] [--holder] | changes <FROM> <TO> [SYMBOL] [--offset N] | foreign [SYMBOL] | releases", help: "KSEI holders above 1 %, synced monthly from IDX: holders, entities, holder search, holders across issuers, concentration (HHI), the ownership network, monthly changes with a summary, foreign vs local" },
   { name: "json", usage: "json <command…>", help: "print the raw JSON envelope of any command" },
   { name: "help", usage: "help [command]", help: "this list" },
   { name: "clear", usage: "clear", help: "clear the sheet" },
@@ -50,6 +57,9 @@ function tokenize(line) {
   while ((m = re.exec(line))) toks.push(m[1] ?? m[2] ?? m[3]);
   return toks;
 }
+// Switches never take the next word as their value: `screen --returns mcap>10T`
+// keeps mcap>10T as a filter clause instead of losing it to --returns.
+const BOOL_FLAGS = new Set(["all", "asc", "company-only", "daily", "desc", "returns", "upcoming"]);
 function flags(toks) {
   const pos = [], opt = {};
   for (let i = 0; i < toks.length; i++) {
@@ -57,7 +67,7 @@ function flags(toks) {
     if (t.startsWith("--")) {
       const [k, v] = t.slice(2).split("=");
       if (v != null) opt[k] = v;
-      else if (i + 1 < toks.length && !toks[i + 1].startsWith("--")) opt[k] = toks[++i];
+      else if (!BOOL_FLAGS.has(k) && i + 1 < toks.length && !toks[i + 1].startsWith("--")) opt[k] = toks[++i];
       else opt[k] = true;
     } else pos.push(t);
   }
@@ -73,6 +83,13 @@ function kv(pairs) {
   return dl;
 }
 const pct = (v) => fmt.pctPlain(v);
+const ESTIMATE_NAMES = { "0q": "this quarter", "+1q": "next quarter", "0y": "this year", "+1y": "next year" };
+// "showing annual estimates" and the like (scope_label in src/output/table_reports.rs).
+function scopeLabel(s) {
+  const period = s.annual && !s.quarterly ? "annual " : s.quarterly && !s.annual ? "quarterly " : "";
+  const kind = s.reported && !s.estimates ? "reported figures" : s.estimates && !s.reported ? "estimates" : "rows";
+  return `showing ${period}${kind}`;
+}
 const x = (v) => (v == null ? NA : `${fmt.num(v, 2)}x`);
 
 const newsTable = (items) => wrapScroll(table([
@@ -81,7 +98,49 @@ const newsTable = (items) => wrapScroll(table([
   { h: "Headline", f: (i) => el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.title }), l: true },
 ], items));
 
+// Statements in another currency than the price (USD statements, IDR price):
+// the source's book, sales and EV multiples then divide one by the other.
+// Same test as Fundamentals::mixed_currency in the CLI.
+const mixedCurrency = (f) => !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
+const mixedRatio = (f, v) => (v != null && mixedCurrency(f) ? `${fmt.ratio(v)}*` : fmt.ratio(v));
+const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} ${f.financial_currency}` : s);
+
+// Growth, valuation and risk lenses (idx.growth.v1, idx.valuation.v1,
+// idx.risk.v1): the inputs, the reading, every rule with its points, then
+// the rules that could not run.
+const LENS_TONE = { cheap: "up", growing: "up", low: "up", expensive: "dn", shrinking: "dn", high: "dn" };
+const yesNo = (b) => (b == null ? null : b ? "yes" : "no");
+function lensView(d, lens, groups, direction, after = []) {
+  const frag = document.createDocumentFragment();
+  const r = d.reading;
+  frag.append(el("p", { class: "prose" }, [el("b", { text: d.name || d.symbol }), ` · ${d.symbol} · ${lens}`]));
+  const grid = el("div", { class: "three" });
+  for (const [title, pairs] of groups) grid.append(el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]));
+  frag.append(grid, ...after);
+  frag.append(el("p", { class: "prose" }, [el("span", { class: `pill ${LENS_TONE[r.label] || ""}`, text: r.label.replace("_", " ") }), ` score ${r.score >= 0 ? "+" : ""}${r.score}, ${r.inputs_available} rule${r.inputs_available === 1 ? "" : "s"} · ${direction}`]));
+  frag.append(el("ul", { class: "reasons" }, r.rules.map((x) => el("li", { text: `${x.points >= 0 ? "+" : ""}${x.points}  ${x.reason}` }))));
+  if (r.notes.length) frag.append(el("ul", { class: "reasons" }, r.notes.map((n) => el("li", { text: `skipped: ${n}` }))));
+  frag.append(el("p", { class: "warn", text: `Heuristic from public data, not investment advice.${d.sources.length ? ` Sources: ${d.sources.join(", ")}` : ""}` }));
+  return frag;
+}
+
 const BANDAR_NOTE = "Bandarmology from the IPOT broker summary: the top N buyers against the top N sellers (ranked by lots), net value as a share of the value traded: +15% big accumulation, +5% accumulation, -5% distribution, -15% big distribution. Heuristic, not advice.";
+
+// Ownership columns that only appear when they carry data: Accts when a holder
+// has several register lines, Control when the release has the 30 Oct 2026 flag.
+const CONTROL_COL = { h: "Control", f: (r) => ({ CONTROLLER: "controller", "AFFILIATE OF THE CONTROLLER": "affiliate" })[r.controller_or_affiliate] ?? (r.controller_or_affiliate || "").toLowerCase(), l: true };
+function ownCols(rows, controllerReported) {
+  const cols = [], notes = [];
+  if (controllerReported) { cols.push(CONTROL_COL); notes.push("Control: CONTROLLER_OR_AFFILIATE as the issuer reported it to IDX for the previous month."); }
+  if (rows.some((r) => (r.accounts ?? 1) > 1)) { cols.push({ h: "Accts", f: (r) => (r.accounts == null ? NA : String(r.accounts)) }); notes.push("Accts: register lines summed (KSEI lists a holder once per SID and once per scrip account without one)."); }
+  return { cols, notes };
+}
+const changeKind = (r) => {
+  const a = r.accounts_from, b = r.accounts_to;
+  if (a != null && b != null && a !== b) return `${r.kind} (${a}→${b} accts)`;
+  const n = Math.max(a ?? 0, b ?? 0);
+  return n > 1 ? `${r.kind} (${n} accts)` : r.kind;
+};
 
 const R = {
   quotes(d) {
@@ -95,6 +154,8 @@ const R = {
       { h: "High", f: (r) => fmt.price(r.day_high) }, { h: "Low", f: (r) => fmt.price(r.day_low) }, { h: "Volume", f: (r) => fmt.int(r.volume) },
       { h: "Mkt Cap", f: (r) => fmt.compact(r.market_cap) }, { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
     ], d)));
+    const behind = d.filter((r) => r.behind_session === true).map((r) => (r.market_time ? `${r.symbol} (last trade ${r.market_time.slice(0, 10)})` : r.symbol));
+    if (behind.length) frag.append(el("p", { class: "warn", text: `Behind the latest IDX session: ${behind.join(", ")} · suspended, not traded since, or the source lags` }));
     if (d.length === 1) frag.append(priceChart(d[0]));
     return frag;
   },
@@ -116,6 +177,33 @@ const R = {
     if (d.candles.length > 40) frag.append(el("p", { class: "warn", text: `Showing the last 40 of ${d.candles.length} candles; use json history … for all.` }));
     return frag;
   },
+  intraday(d) {
+    const frag = document.createDocumentFragment();
+    const q = d.quote, s = d.summary;
+    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${q.market_state.toLowerCase()}`].filter(Boolean);
+    frag.append(el("p", { class: "prose", text: head.join(" · ") }));
+    if (q) {
+      frag.append(el("p", { class: "prose" }, [
+        `Last ${fmt.price(q.price)} `, el("span", { class: signClass(q.change), text: `${fmt.change(q.change)} (${fmt.pct(q.change_pct)})` }),
+        ` · prev close ${fmt.price(q.previous_close)} · open ${fmt.price(q.open)} · high ${fmt.price(q.day_high)} · low ${fmt.price(q.day_low)}${q.volume ? ` · volume ${fmt.compact(q.volume)}` : ""}${q.market_time ? ` · last trade ${fmt.wib(q.market_time)}` : ""}`,
+      ]));
+    }
+    const source = "Yahoo's chart, about 10 minutes behind the market. Minutes without a trade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the day's.";
+    if (!s) { frag.append(el("p", { class: "warn", text: "No bars for this session." }), el("p", { class: "warn", text: source })); return frag; }
+    frag.append(el("p", { class: "prose", text: `Bars ${s.first_bar.slice(11, 16)} to ${s.last_bar.slice(11, 16)} WIB · ${s.bars} bar${s.bars === 1 ? "" : "s"} · open ${fmt.price(s.open)} · high ${fmt.price(s.high)} · low ${fmt.price(s.low)} · close ${fmt.price(s.close)}${s.bars_volume ? ` · volume ${fmt.compact(s.bars_volume)}` : ""} · ${s.vwap == null ? "no VWAP (the bars carry no volume)" : `VWAP ${fmt.price(s.vwap)}`}` }));
+    frag.append(sparkline(d.bars.map((c, i) => [i, c.close]), { cls: "spark" }));
+    const rows = d.bars.slice(-30);
+    let prev = d.bars.length > 30 ? d.bars[d.bars.length - 31].close : null;
+    const withChg = rows.map((c) => { const chg = prev ? ((c.close - prev) / prev) * 100 : null; prev = c.close; return { ...c, chg }; });
+    frag.append(wrapScroll(table([
+      { h: "Time (WIB)", f: (c) => c.time.slice(11, 16), l: true },
+      { h: "Open", f: (c) => fmt.price(c.open) }, { h: "High", f: (c) => fmt.price(c.high) }, { h: "Low", f: (c) => fmt.price(c.low) }, { h: "Close", f: (c) => fmt.price(c.close) },
+      { h: "Chg %", f: (c) => fmt.pct(c.chg), cls: (c) => `num ${signClass(c.chg)}` }, { h: "Volume", f: (c) => fmt.int(c.volume) },
+    ], withChg)));
+    if (d.bars.length > 30) frag.append(el("p", { class: "warn", text: `Showing the last 30 of ${d.bars.length} bars; json intraday ${d.symbol} carries all.` }));
+    frag.append(el("p", { class: "warn", text: `${source} VWAP is computed from the bars' typical prices, an approximation of IDX's average price.` }));
+    return frag;
+  },
   profile(p) {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>${p.name || p.symbol}</b>` }));
@@ -131,11 +219,12 @@ const R = {
     const grid = el("div", { class: "three" });
     const stmt = (title, pairs) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]);
     grid.append(
-      stmt("Valuation", [["Market cap", fmt.compact(v.market_cap)], ["Enterprise value", fmt.compact(v.enterprise_value)], ["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", fmt.ratio(v.price_to_book)], ["P/S", fmt.ratio(v.price_to_sales)], ["EV/EBITDA", fmt.ratio(v.ev_to_ebitda)]]),
-      stmt("Profitability & health", [["ROE", pct(p.roe_pct)], ["ROA", pct(p.roa_pct)], ["Gross margin", pct(p.gross_margin_pct)], ["Operating margin", pct(p.operating_margin_pct)], ["Net margin", pct(p.net_margin_pct)], ["Debt / equity", x(h.debt_to_equity)], ["Current ratio", fmt.ratio(h.current_ratio)], ["Total cash", fmt.compact(h.total_cash)]]),
+      stmt("Valuation", [["Market cap", fmt.compact(v.market_cap)], ["Enterprise value", fmt.compact(v.enterprise_value)], ["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", mixedRatio(f, v.price_to_book)], ["P/S", mixedRatio(f, v.price_to_sales)], ["EV/EBITDA", mixedRatio(f, v.ev_to_ebitda)]]),
+      stmt("Profitability & health", [["ROE", pct(p.roe_pct)], ["ROA", pct(p.roa_pct)], ["Gross margin", pct(p.gross_margin_pct)], ["Operating margin", pct(p.operating_margin_pct)], ["Net margin", pct(p.net_margin_pct)], ["Debt / equity", x(h.debt_to_equity)], ["Current ratio", fmt.ratio(h.current_ratio)], ["Total cash", inStatementCurrency(f, h.total_cash, fmt.compact(h.total_cash))]]),
       stmt("Growth, dividend, analysts", [["Revenue growth", fmt.pct(g.revenue_growth_pct)], ["Earnings growth", fmt.pct(g.earnings_growth_pct)], ["Dividend yield", pct(d.yield_pct)], ["Payout", pct(d.payout_ratio_pct)], ["Ex-dividend", d.ex_dividend_date], ["EPS (ttm)", fmt.price(f.per_share.eps_ttm)], ["Rating", a.recommendation ? a.recommendation.replace("_", " ") : null], ["Target mean", fmt.price(a.target_mean)]]),
     );
     frag.append(grid);
+    if (mixedCurrency(f)) frag.append(el("p", { class: "warn", text: `* Statements in ${f.financial_currency}, price in ${f.currency}: P/B, P/S and EV multiples divide the price by ${f.financial_currency} figures, so they are not comparable, and the verdict does not score P/B.` }));
     if (f.verdict) {
       const vv = f.verdict;
       const cls = vv.label === "undervalued" ? "up" : vv.label === "overvalued" ? "dn" : "";
@@ -144,6 +233,35 @@ const R = {
     }
     frag.append(el("p", { class: "warn", text: `Sources: ${f.sources.join(", ")}` }));
     return frag;
+  },
+  valuation(v) {
+    const m = (x) => mixedRatio(v, x);
+    const after = mixedCurrency(v) ? [el("p", { class: "warn", text: `* Statements in ${v.financial_currency}, price in ${v.currency}: these multiples divide the price by ${v.financial_currency} figures, so they are shown as reported and not scored.` })] : [];
+    return lensView(v, "valuation", [
+      ["Multiples", [["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", m(v.price_to_book)], ["P/S", m(v.price_to_sales)], ["EV/EBITDA", m(v.ev_to_ebitda)], ["EV/Revenue", m(v.ev_to_revenue)]]],
+      ["Price and income", [["Price", fmt.price(v.price)], ["Dividend yield", pct(v.dividend_yield_pct)], ["Payout", pct(v.payout_ratio_pct)], ["Negative equity", yesNo(v.negative_equity)], ["Financial company", yesNo(v.financial_company)]]],
+      ["Analysts", [["Target mean", fmt.price(v.target_mean)], ["Analysts", fmt.int(v.analysts)], ["Upside", fmt.pct(v.target_upside_pct)]]],
+    ], "points favour cheapness", after);
+  },
+  growth(g) {
+    const chg = (k) => ({ h: "Change", f: (y) => fmt.pct(y[k]), cls: (y) => `num ${signClass(y[k])}` });
+    const after = g.annual.length ? [wrapScroll(table([
+      { h: "Fiscal year", f: (y) => `FY${y.end_date.slice(0, 4)}`, l: true }, { h: `Revenue${g.statements_currency ? ` (${g.statements_currency})` : ""}`, f: (y) => fmt.compact(y.revenue) }, chg("revenue_change_pct"),
+      { h: "Net income", f: (y) => fmt.compact(y.net_income) }, chg("net_income_change_pct"),
+    ], g.annual))] : [];
+    return lensView(g, "growth", [
+      ["Latest quarter (year on year)", [["Revenue growth", fmt.pct(g.revenue_growth_pct)], ["Earnings growth", fmt.pct(g.earnings_growth_pct)], ["Quarter end", g.most_recent_quarter]]],
+      ["Earnings per share", [["EPS (ttm)", fmt.price(g.eps_ttm)], ["EPS (forward)", fmt.price(g.eps_forward)], ["Forward vs trailing", fmt.pct(g.eps_forward_growth_pct)]]],
+      ["Multi-year", [["Revenue CAGR", fmt.pct(g.revenue_cagr_pct)], ["Net income CAGR", fmt.pct(g.net_income_cagr_pct)], ["Revenue 5y (source)", fmt.pct(g.revenue_cagr_5y_pct)], ["EPS 3y (source)", fmt.pct(g.eps_growth_3y_pct)]]],
+    ], "points favour growth", after);
+  },
+  risk(r) {
+    const p = r.price, dd = p?.max_drawdown;
+    return lensView(r, "risk", [
+      ["Balance sheet", [["Negative equity", yesNo(r.negative_equity)], ["Debt / equity", x(r.debt_to_equity)], ["Current ratio", fmt.ratio(r.current_ratio)], ["Quick ratio", fmt.ratio(r.quick_ratio)], ["Financial company", yesNo(r.financial_company)], ["Net margin", pct(r.net_margin_pct)], ["EPS (ttm)", fmt.price(r.eps_ttm)]]],
+      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} to ${p.to}`], ["Daily returns", fmt.int(p.observations)], ["Zero returns", p.zero_returns == null ? null : `${fmt.int(p.zero_returns)} of ${fmt.int(p.observations)}`], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
+      ["Volatility and falls", p ? [["Volatility", pct(p.volatility_pct)], ["IHSG volatility", pct(p.benchmark_volatility_pct)], ["Largest fall", dd ? pct(dd.pct) : "none"], ["Peak to trough", dd ? `${dd.peak_date} to ${dd.trough_date}` : null], ["IHSG largest fall", pct(p.benchmark_max_drawdown_pct)]] : []],
+    ], "points add risk");
   },
   technical(t) {
     const frag = document.createDocumentFragment();
@@ -164,14 +282,14 @@ const R = {
     frag.append(el("p", { class: "warn", text: "Rule-based read of daily candles, not investment advice." }));
     return frag;
   },
-  financials(f) {
+  financials(f, only = null) {
     const cols = [{ h: "", k: "label", l: true }, ...f.periods.map((p, i) => ({ h: f.period === "annual" ? `FY${p.end_date.slice(0, 4)}` : p.end_date, f: (r) => r.vals[i], cls: "num" }))];
     const lines = [
       ["Total revenue", "income", "total_revenue"], ["Gross profit", "income", "gross_profit"], ["Operating income", "income", "operating_income"], ["EBITDA", "income", "ebitda"],
       ["Net interest income", "income", "net_interest_income"], ["Pretax income", "income", "pretax_income"], ["Net income", "income", "net_income"], ["EPS (diluted)", "income", "eps_diluted", "price"],
       ["Total assets", "balance", "total_assets"], ["Total liabilities", "balance", "total_liabilities"], ["Shareholders' equity", "balance", "stockholders_equity"], ["Cash & equivalents", "balance", "cash_and_equivalents"], ["Total debt", "balance", "total_debt"],
       ["Operating cash flow", "cash_flow", "operating"], ["Capital expenditure", "cash_flow", "capital_expenditure"], ["Free cash flow", "cash_flow", "free_cash_flow"], ["Dividends paid", "cash_flow", "dividends_paid"],
-    ];
+    ].filter(([, s]) => !only || only.has(s));
     const rows = lines.map(([label, s, k, kind]) => ({ label, vals: f.periods.map((p) => (kind === "price" ? fmt.price(p[s][k]) : fmt.compact(p[s][k]))) })).filter((r) => r.vals.some((v) => v !== NA));
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", text: `${f.symbol} · ${f.period} statements · ${f.periods.length} periods · ${f.currency || ""} · T = trillion, B = billion` }));
@@ -180,10 +298,17 @@ const R = {
   },
   earnings(e) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}` }));
+    frag.append(el("p", { class: "prose", html: `<b>${e.name || e.symbol}</b> · EPS in ${e.currency || "IDR"}${e.scope ? ` · ${scopeLabel(e.scope)}` : ""}` }));
     if (e.quarters.length) frag.append(wrapScroll(table([{ h: "Quarter", k: "period", l: true, cls: "sym" }, { h: "Period end", f: (q) => fmt.date(q.end_date), l: true }, { h: "Reported", f: (q) => fmt.date(q.reported_date), l: true }, { h: "EPS actual", f: (q) => fmt.price(q.eps_actual) }, { h: "EPS est.", f: (q) => fmt.price(q.eps_estimate) }, { h: "Surprise", f: (q) => fmt.pct(q.surprise_pct), cls: (q) => `num ${signClass(q.surprise_pct)}` }], e.quarters)));
     const re = [...e.yearly, ...e.quarterly];
     if (re.length) frag.append(wrapScroll(table([{ h: "Period", k: "period", l: true, cls: "sym" }, { h: "Revenue", f: (r) => fmt.compact(r.revenue) }, { h: "Earnings", f: (r) => fmt.compact(r.earnings) }, { h: "Margin", f: (r) => pct(r.profit_margin_pct) }], re)));
+    const est = e.estimates || [];
+    if (est.length) frag.append(wrapScroll(table([
+      { h: "Consensus", f: (r) => `${ESTIMATE_NAMES[r.period] || r.period} (${r.period})`, l: true, cls: "sym" }, { h: "Period end", f: (r) => fmt.date(r.end_date), l: true },
+      { h: "EPS avg", f: (r) => fmt.price(r.eps_avg) }, { h: "EPS low", f: (r) => fmt.price(r.eps_low) }, { h: "EPS high", f: (r) => fmt.price(r.eps_high) }, { h: "Analysts", f: (r) => fmt.int(r.eps_analysts) },
+      { h: "EPS growth", f: (r) => fmt.pct(r.eps_growth_pct), cls: (r) => `num ${signClass(r.eps_growth_pct)}` }, { h: "Revenue avg", f: (r) => fmt.compact(r.revenue_avg) },
+      { h: "Revenue growth", f: (r) => fmt.pct(r.revenue_growth_pct), cls: (r) => `num ${signClass(r.revenue_growth_pct)}` },
+    ], est)));
     if (e.next) frag.append(el("p", { class: "prose", text: `Next earnings ${e.next.date || NA}${e.next.date_is_estimate ? " (estimated)" : ""} · EPS consensus ${fmt.price(e.next.eps_avg)} (${fmt.price(e.next.eps_low)} to ${fmt.price(e.next.eps_high)}, ${e.next.analysts ?? NA} analysts) · revenue consensus ${fmt.compact(e.next.revenue_avg)}` }));
     if (e.ex_dividend_date) frag.append(el("p", { class: "prose", text: `Ex-dividend ${e.ex_dividend_date} · payment ${e.dividend_date || NA}` }));
     return frag;
@@ -192,24 +317,64 @@ const R = {
     const cols = [{ h: "Metric", k: "label", l: true }, ...list.map((f, i) => ({ h: f.symbol, f: (r) => r.vals[i], cls: "num" }))];
     const rowsDef = [
       ["Price", (f) => fmt.price(f.price)], ["Market cap", (f) => fmt.compact(f.valuation.market_cap)], ["P/E (ttm)", (f) => fmt.ratio(f.valuation.pe_trailing)], ["P/E (fwd)", (f) => fmt.ratio(f.valuation.pe_forward)],
-      ["P/B", (f) => fmt.ratio(f.valuation.price_to_book)], ["EV/EBITDA", (f) => fmt.ratio(f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
+      ["P/B", (f) => mixedRatio(f, f.valuation.price_to_book)], ["EV/EBITDA", (f) => mixedRatio(f, f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
       ["Debt/equity", (f) => x(f.health.debt_to_equity)], ["Rev growth", (f) => fmt.pct(f.growth.revenue_growth_pct)], ["Div yield", (f) => pct(f.dividend.yield_pct)], ["Target (mean)", (f) => fmt.price(f.analyst.target_mean)],
       ["Verdict", (f) => f.verdict?.label.replace("_", " ") || NA],
     ];
-    return wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
+    const t = wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
+    const mixed = list.filter(mixedCurrency).map((f) => `${f.symbol} (statements in ${f.financial_currency}, price in ${f.currency})`);
+    if (!mixed.length) return t;
+    const frag = document.createDocumentFragment();
+    frag.append(t, el("p", { class: "warn", text: `* P/B and EV/EBITDA divide the price by statement figures in another currency, so they are not comparable: ${mixed.join("; ")}.` }));
+    return frag;
   },
   screen(s) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${s.filters.join(", ") || "no filters"} · ${s.quoted} of ${s.universe} quoted · ${s.matched_quote_level} passed quote filters${s.fundamentals_checked ? ` · fundamentals checked for ${s.fundamentals_checked}${s.fundamentals_capped ? " (capped)" : ""}` : ""} · ${s.total_matches} match${s.total_matches === 1 ? "" : "es"} · sorted by ${s.sort}` }));
+    const what = [s.preset, s.filters.join(", ")].filter(Boolean).join(": ") || "no filters";
+    frag.append(el("p", { class: "prose", text: `${what} · ${s.quoted} of ${s.universe} quoted · ${s.matched_quote_level} passed quote filters${s.fundamentals_checked ? ` · fundamentals checked for ${s.fundamentals_checked}${s.fundamentals_capped ? " (capped)" : ""}` : ""} · ${s.total_matches} match${s.total_matches === 1 ? "" : "es"} · sorted by ${s.sort} ${s.descending ? "desc" : "asc"}` }));
     const withF = s.rows.some((r) => r.fundamentals_checked);
+    const keyOf = (clause) => (clause.match(/^\s*([^<>=!]+?)\s*(<=|>=|!=|<|>|=)/) || [])[1]?.toLowerCase();
+    const filterKeys = s.filters.map(keyOf);
+    // One return column: the sort key's window, else the first one filtered on, else 1 year.
+    const WINDOWS = { ret1w: ["1W %", "return_1w_pct"], ret1m: ["1M %", "return_1m_pct"], ret3m: ["3M %", "return_3m_pct"], ret6m: ["6M %", "return_6m_pct"], retytd: ["YTD %", "return_ytd_pct"], ytd: ["YTD %", "return_ytd_pct"], ret1y: ["1Y %", "return_1y_pct"] };
+    const win = WINDOWS[s.sort] || WINDOWS[filterKeys.find((k) => WINDOWS[k])] || WINDOWS.ret1y;
+    const withRange = s.sort === "range" || filterKeys.some((k) => ["range", "pos52", "52w"].includes(k));
     const cols = [
       { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", k: "name", l: true, cls: "name" }, { h: "Price", f: (r) => fmt.price(r.price) },
       { h: "Chg %", f: (r) => fmt.pct(r.change_pct), cls: (r) => `num ${signClass(r.change_pct)}` }, { h: "Mkt Cap", f: (r) => fmt.compact(r.market_cap) },
       { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "P/B", f: (r) => fmt.ratio(r.price_to_book) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
     ];
+    if (s.returns_source) cols.push({ h: win[0], f: (r) => fmt.pct(r[win[1]]), cls: (r) => `num ${signClass(r[win[1]])}` });
+    if (withRange) cols.push({ h: "52w pos", f: (r) => fmt.num(r.range_52w_pct, 1) });
     if (withF) cols.push({ h: "ROE", f: (r) => pct(r.roe_pct) }, { h: "Net mgn", f: (r) => pct(r.net_margin_pct) }, { h: "D/E", f: (r) => x(r.debt_to_equity) }, { h: "Sector", k: "sector", l: true });
     frag.append(wrapScroll(table(cols, s.rows)));
     if (s.rows.length < s.total_matches) frag.append(el("p", { class: "warn", text: `Showing ${s.rows.length} of ${s.total_matches}; add --limit 0 for all.` }));
+    if (s.returns_source) frag.append(el("p", { class: "warn", text: `Return windows: price return % as reported by ${s.returns_source}.` }));
+    if (withRange) frag.append(el("p", { class: "warn", text: "52w pos: where the price sits in its 52-week range, 0 at the low, 100 at the high." }));
+    return frag;
+  },
+  insights(r, all) {
+    const frag = document.createDocumentFragment();
+    frag.append(el("p", { class: "prose" }, [
+      el("b", { text: r.symbol }), `${r.name ? ` · ${r.name}` : ""} · MSN insights${r.updated ? `, updated ${r.updated.slice(0, 16).replace("T", " ")} UTC` : ""}`,
+    ]));
+    frag.append(el("p", { class: "prose", text: `${r.good} good · ${r.bad} bad · ${r.neutral} neutral · ${r.not_rated} not rated${r.peers.length ? ` · peers ${r.peers.join(", ")}` : ""}` }));
+    const MARK = { good: "✓", bad: "✗", neutral: "=", not_rated: "·" };
+    const VS = { peers: "peers", industry: "industry", own_history: "own history", price: "price", threshold: "threshold" };
+    const categories = [...new Set(r.insights.map((i) => i.category))];
+    for (const cat of categories) {
+      const items = r.insights.filter((i) => i.category === cat && (all || i.status !== "not_rated"));
+      if (!items.length) continue;
+      frag.append(el("h3", { class: "stmt-title", text: cat }));
+      frag.append(wrapScroll(table([
+        { h: "", f: (i) => MARK[i.status] || "·", cls: (i) => signClass(i.status === "good" ? 1 : i.status === "bad" ? -1 : 0) },
+        { h: "Statement", f: (i) => i.statement || i.short_statement || i.name, l: true },
+        { h: "vs", f: (i) => VS[i.compared_with] || fmt.text(null), l: true },
+      ], items)));
+    }
+    if (!r.insights.length) frag.append(el("p", { class: "warn", text: "MSN lists no statements for this company." }));
+    if (!all && r.not_rated) frag.append(el("p", { class: "warn", text: `${r.not_rated} statement${r.not_rated === 1 ? "" : "s"} MSN could not rate ${r.not_rated === 1 ? "is" : "are"} hidden; add --all.` }));
+    frag.append(el("p", { class: "warn", text: "Rule-based statements by MSN Money (✓ good, ✗ bad, = neutral, · not rated). Not investment advice." }));
     return frag;
   },
   news(n) {
@@ -372,7 +537,11 @@ const R = {
       const range = s.from === s.to ? s.from : `${s.from} to ${s.to}`;
       frag.append(el("p", { class: "prose", html: `<b>${s.symbol}</b>${s.name ? ` · ${s.name}` : ""} · ${range} · ${s.investor} investors · ${s.board === "all" ? "all boards" : `${s.board} board`}` }));
       if (!s.buyers.length && !s.sellers.length) { frag.append(el("p", { class: "warn", text: `No trades from ${s.from} to ${s.to}.` })); continue; }
-      frag.append(el("p", { class: "prose", html: `Value ${fmt.compact(s.total_value)} · lots ${fmt.compact(s.total_lots)} · avg ${fmt.price(s.average_price)} · foreign net <span class="${signClass(s.foreign_net_value)}">${fmt.compact(s.foreign_net_value)}</span>` }));
+      // One investor side: the source's totals are that side's buying, so it reads as bought and sold.
+      const totals = s.investor === "all"
+        ? `Value ${fmt.compact(s.total_value)} · lots ${fmt.compact(s.total_lots)} · avg ${fmt.price(s.average_price)}`
+        : `${s.investor === "foreign" ? "Foreign" : "Domestic"} investors bought ${fmt.compact(s.buy_value)} · sold ${fmt.compact(s.sell_value)}`;
+      frag.append(el("p", { class: "prose", html: `${totals} · foreign net <span class="${signClass(s.foreign_net_value)}">${fmt.compact(s.foreign_net_value)}</span>` }));
       const grid = el("div", { class: "two" });
       grid.append(
         el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: "Top buyers" }), wrapScroll(table(cols, s.buyers))]),
@@ -380,7 +549,27 @@ const R = {
       );
       frag.append(grid);
     }
-    frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}` }));
+    frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}${list.some((s) => s.board !== "all") ? " The source's foreign net covers every board, so a board filter leaves it out." : ""}` }));
+    return frag;
+  },
+  foreignFlow(fl) {
+    const frag = document.createDocumentFragment();
+    const signed = (v) => (v > 0 ? `+${fmt.compact(v)}` : fmt.compact(v));
+    const share = (v) => (v == null ? null : `${fmt.num(v, 1)}%`);
+    const t = fl.totals;
+    frag.append(el("p", { class: "prose", html: `<b>${fl.symbol}</b>${fl.name ? ` · ${fl.name}` : ""} · foreign flow (IPOT, all boards) · ${fl.from} to ${fl.to} · ${t.sessions} sessions` }));
+    frag.append(wrapScroll(table([
+      { h: "Date", k: "date", l: true },
+      { h: "Value", f: (d) => fmt.compact(d.value) },
+      { h: "Avg", f: (d) => fmt.price(d.average_price) },
+      { h: "Foreign buy", f: (d) => fmt.compact(d.foreign_buy_value) },
+      { h: "Foreign sell", f: (d) => fmt.compact(d.foreign_sell_value) },
+      { h: "Foreign net", f: (d) => signed(d.foreign_net_value), cls: (d) => `num ${signClass(d.foreign_net_value)}` },
+      { h: "Foreign %", f: (d) => share(d.foreign_share_pct) },
+    ], [...fl.days].reverse())));
+    const streak = t.streak === 0 ? "flat last session" : t.streak > 0 ? `${t.streak} net-buy session(s) in a row` : `${-t.streak} net-sell session(s) in a row`;
+    frag.append(el("p", { class: "prose", html: `Total · value ${fmt.compact(t.value)} · foreign buy ${fmt.compact(t.foreign_buy_value)} · sell ${fmt.compact(t.foreign_sell_value)} · net <span class="${signClass(t.foreign_net_value)}">${signed(t.foreign_net_value)}</span> · foreign share ${share(t.foreign_share_pct) ?? fmt.pctPlain(null)} · ${t.net_buy_sessions} net-buy / ${t.net_sell_sessions} net-sell sessions · ${streak}` }));
+    frag.append(el("p", { class: "warn", text: `Rupiah across all boards (negotiated trades included) from IPOT's broker summary, two requests per session; foreign % is foreign buying plus selling over twice the value traded.${fl.rounded ? " The source rounds figures of a million and more to one decimal." : ""} The CLI also reads idx.co.id's share counts (--source idx).` }));
     return frag;
   },
   actions(c) {
@@ -450,7 +639,7 @@ const R = {
   },
   tools() {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools and the Stockbit realtime tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
+    frag.append(el("p", { class: "prose", text: `${TOOLS.length} MCP tools (idx mcp). ${TOOLS.filter((t) => t.web).length} run here; the other ${TOOLS.filter((t) => !t.web).length} (the idx.co.id exchange tools, the KSEI composition tool, the local ownership database tool, MSN's institutional holders and the Stockbit tools) run in the CLI and MCP only. Click a tool to run it, or to see its CLI command.` }));
     frag.append(wrapScroll(table([
       { h: "Tool", k: "tool", l: true, cls: "sym" }, { h: "CLI", k: "cli", l: true },
       { h: "Web terminal", f: (t) => t.web || "CLI and MCP only", l: true }, { h: "What", k: "what", l: true, cls: "name" },
@@ -462,11 +651,7 @@ const R = {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>${t.tool}</b> · ${t.what}` }));
     frag.append(el("pre", { text: `${t.cli}\n${t.cli.replace(/^idx /, "idx -o json ")}` }));
-    const stockbit = t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit");
-    const reason = stockbit
-      ? "Stockbit realtime carries your own account session (captured once by `idx stockbit login`), so it runs in the CLI and the MCP server only, never this public page."
-      : CLI_ONLY_REASON;
-    frag.append(el("p", { class: "warn", text: `${reason} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
+    frag.append(el("p", { class: "warn", text: `${cliOnlyReason(t)} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
     return frag;
   },
   holidays(h) {
@@ -478,6 +663,63 @@ const R = {
       { h: "Holiday", k: "name", l: true, cls: "name" }, { h: "English", f: (d) => d.name_en || NA, l: true },
     ], h.holidays)));
     frag.append(el("p", { class: "warn", text: `Covers ${h.years_covered.join(", ")}, from the calendar idx.co.id publishes. Weekend holidays are not listed; IDX can add a holiday later.` }));
+    return frag;
+  },
+  astro(a) {
+    const frag = document.createDocumentFragment();
+    const name = (s) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+    const hm = (iso) => (iso ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : fmt.text(null));
+    // Minutes truncated, never rounded up into the next degree (as the CLI prints them).
+    const dms = (deg) => { const d = Math.floor(deg); return `${d}°${String(Math.min(59, Math.floor((deg - d) * 60 + 1e-9))).padStart(2, "0")}'`; };
+    const signed = (v, d) => (v > 0 ? `+${fmt.num(v, d)}` : fmt.num(v, d));
+    const orNa = (v, f) => (v == null ? fmt.text(null) : f(v));
+    frag.append(el("p", { class: "prose", html: `<b>IHSG astro · ${a.weton.day} ${a.weton.pasaran} ${a.date}</b> · positions at ${a.at.slice(11, 16)} WIB, the IDX close` }));
+    frag.append(wrapScroll(table([
+      { h: "Body", f: (b) => name(b.body), l: true, cls: "sym" }, { h: "Sign", f: (b) => name(b.sign), l: true },
+      { h: "Position", f: (b) => `${dms(b.degree)}${b.retrograde ? " R" : ""}`, l: true }, { h: "Speed/day", f: (b) => `${signed(b.speed, 3)}°`, cls: (b) => `num ${signClass(b.speed)}` },
+    ], a.bodies)));
+    const m = a.moon, me = a.mercury;
+    frag.append(el("p", { class: "prose", text: `Moon: ${m.phase.replace(/_/g, " ")}, ${fmt.num(m.illumination * 100, 0)}% lit, ${fmt.num(m.age_days, 1)} days old · new moon ${hm(m.next_new_moon)} · full moon ${hm(m.next_full_moon)}` }));
+    let merc = me.retrograde ? `Mercury: retrograde${me.retrograde_since ? ` since ${hm(me.retrograde_since)}` : ""}${me.retrograde_until ? `, direct ${hm(me.retrograde_until)}` : ""}` : "Mercury: direct";
+    if (me.next_retrograde) merc += ` · next retrograde ${me.next_retrograde.from.slice(0, 10)}${me.next_retrograde.until ? ` to ${me.next_retrograde.until.slice(0, 10)}` : ""}`;
+    frag.append(el("p", { class: "prose", text: merc }));
+    const w = a.weton, sh = a.shio;
+    frag.append(el("p", { class: "prose", text: `Weton: ${w.day} ${w.pasaran}, neptu ${w.neptu_day} + ${w.neptu_pasaran} = ${w.neptu} · Shio: ${sh ? `${sh.animal_id} (${sh.element} ${sh.animal}) since Imlek ${sh.year_start}` : "not computed before 1924 or after 2050"}` }));
+    const days = Math.round((Date.parse(a.upcoming.to) - Date.parse(a.upcoming.from)) / 86400e3);
+    const what = (e) => {
+      const sign = name(e.sign);
+      if (e.kind === "ingress") return `${name(e.body)} enters ${sign}`;
+      if (e.kind === "station_retrograde") return `${name(e.body)} stations retrograde in ${sign}`;
+      if (e.kind === "station_direct") return `${name(e.body)} stations direct in ${sign}`;
+      return `${name(e.kind)}${e.kind === "new_moon" || e.kind === "full_moon" ? "" : " moon"} in ${sign}`;
+    };
+    frag.append(el("h3", { class: "stmt-title", text: `Next ${days} day${days === 1 ? "" : "s"}` }));
+    if (a.upcoming.events.length) frag.append(wrapScroll(table([{ h: "WIB", f: (e) => hm(e.at), l: true, cls: "sym" }, { h: "Event", f: what, l: true }], a.upcoming.events)));
+    else frag.append(el("p", { class: "warn", text: "No exact phases, stations or ingresses." }));
+    if (a.natal) {
+      frag.append(el("h3", { class: "stmt-title", text: `Transits to IHSG's chart (${a.natal.chart === "launch" ? "launch" : "base date"} ${a.natal.date}, noon WIB; orb 2°)` }));
+      if (a.natal.transits.length) frag.append(wrapScroll(table([
+        { h: "Transit", f: (t) => name(t.transit), l: true, cls: "sym" }, { h: "Aspect", k: "aspect", l: true }, { h: "Natal", f: (t) => `natal ${name(t.natal)}`, l: true },
+        { h: "Orb", f: (t) => `${fmt.num(t.orb, 2)}°` }, { h: "Motion", f: (t) => (t.applying ? "applying" : "separating"), l: true },
+      ], a.natal.transits)));
+      else frag.append(el("p", { class: "warn", text: "No aspects within 2° today." }));
+    }
+    const b = a.backtest;
+    if (b) {
+      frag.append(el("h3", { class: "stmt-title", text: `Backtest · ${b.symbol} daily close-to-close returns · ${b.from} to ${b.to} · ${fmt.int(b.returns)} sessions` }));
+      frag.append(el("p", { class: "prose", text: `All sessions: mean ${signed(b.mean_pct, 4)}%, median ${signed(b.median_pct, 4)}%, up ${fmt.num(b.win_rate_pct, 2)}%` }));
+      const FACTORS = { moon_phase: "Moon phase", mercury: "Mercury", pasaran: "Pasaran", sun_sign: "Sun sign" };
+      const rows = b.factors.flatMap((f) => f.groups.map((g) => ({ ...g, factor: FACTORS[f.factor] || f.factor })));
+      frag.append(wrapScroll(table([
+        { h: "Factor", k: "factor", l: true }, { h: "Group", f: (g) => name(g.group), l: true, cls: "sym" }, { h: "Days", f: (g) => fmt.int(g.n) },
+        { h: "Mean %", f: (g) => orNa(g.mean_pct, (v) => signed(v, 4)), cls: (g) => `num ${signClass(g.mean_pct)}` },
+        { h: "Median %", f: (g) => orNa(g.median_pct, (v) => signed(v, 4)) }, { h: "Up %", f: (g) => orNa(g.win_rate_pct, (v) => fmt.num(v, 1)) },
+        { h: "t", f: (g) => orNa(g.t_stat, (v) => fmt.num(v, 2)) }, { h: "p", f: (g) => orNa(g.p_value, (v) => `${fmt.num(v, 4)}${g.significant ? " *" : ""}`) },
+      ], rows)));
+      const verdict = b.significant === 0 ? "none pass" : `${b.significant} pass (marked *)`;
+      frag.append(el("p", { class: "prose", text: `${b.tests} tests against all other sessions (Welch's t); Bonferroni needs p < ${b.bonferroni_alpha} at ${b.alpha * 100}%: ${verdict}. Sun signs follow the calendar, so they also carry month-of-year effects. Descriptive, not a trading signal.` }));
+    }
+    frag.append(el("p", { class: "warn", text: `${a.disclaimer}${b ? "" : " Add --backtest to see how IHSG's daily returns split by these factors; the web runs 1y to 10y, the CLI all of it since 1990."}` }));
     return frag;
   },
   sentiment(s) {
@@ -493,6 +735,7 @@ const R = {
   market(m) {
     const frag = document.createDocumentFragment();
     frag.append(el("p", { class: "prose", html: `<b>IHSG ${fmt.price(m.index?.price)}</b> ${fmt.change(m.index?.change)} (${fmt.pct(m.index?.change_pct)}) · advancing ${m.advancing} · declining ${m.declining} · unchanged ${m.unchanged} · ${m.quoted} quoted · snapshot ${fmt.wibAt(m.refreshed_at)} · ${boardWords(m)}` }));
+    if (m.behind_session) frag.append(el("p", { class: "warn", text: `Behind the latest IDX session: the newest quote on the board is from ${m.as_of.slice(0, 10)}` }));
     if (m.index_tape.length > 1) frag.append(sparkline(m.index_tape, { cls: "spark" }));
     const grid = el("div", { class: "three" });
     const mk = (title, rows, valueCol) => el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Price", f: (r) => fmt.price(r.price) }, valueCol], rows))]);
@@ -503,14 +746,18 @@ const R = {
   },
   holders(h) {
     const frag = document.createDocumentFragment();
+    const extra = ownCols(h.holders, h.controller_reported);
     frag.append(el("p", { class: "prose", html: `<b>${h.symbol}</b> · ${h.issuer_name || ""} · holders above 1 % as of ${h.as_of} · ${h.holders.length} listed = ${pct(h.listed_pct)}` }));
-    frag.append(wrapScroll(table([{ h: "#", f: (r, i) => "", l: true }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], h.holders.map((r, i) => ({ ...r, n: i + 1 })))));
+    frag.append(wrapScroll(table([{ h: "#", f: (r, i) => "", l: true }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, ...extra.cols, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], h.holders.map((r, i) => ({ ...r, n: i + 1 })))));
+    for (const n of extra.notes) frag.append(el("p", { class: "warn", text: n }));
     return frag;
   },
   entity(e) {
     const frag = document.createDocumentFragment();
+    const extra = ownCols(e.holdings, e.controller_reported);
     frag.append(el("p", { class: "prose", text: `"${e.query}" · ${e.entities.length} matching holder${e.entities.length === 1 ? "" : "s"} · as of ${e.as_of}: ${e.entities.join("; ")}` }));
-    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "Holder (as printed)", k: "holder_raw", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], e.holdings)));
+    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "Holder (as printed)", k: "holder_raw", l: true }, { h: "Type", k: "investor_type", l: true }, ...extra.cols, { h: "Shares", f: (r) => fmt.int(r.shares_total) }, { h: "%", f: (r) => pct(r.pct) }], e.holdings)));
+    for (const n of extra.notes) frag.append(el("p", { class: "warn", text: n }));
     return frag;
   },
   changes(c) {
@@ -524,15 +771,85 @@ const R = {
       if (!c.symbol && s.issuer_flow.length) frag.append(el("p", { class: "prose", text: `Issuer flow · ${s.issuer_flow.slice(0, 8).map((i) => `${i.symbol} ${pp(i.net_pp)} (foreign ${pp(i.foreign_net_pp)})`).join(" · ")}` }));
     }
     if (c.changes.length < c.total_matches) frag.append(el("p", { class: "warn", text: `Rows ${(c.offset || 0) + 1}-${(c.offset || 0) + c.changes.length} of ${c.total_matches} · next page: --offset ${(c.offset || 0) + c.changes.length} · all: --limit 0` }));
-    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "Kind", k: "kind", l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
+    const flagged = c.changes.some((r) => r.controller_or_affiliate);
+    frag.append(wrapScroll(table([{ h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, ...(flagged ? [CONTROL_COL] : []), { h: "Kind", f: changeKind, l: true }, { h: "% from", f: (r) => pct(r.pct_from) }, { h: "% to", f: (r) => pct(r.pct_to) }, { h: "Δ pp", f: (r) => fmt.change(r.pct_change), cls: (r) => `num ${signClass(r.pct_change)}` }, { h: "Δ shares", f: (r) => fmt.change(r.shares_change), cls: (r) => `num ${signClass(r.shares_change)}` }], c.changes)));
+    return frag;
+  },
+  ownSearch(r) {
+    const frag = document.createDocumentFragment();
+    const shown = r.matches.length < r.total_matches ? ` · showing ${r.matches.length}` : "";
+    frag.append(el("p", { class: "prose", text: `"${r.query}" · ${r.total_matches} holder${r.total_matches === 1 ? " matches" : "s match"}${shown} · issuers counted as of ${r.as_of}` }));
+    if (!r.matches.length) return frag;
+    frag.append(wrapScroll(table([
+      { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Match", k: "matched", l: true }, { h: "Issuers", f: (m) => String(m.issuers) },
+      { h: "Total %", f: (m) => (m.issuers ? pct(m.total_pct) : null) }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true },
+      { h: "Spellings", f: (m) => m.spellings.join(" | "), l: true }, { h: "Key", k: "entity_key", l: true },
+    ], r.matches)));
+    const top = r.matches[0];
+    frag.append(el("p", { class: "warn", text: `Total %: stakes in different issuers added up (a breadth measure). Next: ownership entity ${top.entity_key} --as-of ${top.issuers ? r.as_of : top.last_seen}` }));
+    return frag;
+  },
+  crossHolders(r) {
+    const frag = document.createDocumentFragment();
+    const filters = [r.investor_type ? `type ~ ${r.investor_type}` : null, r.origin ? (r.origin === "foreign" ? "foreign (A)" : "local (L)") : null].filter(Boolean);
+    const shown = r.holders.length < r.total_matches ? ` · showing ${r.holders.length} (--limit 0 for all)` : "";
+    frag.append(el("p", { class: "prose", text: `Holders above 1 % in at least ${r.min_issuers} issuer${r.min_issuers === 1 ? "" : "s"} as of ${r.as_of}${filters.map((f) => ` · ${f}`).join("")} · ${r.total_matches} holder${r.total_matches === 1 ? "" : "s"}${shown}` }));
+    if (!r.holders.length) return frag;
+    const largest = (h) => h.positions.slice(0, 4).map((p) => `${p.symbol} ${pct(p.pct)}`).join(", ") + (h.positions.length > 4 ? ", …" : "");
+    frag.append(wrapScroll(table([
+      { h: "#", f: (h) => String(h.n) }, { h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true },
+      { h: "Issuers", f: (h) => String(h.issuers) }, { h: "Total %", f: (h) => pct(h.total_pct) }, { h: "Largest positions", f: largest, l: true },
+    ], r.holders.map((h, i) => ({ ...h, n: i + 1 })))));
+    frag.append(el("p", { class: "warn", text: "Total % adds stakes in different companies: a breadth measure, not a share of anything. Custodian and nominee accounts (securities companies, private banks) hold for their clients. A holder printed two ways counts twice." }));
+    return frag;
+  },
+  concentration(r) {
+    const frag = document.createDocumentFragment();
+    const by = { hhi: "HHI", top1: "largest stake", top3: "top-3 stakes" }[r.sort] || r.sort;
+    const shown = r.rows.length < r.total_matches ? ` · showing ${r.rows.length} (--limit 0 for all)` : "";
+    frag.append(el("p", { class: "prose", text: `Ownership concentration as of ${r.as_of} · by ${by}, ${r.ascending ? "least" : "most"} first · ${r.total_matches} issuer${r.total_matches === 1 ? "" : "s"}${shown}` }));
+    frag.append(wrapScroll(table([
+      { h: "#", f: (c) => String(c.n) }, { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Issuer", k: "issuer_name", l: true }, { h: "HHI", f: (c) => fmt.num(c.hhi, 2) },
+      { h: "Top 1 %", f: (c) => pct(c.top1_pct) }, { h: "Top 3 %", f: (c) => pct(c.top3_pct) }, { h: "Listed %", f: (c) => pct(c.listed_pct) }, { h: "Undisclosed %", f: (c) => pct(c.undisclosed_pct) },
+      ...(r.controller_reported ? [{ h: "Control %", f: (c) => pct(c.controller_pct) }] : []),
+      { h: "Holders", f: (c) => String(c.holders_listed) }, { h: "Largest holder", k: "top_holder", l: true },
+    ], r.rows.map((c, i) => ({ ...c, n: i + 1 })))));
+    frag.append(el("p", { class: "warn", text: `HHI is the sum of the squared stakes of the holders listed above 1 % (0 to 10,000). Holders at or below 1 % are not published, so HHI covers the listed holders only (a lower bound) and Undisclosed is what the register does not show.${r.controller_reported ? " Control %: stakes flagged CONTROLLER or AFFILIATE OF THE CONTROLLER." : ""}` }));
+    return frag;
+  },
+  graph(g) {
+    const frag = document.createDocumentFragment();
+    const label = g.issuers.find((i) => i.id === g.root)?.symbol || g.holders.find((h) => h.id === g.root)?.holder || g.root;
+    const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+    frag.append(el("p", { class: "prose", text: `Ownership network around ${label} as of ${g.as_of} · ${n(g.depth, "hop", "hops")} · ${n(g.holders.length, "holder", "holders")} · ${n(g.issuers.length, "issuer", "issuers")} · ${n(g.links.length, "link", "links")}${g.min_pct > 0 ? ` · stakes of ${g.min_pct}% or more` : ""}${g.truncated ? " · truncated" : ""}` }));
+    const holders = new Map(g.holders.map((h) => [h.id, h]));
+    frag.append(wrapScroll(table([
+      { h: "Hops", f: (l) => String(l.hops) }, { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Holder", k: "holder", l: true },
+      { h: "Type", f: (l) => holders.get(l.from)?.investor_type ?? null, l: true }, { h: "L/A", f: (l) => holders.get(l.from)?.local_foreign ?? null, l: true }, { h: "%", f: (l) => pct(l.pct) },
+    ], g.links)));
+    frag.append(el("p", { class: "warn", text: "Each row is a holding above 1 %. The CLI draws it too: idx ownership graph … --dot | dot -Tsvg" }));
     return frag;
   },
   releases(list) {
-    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Source", k: "source", l: true }], list));
+    return wrapScroll(table([{ h: "As of", k: "as_of", l: true, cls: "sym" }, { h: "Format", k: "format", l: true }, { h: "Rows", f: (r) => fmt.int(r.rows) }, { h: "Positions", f: (r) => fmt.int(r.positions) }, { h: "Source", k: "source", l: true }], list));
   },
 };
 
 // ---- command execution -----------------------------------------------------
+
+// `--statement income,balance,cash` (aliases cashflow, cash-flow; all = every
+// statement) as the set of statement keys to show, or null for all of them.
+const STATEMENTS = { income: "income", balance: "balance", cash: "cash_flow", cashflow: "cash_flow", "cash-flow": "cash_flow" };
+function statements(v) {
+  if (v == null || v === true) return null;
+  const keys = new Set();
+  for (const name of String(v).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
+    if (name === "all") return null;
+    if (!STATEMENTS[name]) throw Object.assign(new Error(`invalid statement "${name}"; use income, balance, cash or all`), { code: "usage" });
+    keys.add(STATEMENTS[name]);
+  }
+  return keys.size ? keys : null;
+}
 
 function need(pos, n, usage) { if (pos.length < n) throw Object.assign(new Error(`usage: ${usage}`), { code: "usage" }); }
 
@@ -561,19 +878,45 @@ async function run(line) {
     case "clear": return { clear: true };
     case "quote": need(pos, 1, cmd.usage); env = await api(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
     case "history": need(pos, 1, cmd.usage); env = await api(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
+    case "intraday": need(pos, 1, cmd.usage); env = await api(`intraday?${qs({ symbol: sym(), interval: pos[1] || opt.interval || "1m", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.intraday; break;
     case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
-    case "financials": need(pos, 1, cmd.usage); env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`); render = R.financials; break;
-    case "earnings": need(pos, 1, cmd.usage); env = await api(`earnings?symbol=${encodeURIComponent(sym())}`); render = R.earnings; break;
-    case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
+    case "financials": {
+      need(pos, 1, cmd.usage);
+      const only = statements(opt.statement);
+      env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`);
+      render = (d) => R.financials(d, only);
+      break;
+    }
+    case "earnings": {
+      // Boolean flags: a word the flag parser took as a flag's value is the symbol.
+      for (const k of ["annual", "quarterly", "reported", "estimates", "history", "forecast"]) if (typeof opt[k] === "string") { pos.push(opt[k]); opt[k] = true; }
+      need(pos, 1, cmd.usage);
+      const reported = opt.reported || opt.history, estimates = opt.estimates || opt.forecast;
+      const period = opt.annual && !opt.quarterly ? "annual" : opt.quarterly && !opt.annual ? "quarterly" : null;
+      const kind = reported && !estimates ? "reported" : estimates && !reported ? "estimates" : null;
+      env = await api(`earnings?${qs({ symbol: sym(), period, kind })}`);
+      render = R.earnings;
+      break;
+    }
+    case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: opt.lens })}`); render = opt.lens ? R[String(opt.lens).toLowerCase()] : R.fundamentals; break;
+    case "growth": case "valuation": case "risk": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: name })}`); render = R[name]; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
     case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
-    case "screen": need(pos, 1, cmd.usage); env = await api(`screen?${qs({ filter: pos.join(","), sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : null })}`); render = R.screen; break;
+    case "screen": env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
     case "news": env = await api(`news?${qs({ symbol: sym(), limit: opt.limit || 20, company_only: opt["company-only"] ? "1" : null })}`); render = R.news; break;
     case "dividends": need(pos, 1, cmd.usage); env = await api(`dividends?symbol=${encodeURIComponent(sym())}`); render = R.dividends; break;
     case "returns": need(pos, 1, cmd.usage); env = await api(`returns?${qs({ symbols: pos.join(","), benchmark: opt.benchmark })}`); render = R.returns; break;
     case "brief": need(pos, 1, cmd.usage); env = await api(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
     case "sentiment": need(pos, 1, cmd.usage); env = await api(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
+    case "insights": {
+      need(pos, 1, cmd.usage);
+      const all = opt.all != null;
+      env = await api(`insights?symbol=${encodeURIComponent(sym())}`);
+      render = (d) => R.insights(d, all);
+      break;
+    }
     case "broker": need(pos, 1, cmd.usage); env = await api(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
+    case "foreign": need(pos, 1, cmd.usage); env = await api(`foreign?${qs({ symbol: sym(), days: opt.days, from: opt.from, to: opt.to })}`); render = R.foreignFlow; break;
     case "bandar": {
       if ((pos[0] || "").toLowerCase() === "screen") {
         env = await api(`bandar/screen?${qs({ preset: opt.preset, filter: opt.filter, period: opt.period, top: opt.top, sort: opt.sort, asc: opt.asc ? "1" : opt.desc ? "0" : null, limit: opt.limit })}`);
@@ -608,6 +951,12 @@ async function run(line) {
       render = R.holidays;
       break;
     }
+    case "astro": {
+      const date = pos[0] || opt.date;
+      env = await api(`astro?${qs({ date, days: opt.days, natal: opt.natal, backtest: opt.backtest ? "1" : null, period: opt.period })}`);
+      render = R.astro;
+      break;
+    }
     case "ownership": {
       const sub = (pos[0] || "").toLowerCase();
       if (sub === "ticker") { need(pos, 2, cmd.usage); env = await api(`ownership/ticker?${qs({ symbol: pos[1], as_of: opt["as-of"] })}`); render = R.holders; }
@@ -615,6 +964,20 @@ async function run(line) {
       else if (sub === "changes") { need(pos, 3, cmd.usage); env = await api(`ownership/changes?${qs({ from: pos[1], to: pos[2], symbol: pos[3], min_change: opt["min-change"], limit: opt.limit, offset: opt.offset })}`); render = R.changes; }
       else if (sub === "foreign") { env = await api(`ownership/foreign?${qs({ symbol: pos[1], from: opt.from, to: opt.to, limit: opt.limit })}`); render = R.foreign; }
       else if (sub === "releases") { env = await api("ownership/releases"); render = R.releases; }
+      else if (sub === "search") { need(pos, 2, cmd.usage); env = await api(`ownership/search?${qs({ q: pos.slice(1).join(" "), limit: opt.limit, as_of: opt["as-of"] })}`); render = R.ownSearch; }
+      else if (sub === "cross-holders") { env = await api(`ownership/cross-holders?${qs({ min_issuers: opt["min-issuers"] ?? opt["min-tickers"], type: opt.type, origin: opt.origin, limit: opt.limit, as_of: opt["as-of"] })}`); render = R.crossHolders; }
+      else if (sub === "concentration") {
+        // `--asc BBCA` hands the symbol to the flag; take it back.
+        const syms = [...pos.slice(1), ...[opt.asc, opt.ascending].filter((v) => typeof v === "string")];
+        env = await api(`ownership/concentration?${qs({ symbols: syms.join(","), by: opt.by, asc: opt.asc || opt.ascending ? "1" : null, limit: opt.limit, as_of: opt["as-of"] })}`);
+        render = R.concentration;
+      } else if (sub === "graph") {
+        const root = [...pos.slice(1), ...(typeof opt.holder === "string" ? [opt.holder] : [])];
+        need(root, 1, cmd.usage);
+        env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
+        render = R.graph;
+      }
+      else if (sub === "institutions") return { local: "CLI and MCP only", node: R.cliOnly(byName("idx_ownership_institutions")) };
       else throw Object.assign(new Error(`usage: ${cmd.usage}`), { code: "usage" });
       break;
     }
@@ -781,7 +1144,8 @@ function paintHistory() {
 
 // ---- the gate, the rail and the keys ------------------------------------------
 
-const SAMPLE = ["market", "brief BBCA", "quote BBCA", "returns BBCA BBRI BMRI", "dividends TLKM", "fundamental BBCA", "technical BBRI", "screen pe<10,div>5,mcap>5T --sort div", "news TLKM", "broker BBCA", "bandar BBCA --daily", "bandar screen --preset big-accumulation", "bandar broker YP", "actions BBCA", "holidays --upcoming", "compare BBCA BBRI BMRI", "ownership ticker BBCA", "tools", "help"];
+// hints + deep links (?cmd=)
+const SAMPLE = ["market", "brief BBCA", "quote BBCA", "returns BBCA BBRI BMRI", "dividends TLKM", "fundamental BBCA", "technical BBRI", "screen pe<10,div>5,mcap>5T --sort div", "news TLKM", "broker BBCA", "bandar BBCA --daily", "bandar screen --preset big-accumulation", "bandar broker YP", "actions BBCA", "holidays --upcoming", "astro", "compare BBCA BBRI BMRI", "ownership ticker BBCA", "tools", "help"];
 document.getElementById("hints").append(...SAMPLE.map((s) => el("button", { type: "button", text: s, onclick: () => runLine(s) })));
 
 const takesArgs = (usage) => /<[^>]+>/.test(usage.split(" | ")[0]);
@@ -797,8 +1161,10 @@ function pick(c) {
 }
 // The rail is narrow: each command gets a label of a few words here; help prints the full text.
 const RAIL = {
-  quote: "quotes and chart", history: "OHLCV candles", profile: "company profile", financials: "statements",
-  earnings: "EPS vs estimates", fundamental: "ratios, verdict", technical: "indicators, signal", compare: "side by side",
+  quote: "quotes and chart", history: "OHLCV candles", intraday: "minute bars", profile: "company profile", financials: "statements",
+  earnings: "EPS vs estimates", fundamental: "ratios, verdict", growth: "growth lens", valuation: "valuation lens",
+  risk: "risk vs IHSG", technical: "indicators, signal", compare: "side by side", insights: "MSN insights",
+  foreign: "foreign flow", astro: "IHSG astrology",
   screen: "filter the market", news: "headlines", dividends: "payments, yield", returns: "returns vs IHSG",
   brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", bandar: "bandarmology",
   actions: "corporate actions", market: "IHSG and movers", holidays: "trading holidays", list: "listed stocks",

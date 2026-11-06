@@ -73,9 +73,21 @@ impl Cache {
     }
 
     pub fn put(&self, key: &str, status: u16, body: &str) -> Result<()> {
+        self.put_at(key, status, body, Utc::now())
+    }
+
+    /// Like [`put`](Self::put) with an explicit fetch time, so tests can
+    /// seed a copy that is already older than its TTL.
+    pub fn put_at(
+        &self,
+        key: &str,
+        status: u16,
+        body: &str,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<()> {
         let stored = Stored {
             key: key.to_string(),
-            fetched_at: Utc::now(),
+            fetched_at,
             status,
             body: body.to_string(),
         };
@@ -83,6 +95,25 @@ impl Cache {
     }
 
     /// Typed convenience for small structured state (sessions, tokens).
+    /// [`put`](Self::put) as if fetched at `fetched_at`, for tests of cache
+    /// lifetimes.
+    #[cfg(test)]
+    pub fn put_fetched_at(
+        &self,
+        key: &str,
+        status: u16,
+        body: &str,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let stored = Stored {
+            key: key.to_string(),
+            fetched_at,
+            status,
+            body: body.to_string(),
+        };
+        self.write(key, &stored)
+    }
+
     pub fn get_json<T: DeserializeOwned>(&self, key: &str, ttl: Duration) -> Option<T> {
         let hit = self.get(key, ttl)?;
         if !hit.fresh {

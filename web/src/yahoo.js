@@ -68,8 +68,17 @@ async function getWithSession(env, url) {
 
 // ---- raw fetchers ----------------------------------------------------------
 
+/** Mirrors Yahoo::chart_url: `range=max` comes back monthly whatever the
+ * interval, so full daily or weekly history asks for the whole epoch. */
+export function chartUrl(symbol, period = "1y", interval = "1d") {
+  if (period === "max" && (interval === "1d" || interval === "1wk")) {
+    return `${CHART}${yahooSymbol(symbol)}?period1=0&period2=9999999999&interval=${interval}&includePrePost=false`;
+  }
+  return `${CHART}${yahooSymbol(symbol)}?range=${period}&interval=${interval}&includePrePost=false`;
+}
+
 export async function fetchChart(symbol, period = "1y", interval = "1d") {
-  const url = `${CHART}${yahooSymbol(symbol)}?range=${period}&interval=${interval}&includePrePost=false`;
+  const url = chartUrl(symbol, period, interval);
   const r = await fetchWithin(url, { headers: { "User-Agent": UA } });
   const body = await r.json().catch(() => null);
   if (r.status === 404 || body?.chart?.error?.code === "Not Found") {
@@ -156,6 +165,13 @@ const text = (o, k) => {
   const v = o?.[k];
   return typeof v === "string" && v.trim() ? v.trim() : null;
 };
+// Yahoo pads amounts it has not loaded as {raw: 0, fmt: null}; a reported
+// figure carries its formatted form. Padded means missing, not zero.
+const amount = (o, k) => {
+  const v = o?.[k];
+  if (v && typeof v === "object" && v.fmt === null && v.raw === 0) return null;
+  return raw(o, k);
+};
 const dateOf = (o, k) => {
   const v = raw(o, k);
   return v == null ? null : new Date(v * 1000).toISOString().slice(0, 10);
@@ -192,17 +208,39 @@ export function parseV7Quote(q) {
   };
 }
 
-export function parseChart(body, period, interval) {
+/** Interval::bar_seconds: the intraday bar sizes in seconds. */
+const BAR_SECONDS = { "1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600 };
+
+const INTERVALS = ["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"];
+/** Yahoo's dataGranularity as an interval idx knows ("60m" is its other name for "1h"), or null. */
+export function granularity(g) {
+  if (g === "60m") return "1h";
+  return INTERVALS.includes(g) ? g : null;
+}
+
+/** Mirrors parse::parse_chart: the interval is the bar size Yahoo reports
+ * (meta.dataGranularity) when idx knows it, otherwise the one asked for. */
+export function parseChart(body, period, requested) {
   const r = body?.chart?.result?.[0];
   if (!r) throw new Error("chart response has no result");
   const meta = r.meta || {};
+  const interval = granularity(meta.dataGranularity) || requested;
   const ts = r.timestamp || [];
   const q = r.indicators?.quote?.[0] || {};
   const adj = r.indicators?.adjclose?.[0]?.adjclose || [];
   const candles = [];
+  // In session, and in multi-day windows after the close, an intraday window
+  // ends with a row at the last trade time (09:02:16, 16:14:43): a snapshot, not
+  // a bar. Bars start on the minute and on the interval's grid from the window's
+  // first row, so a row off that grid, or one repeating the time of the row
+  // before it, is the snapshot (parse.rs does the same).
+  const step = BAR_SECONDS[String(interval)];
+  const anchor = ts.find((t) => t != null);
+  const mod = (a, n) => ((a % n) + n) % n;
   for (let i = 0; i < ts.length; i++) {
     const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
-    if ([o, h, l, c].some((v) => v == null)) continue;
+    if (ts[i] == null || [o, h, l, c].some((v) => v == null)) continue;
+    if (step && anchor != null && (ts[i] % 60 !== 0 || mod(ts[i] - anchor, step) !== 0 || (i > 0 && ts[i - 1] === ts[i]))) continue;
     candles.push({
       time: wibIso(ts[i]),
       t: ts[i],
@@ -276,7 +314,12 @@ export function parseFundamentals(r, symbol) {
   return {
     symbol,
     name: text(price, "longName") || text(price, "shortName"),
-    currency: text(price, "currency") || text(fd, "financialCurrency"),
+    // The price's currency only (summaryDetail names it too): financialCurrency
+    // is the statements' and has its own field.
+    currency: text(price, "currency") || text(sd, "currency"),
+    // USD for coal, oil and gas, and airline issuers: Yahoo's P/B, P/S and EV
+    // multiples then divide the IDR price by USD figures.
+    financial_currency: text(fd, "financialCurrency"),
     sector: text(ap, "sector"), industry: text(ap, "industry"),
     price: raw(fd, "currentPrice") ?? raw(price, "regularMarketPrice"),
     beta: raw(sd, "beta"), week52_high: raw(sd, "fiftyTwoWeekHigh"), week52_low: raw(sd, "fiftyTwoWeekLow"),
@@ -313,6 +356,28 @@ export function parseFundamentals(r, symbol) {
   };
 }
 
+// earningsTrend rows for this and next quarter and fiscal year (port of
+// estimates() in src/providers/yahoo/summary.rs). Counts keep a zero; amounts
+// padded as {raw: 0, fmt: null} are null. A ticker no analyst covers still gets
+// the four rows with nothing in them; those are left out (has_consensus).
+const ESTIMATE_KINDS = { "0q": "quarterly", "+1q": "quarterly", "0y": "annual", "+1y": "annual" };
+const ESTIMATE_FIGURES = ["eps_avg", "eps_low", "eps_high", "eps_year_ago", "eps_growth_pct", "revenue_avg", "revenue_low", "revenue_high", "revenue_year_ago", "revenue_growth_pct"];
+const hasConsensus = (r) => ESTIMATE_FIGURES.some((k) => r[k] != null) || r.eps_analysts > 0 || r.revenue_analysts > 0;
+export function parseEstimates(trend) {
+  return (trend?.trend || []).filter((t) => ESTIMATE_KINDS[t?.period]).map((t) => {
+    const eps = t.earningsEstimate || {}, rev = t.revenueEstimate || {};
+    const growth = pct(eps, "growth");
+    const end = typeof t.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.endDate.trim()) ? t.endDate.trim() : null;
+    return {
+      period: t.period, period_type: ESTIMATE_KINDS[t.period], end_date: end,
+      eps_avg: amount(eps, "avg"), eps_low: amount(eps, "low"), eps_high: amount(eps, "high"), eps_year_ago: amount(eps, "yearAgoEps"),
+      eps_growth_pct: growth ?? pct(t, "growth"), eps_analysts: raw(eps, "numberOfAnalysts"),
+      revenue_avg: amount(rev, "avg"), revenue_low: amount(rev, "low"), revenue_high: amount(rev, "high"), revenue_year_ago: amount(rev, "yearAgoRevenue"),
+      revenue_growth_pct: pct(rev, "growth"), revenue_analysts: raw(rev, "numberOfAnalysts"),
+    };
+  }).filter(hasConsensus);
+}
+
 export function parseEarnings(r, symbol) {
   const price = r?.price || {}, e = r?.earnings || {}, cal = r?.calendarEvents || {}, trend = r?.earningsTrend || {};
   const label = (x) => (typeof x?.date === "string" ? x.date : x?.date != null ? String(x.date) : "");
@@ -322,10 +387,10 @@ export function parseEarnings(r, symbol) {
     surprise_pct: typeof q.surprisePct === "string" ? (parseFloat(q.surprisePct) || null) : num(q.surprisePct),
   }));
   const re = (arr) => (arr || []).map((x) => {
-    const revenue = raw(x, "revenue");
-    let earnings = raw(x, "earnings");
+    const revenue = amount(x, "revenue");
+    let earnings = amount(x, "earnings");
     if (earnings === 0 && revenue) earnings = null;
-    return { period: label(x), revenue, earnings, profit_margin_pct: earnings == null ? null : pct(x, "profitMargin") };
+    return { period: label(x), revenue, earnings, profit_margin_pct: earnings != null && revenue ? pct(x, "profitMargin") : null };
   });
   const ce = cal.earnings || {};
   const cur = (trend.trend || []).find((t) => t.period === "0q");
@@ -333,17 +398,19 @@ export function parseEarnings(r, symbol) {
   return {
     symbol, name: text(price, "longName") || text(price, "shortName"),
     currency: text(e, "financialCurrency") || text(price, "currency"),
+    estimates: parseEstimates(trend),
     quarters, yearly: re(e.financialsChart?.yearly), quarterly: re(e.financialsChart?.quarterly),
     next: (!cal.earnings && !cur) ? null : {
       date: nextDate ? new Date(nextDate * 1000).toISOString().slice(0, 10) : null,
       date_is_estimate: !!ce.isEarningsDateEstimate,
-      eps_avg: raw(ce, "earningsAverage"), eps_low: raw(ce, "earningsLow"), eps_high: raw(ce, "earningsHigh"),
+      eps_avg: amount(ce, "earningsAverage"), eps_low: amount(ce, "earningsLow"), eps_high: amount(ce, "earningsHigh"),
       eps_growth_pct: cur ? pct(cur, "growth") : null,
-      revenue_avg: raw(ce, "revenueAverage"), revenue_low: raw(ce, "revenueLow"), revenue_high: raw(ce, "revenueHigh"),
+      revenue_avg: amount(ce, "revenueAverage"), revenue_low: amount(ce, "revenueLow"), revenue_high: amount(ce, "revenueHigh"),
       analysts: cur ? raw(cur.earningsEstimate || {}, "numberOfAnalysts") : null,
     },
     ex_dividend_date: dateOf(cal, "exDividendDate"), dividend_date: dateOf(cal, "dividendDate"),
     source: "yahoo:quoteSummary",
+    scope: null,
   };
 }
 

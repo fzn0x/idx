@@ -81,6 +81,24 @@ pub fn quotes(rows: &[Quote], color: bool) -> String {
             when.format("%Y-%m-%d %H:%M")
         ));
     }
+    let behind: Vec<String> = rows
+        .iter()
+        .filter(|q| q.behind_session == Some(true))
+        .map(|q| match q.market_time {
+            Some(t) => format!(
+                "{} (last trade {})",
+                q.symbol,
+                t.with_timezone(&crate::model::wib()).format("%Y-%m-%d")
+            ),
+            None => q.symbol.to_string(),
+        })
+        .collect();
+    if !behind.is_empty() {
+        out.push_str(&format!(
+            "Behind the latest IDX session: {} · suspended, not traded since, or the source lags\n",
+            behind.join(", ")
+        ));
+    }
     out
 }
 
@@ -287,6 +305,26 @@ mod tests {
             "missing open/high/low should render as a dash"
         );
         assert!(!s.contains("\x1b["), "no ANSI without color");
+    }
+
+    #[test]
+    fn quotes_table_notes_rows_behind_the_session() {
+        let at = |s: &str| Some(chrono::DateTime::parse_from_rfc3339(s).unwrap());
+        let mut wika = quote();
+        wika.symbol = Symbol::parse("WIKA").unwrap();
+        wika.market_time = at("2025-02-17T16:14:58+07:00");
+        wika.behind_session = Some(true);
+        let mut bbca = quote();
+        bbca.market_time = at("2026-11-06T16:14:43+07:00");
+        bbca.behind_session = Some(false);
+        let s = quotes(&[bbca.clone(), wika], false);
+        assert!(
+            s.contains("Behind the latest IDX session: WIKA (last trade 2025-02-17) · suspended, not traded since, or the source lags"),
+            "{s}"
+        );
+        assert!(s.contains("Last trade 2026-11-06 16:14 WIB"), "{s}");
+        assert!(!quotes(&[bbca], false).contains("Behind the latest"));
+        assert!(!quotes(&[quote()], false).contains("Behind the latest"));
     }
 
     #[test]

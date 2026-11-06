@@ -1,14 +1,19 @@
 // JSON API behind the web terminal. Every response is the CLI envelope:
-// { schema, provider, fetched_at, cached, stale, warnings?, data } and errors
-// are { error: { code, message }, exit_code } with a matching HTTP status.
+// { schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data }
+// and errors are { error: { code, message }, exit_code } with a matching HTTP
+// status.
 
 import * as y from "./yahoo.js";
 import * as an from "./analysis.js";
 import * as ex from "./extras.js";
+import * as own from "./ownership.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
-import { fetchWithin } from "./net.js";
+import * as astroLib from "./astro.js";
+import * as msn from "./msn-insights.js";
+import * as msnScreen from "./msn-screen.js";
+import { fetchWithin, redactUrls } from "./net.js";
 import { scanRows, scanStatus } from "./bandar-scan.js";
 import { syncStatus } from "./ownership-sync.js";
 import UNIVERSE from "./universe.json" with { type: "json" };
@@ -24,9 +29,13 @@ const notFound = (m) => new ApiError("not_found", m, 404, 4);
 const usage = (m) => new ApiError("usage", m, 400, 2);
 const provider = (m) => new ApiError("provider", m, 502, 3);
 
-export function envelope(schema, data, { provider: p = "yahoo", fetched_at = new Date(), cached = false, stale = false, warnings = [] } = {}) {
+// `stale_reason` says why a stale copy was served, as in the CLI. The Worker
+// has no offline mode: every stale copy follows a failed fetch or a board the
+// minute refresh stopped updating, so the reason defaults to fetch_failed.
+export function envelope(schema, data, { provider: p = "yahoo", fetched_at = new Date(), cached = false, stale = false, stale_reason = null, warnings = [] } = {}) {
   const at = fetched_at instanceof Date ? fetched_at : new Date(fetched_at * 1000);
   const env = { schema, provider: p, fetched_at: at.toISOString().replace(/\.\d{3}Z$/, "Z"), cached, stale };
+  if (stale) env.stale_reason = stale_reason || "fetch_failed";
   if (warnings.length) env.warnings = warnings;
   env.data = data;
   return env;
@@ -37,7 +46,8 @@ export function parseSymbol(raw) {
   if (!s) throw usage("empty symbol");
   // Index codes keep their caret (^JKSE is IHSG), like the CLI's Symbol::parse.
   const body = s.startsWith("^") ? s.slice(1) : s;
-  if (!body || body.length > 12 || !/^[A-Z0-9-]+$/.test(body)) throw usage(`invalid symbol "${raw}": expected an IDX ticker like BBCA`);
+  // A code starts with a letter or digit (BUKA-W is fine, "-" and "-BBCA" are not).
+  if (!body || body.length > 12 || !/^[A-Z0-9][A-Z0-9-]*$/.test(body)) throw usage(`invalid symbol "${raw}": expected an IDX ticker like BBCA`);
   return s;
 }
 export function parseSymbols(raw) {
@@ -52,11 +62,12 @@ export function parseSymbols(raw) {
 // With `retryAfter`, a failure is remembered for that many seconds (row
 // `fail:<key>`), so readers get the stale copy or the error at once instead
 // of each waiting on a source that is down.
+/** `ttlSecs` may be a function of the produced value. */
 async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(key).first();
   if (row && row.expires_at > now) return { value: JSON.parse(row.v), cached: true, stale: false, fetched_at: row.fetched_at };
-  const staleCopy = (why) => ({ value: JSON.parse(row.v), cached: true, stale: true, fetched_at: row.fetched_at, warning: `live fetch failed (${why}); showing cached copy` });
+  const staleCopy = (why) => ({ value: JSON.parse(row.v), cached: true, stale: true, fetched_at: row.fetched_at, warning: `live fetch failed (${redactUrls(why)}); showing cached copy` });
   if (retryAfter) {
     const fail = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(`fail:${key}`).first();
     if (fail && fail.expires_at > now) {
@@ -67,13 +78,14 @@ async function cached(env, key, ttlSecs, producer, { retryAfter = 0 } = {}) {
   }
   try {
     const value = await producer();
+    const ttl = typeof ttlSecs === "function" ? ttlSecs(value) : ttlSecs;
     await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
-      .bind(key, JSON.stringify(value), now + ttlSecs, now).run();
+      .bind(key, JSON.stringify(value), now + ttl, now).run();
     return { value, cached: false, stale: false, fetched_at: now };
   } catch (e) {
     if (retryAfter) {
       await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
-        .bind(`fail:${key}`, JSON.stringify(e.message), now + retryAfter, now).run();
+        .bind(`fail:${key}`, JSON.stringify(redactUrls(e.message)), now + retryAfter, now).run();
     }
     if (row) return staleCopy(e.message);
     throw e;
@@ -91,10 +103,10 @@ export async function kvPut(env, k, value) {
 // ---- snapshot (cron) ---------------------------------------------------
 
 const WIB_OFFSET_MIN = 7 * 60;
+/** Trading hours with a margin for the delayed close, on IDX trading days only (weekends and holidays closed). */
 export function marketIsOpen(now = new Date()) {
   const wib = new Date(now.getTime() + WIB_OFFSET_MIN * 60000);
-  const day = wib.getUTCDay();
-  if (day === 0 || day === 6) return false;
+  if (!hol.isTradingDay(wib.toISOString().slice(0, 10))) return false;
   const mins = wib.getUTCHours() * 60 + wib.getUTCMinutes();
   return mins >= 8 * 60 + 45 && mins <= 16 * 60 + 30;
 }
@@ -137,9 +149,23 @@ async function board(env) {
   return b;
 }
 
+const wibText = (unixSecs) => `${y.wibIso(unixSecs).slice(0, 16).replace("T", " ")} WIB`;
+
+/**
+ * Whether the board (refreshed at `ts`, unix seconds) is older than the cron
+ * allows: every minute in trading hours, every 15 minutes outside them. So
+ * stale past 10 minutes once the market has been open that long, past 35
+ * otherwise; the warning says how old it is.
+ */
+export function boardFreshness(ts, now = new Date()) {
+  const open = marketIsOpen(now) && marketIsOpen(new Date(now.getTime() - 10 * 60e3));
+  if (now.getTime() / 1000 - ts <= (open ? 10 : 35) * 60) return { stale: false, warnings: [] };
+  return { stale: true, warnings: [`the market snapshot is from ${wibText(ts)}; its refresh has failed since`] };
+}
+
 // ---- endpoints ---------------------------------------------------------
 
-export async function market(env) {
+export async function market(env, now = new Date()) {
   const b = await board(env);
   const quotes = b.value.quotes.filter((q) => q.price != null && q.change_pct != null);
   const byChg = [...quotes].sort((a, c) => c.change_pct - a.change_pct);
@@ -149,10 +175,11 @@ export async function market(env) {
   const ticks = await env.DB.prepare("SELECT ts, price FROM ticks WHERE symbol = '^JKSE' AND ts >= ?1 ORDER BY ts")
     .bind(Math.floor(Date.now() / 1000) - 2 * 86400).all();
   const trim = (q) => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, change_pct: q.change_pct, volume: q.volume, value: q.price != null && q.volume != null ? q.price * q.volume : null, market_cap: q.market_cap });
+  const asOf = b.value.quotes.map((q) => q.market_time).filter(Boolean).sort().pop() || null;
   const data = {
-    as_of: b.value.quotes.map((q) => q.market_time).filter(Boolean).sort().pop() || null,
+    as_of: asOf,
     refreshed_at: new Date(b.value.ts * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
-    market_open: marketIsOpen(),
+    market_open: marketIsOpen(now),
     index: b.value.index ? trim(b.value.index) : null,
     index_tape: (ticks.results || []).map((t) => [t.ts, t.price]),
     quoted: quotes.length,
@@ -161,6 +188,7 @@ export async function market(env) {
     unchanged: quotes.filter((q) => q.change_pct === 0).length,
     turnover: quotes.reduce((s, q) => s + (q.volume || 0) * (q.price || 0), 0),
     market_state: b.value.index?.market_state || null,
+    behind_session: hol.behindDate(asOf, hol.latestSession(now)),
     liquid_min_market_cap: 1e12,
     gainers: liquidByChg.slice(0, 10).map(trim),
     losers: liquidByChg.slice(-10).reverse().map(trim),
@@ -168,12 +196,16 @@ export async function market(env) {
     heavyweights: [...quotes].sort((a, c) => (c.market_cap || 0) - (a.market_cap || 0)).slice(0, 16).map(trim),
     universe: SYMBOLS.length,
   };
-  return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, warnings: b.value.warnings || [] });
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.market.v1", data, { fetched_at: b.value.ts, cached: true, stale: fresh.stale, warnings: [...fresh.warnings, ...(b.value.warnings || [])] });
 }
 
-export async function quote(env, symbolsRaw) {
+export async function quote(env, symbolsRaw, now = new Date()) {
   const symbols = parseSymbols(symbolsRaw);
   const b = await board(env);
+  // behind_session is set on copies, never on the board's own rows.
+  const latest = hol.latestSession(now);
+  const flag = (q) => ({ ...q, behind_session: hol.behindSession(q, latest) });
   const bySym = new Map(b.value.quotes.map((q) => [q.symbol, q]));
   const found = symbols.map((s) => bySym.get(s)).filter(Boolean);
   const warnings = symbols.filter((s) => !bySym.has(s)).map((s) => `no data for ${s}`);
@@ -181,32 +213,117 @@ export async function quote(env, symbolsRaw) {
     // Not in the universe: try live once, cached briefly.
     const live = await cached(env, `quote:${symbols.join(",")}`, 60, async () => (await y.fetchQuotes(env, symbols)).map(y.parseV7Quote));
     if (!live.value.length) throw notFound(`no quotes for ${symbols.join(", ")}`);
-    return envelope("idx.quotes.v1", live.value, { cached: live.cached, stale: live.stale, fetched_at: live.fetched_at, warnings: symbols.filter((s) => !live.value.some((q) => q.symbol === s)).map((s) => `no data for ${s}`) });
+    const missing = symbols.filter((s) => !live.value.some((q) => q.symbol === s)).map((s) => `no data for ${s}`);
+    return envelope("idx.quotes.v1", live.value.map(flag), { cached: live.cached, stale: live.stale, fetched_at: live.fetched_at, warnings: [...(live.warning ? [live.warning] : []), ...missing] });
   }
-  return envelope("idx.quotes.v1", found, { cached: true, fetched_at: b.value.ts, warnings });
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.quotes.v1", found.map(flag), { cached: true, stale: fresh.stale, fetched_at: b.value.ts, warnings: [...fresh.warnings, ...warnings] });
 }
 
 const PERIODS = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","ytd","max"];
-const INTERVALS = ["5m","15m","30m","1h","1d","1wk","1mo"];
+const INTERVALS = ["1m","2m","5m","15m","30m","1h","1d","1wk","1mo"];
+const INTRADAY = ["1m","2m","5m","15m","30m","1h"];
+
+/** Interval::check_period: Yahoo serves 1m bars for 8 days per request and 2m for 60 days. */
+export function checkPeriod(period, interval) {
+  if (interval === "1m" && !["1d","5d"].includes(period)) throw usage("1-minute bars cover at most 5 days; use period 1d or 5d");
+  if (interval === "2m" && !["1d","5d","1mo"].includes(period)) throw usage("2-minute bars cover at most a month; use period 1d, 5d or 1mo");
+}
+
+/** A D1 row holds at most 2,000,000 bytes; the margin covers the key, the other columns and a non-ASCII name. */
+const CACHE_ROW_BUDGET = 1_900_000;
+/** More than any candle's JSON takes (91 bytes of keys and time, six numbers), so shorter histories skip the measuring. */
+const CANDLE_BYTES_MAX = 256;
+
+/** Keeps the most recent candles of a parsed history that fit one D1 cache row (all daily bars of an old
+ * index since 1970 do not); its summary still covers every candle Yahoo returned. */
+export function fitCacheRow(h, budget = CACHE_ROW_BUDGET) {
+  if (h.candles.length * CANDLE_BYTES_MAX < budget) return h;
+  let size = JSON.stringify(h).length, keep = h.candles.length, out = h;
+  while (size > budget && keep > 0) {
+    keep = Math.floor((keep * budget * 0.98) / size);
+    out = { ...h, candles: h.candles.slice(-keep) };
+    size = JSON.stringify(out).length;
+  }
+  return out;
+}
 
 export async function history(env, symbolRaw, period = "1y", interval = "1d", limit = 0) {
   const symbol = parseSymbol(symbolRaw);
   if (!PERIODS.includes(period)) throw usage(`invalid period "${period}"; use ${PERIODS.join(",")}`);
   if (!INTERVALS.includes(interval)) throw usage(`invalid interval "${interval}"; use ${INTERVALS.join(",")}`);
-  const intraday = ["5m","15m","30m","1h"].includes(interval);
-  const r = await cached(env, `history:${symbol}:${period}:${interval}`, intraday ? 120 : 3600, async () => {
+  checkPeriod(period, interval);
+  const intraday = INTRADAY.includes(interval);
+  // Keyed on the request, so a row written for an older URL (0.8.1 asked range=max and got monthly bars
+  // labelled 1d) is never served, not even as a stale copy.
+  const r = await cached(env, `history:${y.chartUrl(symbol, period, interval)}`, intraday ? 120 : 3600, async () => {
     const res = await y.fetchChart(symbol, period, interval);
     if (res.notFound) return { notFound: res.message };
-    return y.parseChart(res.body, period, interval);
+    return fitCacheRow(y.parseChart(res.body, period, interval));
   });
   if (r.value.notFound) throw notFound(`${symbol}: ${r.value.notFound}`);
   const data = { ...r.value };
   const warnings = r.warning ? [r.warning] : [];
+  if (data.interval !== interval) warnings.push(`Yahoo returned ${data.interval} bars for ${period}/${interval}; the candles are labelled ${data.interval}`);
+  if (data.summary && data.summary.candles > data.candles.length) warnings.push(`the web terminal keeps the last ${data.candles.length} of ${data.summary.candles} candles (one cache row); summary covers all of them; the CLI returns every candle`);
   if (limit > 0 && data.candles.length > limit) {
     data.candles = data.candles.slice(-limit);
     warnings.push(`candles truncated to the last ${limit}; summary covers the full period`);
   }
   return envelope("idx.history.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
+}
+
+/**
+ * service::intraday: the latest session's bars (history 1d at `interval`), the
+ * quote alongside (board snapshot, live fallback; a failure is a warning) and
+ * the bars' summary with VWAP. Yahoo's 1-day window is empty for the first
+ * minutes after the open (and for a stock with no trade today), so an empty one
+ * is retried over 5 days.
+ */
+export async function intraday(env, symbolRaw, interval = "1m", limit = 0) {
+  const symbol = parseSymbol(symbolRaw);
+  if (!INTRADAY.includes(interval)) throw usage(`intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not ${interval}; use history (stocks history, idx_history) for daily bars`);
+  let [h, q] = await Promise.all([
+    history(env, symbol, "1d", interval, 0),
+    quote(env, symbol).catch((error) => ({ error })),
+  ]);
+  const retry = [];
+  let window = "the latest session";
+  if (!h.data.candles.length) {
+    try {
+      const wider = await history(env, symbol, "5d", interval, 0);
+      const last = wider.data.candles[wider.data.candles.length - 1];
+      if (last) {
+        retry.push(`no ${interval} bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, ${last.time.slice(0, 10)}`);
+        h = wider;
+      } else window = "the last 5 days";
+    } catch (e) {
+      retry.push(`retrying over 5 days failed: ${e.message}`);
+    }
+  }
+  const warnings = [...(h.warnings || []), ...retry];
+  let qt = null;
+  if (q.error) warnings.push(`no quote for ${symbol}: ${q.error.message}`);
+  else {
+    qt = q.data.find((x) => x.symbol === symbol) || null;
+    for (const w of q.warnings || []) if (!warnings.includes(w)) warnings.push(w);
+    if (!qt) warnings.push(`no quote for ${symbol}`);
+  }
+  const bars = ex.sessionBars(h.data.candles);
+  const session = bars.length ? bars[bars.length - 1].time.slice(0, 10) : null;
+  if (!bars.length) warnings.push(`no bars for ${symbol}: it did not trade in ${window}, or the source has none outside trading hours`);
+  const quoteDay = qt?.market_time ? qt.market_time.slice(0, 10) : null;
+  if (session && quoteDay && session !== quoteDay) warnings.push(`the bars are from ${session} but the quote's last trade is from ${quoteDay}; the source updates them separately`);
+  const data = {
+    symbol, name: h.data.name || qt?.name || NAME_BY_SYMBOL.get(symbol) || null, session, interval,
+    quote: qt, bars, summary: ex.intradaySummary(bars),
+  };
+  if (limit > 0 && data.bars.length > limit) {
+    data.bars = data.bars.slice(-limit);
+    warnings.push(`bars truncated to the last ${limit}; the summary covers the whole session`);
+  }
+  const at = Math.min(Date.parse(h.fetched_at), q.error ? Infinity : Date.parse(q.fetched_at)) / 1000;
+  return envelope("idx.intraday.v1", data, { cached: h.cached && (q.error ? true : q.cached), stale: h.stale || !!q.stale, fetched_at: at, warnings });
 }
 
 async function summary(env, symbol, modules, ttl = 6 * 3600) {
@@ -227,18 +344,63 @@ export async function profile(env, symbolRaw) {
   return envelope("idx.profile.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
 }
 
-export async function fundamentals(env, symbolRaw) {
+export async function fundamentals(env, symbolRaw, lensRaw = null) {
   const symbol = parseSymbol(symbolRaw);
+  const lens = lensRaw == null || String(lensRaw).trim() === "" ? null : String(lensRaw).trim().toLowerCase();
+  if (lens) {
+    if (!LENSES.includes(lens)) throw usage(`unknown lens "${lensRaw}"; use growth, valuation or risk`);
+    return lensReading(env, symbol, lens);
+  }
   const r = await summary(env, symbol, y.FUNDAMENTAL_MODULES);
   const data = y.parseFundamentals(r.value, symbol);
   data.verdict = an.verdict(data);
   return envelope("idx.fundamentals.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
 }
 
-export async function earnings(env, symbolRaw) {
+// Growth, valuation and risk lenses, as service::lenses does in the CLI:
+// growth adds the annual statements, risk a year of daily candles for the
+// stock and for IHSG. A missing input becomes a warning; the call fails only
+// when the essential inputs all fail. A not_found wins only from an input
+// that names the ticker (fundamentals, the stock's candles): a listed ticker
+// can have no statements, and that must not hide why the fundamentals failed.
+const LENSES = ["growth", "valuation", "risk"];
+async function lensReading(env, symbol, lens) {
+  const settle = (p) => p.then((ok) => ({ ok }), (err) => ({ err }));
+  const jobs = [["fundamentals", "fundamentals", settle(fundamentals(env, symbol))]];
+  if (lens === "growth") jobs.push(["statements", "annual statements", settle(financials(env, symbol, "annual"))]);
+  if (lens === "risk") {
+    jobs.push(["history", "price history", settle(history(env, symbol, "1y", "1d", 0))]);
+    jobs.push(["benchmark", `benchmark ${an.LENS_BENCHMARK} unavailable`, settle(history(env, an.LENS_BENCHMARK, "1y", "1d", 0))]);
+  }
+  const got = {}, warnings = [], errors = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), any = false;
+  for (const [key, label, job] of jobs) {
+    const r = await job;
+    if (r.err) {
+      warnings.push(`${label}: ${r.err.message}`);
+      if (key !== "benchmark") errors.push({ err: r.err, namesTicker: key !== "statements" });
+      continue;
+    }
+    got[key] = r.ok.data;
+    any = true;
+    cachedAll &&= !!r.ok.cached; stale ||= !!r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000);
+    for (const w of r.ok.warnings || []) if (!warnings.includes(w)) warnings.push(w);
+  }
+  const essential = lens === "risk" ? got.fundamentals || got.history : got.fundamentals || got.statements;
+  if (!any || !essential) throw (errors.find((e) => e.namesTicker && e.err.code === "not_found") || errors[0]).err;
+  const data = lens === "valuation" ? an.valuationLens(got.fundamentals)
+    : lens === "growth" ? an.growthLens(symbol, got.fundamentals || null, got.statements || null)
+    : an.riskLens(symbol, got.fundamentals || null, got.history || null, got.benchmark || null);
+  return envelope(`idx.${lens}.v1`, data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
+}
+
+export async function earnings(env, symbolRaw, period = null, kind = null) {
   const symbol = parseSymbol(symbolRaw);
+  let filter;
+  try { filter = ex.earningsFilter(period, kind); } catch (e) { throw usage(e.message); }
   const r = await summary(env, symbol, y.EARNINGS_MODULES);
-  return envelope("idx.earnings.v1", y.parseEarnings(r.value, symbol), { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
+  const data = ex.filterEarnings(y.parseEarnings(r.value, symbol), filter);
+  return envelope("idx.earnings.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] });
 }
 
 export async function financials(env, symbolRaw, period = "annual") {
@@ -271,25 +433,39 @@ export async function dividends(env, symbolRaw) {
   return envelope("idx.dividends.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
 }
 
+/** Adds each warning once, keeping order. */
+const addWarnings = (list, more) => { for (const w of more || []) if (!list.includes(w)) list.push(w); };
+
+/** The cause inside a `live fetch failed (...); showing cached copy` warning, or null. */
+const failureCause = (warnings) => {
+  for (const w of warnings || []) {
+    const m = /^live fetch failed \((.*)\); showing cached copy$/s.exec(w);
+    if (m) return m[1];
+  }
+  return null;
+};
+
 export async function returns(env, symbolsRaw, benchmark = "^JKSE") {
   const symbols = parseSymbols(symbolsRaw);
   const bench = benchmark && benchmark.toLowerCase() !== "none" ? parseSymbol(benchmark) : null;
   const fetchOne = (s) => history(env, s, "5y", "1d", 0).then((e) => ({ ok: e })).catch((e) => ({ err: e }));
   const [results, b] = await Promise.all([Promise.all(symbols.map(fetchOne)), bench ? fetchOne(bench) : null]);
   const warnings = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
+  // A benchmark that is used counts toward the freshness, as in the CLI.
+  const fold = (e) => { cachedAll &&= e.cached; stale ||= e.stale; fetched = Math.min(fetched, Date.parse(e.fetched_at) / 1000); addWarnings(warnings, e.warnings); };
   let benchPerf = null;
   if (bench) {
-    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); }
+    if (b.ok) { benchPerf = ex.performance(b.ok.data); if (!benchPerf) warnings.push(`benchmark ${bench}: no candles`); else fold(b.ok); }
     else warnings.push(`benchmark ${bench} unavailable: ${b.err.message}`);
   }
   const data = [];
-  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), firstErr = null;
   results.forEach((r, i) => {
     if (r.err) { warnings.push(r.err.code === "not_found" ? `no data for ${symbols[i]}` : `${symbols[i]}: ${r.err.message}`); firstErr ||= r.err; return; }
     const p = ex.performance(r.ok.data);
     if (!p) { warnings.push(`${symbols[i]}: no candles`); return; }
     if (benchPerf) p.benchmark = { symbol: benchPerf.symbol, name: benchPerf.name, returns: benchPerf.returns, excess: ex.minusWindows(p.returns, benchPerf.returns) };
-    cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000);
+    fold(r.ok);
     data.push(p);
   });
   if (!data.length) throw firstErr || notFound("no data");
@@ -303,41 +479,130 @@ export async function compare(env, symbolsRaw) {
   const data = [], warnings = [];
   let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000);
   for (const r of results) {
-    if (r.ok) { data.push(r.ok.data); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000); }
+    if (r.ok) { data.push(r.ok.data); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, Date.parse(r.ok.fetched_at) / 1000); addWarnings(warnings, r.ok.warnings); }
     else warnings.push(r.err.code === "not_found" ? `no data for ${r.s}` : `${r.s}: ${r.err.message}`);
   }
   if (!data.length) throw results[0].err;
   return envelope("idx.compare.v1", data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFundamentals = 20, descending = true) {
-  const filters = an.parseFilters(filterSpec || "");
-  const sortField = an.sortField(sort);
+// ---- MSN (insights, whole-market return windows) -------------------------
+
+const msnFail = (e) => (e instanceof ApiError ? e : provider(`msn: ${e.message}`));
+
+/** MSN security id of an IDX ticker, cached 30 days (same key as the CLI's lookup TTL). */
+async function msnId(env, symbol) {
+  const r = await cached(env, `msn:id:${symbol}`, 30 * 86400, async () => {
+    const id = msn.parseAutosuggest(await msn.getJson(msn.autosuggestUrl(symbol)), symbol);
+    if (!id) throw notFound(`${symbol} is not listed on IDX per MSN`);
+    return id;
+  });
+  return r.value;
+}
+
+export async function insights(env, raw) {
+  const symbol = parseSymbol(raw);
+  try {
+    const id = await msnId(env, symbol);
+    // The parsed report and MSN's peer ids, not the raw 24 KB body, go to D1.
+    // The peers resolve under their own key, like the CLI's separate Quotes
+    // cache entry, so a failed peer lookup is a warning that is never stored.
+    const r = await cached(env, `msn:insights:${symbol}`, 6 * 3600, async () => {
+      const body = await msn.getJson(msn.insightsUrl(id));
+      const parsed = body && msn.parseInsights(body, symbol);
+      if (!parsed) throw notFound(`MSN has no insights for ${symbol}`);
+      return parsed;
+    });
+    const report = { ...r.value.report, peers: [] };
+    const warnings = [...r.value.warnings];
+    if (r.warning) warnings.push(r.warning);
+    let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at;
+    const ids = r.value.peerIds || [];
+    if (ids.length) {
+      try {
+        const p = await cached(env, `msn:peers:${ids.join(",")}`, 6 * 3600, async () => {
+          const body = await msn.getJson(msn.quotesUrl(ids));
+          if (!body) throw new Error("Quotes returned HTTP 404");
+          return msn.parsePeers(body, ids);
+        });
+        report.peers = p.value;
+        cachedAll &&= p.cached; stale ||= p.stale; fetchedAt = Math.min(fetchedAt, p.fetched_at);
+        if (p.warning) warnings.push(`MSN's peer list: ${p.warning}`);
+      } catch (e) { warnings.push(`could not resolve MSN's peer list: ${e.message}`); }
+    }
+    return envelope("idx.insights.v1", report, { provider: msn.NAME, cached: cachedAll, stale, fetched_at: fetchedAt, warnings });
+  } catch (e) { throw msnFail(e); }
+}
+
+/** Every Indonesian stock's return windows, one POST cached 15 minutes. */
+async function marketReturns(env) {
+  try {
+    return await cached(env, "msn:returns:id", 15 * 60, async () => {
+      const body = await msn.getJson(msnScreen.screenerUrl(), { method: "POST", headers: { "Content-Type": "application/json" }, body: msnScreen.MARKET_LIST_BODY });
+      const list = msnScreen.parseMarketList(body);
+      if (!Object.keys(list.returns).length) throw notFound("MSN returned no Indonesian stocks");
+      return list;
+    });
+  } catch (e) { throw msnFail(e); }
+}
+
+export async function screen(env, filterSpec, sort = null, limit = 25, maxFundamentals = 20, descending = null, presetRaw = null, withReturns = false, now = new Date()) {
+  const preset = presetRaw ? an.parsePreset(presetRaw) : null;
+  const pr = preset ? an.PRESETS[preset] : null;
+  const filters = [...(pr ? an.parseFilters(pr.filter) : []), ...an.parseFilters(filterSpec || "")];
+  const sortName = String(sort || pr?.sort || "mcap").toLowerCase();
+  const sortField = an.sortField(sortName);
   if (!sortField) throw usage(`unknown sort key "${sort}"; use one of ${an.KEY_NAMES}`);
+  descending ??= pr ? pr.descending : true;
   const b = await board(env);
   let rows = b.value.quotes.map((q) => ({
     symbol: q.symbol, name: q.name || NAME_BY_SYMBOL.get(q.symbol) || null, price: q.price, change_pct: q.change_pct, market_cap: q.market_cap,
     pe_trailing: q.pe_trailing, pe_forward: q.pe_forward, price_to_book: q.price_to_book, dividend_yield_pct: q.dividend_yield_pct,
-    eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low, fundamentals_checked: false,
+    eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low,
+    range_52w_pct: an.rangePosition(q.price, q.week52_low, q.week52_high),
+    return_1w_pct: null, return_1m_pct: null, return_3m_pct: null, return_6m_pct: null, return_ytd_pct: null, return_1y_pct: null,
+    fundamentals_checked: false,
     sector: null, industry: null, roe_pct: null, roa_pct: null, net_margin_pct: null, operating_margin_pct: null, debt_to_equity: null,
     revenue_growth_pct: null, earnings_growth_pct: null, peg: null, price_to_sales: null,
   }));
   const quoted = rows.length;
+  const warnings = [];
+  // Return windows: when a filter or the sort needs them a failure is an
+  // error, not a silently empty screen.
+  const returnsRequired = filters.some((f) => an.RETURN_FIELDS.has(f.field)) || an.RETURN_FIELDS.has(sortField);
+  let returnsSource = null, cachedAll = true, staleAny = false, fetchedAt = b.value.ts;
+  if (returnsRequired || withReturns) {
+    try {
+      const m = await marketReturns(env);
+      for (const r of rows) msnScreen.applyReturns(r, m.value.returns[r.symbol]);
+      returnsSource = msnScreen.SOURCE;
+      cachedAll = m.cached; staleAny = m.stale; fetchedAt = Math.min(fetchedAt, m.fetched_at);
+      if (m.warning) warnings.push(m.warning);
+      if (m.value.count != null && m.value.count > m.value.listed) warnings.push(`MSN listed ${m.value.listed} of ${m.value.count} stocks; the rest have no return windows`);
+    } catch (e) {
+      if (returnsRequired) throw e;
+      warnings.push(`return windows unavailable: ${e.message}`);
+    }
+  }
   const quoteFilters = filters.filter((f) => !an.FUNDAMENTAL_FIELDS.has(f.field));
   const fundFilters = filters.filter((f) => an.FUNDAMENTAL_FIELDS.has(f.field));
   rows = rows.filter((r) => an.matches(r, quoteFilters));
   const matchedQuote = rows.length;
-  let checked = 0, capped = false;
-  const warnings = [];
+  let checked = 0, capped = false, staleFund = 0, cause = null;
   if (fundFilters.length || an.FUNDAMENTAL_FIELDS.has(sortField)) {
     an.sortRows(rows, "market_cap", true);
     const cap = Math.max(1, Math.min(maxFundamentals, 40));
     if (rows.length > cap) { capped = true; rows = rows.slice(0, cap); }
-    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).then((e) => e.data).catch(() => null)));
+    const results = await Promise.all(rows.map((r) => fundamentals(env, r.symbol).catch(() => null)));
     rows.forEach((r, i) => {
-      const f = results[i];
-      if (!f) return;
+      const e = results[i];
+      if (!e) return;
+      const f = e.data;
       checked++;
+      // Freshness only: one summary line below instead of a failure
+      // warning per company, as in the CLI.
+      cachedAll &&= e.cached;
+      if (e.stale) { staleFund++; cause ??= failureCause(e.warnings); }
       Object.assign(r, {
         fundamentals_checked: true, sector: f.sector, industry: f.industry, roe_pct: f.profitability.roe_pct, roa_pct: f.profitability.roa_pct,
         net_margin_pct: f.profitability.net_margin_pct, operating_margin_pct: f.profitability.operating_margin_pct, debt_to_equity: f.health.debt_to_equity,
@@ -346,13 +611,18 @@ export async function screen(env, filterSpec, sort = "mcap", limit = 25, maxFund
       r.pe_trailing ??= f.valuation.pe_trailing; r.price_to_book ??= f.valuation.price_to_book; r.dividend_yield_pct ??= f.dividend.yield_pct;
     });
     rows = rows.filter((r) => an.matches(r, fundFilters));
+    if (staleFund) warnings.push(`fundamentals for ${staleFund} of ${checked} companies are stale cached copies: the live fetch failed${cause ? ` (${cause})` : ""}`);
     if (capped) warnings.push(`fundamentals were fetched for the ${cap} largest companies that passed the quote filters; the web terminal caps this at 40`);
   }
   an.sortRows(rows, sortField, descending);
   const total = rows.length;
   if (limit > 0) rows = rows.slice(0, limit);
-  const data = { filters: filters.map((f) => f.raw), sort: sort.toLowerCase(), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote, fundamentals_checked: checked, fundamentals_capped: capped, total_matches: total, rows };
-  return envelope("idx.screen.v1", data, { cached: true, fetched_at: b.value.ts, warnings });
+  const data = {
+    preset, filters: filters.map((f) => f.raw), sort: an.keyName(sortName), descending, universe: SYMBOLS.length, quoted, matched_quote_level: matchedQuote,
+    fundamentals_checked: checked, fundamentals_capped: capped, returns_source: returnsSource, total_matches: total, rows,
+  };
+  const fresh = boardFreshness(b.value.ts, now);
+  return envelope("idx.screen.v1", data, { cached: cachedAll, stale: fresh.stale || staleAny || staleFund > 0, fetched_at: fetchedAt, warnings: [...fresh.warnings, ...warnings] });
 }
 
 // ---- news ---------------------------------------------------------------
@@ -442,28 +712,72 @@ const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400e
 function isoDate(raw, what) {
   if (raw == null || raw === "") return null;
   const s = String(raw).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(`${s}T00:00:00Z`))) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
+  const ms = Date.parse(`${s}T00:00:00Z`);
+  // Date.parse rolls 2026-02-30 over to 2 March; only a real date survives the round trip.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== s) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
   return s;
 }
 
-async function brokerRange(env, symbol, from, to, investor, board, today) {
-  // A range that ended before today no longer changes; today's moves with every trade.
-  const ttl = to < today ? 7 * 86400 : 5 * 60;
-  const r = await cached(env, `ipot:${symbol}:${from}:${to}:${investor}:${board}`, ttl, async () => {
+/** One parsed IPOT page through the D1 cache. A range that ended before today no longer changes; today's moves with every trade. */
+async function ipotPage(env, symbol, from, to, investor, board, today) {
+  // A closed range keeps for the week, unless its page shows trades without
+  // broker lists (not published yet, like ipot::broker_summary).
+  const ttl = (p) => (to < today && !ipot.unpublished(p) ? 7 * 86400 : 5 * 60);
+  return cached(env, `ipot:${symbol}:${from}:${to}:${investor}:${board}`, ttl, async () => {
     let html;
     try { html = await ipot.fetchPage(ipot.url(symbol, from, to, investor, board)); } catch (e) { throw provider(`ipot: broker summary for ${symbol}: ${e.message}`); }
     const p = ipot.parse(html);
     if (p.invalid) throw notFound(`${symbol} is not a stock code IPOT knows`);
     return p;
   });
+}
+
+/** A summary like ipot::broker_summary_range: over a range that reached the latest sessions the foreign net is rebuilt from single sessions. */
+async function brokerRange(env, symbol, from, to, investor, board, today) {
+  const r = await ipotPage(env, symbol, from, to, investor, board, today);
   const p = r.value;
+  const t = ipot.totals(p, investor, board);
+  const warnings = r.warning ? [r.warning] : [];
+  let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at, net = t.foreign_net_value;
+  if (ipot.rangeNetSuspect(from, to, { ...p, foreign_net_value: net }, ipot.wibDate(r.fetched_at), today)) {
+    try {
+      net = await ipot.rebuildNet(from, to, today, async (f, t) => {
+        const x = await ipotPage(env, symbol, f, t, investor, board, today);
+        cachedAll &&= x.cached; stale ||= x.stale; fetchedAt = Math.min(fetchedAt, x.fetched_at);
+        if (x.warning && !warnings.includes(x.warning)) warnings.push(x.warning);
+        return { page: x.value, fetchedOn: ipot.wibDate(x.fetched_at) };
+      });
+    } catch (e) {
+      net = null;
+      warnings.push(`${symbol}: no foreign net from ${from} to ${to}: the source counts the latest session twice over a range, and reading the sessions one by one failed (${e.message})`);
+    }
+  }
   const flow = (f) => ({ ...f, name: BROKERS[f.code] ?? null });
   const data = {
     symbol, name: NAME_BY_SYMBOL.get(symbol) || null, from: p.from || from, to: p.to || to, investor, board,
     buyers: p.buyers.map(flow), sellers: p.sellers.map(flow),
-    total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: p.foreign_net_value, average_price: p.average_price, rounded: p.rounded,
+    total_value: t.total_value, total_lots: t.total_lots, foreign_net_value: net, average_price: t.average_price,
+    buy_value: t.buy_value, sell_value: ipot.sellValue(investor, t.buy_value, net), rounded: p.rounded,
   };
-  return { data, cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings: r.warning ? [r.warning] : [] };
+  return { data, cached: cachedAll, stale, fetched_at: fetchedAt, warnings };
+}
+
+/**
+ * For one investor side the page's totals are that side's buying; bandar's
+ * percentages need the stock's value traded, so they come from the
+ * all-investor page of the same range and board, like service::with_value_traded.
+ */
+async function withValueTraded(env, sum, investor, board, today) {
+  const d = sum.data;
+  if (investor === "all" || (!d.buyers.length && !d.sellers.length)) return;
+  try {
+    const all = await ipotPage(env, d.symbol, d.from, d.to, "all", board, today);
+    d.total_value = all.value.total_value;
+    d.total_lots = all.value.total_lots;
+    sum.cached &&= all.cached; sum.stale ||= all.stale; sum.fetched_at = Math.min(sum.fetched_at, all.fetched_at);
+  } catch (e) {
+    sum.warnings.push(`${d.symbol}: no value traded from ${d.from} to ${d.to}, so no percentages (${e.message})`);
+  }
 }
 
 async function brokerLatest(env, symbol, investor, board, today) {
@@ -508,6 +822,94 @@ export async function broker(env, symbolsRaw, dateRaw, fromRaw, toRaw, investor 
   return envelope("idx.broker.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
+// ---- foreign flow (IPOT) -----------------------------------------------
+
+/** Sessions /api/foreign reads by default and at most: two subrequests each (the CLI takes 60). */
+const FOREIGN_WEB_DEFAULT = 10;
+const FOREIGN_WEB_MAX = 20;
+/** Minutes after midnight WIB when today's session is over (post-trading ends 16:15). */
+const SESSION_DONE_MIN = 16 * 60 + 15;
+
+const tradingDaysBetween = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) if (hol.isTradingDay(d)) out.push(d); return out; };
+const latestTradingDays = (today, n) => { const out = []; for (let d = today; out.length < n; d = addDays(d, -1)) if (hol.isTradingDay(d)) out.unshift(d); return out; };
+
+/**
+ * /api/foreign: `idx stocks foreign --source ipot` (idx.foreign.value.v1).
+ * Foreign buying, selling and net in rupiah across all boards, from each
+ * session's all-investor and foreign pages (shared with /api/broker in D1).
+ * idx.co.id refuses this host, so the CLI's default source is not offered.
+ */
+export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourceRaw) {
+  const symbol = parseSymbol(symbolRaw);
+  if (symbol.startsWith("^")) throw usage(`${symbol} is an index; foreign flow is per stock`);
+  const source = String(sourceRaw ?? "").trim().toLowerCase() || "ipot";
+  if (source === "idx") throw usage("idx.co.id refuses requests from this site's host; the web terminal reads IPOT (source=ipot), in rupiah across all boards; the CLI and MCP read idx.co.id too");
+  if (source !== "ipot") throw usage(`invalid source "${sourceRaw}"; the web terminal reads ipot`);
+  let from = isoDate(fromRaw, "from"), to = isoDate(toRaw, "to");
+  const hasDays = daysRaw != null && daysRaw !== "";
+  if (hasDays && (from || to)) throw usage("give either the latest days or a from/to range, not both");
+  if (to && !from) throw usage("to needs from, the first session of the range");
+  const today = wibToday();
+  let candidates, n = null;
+  if (from) {
+    to ||= today;
+    if (from > to) throw usage(`the range starts (${from}) after it ends (${to})`);
+    if (to > today) throw usage(`${to} is in the future (today is ${today} in WIB)`);
+    candidates = tradingDaysBetween(from, to);
+    if (candidates.length > FOREIGN_WEB_MAX) throw usage(`the web terminal reads at most ${FOREIGN_WEB_MAX} sessions (two requests each); ${from} to ${to} has ${candidates.length}; the CLI takes 60`);
+  } else {
+    n = num(daysRaw, FOREIGN_WEB_DEFAULT);
+    if (!Number.isInteger(n) || n < 1 || n > FOREIGN_WEB_MAX) throw usage(`days must be between 1 and ${FOREIGN_WEB_MAX} on the web (two requests per session); the CLI takes 60`);
+    // One more when today trades: its session is published after the close.
+    candidates = latestTradingDays(today, hol.isTradingDay(today) ? n + 1 : n);
+  }
+  const readDay = async (d) => {
+    const all = await ipotPage(env, symbol, d, d, "all", "all", today);
+    const traded = all.value.buyers.length || all.value.sellers.length;
+    return { d, all, foreign: traded ? await ipotPage(env, symbol, d, d, "foreign", "all", today) : null };
+  };
+  const days = [], warnings = [];
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), rounded = false, firstErr = null, pending = null;
+  for (let i = 0; i < candidates.length; i += 3) {
+    const got = await Promise.allSettled(candidates.slice(i, i + 3).map(readDay));
+    for (const [k, r] of got.entries()) {
+      const d = candidates[i + k];
+      if (r.status === "rejected") {
+        if (r.reason?.code === "not_found") throw r.reason;
+        warnings.push(`${symbol}: the session of ${d} failed: ${r.reason?.message ?? r.reason}`);
+        firstErr ||= r.reason;
+        continue;
+      }
+      for (const page of [r.value.all, r.value.foreign].filter(Boolean)) {
+        cachedAll &&= page.cached; stale ||= page.stale; fetched = Math.min(fetched, page.fetched_at);
+        if (page.warning && !warnings.includes(page.warning)) warnings.push(page.warning);
+      }
+      const s = ipot.foreignDay(d, r.value.all.value, r.value.foreign?.value ?? null, today);
+      if (s.session === "traded") { days.push(s.day); rounded ||= s.rounded; }
+      else if (s.session === "pending") {
+        if (!pending || d > pending) pending = d;
+        warnings.push(d >= today
+          ? `${symbol}: today's session (${d}) is left out: the source publishes the foreign figures after the close`
+          : `${symbol}: the session of ${d} is left out: the source shows its totals but has not published its broker lists and foreign figures yet`);
+      }
+    }
+  }
+  if (!days.length) {
+    // A session that failed may have traded: say it failed, like the CLI.
+    if (firstErr) throw firstErr;
+    const span = `for ${symbol} from ${candidates[0]} to ${candidates[candidates.length - 1]}`;
+    if (pending) throw notFound(`no published session with trades ${span}: ${pending >= today ? `today's session (${pending}) is published after the close` : `the source has not published the session of ${pending} yet`}`);
+    throw notFound(`no sessions with trades ${span}`);
+  }
+  const list = n ? days.slice(-n) : days;
+  if (n && list.length < n) warnings.push(`${symbol} traded on ${list.length} of the ${candidates.length} latest trading days the web reads`);
+  const last = list[list.length - 1].date;
+  const w = new Date(Date.now() + 7 * 3600e3);
+  if (last === today && w.getUTCHours() * 60 + w.getUTCMinutes() < SESSION_DONE_MIN) warnings.push(`${symbol}: today's session (${today}) is still trading; its figures will change`);
+  const data = { symbol, name: NAME_BY_SYMBOL.get(symbol) || null, from: list[0].date, to: last, days: list, totals: ipot.foreignTotals(list), rounded };
+  return envelope("idx.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
+}
+
 // ---- corporate actions and holidays ------------------------------------
 
 /** Days `actions` reaches back without `since`, like the CLI. */
@@ -542,6 +944,47 @@ export function holidays(yearRaw, allRaw, upcomingRaw) {
   return envelope("idx.holidays.v1", data, { provider: "bundled", cached: true, warnings });
 }
 
+// ---- astro --------------------------------------------------------------
+
+/** The web lists up to 90 days of events; the CLI takes 366. */
+const ASTRO_WEB_MAX_DAYS = 90;
+/** The web backtests up to 10y (default 5y); max is CLI-only (9,000+ sessions). */
+const ASTRO_WEB_PERIODS = ["1y", "2y", "5y", "10y"];
+
+/** idx.astro.v1: the sky for a date (computed here) and, with backtest, IHSG's daily returns by factor. */
+export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, periodRaw) {
+  const truthy = (v) => v === "1" || v === "true" || v === true;
+  const date = isoDate(dateRaw, "date") || wibToday();
+  if (date < astroLib.FIRST_DATE || date > astroLib.LAST_DATE) throw usage(`astro covers ${astroLib.FIRST_DATE} to ${astroLib.LAST_DATE}, the range of the planetary elements; got ${date}`);
+  const days = daysRaw == null || daysRaw === "" ? 30 : Number(daysRaw);
+  if (!Number.isInteger(days) || days < 1 || days > ASTRO_WEB_MAX_DAYS) throw usage(`days must be 1 to ${ASTRO_WEB_MAX_DAYS} in the web terminal (the CLI takes 366); got ${daysRaw}`);
+  const natal = String(natalRaw || "launch").trim().toLowerCase();
+  if (!["launch", "base", "none"].includes(natal)) throw usage(`invalid natal chart "${natalRaw}"; use launch, base or none`);
+  // As on the CLI (--period requires --backtest) and over MCP.
+  if (!truthy(backtestRaw) && periodRaw != null && String(periodRaw).trim() !== "") throw usage("period is the backtest's look-back; pass it with backtest=1 (astro --backtest --period 2y)");
+  const period = String(periodRaw || "5y").trim().toLowerCase();
+  if (period === "max") throw usage("the web terminal backtests up to 10y; the CLI runs max (idx market astro --backtest)");
+  if (!ASTRO_WEB_PERIODS.includes(period)) throw usage(`invalid backtest period "${periodRaw}"; use ${ASTRO_WEB_PERIODS.join(", ")}`);
+  const { data, warnings } = astroLib.sky(date, days, natal);
+  if (!truthy(backtestRaw)) return envelope("idx.astro.v1", data, { provider: "computed", warnings });
+  // The result, not the candles, is cached: one D1 row per period, refreshed every 6 hours.
+  const r = await cached(env, `astro_backtest:${period}`, 6 * 3600, async () => {
+    const h = await history(env, "^JKSE", period, "1d", 0);
+    const hist = { ...h.data };
+    const leftOut = astroLib.dropUnfinished(hist, Date.parse(h.fetched_at));
+    try {
+      return { backtest: astroLib.backtest(hist, period), left_out: leftOut };
+    } catch (e) {
+      if (e instanceof astroLib.BacktestError) throw e.code === "not_found" ? notFound(e.message) : provider(`backtest: ${e.message}`);
+      throw e;
+    }
+  });
+  data.backtest = r.value.backtest;
+  if (r.value.left_out) warnings.push(`the backtest leaves out ${r.value.left_out}, a session that had not closed when the history was fetched`);
+  if (r.warning) warnings.push(r.warning);
+  return envelope("idx.astro.v1", data, { provider: "yahoo", cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
+}
+
 // ---- bandarmology ------------------------------------------------------
 
 const BANDAR_WEB_MAX_SYMBOLS = 5;
@@ -553,14 +996,29 @@ async function boardQuotes(env) {
   return new Map((b?.value?.quotes || []).map((q) => [q.symbol, q]));
 }
 
-/** Every weekday's summary of the range as one cached row (one D1 read, one write). */
+/**
+ * Every weekday's summary of the range as one cached row (one D1 read, one
+ * write), read like ipot::parse::Parsed::into_summary; for one investor side
+ * each session's value traded comes from its all-investor page.
+ */
 async function bandarSessions(env, symbol, from, to, investor, mboard, today) {
   const ttl = to < today ? 7 * 86400 : 5 * 60;
-  return cached(env, `bandar_daily:${symbol}:${from}:${to}:${investor}:${mboard}`, ttl, async () => {
+  return cached(env, `bandar_days:${symbol}:${from}:${to}:${investor}:${mboard}`, ttl, async () => {
     const days = bd.weekdays(from, to), out = [];
+    const page = async (d, who) => ipot.parse(await ipot.fetchPage(ipot.url(symbol, d, d, who, mboard)));
     for (let i = 0; i < days.length; i += 3) {
-      const pages = await Promise.all(days.slice(i, i + 3).map(async (d) => [d, ipot.parse(await ipot.fetchPage(ipot.url(symbol, d, d, investor, mboard)))]));
-      for (const [d, p] of pages) if (!p.invalid) out.push({ ...p, from: p.from || d, to: p.to || d });
+      const pages = await Promise.all(days.slice(i, i + 3).map(async (d) => {
+        const p = await page(d, investor);
+        if (p.invalid) return [d, p, null];
+        const traded = p.buyers.length || p.sellers.length;
+        return [d, p, investor !== "all" && traded ? await page(d, "all") : null];
+      }));
+      for (const [d, p, all] of pages) {
+        if (p.invalid) continue;
+        const t = ipot.totals(p, investor, mboard);
+        if (all && !all.invalid) Object.assign(t, { total_value: all.total_value, total_lots: all.total_lots });
+        out.push({ ...p, ...t, from: p.from || d, to: p.to || d });
+      }
     }
     return out;
   });
@@ -581,6 +1039,7 @@ async function bandarOne(env, s, q) {
       sum.cached &&= latest.cached;
     }
   }
+  await withValueTraded(env, sum, investor, mboard, today);
   const d = sum.data, warnings = [...sum.warnings];
   const empty = !d.buyers.length && !d.sellers.length;
   if (from && empty) warnings.push(`${s}: no trades from ${from} to ${to}`);
@@ -631,6 +1090,11 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
   if (daily && symbols.length > 1) throw usage("the daily series on the web takes one ticker; the CLI takes three");
   if (daily && ((!from && period === "3m") || (from && bd.weekdays(from, to).length > BANDAR_DAILY_MAX_SESSIONS))) {
     throw usage(`the daily series on the web covers at most ${BANDAR_DAILY_MAX_SESSIONS} sessions (1m); the CLI goes further`);
+  }
+  // One investor side reads two pages a session (its own and the value traded).
+  const sideMax = Math.floor(BANDAR_DAILY_MAX_SESSIONS / 2);
+  if (daily && investor !== "all" && ((!from && period !== "1d" && period !== "1w") || (from && bd.weekdays(from, to).length > sideMax))) {
+    throw usage(`the daily series for one investor side on the web covers at most ${sideMax} sessions (1w), two requests each; the CLI goes further`);
   }
   const quotes = await boardQuotes(env);
   const q = { period, from, to, top, investor, mboard, daily, today, quotes };
@@ -762,7 +1226,20 @@ async function ownershipRelease(env, asOf) {
   }
   return row.as_of;
 }
-const holdingRow = (r) => ({ as_of: r.as_of, symbol: r.symbol, issuer_name: r.issuer_name, holder: r.holder, holder_raw: r.holder_raw, entity_key: r.entity_key, investor_type: r.investor_type, local_foreign: r.local_foreign, nationality: r.nationality ?? null, domicile: r.domicile ?? null, shares_scripless: r.shares_scripless ?? null, shares_scrip: r.shares_scrip ?? null, shares_total: r.shares_total, pct: r.pct });
+const holdingRow = (r) => ({ as_of: r.as_of, symbol: r.symbol, issuer_name: r.issuer_name, holder: r.holder, holder_raw: r.holder_raw, entity_key: r.entity_key, investor_type: r.investor_type, local_foreign: r.local_foreign, nationality: r.nationality ?? null, domicile: r.domicile ?? null, shares_scripless: r.shares_scripless ?? null, shares_scrip: r.shares_scrip ?? null, shares_total: r.shares_total, pct: r.pct, accounts: r.accounts ?? null, controller_or_affiliate: r.controller_or_affiliate ?? null });
+/** What the CLI's release notes say about loaded months: copies made before idx 0.8.2 summed accounts, rows dated otherwise. */
+async function ownershipNotes(env, dates) {
+  const rows = (await env.DB.prepare(`SELECT as_of, lines, other_date_rows FROM own_releases WHERE as_of IN (${dates.map((_, i) => `?${i + 1}`).join(", ")}) ORDER BY as_of`).bind(...dates).all()).results;
+  const notes = [];
+  const legacy = rows.filter((r) => r.lines == null).map((r) => r.as_of);
+  if (legacy.length) notes.push(`the web copy of ${legacy.join(", ")} predates idx 0.8.2, which sums a holder's accounts; it reloads once the mirror is rebuilt`);
+  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} row${r.other_date_rows === 1 ? "" : "s"} dated otherwise; they are not part of the ${r.as_of} holdings`);
+  return notes;
+}
+async function controllerReported(env, date) {
+  const r = await env.DB.prepare("SELECT controller_column FROM own_releases WHERE as_of = ?1").bind(date).first();
+  return r?.controller_column === 1;
+}
 
 export async function ownershipTicker(env, symbolRaw, asOf) {
   const symbol = parseSymbol(symbolRaw);
@@ -770,16 +1247,20 @@ export async function ownershipTicker(env, symbolRaw, asOf) {
   const rows = (await env.DB.prepare("SELECT * FROM own_holdings WHERE as_of = ?1 AND symbol = ?2 ORDER BY pct DESC").bind(date, symbol).all()).results;
   if (!rows.length) throw notFound(`no holders above 1% recorded for ${symbol} as of ${date}`);
   const holders = rows.map(holdingRow);
-  return envelope("idx.ownership.holders.v1", { symbol, issuer_name: rows[0].issuer_name, as_of: date, listed_pct: holders.reduce((s, h) => s + h.pct, 0), holders }, { provider: "github-mirror", cached: true });
+  const data = { symbol, issuer_name: rows[0].issuer_name, as_of: date, listed_pct: holders.reduce((s, h) => s + h.pct, 0), holders, controller_reported: await controllerReported(env, date) };
+  return envelope("idx.ownership.holders.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
 }
 export async function ownershipEntity(env, query, asOf) {
   if (!query || query.trim().length < 3) throw usage("entity name needs at least 3 characters");
+  const key = ex.entitySearchKey(query);
+  // "%%%" or "!!!" would normalise to an empty key and match every holder.
+  if (key.replace(/[^A-Z0-9]/g, "").length < 3) throw usage("name needs at least 3 letters or digits");
   const date = await ownershipRelease(env, asOf);
-  const key = query.toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(" ").filter((t) => t && !["PT","TBK","PERSERO"].includes(t)).join(" ");
   const rows = (await env.DB.prepare("SELECT * FROM own_holdings WHERE as_of = ?1 AND entity_key LIKE ?2 ORDER BY pct DESC").bind(date, `%${key}%`).all()).results;
   if (!rows.length) throw notFound(`no holder matching "${query}" as of ${date}`);
   const entities = [...new Set(rows.map((r) => r.holder))].sort();
-  return envelope("idx.ownership.entity.v1", { query, as_of: date, entities, holdings: rows.map(holdingRow) }, { provider: "github-mirror", cached: true });
+  const data = { query, as_of: date, entities, holdings: rows.map(holdingRow), controller_reported: await controllerReported(env, date) };
+  return envelope("idx.ownership.entity.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
 }
 export async function ownershipReleases(env) {
   const rows = (await env.DB.prepare("SELECT * FROM own_releases ORDER BY as_of").all()).results;
@@ -787,35 +1268,31 @@ export async function ownershipReleases(env) {
   const warnings = [];
   if (s.loading) warnings.push(`loading ${s.loading.as_of}: part ${s.loading.part} of ${s.loading.of}`);
   if (!rows.length && !s.loading) warnings.push(await emptyRegisterMessage(env));
-  return envelope("idx.ownership.releases.v1", rows.map((r) => ({ as_of: r.as_of, format: r.format, source: r.source, sha256: r.sha256 || "", rows: r.rows, issuers: r.issuers ?? 0, entities: r.entities ?? 0, imported_at: new Date(r.synced_at * 1000).toISOString() })), { provider: "github-mirror", cached: true, warnings });
+  if (rows.length) warnings.push(...(await ownershipNotes(env, rows.map((r) => r.as_of))));
+  // D1 `rows` counts the positions loaded; `lines` (index from idx 0.8.2 on) the register lines behind them.
+  const list = rows.map((r) => ({
+    as_of: r.as_of, format: r.format, source: r.source, sha256: r.sha256 || "", rows: r.lines ?? r.rows, issuers: r.issuers ?? 0, entities: r.entities ?? 0, imported_at: new Date(r.synced_at * 1000).toISOString(),
+    positions: r.lines != null ? r.rows : null, other_date_rows: r.other_date_rows ?? null, controller_column: r.controller_column == null ? null : r.controller_column === 1,
+  }));
+  return envelope("idx.ownership.releases.v1", list, { provider: "github-mirror", cached: true, warnings });
 }
 export async function ownershipChanges(env, from, to, symbolRaw, minChange = 0, limit = 50, offset = 0) {
   if (!from || !to || from >= to) throw usage("--from must be earlier than --to (YYYY-MM-DD)");
   await ownershipRelease(env, from); await ownershipRelease(env, to);
   const symbol = symbolRaw ? parseSymbol(symbolRaw) : null;
+  const cols = "symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct, accounts, controller_or_affiliate";
   const load = async (d) => {
-    const q = symbol ? env.DB.prepare("SELECT symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct FROM own_holdings WHERE as_of = ?1 AND symbol = ?2").bind(d, symbol)
-                     : env.DB.prepare("SELECT symbol, holder, entity_key, investor_type, local_foreign, shares_total, pct FROM own_holdings WHERE as_of = ?1").bind(d);
-    const m = new Map();
-    for (const r of (await q.all()).results) m.set(`${r.symbol}|${r.entity_key}`, r);
-    return m;
+    const q = symbol ? env.DB.prepare(`SELECT ${cols} FROM own_holdings WHERE as_of = ?1 AND symbol = ?2`).bind(d, symbol)
+                     : env.DB.prepare(`SELECT ${cols} FROM own_holdings WHERE as_of = ?1`).bind(d);
+    return (await q.all()).results;
   };
   const [before, after] = await Promise.all([load(from), load(to)]);
-  const changes = [];
-  const r4 = (v) => Math.round(v * 1e4) / 1e4;
-  for (const [k, a] of after) {
-    const b = before.get(k);
-    if (b) {
-      if (Math.abs(a.pct - b.pct) < 1e-9 && a.shares_total === b.shares_total) continue;
-      changes.push({ symbol: a.symbol, holder: a.holder, entity_key: a.entity_key, investor_type: a.investor_type, local_foreign: a.local_foreign, kind: "changed", pct_from: b.pct, pct_to: a.pct, pct_change: r4(a.pct - b.pct), shares_from: b.shares_total, shares_to: a.shares_total, shares_change: a.shares_total - b.shares_total });
-    } else changes.push({ symbol: a.symbol, holder: a.holder, entity_key: a.entity_key, investor_type: a.investor_type, local_foreign: a.local_foreign, kind: "new", pct_from: null, pct_to: a.pct, pct_change: r4(a.pct), shares_from: null, shares_to: a.shares_total, shares_change: a.shares_total });
-  }
-  for (const [k, b] of before) if (!after.has(k)) changes.push({ symbol: b.symbol, holder: b.holder, entity_key: b.entity_key, investor_type: b.investor_type, local_foreign: b.local_foreign, kind: "exited", pct_from: b.pct, pct_to: null, pct_change: r4(-b.pct), shares_from: b.shares_total, shares_to: null, shares_change: -b.shares_total });
+  const changes = ex.diffPositions(before, after);
   const kept = changes.filter((c) => Math.abs(c.pct_change) + 1e-12 >= minChange).sort((a, b) => Math.abs(b.pct_change) - Math.abs(a.pct_change) || a.symbol.localeCompare(b.symbol));
   const summary = ex.summariseChanges(kept);
   const off = Math.min(Math.max(0, offset), kept.length);
   const page = kept.slice(off, limit > 0 ? off + limit : undefined);
-  return envelope("idx.ownership.changes.v1", { from, to, symbol, min_pct_change: minChange, total_matches: kept.length, offset: off, summary, changes: page }, { provider: "github-mirror", cached: true });
+  return envelope("idx.ownership.changes.v1", { from, to, symbol, min_pct_change: minChange, total_matches: kept.length, offset: off, summary, changes: page }, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [from, to]) });
 }
 
 async function ownershipPct(env, asOf) {
@@ -829,7 +1306,7 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
     const rows = (await env.DB.prepare("SELECT as_of, MAX(issuer_name) AS issuer_name, COALESCE(SUM(CASE WHEN local_foreign = 'A' THEN pct END), 0) AS fp, COALESCE(SUM(CASE WHEN local_foreign = 'L' THEN pct END), 0) AS lp, COALESCE(SUM(CASE WHEN local_foreign IS NULL OR local_foreign NOT IN ('A','L') THEN pct END), 0) AS up, SUM(CASE WHEN local_foreign = 'A' THEN 1 ELSE 0 END) AS fh, SUM(CASE WHEN local_foreign = 'L' THEN 1 ELSE 0 END) AS lh, SUM(pct) AS listed FROM own_holdings WHERE symbol = ?1 AND as_of IN (SELECT as_of FROM own_releases) GROUP BY as_of ORDER BY as_of").bind(symbol).all()).results;
     if (!rows.length) { await ownershipRelease(env, null); throw notFound(`no holders above 1% recorded for ${symbol} in any loaded release`); }
     const points = rows.map((r, i) => ({ as_of: r.as_of, foreign_pct: r4(r.fp), local_pct: r4(r.lp), unflagged_pct: r4(r.up), foreign_holders: r.fh, local_holders: r.lh, listed_pct: r4(r.listed), foreign_change_pp: i ? r4(r.fp - rows[i - 1].fp) : null }));
-    return envelope("idx.ownership.foreign.v1", { symbol, issuer_name: rows.map((r) => r.issuer_name).filter(Boolean).pop() || null, points }, { provider: "github-mirror", cached: true });
+    return envelope("idx.ownership.foreign.v1", { symbol, issuer_name: rows.map((r) => r.issuer_name).filter(Boolean).pop() || null, points }, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, rows.map((r) => r.as_of)) });
   }
   const releases = (await env.DB.prepare("SELECT as_of FROM own_releases ORDER BY as_of").all()).results.map((r) => r.as_of);
   if (!releases.length) throw notFound("no ownership data loaded on the web terminal yet");
@@ -842,10 +1319,105 @@ export async function ownershipForeign(env, symbolRaw, from, to, limit = 25) {
   const rows = [...after.entries()].map(([symbol, a]) => { const b = before.get(symbol); const pf = b ? r4(b.foreign_pct) : null; return { symbol, issuer_name: a.issuer_name, foreign_pct_from: pf, foreign_pct_to: r4(a.foreign_pct), change_pp: r4(a.foreign_pct - (pf || 0)), foreign_holders_to: a.foreign_holders }; })
     .sort((a, b) => Math.abs(b.change_pp) - Math.abs(a.change_pp) || a.symbol.localeCompare(b.symbol));
   const data = { from: fromDate, to: toDate, issuers: rows.length, inflows: rows.filter((r) => r.change_pp > 0).length, outflows: rows.filter((r) => r.change_pp < 0).length, net_pp: r4(rows.reduce((s, r) => s + r.change_pp, 0)), rows: limit > 0 ? rows.slice(0, limit) : rows };
-  return envelope("idx.ownership.foreign-flow.v1", data, { provider: "github-mirror", cached: true });
+  return envelope("idx.ownership.foreign-flow.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [fromDate, toDate]) });
+}
+
+// ---- ownership analytics (ports of src/ownership/analytics.rs) ------------------------------
+
+const STAKE_COLS = "symbol, issuer_name, entity_key, holder, holder_raw, investor_type, local_foreign, controller_or_affiliate, shares_total, pct";
+/** One month's positions (a holder's accounts already summed): one D1 read of the release, like entity and changes. */
+async function monthStakes(env, date) {
+  return (await env.DB.prepare(`SELECT ${STAKE_COLS} FROM own_holdings WHERE as_of = ?1 ORDER BY symbol, entity_key`).bind(date).all()).results;
+}
+const wholeIn = (v, name, lo, hi) => { if (!Number.isInteger(v) || v < lo || v > hi) throw usage(`${name} must be ${lo} to ${hi}`); return v; };
+const ownedBy = (fn) => { try { return fn(); } catch (e) { if (e instanceof own.UsageError) throw usage(e.message); throw e; } };
+
+/** idx.ownership.search.v1 over the selected month (the web has no table of every spelling ever seen). */
+export async function ownershipSearch(env, queryRaw, limit = 20, asOf) {
+  const query = String(queryRaw ?? "").trim();
+  ownedBy(() => own.searchKey(query));
+  const date = await ownershipRelease(env, asOf);
+  const rows = await monthStakes(env, date);
+  const all = ownedBy(() => own.search(own.knownFromMonth(rows, date), rows, query));
+  const warnings = await ownershipNotes(env, [date]);
+  warnings.push(`the web terminal searches the ${date} register only (its spellings, last_seen ${date}); idx ownership search covers every imported month`);
+  if (!all.length) warnings.push(`no holder matching "${query}"`);
+  const data = { query, as_of: date, total_matches: all.length, matches: limit > 0 ? all.slice(0, limit) : all };
+  return envelope("idx.ownership.search.v1", data, { provider: "github-mirror", cached: true, warnings });
+}
+
+/** idx.ownership.cross-holders.v1: holders ranked by the issuers they own more than 1 % of. */
+export async function ownershipCrossHolders(env, minIssuers = 2, typeRaw, originRaw, limit = 25, asOf) {
+  if (!Number.isInteger(minIssuers) || minIssuers < 1) throw usage("--min-issuers must be at least 1");
+  const origin = originRaw ? String(originRaw).trim().toLowerCase() : null;
+  if (origin && origin !== "foreign" && origin !== "local") throw usage(`invalid origin "${originRaw}"; use foreign or local`);
+  const investorType = String(typeRaw ?? "").split(/\s+/).filter(Boolean).join(" ") || null;
+  const date = await ownershipRelease(env, asOf);
+  const all = own.crossHolders(await monthStakes(env, date), { min_issuers: minIssuers, investor_type: investorType, origin });
+  const data = { as_of: date, min_issuers: minIssuers, investor_type: investorType, origin, total_matches: all.length, holders: limit > 0 ? all.slice(0, limit) : all };
+  return envelope("idx.ownership.cross-holders.v1", data, { provider: "github-mirror", cached: true, warnings: await ownershipNotes(env, [date]) });
+}
+
+/** idx.ownership.concentration.v1: HHI, top-1 and top-3 stakes per issuer. */
+export async function ownershipConcentration(env, symbolsRaw, byRaw = "hhi", ascending = false, limit = 25, asOf) {
+  const by = String(byRaw || "hhi").trim().toLowerCase();
+  if (!own.SORTS.includes(by)) throw usage(`invalid ranking "${byRaw}"; use hhi, top1 or top3`);
+  const symbols = symbolsRaw && String(symbolsRaw).trim() ? parseSymbols(symbolsRaw) : null;
+  const date = await ownershipRelease(env, asOf);
+  const reported = await controllerReported(env, date);
+  let rows = own.concentration(await monthStakes(env, date), reported);
+  const warnings = await ownershipNotes(env, [date]);
+  let total;
+  if (symbols) {
+    const bySymbol = new Map(rows.map((r) => [r.symbol, r]));
+    rows = [];
+    for (const s of symbols) {
+      if (bySymbol.has(s)) rows.push(bySymbol.get(s));
+      else warnings.push(`no holders above 1% recorded for ${s} as of ${date}`);
+    }
+    if (!rows.length) throw notFound(`no holders above 1% recorded for ${symbols.join(", ")} as of ${date}`);
+    total = rows.length;
+  } else {
+    own.rankConcentration(rows, by, ascending);
+    total = rows.length;
+    if (limit > 0) rows = rows.slice(0, limit);
+  }
+  const data = { as_of: date, sort: by, ascending, total_matches: total, controller_reported: reported, rows };
+  return envelope("idx.ownership.concentration.v1", data, { provider: "github-mirror", cached: true, warnings });
+}
+
+/** idx.ownership.graph.v1: the holder-issuer network around a ticker or a holder. */
+export async function ownershipGraph(env, rootRaw, depth = 2, minPct = 0, maxNodes = 100, forceHolder = false, asOf) {
+  wholeIn(depth, "--depth", 1, 6);
+  wholeIn(maxNodes, "--max-nodes", 1, 1000);
+  if (!Number.isFinite(minPct) || minPct < 0 || minPct > 100) throw usage("--min-pct must be 0 to 100");
+  const root = String(rootRaw ?? "").trim();
+  if (!root) throw usage("graph needs a ticker or a holder");
+  let symbol = null;
+  try { symbol = parseSymbol(root); } catch { symbol = null; }
+  const date = await ownershipRelease(env, asOf);
+  const stakes = await monthStakes(env, date);
+  const start = own.rootFor(stakes, root, forceHolder, symbol);
+  if (!start) throw notFound(`no ticker or holder matching "${root}" as of ${date}`);
+  const w = own.walk(stakes, start.root, depth, minPct, maxNodes);
+  const warnings = await ownershipNotes(env, [date]);
+  if (start.warning) warnings.push(start.warning);
+  if (w.truncated) warnings.push(`stopped at ${maxNodes} nodes; raise --max-nodes or --min-pct`);
+  const id = start.root.issuer != null ? own.issuerId(start.root.issuer) : own.holderId(start.root.holder);
+  const data = { as_of: date, root: id, depth, min_pct: minPct, max_nodes: maxNodes, truncated: w.truncated, issuers: w.issuers, holders: w.holders, links: w.links };
+  return envelope("idx.ownership.graph.v1", data, { provider: "github-mirror", cached: true, warnings });
 }
 
 // ---- brief ---------------------------------------------------------------------
+
+// The brief's "Valuation verdict" key point, null without a verdict. A P/B
+// over statements in another currency is not a ratio, so it is left out (as
+// service::valuation_key_point does in the CLI).
+export function valuationKeyPoint(f) {
+  if (!f?.verdict) return null;
+  const v = f.verdict, pe = f.valuation.pe_trailing, pb = an.mixedCurrency(f) ? null : f.valuation.price_to_book;
+  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} inputs)${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
+}
 
 export async function brief(env, symbolRaw) {
   const symbol = parseSymbol(symbolRaw);
@@ -873,7 +1445,9 @@ export async function brief(env, symbolRaw) {
   const pct = (v, dp = 1) => `${v >= 0 ? "+" : ""}${v.toFixed(dp)}%`;
   const key_points = [];
   if (q && q.price != null && q.change_pct != null) key_points.push(`Price ${q.price.toLocaleString("en-US")} (${pct(q.change_pct, 2)} today)${q.market_cap ? `, market cap ${(q.market_cap / 1e12).toFixed(1)}T` : ""}`);
-  if (f?.verdict) key_points.push(`Valuation verdict: ${f.verdict.label} (score ${f.verdict.score >= 0 ? "+" : ""}${f.verdict.score}, ${f.verdict.inputs_available} inputs)${f.valuation.pe_trailing != null ? `; P/E ${f.valuation.pe_trailing.toFixed(1)}` : ""}${f.valuation.price_to_book != null ? `, P/B ${f.valuation.price_to_book.toFixed(2)}` : ""}`);
+  if (q?.behind_session === true && q.market_time) key_points.push(`Last trade ${hol.wibDate(q.market_time)}, before the latest IDX session: suspended, not traded since, or the source lags`);
+  const valuation = valuationKeyPoint(f);
+  if (valuation) key_points.push(valuation);
   if (t) key_points.push(`Technical signal: ${t.signal.label} (score ${t.signal.score >= 0 ? "+" : ""}${t.signal.score}), trend ${t.trend}${t.rsi14 != null ? `, RSI ${t.rsi14.toFixed(0)}` : ""}`);
   if (r?.returns?.["1y"] != null) key_points.push(`1y return ${pct(r.returns["1y"])}${r.benchmark?.excess?.["1y"] != null ? ` (${r.benchmark.excess["1y"] >= 0 ? "+" : ""}${r.benchmark.excess["1y"].toFixed(1)} pp vs ${r.benchmark.symbol})` : ""}; YTD ${r.returns.ytd != null ? pct(r.returns.ytd) : "n/a"}`);
   if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");
@@ -932,13 +1506,20 @@ export async function route(env, url) {
     case "/market": return market(env);
     case "/quote": return quote(env, q.get("symbols") || q.get("symbol"));
     case "/history": return history(env, q.get("symbol"), q.get("period") || "1y", q.get("interval") || "1d", num(q.get("limit"), 0));
+    case "/intraday": return intraday(env, q.get("symbol"), q.get("interval") || "1m", num(q.get("limit"), 0));
     case "/profile": return profile(env, q.get("symbol"));
-    case "/fundamental": return fundamentals(env, q.get("symbol"));
-    case "/earnings": return earnings(env, q.get("symbol"));
+    case "/fundamental": return fundamentals(env, q.get("symbol"), q.get("lens"));
+    case "/earnings": return earnings(env, q.get("symbol"), q.get("period"), q.get("kind"));
     case "/financials": return financials(env, q.get("symbol"), q.get("period") || "annual");
     case "/technical": return technical(env, q.get("symbol"), q.get("period") || "1y");
     case "/compare": return compare(env, q.get("symbols"));
-    case "/screen": return screen(env, q.get("filter") || "", q.get("sort") || "mcap", num(q.get("limit"), 25), num(q.get("max_fundamentals"), 20), q.get("asc") == null);
+    case "/screen": {
+      const asc = q.get("asc"), desc = q.get("desc");
+      const on = (v) => v === "1" || v === "true";
+      const descending = asc != null && asc !== "" ? !on(asc) : desc != null && desc !== "" ? on(desc) : null;
+      return screen(env, q.get("filter") || "", q.get("sort"), num(q.get("limit"), 25), num(q.get("max_fundamentals"), 20), descending, q.get("preset"), on(q.get("returns")));
+    }
+    case "/insights": return insights(env, q.get("symbol"));
     case "/news": return (await news(env, q.get("symbol"), num(q.get("limit"), 20), q.get("company_only") === "1" || q.get("company_only") === "true")).env;
     case "/dividends": return dividends(env, q.get("symbol"));
     case "/returns": return returns(env, q.get("symbols") || q.get("symbol"), q.get("benchmark") || "^JKSE");
@@ -946,18 +1527,24 @@ export async function route(env, url) {
     case "/ownership/foreign": return ownershipForeign(env, q.get("symbol"), q.get("from"), q.get("to"), num(q.get("limit"), 25));
     case "/sentiment": return sentiment(env, q.get("symbol"));
     case "/broker": return broker(env, q.get("symbols") || q.get("symbol"), q.get("date"), q.get("from"), q.get("to"), q.get("investor") || "all", q.get("board") || "all");
+    case "/foreign": return foreignFlow(env, q.get("symbol"), q.get("days"), q.get("from"), q.get("to"), q.get("source"));
     case "/bandar": return bandar(env, q.get("symbols") || q.get("symbol"), q.get("period"), q.get("date"), q.get("from"), q.get("to"), q.get("top"), q.get("investor") || "all", q.get("board") || "all", q.get("daily"));
     case "/bandar/screen": return bandarScreen(env, q.get("preset"), q.get("filter"), q.get("period"), q.get("top"), q.get("sort"), q.get("asc"), q.get("limit"));
     case "/bandar/status": return envelope("idx.bandar.scan.v1", await scanStatus(env), { provider: ipot.NAME, cached: true });
     case "/bandar/broker": return bandarBroker(env, q.get("code"), q.get("period"), q.get("limit"));
     case "/actions": return actions(env, q.get("symbol"), q.get("since"));
     case "/holidays": return holidays(q.get("year"), q.get("all"), q.get("upcoming"));
+    case "/astro": return astro(env, q.get("date"), q.get("days"), q.get("natal"), q.get("backtest"), q.get("period"));
     case "/instruments": return instruments(q.get("search"), q.get("board"));
     case "/members": return members(q.get("search"));
     case "/ownership/ticker": return ownershipTicker(env, q.get("symbol"), q.get("as_of"));
     case "/ownership/entity": return ownershipEntity(env, q.get("name"), q.get("as_of"));
     case "/ownership/changes": return ownershipChanges(env, q.get("from"), q.get("to"), q.get("symbol"), num(q.get("min_change"), 0), num(q.get("limit"), 50), num(q.get("offset"), 0));
     case "/ownership/releases": return ownershipReleases(env);
+    case "/ownership/search": return ownershipSearch(env, q.get("q") ?? q.get("query"), num(q.get("limit"), 20), q.get("as_of"));
+    case "/ownership/cross-holders": return ownershipCrossHolders(env, num(q.get("min_issuers"), 2), q.get("type"), q.get("origin"), num(q.get("limit"), 25), q.get("as_of"));
+    case "/ownership/concentration": return ownershipConcentration(env, q.get("symbols"), q.get("by") || "hhi", q.get("asc") === "1" || q.get("asc") === "true", num(q.get("limit"), 25), q.get("as_of"));
+    case "/ownership/graph": return ownershipGraph(env, q.get("root"), num(q.get("depth"), 2), num(q.get("min_pct"), 0), num(q.get("max_nodes"), 100), q.get("holder") === "1" || q.get("holder") === "true", q.get("as_of"));
     case "/ownership/status": return envelope("idx.ownership.sync.v1", await syncStatus(env), { provider: "github-mirror", cached: true });
     case "/universe": return envelope("idx.universe.v1", UNIVERSE.map(([symbol, name]) => ({ symbol, name })), { provider: "bundled", cached: true });
     case "/repo": return repo(env);

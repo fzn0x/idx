@@ -8,9 +8,14 @@ name: ownership data
 # idx.co.id blocks cloud networks (GitHub-hosted runners included), so the
 # scrape needs an ordinary connection: register an always-on machine you own as
 # a self-hosted runner and set the repository variable OWNERSHIP_RUNNER to
-# `self-hosted` (docs/ownership.md). On a GitHub-hosted runner the job leaves
-# the mirror unchanged and only fails when the newest register is 45 days old,
-# which works as a staleness alarm.
+# `self-hosted` (docs/ownership.md). On a GitHub-hosted runner the job cannot
+# reach idx.co.id, so it adds no new months: it rebuilds the parts and the
+# prebuilt SQLite snapshot (`snapshot-v{V}.json` + `ownership-v{V}-*.sqlite.gz`,
+# which `idx ownership sync` installs) from the files already mirrored,
+# uploading them when they change, so a parser or schema change on main is
+# published within a run. It fails when index.json lists a month whose file is
+# missing from the release, and once the newest register is 45 days old, which
+# works as a staleness alarm.
 
 on:
   schedule:

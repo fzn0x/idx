@@ -30,6 +30,38 @@ account, holding or token field.
 | market_session.json | `/company-price-feed/market-time/session` | `detail.regular.state_name`, e.g. `STATE_NAME_MARKET_CLOSED` |
 | unauthorized.json | any route with an invalid bearer | HTTP 401 `{"error_type":"UNAUTHORIZED","message":"Unauthorized"}` |
 
+## Recorded by 0xrsydn/idx-cli
+
+The files in this table were recorded by the reference CLI 0xrsydn/idx-cli (MIT
+License, Copyright (c) 2026 idx-cli contributors) on 2026-11-03 with a real session,
+GET only, and are copied byte for byte from its `crates/idx-core/tests/fixtures/` at
+commit be9d17b (file name there: `stockbit_exodus_<name>`, or `stockbit_<name>` for the
+block page). They were checked for user data (user ids, e-mail addresses, names of the
+account holder, `is_holding_exist`, JWTs) before they were copied: there is none.
+
+| file | request | notes |
+| --- | --- | --- |
+| corpaction_dividend.json | `/corpaction/dividend` | market-wide cash dividends, 21 rows, cum dates 2025-11-12 .. 2026-11-11, plus `"today":"2026-11-03"`. Row fields `dividend_{cumdate,exdate,recdate,paydate,value,currency,id}` (`value` a string, `currency` `CURRENCY_IDR`), `event_note`, `lastprice` |
+| corpaction_dividend_bbca.json | `/corpaction/dividend?symbol=BBCA` | BBCA's cash dividends, 37 rows, 2026-08-28 back to 2009-06-09 |
+| corpaction_stock_dividend.json | `/corpaction/stock_dividend` | `{"stock_dividend":[]}`: empty on the recording day |
+| corpaction_bonus.json | `/corpaction/bonus` | bonus shares: `sahambonus_{ratio,id}` (ratio `"6 : 4"`) and the dates and terms under `stocksplit_*` names (`cumdate`, `exdate`, `recdate`, `paymentdate`, `old`, `new`, `factor`); `sahambonus_new_price: 0` is a placeholder |
+| corpaction_rightissue.json | `/corpaction/rightissue` | `rightissue_{cumdate,exdate,recdate,old,new,ratio,price,factor,trading_start,trading_end,id}`; `price` a number; decoys `rightissue_adj_factor`, `_price_factor`, `_price_adj` are 0 |
+| corpaction_warrant.json | `/corpaction/warrant` | 36 rows: BRNA's company warrant and 35 structured warrants whose `company_symbol` is the warrant's own 10-character code (`ASIIZPCN7A`); `wrant_{trading_from,trading_end,exc_from,exc_end,exc_price,id}` |
+| corpaction_stocksplit.json | `/corpaction/stocksplit` | market-wide splits, `stocksplit_{cumdate,exdate,recdate,old,new,ratio,factor,id}` |
+| corpaction_stocksplit_bbca.json | `/corpaction/stocksplit?symbol=BBCA` | BBCA's splits: 2021 1 : 5, 2008 and 2004 1 : 2 |
+| corpaction_reversesplit.json | `/corpaction/reversesplit` | `{"stock_reverse":[]}`: the list key is not the path type; empty on the recording day |
+| corpaction_rups.json | `/corpaction/rups` | 47 meetings, 2026-11-03 .. 2026-12-09: the market list starts on the recording day. `rups_{date,time,venue,eligible_date,id}`, `company_name` often `""` |
+| corpaction_rups_bbca.json | `/corpaction/rups?symbol=BBCA` | BBCA's meetings back to 2020; venues contain newlines and tabs |
+| corpaction_pubex.json | `/corpaction/pubex` | public exposes 2026-11-03 .. 2026-11-24, `puexp_{date,time,venue,id}` (`time` `"13:00:00"`) |
+| corpaction_pubex_bbca.json | `/corpaction/pubex?symbol=BBCA` | BBCA's six exposes back to 2021; tabs in a venue |
+| corpaction_ipo.json | `/corpaction/ipo` | 15 listings 2025-11-06 .. 2026-09-26: `ipo_listing_date`, `company_name`, `ipo_price.final`, `ipo_data_detail.{shares,percentage,offering_start,offering_end}`; ETF listings carry the placeholders `0`, `""` and `0001-01-01 00:00:00` |
+| corpaction_tenderoffer.json | `/corpaction/tenderoffer` | `{"tender":[..]}` (list key `tender`): `tender_{start,end,paydate,price,shares,percentage,id}`, `company_name`; AUTO at 3,600 for 238,442,293 shares (4.95 %) |
+| majorholder.json | `/insider/company/majorholder?page=1` | market-wide movements, `is_more: true`; an excerpt (8 rows) of a 50-row page. Row: `id` (the holder's id, not the row's), `name`, `symbol`, `date` (`"02 Nov 26"`), `previous` / `current` / `changes` (`value` shares as `"+2,500,000"`, `percentage` as `"+0.07"`), `action_type` (`ACTION_TYPE_BUY`, `_SELL`, `_TRANSFER`, `_RIGHT_ISSUE`), `data_source.type` (`SOURCE_TYPE_IDX` / `_KSEI`), `nationality`, `badges`, `price.raw.value`, `value.raw.value`, `is_estimated_price` (true on the KSEI rows, whose `price_formatted` is empty), `purpose`, `broker_detail.{code,group}`. BUVA's rights-issue row: `changes.value "0"` with `percentage "-0.97"` |
+| majorholder_p2.json | `/insider/company/majorholder?page=2` | `is_more: false`; 6 rows: crossings (ENRG, purpose `Reverse REPO`; one with an estimated price), `PRIVATE_PLACEMENT` (purpose `PMTHMETD`), `TENDER_OFFER` |
+| majorholder_bbca.json | `/insider/company/majorholder?page=1&symbol=BBCA` | 8 director and commissioner buys at 6,982 on 2026-03-25 (a share plan); `badges` `SHAREHOLDER_BADGE_DIREKTUR` / `_KOMISARIS`; stakes such as `"0.0003"` |
+| majorholder_bbca_p2.json | `/insider/company/majorholder?page=2&symbol=BBCA` | `is_more: false`; 4 rows from 2024-03-22 at 10,108 |
+| blocked_403.html | any exodus route, from a network Stockbit's CDN refuses | HTTP 403 HTML page from CloudFront ("The request could not be satisfied"). Not a refused token: a refresh cannot help, so idx reports it and does not retry (a refused token is a 401, or a 403 with a JSON body such as `unauthorized.json`) |
+
 Constructed, not recorded (the tokens inside are dummies signed by nobody):
 
 | file | stands for | why constructed |
