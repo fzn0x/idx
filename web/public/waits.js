@@ -13,7 +13,7 @@ const IPOT_SLOW = `IPOT sometimes answers 404 before the data; each one is retri
 const YAHOO = { on: "Yahoo Finance" };
 
 export const WAITS = {
-  quote: YAHOO, history: YAHOO, profile: YAHOO, financials: YAHOO, earnings: YAHOO, fundamental: YAHOO, technical: YAHOO, dividends: YAHOO,
+  quote: YAHOO, history: YAHOO, intraday: YAHOO, profile: YAHOO, financials: YAHOO, earnings: YAHOO, fundamental: YAHOO, technical: YAHOO, dividends: YAHOO,
   compare: { on: "Yahoo Finance, one request per symbol" },
   returns: { on: "Yahoo Finance, one history per symbol and the benchmark" },
   screen: { on: "the board and Yahoo fundamentals", slow: "fundamental filters fetch each matching ticker, up to --max-fundamentals (20)" },

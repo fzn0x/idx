@@ -200,9 +200,13 @@ export function parseChart(body, period, interval) {
   const q = r.indicators?.quote?.[0] || {};
   const adj = r.indicators?.adjclose?.[0]?.adjclose || [];
   const candles = [];
+  // Multi-day intraday windows end with a row at the last trade time (16:14:43),
+  // a snapshot rather than a bar; bars start on the minute (parse.rs does the same).
+  const intraday = /^\d+[mh]$/.test(String(interval));
   for (let i = 0; i < ts.length; i++) {
     const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
     if ([o, h, l, c].some((v) => v == null)) continue;
+    if (intraday && ts[i] % 60 !== 0) continue;
     candles.push({
       time: wibIso(ts[i]),
       t: ts[i],

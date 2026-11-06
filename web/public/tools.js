@@ -1,4 +1,4 @@
-// The 36 MCP tools, each with its CLI command and, where the web terminal can
+// The 37 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host) and the
 // Stockbit realtime ones (they carry a personal account session).
@@ -10,6 +10,7 @@ export const TOOLS = [
   { tool: "idx_market", cli: "idx market overview", web: "market", what: "IHSG, breadth, gainers, losers, most traded" },
   { tool: "idx_quote", cli: "idx stocks quote BBCA,BBRI", web: "quote BBCA", what: "delayed quotes; one symbol adds a price chart" },
   { tool: "idx_history", cli: "idx stocks history BBCA --period 3mo", web: "history BBCA 3mo", what: "OHLCV candles" },
+  { tool: "idx_intraday", cli: "idx stocks intraday BBCA", web: "intraday BBCA", what: "the latest session by the minute: OHLCV bars, VWAP, change vs the previous close" },
   { tool: "idx_profile", cli: "idx stocks profile TLKM", web: "profile TLKM", what: "sector, industry, description, management" },
   { tool: "idx_financials", cli: "idx stocks financials ASII", web: "financials ASII", what: "income statement, balance sheet, cash flow" },
   { tool: "idx_earnings", cli: "idx stocks earnings TLKM", web: "earnings TLKM", what: "EPS vs estimates, next earnings date" },

@@ -172,12 +172,12 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="stmt">
-        <h3 class="stmt-title">For agents<small>idx mcp · 36 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 37 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
             <tr><td>idx_market</td><td>IHSG, breadth, movers</td></tr>
-            <tr><td>idx_quote · idx_history</td><td>quotes, OHLCV candles</td></tr>
+            <tr><td>idx_quote · idx_history · idx_intraday</td><td>quotes, OHLCV candles, the session by the minute</td></tr>
             <tr><td>idx_fundamental · idx_technical</td><td>verdict, signal</td></tr>
             <tr><td>idx_returns · idx_dividends</td><td>vs IHSG, TTM yield</td></tr>
             <tr><td>idx_screen · idx_news · idx_sentiment</td><td>filter, headlines, lexicon</td></tr>
@@ -191,13 +191,13 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_orderbook · idx_stockbit_*</td><td>realtime book, Stockbit login (opt-in)</td></tr>
           </tbody>
         </table>
-        <p class="foot"><a href="#cmd-h">All 36 tools with their CLI and web commands ↓</a></p>
+        <p class="foot"><a href="#cmd-h">All 37 tools with their CLI and web commands ↓</a></p>
       </div>
     </div>
   </section>
 
   <section class="section" aria-labelledby="cmd-h">
-    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 36 MCP tools, the CLI command behind each, and 28 that run in the web terminal</small></h2>
+    <h2 id="cmd-h" class="strip"><span class="cond">Daftar Perintah</span><small>Commands and tools · 37 MCP tools, the CLI command behind each, and 29 that run in the web terminal</small></h2>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -206,6 +206,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_market</td><td><code>idx market overview</code></td><td><a href="/terminal?cmd=market">market</a></td><td class="muted">IHSG, breadth, gainers, losers, most traded</td></tr>
             <tr><td>idx_quote</td><td><code>idx stocks quote BBCA,BBRI</code></td><td><a href="/terminal?cmd=quote%20BBCA">quote BBCA</a></td><td class="muted">delayed quotes; one symbol adds a price chart</td></tr>
             <tr><td>idx_history</td><td><code>idx stocks history BBCA --period 3mo</code></td><td><a href="/terminal?cmd=history%20BBCA%203mo">history BBCA 3mo</a></td><td class="muted">OHLCV candles</td></tr>
+            <tr><td>idx_intraday</td><td><code>idx stocks intraday BBCA</code></td><td><a href="/terminal?cmd=intraday%20BBCA">intraday BBCA</a></td><td class="muted">the latest session by the minute: OHLCV bars, VWAP, change vs the previous close</td></tr>
             <tr><td>idx_profile</td><td><code>idx stocks profile TLKM</code></td><td><a href="/terminal?cmd=profile%20TLKM">profile TLKM</a></td><td class="muted">sector, industry, description, management</td></tr>
             <tr><td>idx_financials</td><td><code>idx stocks financials ASII</code></td><td><a href="/terminal?cmd=financials%20ASII">financials ASII</a></td><td class="muted">income statement, balance sheet, cash flow</td></tr>
             <tr><td>idx_earnings</td><td><code>idx stocks earnings TLKM</code></td><td><a href="/terminal?cmd=earnings%20TLKM">earnings TLKM</a></td><td class="muted">EPS vs estimates, next earnings date</td></tr>

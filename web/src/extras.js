@@ -1,5 +1,5 @@
-// Ports of src/analysis/{returns,dividends}.rs and the news ordering in
-// src/service.rs, plus the ownership changes summary. Pure; shared by the
+// Ports of src/analysis/{returns,dividends,intraday}.rs and the news ordering
+// in src/service.rs, plus the ownership changes summary. Pure; shared by the
 // Worker API and tests so the web terminal agrees with the CLI.
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -8,6 +8,39 @@ const dateOnly = (iso) => String(iso).slice(0, 10);
 const addMonths = (d, n) => { const x = new Date(d + "T00:00:00Z"); const day = x.getUTCDate(); x.setUTCDate(1); x.setUTCMonth(x.getUTCMonth() + n); const last = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate(); x.setUTCDate(Math.min(day, last)); return x.toISOString().slice(0, 10); };
 const addDays = (d, n) => new Date(Date.parse(d + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+
+// ---- intraday --------------------------------------------------------------
+
+/** The candles of the last WIB date, oldest first (analysis::intraday::session_bars). */
+export function sessionBars(candles) {
+  if (!candles.length) return [];
+  const day = dateOnly(candles[candles.length - 1].time);
+  let i = candles.length;
+  while (i > 0 && dateOnly(candles[i - 1].time) === day) i--;
+  return candles.slice(i);
+}
+
+/**
+ * Summary of one session's bars (analysis::intraday::summary): first bar's
+ * open, highest high, lowest low, last close, the bars' volume and a VWAP of
+ * each bar's typical price (high + low + close) / 3, null without volume.
+ */
+export function intradaySummary(bars) {
+  if (!bars.length) return null;
+  const first = bars[0], last = bars[bars.length - 1];
+  let high = -Infinity, low = Infinity, volume = 0, weighted = 0;
+  for (const c of bars) {
+    high = Math.max(high, c.high);
+    low = Math.min(low, c.low);
+    volume += c.volume;
+    weighted += ((c.high + c.low + c.close) / 3) * c.volume;
+  }
+  return {
+    first_bar: first.time, last_bar: last.time, bars: bars.length,
+    open: first.open, high, low, close: last.close,
+    bars_volume: volume, vwap: volume > 0 ? r2(weighted / volume) : null,
+  };
+}
 
 // ---- returns ---------------------------------------------------------------
 
