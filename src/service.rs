@@ -166,6 +166,7 @@ pub async fn screen(
         opts.with_fundamentals || !fund_filters.is_empty() || opts.sort.needs_fundamentals();
     let mut checked = 0usize;
     let mut failed_live = 0usize;
+    let mut cause: Option<String> = None;
     let mut capped = false;
     if need_fund && !rows.is_empty() {
         scr::sort_rows(&mut rows, Key::Mcap, true);
@@ -192,6 +193,13 @@ pub async fn screen(
                     out.absorb_freshness(&f);
                     if f.stale_reason == Some(StaleReason::FetchFailed) {
                         failed_live += 1;
+                        if cause.is_none() {
+                            cause = f
+                                .warnings
+                                .iter()
+                                .find_map(|w| crate::providers::fetch_failed_cause(w))
+                                .map(str::to_string);
+                        }
                     }
                     if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
                         scr::apply_fundamentals(row, &f.data);
@@ -203,7 +211,8 @@ pub async fn screen(
         rows.retain(|r| scr::matches(r, &fund_filters));
         if failed_live > 0 {
             out.warnings.push(format!(
-                "fundamentals for {failed_live} of {checked} companies are stale cached copies: the live fetch failed"
+                "fundamentals for {failed_live} of {checked} companies are stale cached copies: the live fetch failed{}",
+                cause.map(|c| format!(" ({c})")).unwrap_or_default()
             ));
         }
         if capped {
@@ -1817,6 +1826,66 @@ mod tests {
         assert_eq!(err.exit_code(), 4);
         let err = compare(&Fake, &syms(&["BBCA"])).await.unwrap_err();
         assert_eq!(err.exit_code(), 2);
+    }
+
+    /// Fresh quotes; fundamentals only as stale copies after a failed fetch.
+    struct StaleFundamentals;
+
+    #[async_trait]
+    impl Provider for StaleFundamentals {
+        fn name(&self) -> &'static str {
+            "stale"
+        }
+        async fn quotes(&self, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let rows = symbols
+                .iter()
+                .map(|s| {
+                    let mut q = Quote::empty(s.clone(), "stale");
+                    q.price = Some(1_000.0);
+                    q.market_cap = Some(1e13);
+                    q
+                })
+                .collect();
+            Ok(Sourced::fresh(rows, "stale"))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+        async fn fundamentals(&self, s: &Symbol) -> Result<Sourced<Fundamentals>> {
+            let mut out = Sourced::fresh(Fundamentals::empty(s.clone(), "stale"), "stale");
+            out.cached = true;
+            out.stale = true;
+            out.stale_reason = Some(StaleReason::FetchFailed);
+            out.warnings = vec![crate::providers::fetch_failed_warning(
+                "error sending request for url (https://x.test/q): refused",
+            )];
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn screen_on_stale_fundamentals_names_the_failure_once() {
+        let universe: Vec<Issuer> = syms(&["BBCA", "BBRI"])
+            .into_iter()
+            .map(|symbol| Issuer { symbol, name: None })
+            .collect();
+        let opts = ScreenOptions {
+            filters: vec![],
+            sort: Key::Mcap,
+            descending: true,
+            limit: 0,
+            max_fundamentals: 10,
+            with_fundamentals: true,
+        };
+        let got = screen(&StaleFundamentals, &universe, &opts).await.unwrap();
+        assert_eq!(got.data.fundamentals_checked, 2);
+        // Live quotes, cached fundamentals: not all cached, but stale.
+        assert!(got.stale && !got.cached);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            got.warnings,
+            ["fundamentals for 2 of 2 companies are stale cached copies: the live fetch failed (error sending request for url (https://x.test/q): refused)"]
+        );
     }
     /// Quotes with fixed last-trade times, whatever is asked.
     struct Stamped;

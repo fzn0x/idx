@@ -50,6 +50,14 @@ pub fn fetch_failed_warning(why: &str) -> String {
     format!("live fetch failed ({why}); showing cached copy")
 }
 
+/// The cause inside a [`fetch_failed_warning`], or `None` for any other
+/// warning.
+pub fn fetch_failed_cause(warning: &str) -> Option<&str> {
+    warning
+        .strip_prefix("live fetch failed (")?
+        .strip_suffix("); showing cached copy")
+}
+
 impl<T> Sourced<T> {
     pub fn fresh(data: T, provider: &'static str) -> Self {
         Sourced {
@@ -573,6 +581,8 @@ mod tests {
             s.warnings,
             ["live fetch failed (boom); showing cached copy"]
         );
+        assert_eq!(fetch_failed_cause(&s.warnings[0]), Some("boom"));
+        assert_eq!(fetch_failed_cause("no data for BBCA"), None);
         let off = Sourced::from_fetched(1, "t", &fetched(Some(StaleReason::Offline), None));
         assert!(off.stale && off.warnings.is_empty());
         assert_eq!(off.stale_reason, Some(StaleReason::Offline));
