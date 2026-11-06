@@ -67,7 +67,7 @@ const facts = (root) => [
   "Tickers are IDX codes (`BBCA`, `TLKM`); the `.JK` suffix is optional and `^JKSE` is the IHSG composite.",
   "`idx -o json <command>` prints one envelope on stdout: `schema`, `provider`, `fetched_at`, `cached`, `stale`, `warnings`, `data`. Errors go to stderr as `{\"error\":{\"code\":...,\"message\":...},\"exit_code\":N}`.",
   exitCodesFact(read(root, "docs/json-output.md")),
-  "`idx mcp` serves the commands as typed MCP tools over stdio (`idx mcp --http` for URL-only clients); `idx mcp setup <client>` prints the registration for each agent.",
+  "`idx mcp` serves the commands as typed MCP tools over stdio (`idx mcp --http 127.0.0.1:8765` for URL-only clients); `idx mcp setup <client>` prints the registration for each agent.",
   "A value the source does not publish is `null`; nothing is estimated. Verdicts and signals are labelled rule-based heuristics, not investment advice.",
   "Every page below is Markdown; the same page as HTML drops the `.md` (`/docs/mcp`).",
 ];
