@@ -47,6 +47,7 @@ Once logged in, point any quote/history command at the provider:
 ```sh
 idx --provider stockbit stocks quote BBCA BBRI      # realtime, not delayed
 idx --provider stockbit stocks history BBCA --period 1mo
+idx --provider stockbit stocks intraday BBCA        # today's one-minute bars, realtime
 idx config set provider stockbit                    # make it the default
 ```
 
@@ -61,9 +62,14 @@ idx -o json stockbit orderbook TLKM | jq '.data.bids[0]'
 Sizes in the order book are **shares** (one IDX lot is 100 shares); values are
 IDR. History candle volumes are converted from Stockbit's lots to shares so they
 match the other providers. Stockbit chooses the candle granularity from the
-window — `1mo`/`3mo`/`1y` are daily, `5d`/intraday is hourly, `5y` is weekly —
-and a warning says so when it is not the daily bars the interval nominally asks
-for.
+window (`1mo`/`3mo`/`1y` are daily, `5d`/intraday is hourly, `1d` is
+one-minute, `5y` is weekly), and a warning says so when it is not the bar size
+the interval asks for.
+
+`stocks intraday` uses whichever provider is selected, so with
+`--provider stockbit` it shows today's realtime one-minute bars from your
+session during trading hours (none outside them; the quote still answers),
+while the default providers serve Yahoo's delayed bars without a login.
 
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run
