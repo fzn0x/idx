@@ -132,7 +132,7 @@ pub enum StocksCmd {
 
     /// Valuation, profitability, balance-sheet, growth and dividend ratios with a plain-language verdict.
     #[command(
-        after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). It is not investment advice."
+        after_help = "Examples:\n  idx stocks fundamental BBCA\n  idx -o json stocks fundamental TLKM | jq '.data.verdict'\n  idx -o json stocks fundamental ITMG | jq '.data | {currency, financial_currency}'\n\nThe verdict is a transparent rule score over public ratios (every rule that fires is listed). Negative shareholders' equity scores against the company and sets the P/B, ROE and debt/equity rules aside. When the statements are in another currency than the price (financial_currency USD, price in IDR), P/B, P/S and EV multiples mix the two, so P/B is not scored and the table marks them with *. It is not investment advice."
     )]
     Fundamental {
         #[arg(value_name = "SYMBOL")]

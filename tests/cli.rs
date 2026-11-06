@@ -860,6 +860,121 @@ fn msn_provider_is_selectable() {
         .stderr(predicate::str::contains("--provider auto"));
 }
 
+const QUOTE_SUMMARY: &str = "https://query2.finance.yahoo.com/v10/finance/quoteSummary";
+const FUNDAMENTAL_MODULES: &str =
+    "modules=assetProfile,summaryDetail,defaultKeyStatistics,financialData,price";
+
+#[test]
+fn negative_equity_is_adverse_in_the_merged_report() {
+    // GIAA on 2026-11-06: Yahoo blanks debt/equity but keeps a negative book
+    // value; `auto` asks MSN to fill the gaps, whose debt/equity is the
+    // placeholder -999.9999.
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        &format!("{QUOTE_SUMMARY}/GIAA.JK?{FUNDAMENTAL_MODULES}"),
+        "yahoo/quote_summary_fundamentals_giaa.json",
+    );
+    seed(
+        &sb.cache,
+        "https://services.bingapis.com/contentservices-finance.csautosuggest/api/v1/Query?query=GIAA&market=en-id",
+        "msn/autosuggest_giaa.json",
+    );
+    seed(
+        &sb.cache,
+        "https://assets.msn.com/service/Finance/Equities?ids=bkgq5r",
+        "msn/equities_giaa.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "fundamental", "GIAA"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &v["data"];
+    assert_eq!(v["schema"], "idx.fundamentals.v1");
+    assert_eq!(d["sources"][1], "msn:equities", "{d}");
+    assert!(d["health"]["debt_to_equity"].is_null(), "{d}");
+    assert_eq!(d["per_share"]["book_value"], -0.001);
+    assert_eq!(d["financial_currency"], "USD");
+    assert_eq!(d["verdict"]["label"], "overvalued");
+    assert_eq!(d["verdict"]["score"], -3);
+    assert_eq!(d["verdict"]["inputs_available"], 5);
+    let reasons = d["verdict"]["reasons"].to_string();
+    assert!(
+        reasons.contains("negative shareholders' equity"),
+        "{reasons}"
+    );
+    assert!(!reasons.contains("conservative"), "{reasons}");
+}
+
+#[test]
+fn usd_statements_do_not_score_pb() {
+    // ITMG on 2026-11-06: an IDR price over USD statements (P/B 14103).
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        &format!("{QUOTE_SUMMARY}/ITMG.JK?{FUNDAMENTAL_MODULES}"),
+        "yahoo/quote_summary_fundamentals_itmg.json",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "--provider",
+            "yahoo",
+            "-o",
+            "json",
+            "stocks",
+            "fundamental",
+            "ITMG",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &v["data"];
+    assert_eq!(d["currency"], "IDR");
+    assert_eq!(d["financial_currency"], "USD");
+    assert!(
+        d["valuation"]["price_to_book"].as_f64().unwrap() > 14000.0,
+        "the reported value is kept"
+    );
+    let reasons = d["verdict"]["reasons"].to_string();
+    assert!(!reasons.contains("is rich"), "{reasons}");
+    assert!(
+        reasons.contains("statements in USD and price in IDR: P/B rule skipped"),
+        "{reasons}"
+    );
+    assert_eq!(d["verdict"]["inputs_available"], 8);
+
+    idx(&sb.cache, &sb.config)
+        .args(["--provider", "yahoo", "stocks", "fundamental", "ITMG"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("14,103.31*"))
+        .stdout(predicate::str::contains("1.72 USD"))
+        .stdout(predicate::str::contains(
+            "* Statements in USD, price in IDR",
+        ));
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "fundamentals"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("financial_currency"));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "fundamental", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("financial_currency"));
+}
+
 #[test]
 fn ownership_import_and_queries_work_offline() {
     let sb = sandbox();
