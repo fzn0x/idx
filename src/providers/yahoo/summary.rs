@@ -126,7 +126,10 @@ pub fn parse_fundamentals(body: &str, symbol: &Symbol) -> Result<Fundamentals> {
 
     let mut f = Fundamentals::empty(symbol.clone(), SOURCE);
     f.name = text(price, "longName").or_else(|| text(price, "shortName"));
-    f.currency = text(price, "currency").or_else(|| text(fd, "financialCurrency"));
+    // The price's currency only: financialCurrency is the statements' and goes
+    // to its own field, so a missing price currency stays unknown rather than
+    // hiding a USD/IDR mix.
+    f.currency = text(price, "currency").or_else(|| text(sd, "currency"));
     // USD for coal, oil and gas, and airline issuers (ITMG, MEDC, GIAA): their
     // priceToBook, priceToSalesTrailing12Months and enterpriseTo* divide the
     // IDR price by USD figures, and bookValue, revenuePerShare, totalDebt and
@@ -425,6 +428,28 @@ mod tests {
         assert!((f.valuation.pe_trailing.unwrap() - 7.456572).abs() < 1e-6);
         assert_eq!(f.per_share.eps_ttm, Some(3258.87));
         assert_eq!(f.negative_equity(), Some(false));
+    }
+
+    #[test]
+    fn currency_never_falls_back_to_the_statement_currency() {
+        // The ITMG body without price.currency: summaryDetail also names the
+        // trading currency.
+        let mut body: Value = serde_json::from_str(ITMG).unwrap();
+        let r = body.pointer_mut("/quoteSummary/result/0").unwrap();
+        r["price"].as_object_mut().unwrap().remove("currency");
+        let f = parse_fundamentals(&body.to_string(), &sym("ITMG")).unwrap();
+        assert_eq!(f.currency.as_deref(), Some("IDR"));
+        assert!(f.mixed_currency());
+
+        // Without either, the price currency is unknown, not USD.
+        let r = body.pointer_mut("/quoteSummary/result/0").unwrap();
+        r["summaryDetail"]
+            .as_object_mut()
+            .unwrap()
+            .remove("currency");
+        let f = parse_fundamentals(&body.to_string(), &sym("ITMG")).unwrap();
+        assert_eq!(f.currency, None);
+        assert_eq!(f.financial_currency.as_deref(), Some("USD"));
     }
 
     #[test]

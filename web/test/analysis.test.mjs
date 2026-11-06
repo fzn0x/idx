@@ -128,6 +128,19 @@ test("USD statements: ITMG's P/B is not scored, BBCA's is", () => {
   assert.ok(an.verdict(same).reasons.some((x) => x.includes("is rich")));
 });
 
+test("currency is the price's, never the statements'", () => {
+  // The ITMG body without price.currency: summaryDetail names it too.
+  const r = JSON.parse(fixture("yahoo/quote_summary_fundamentals_itmg.json")).quoteSummary.result[0];
+  delete r.price.currency;
+  let f = y.parseFundamentals(r, "ITMG");
+  assert.equal(f.currency, "IDR");
+  assert.ok(an.mixedCurrency(f));
+  delete r.summaryDetail.currency;
+  f = y.parseFundamentals(r, "ITMG");
+  assert.equal(f.currency, null, "unknown, not USD");
+  assert.equal(f.financial_currency, "USD");
+});
+
 test("earnings parse: padded zero quarters become null", () => {
   const r = JSON.parse(fixture("yahoo/quote_summary_statements_bbca.json")).quoteSummary.result[0];
   const e = y.parseEarnings(r, "BBCA");
