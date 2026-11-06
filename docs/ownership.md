@@ -223,6 +223,10 @@ Safety:
   write transaction into the live file. Other idx processes reading it (an
   `idx mcp` call) keep their view until they finish; nothing is renamed or
   deleted under them.
+- One sync of a database runs at a time: parallel calls of one `idx mcp`
+  wait for each other, and other idx processes wait on an exclusive SQLite
+  lock on `<database>.sync.lock`, an empty file left in place. A sync that
+  waited finds the database up to date instead of installing it twice.
 - The installed file keeps the snapshot's `snapshot_info` table (generated_at,
   built_by, content digest, the months and file hashes it held), which is how
   `sync` and `status` recognise it later. Queries ignore it.

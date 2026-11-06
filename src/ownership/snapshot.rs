@@ -22,13 +22,15 @@
 //! database has without `force` ([`plan`] decides). The swap goes through
 //! SQLite's online backup API: one write transaction into the live file, so
 //! a reader (an `idx mcp` call) keeps its view until it finishes and nothing
-//! is renamed under it. `idx ownership status` ([`status`]) reports both
-//! sides without writing anything.
+//! is renamed under it. Syncs of one database run one at a time
+//! ([`lock_path`]). `idx ownership status` ([`status`]) reports both sides
+//! without writing anything.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, SubsecRound, Utc};
 use rusqlite::backup::{Backup, StepResult};
@@ -697,9 +699,76 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// `{dir}/.{stem}-{pid}-{n}.tmp`, unique per call: two installs in one
+/// process (parallel calls of `idx mcp`) never share a file.
+fn unique_tmp(dir: &Path, stem: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(".{stem}-{}-{n}.tmp", std::process::id()))
+}
+
 /// `<database>.bak`: the copy `sync` keeps of a database it replaces.
 pub fn backup_path(db_path: &Path) -> PathBuf {
     sidecar(db_path, ".bak")
+}
+
+/// `<database>.sync.lock`: the empty SQLite file a sync holds an exclusive
+/// lock on, so syncs from several idx processes run one at a time. It stays
+/// in place; the operating system drops the lock when a process ends.
+pub fn lock_path(db_path: &Path) -> PathBuf {
+    sidecar(db_path, ".sync.lock")
+}
+
+/// Serializes syncs within this process (parallel `idx mcp` calls).
+static SYNCING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Held for a whole sync. Fields drop in order: the file lock first, then
+/// the process-wide mutex.
+struct SyncLock {
+    _file: Connection,
+    _process: tokio::sync::MutexGuard<'static, ()>,
+}
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Waits (up to `wait`) until no other sync of `db_path` runs, in this
+/// process or another one.
+async fn lock_sync(db_path: &Path, wait: Duration) -> Result<SyncLock> {
+    let process = SYNCING.lock().await;
+    let path = lock_path(db_path);
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let err = db_err(&path);
+    let file = Connection::open(&path).map_err(&err)?;
+    file.busy_timeout(Duration::ZERO).map_err(&err)?;
+    let started = Instant::now();
+    loop {
+        match file.execute_batch("BEGIN EXCLUSIVE") {
+            Ok(()) => {
+                return Ok(SyncLock {
+                    _file: file,
+                    _process: process,
+                })
+            }
+            Err(e) if is_busy(&e) && started.elapsed() < wait => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(e) if is_busy(&e) => {
+                return Err(IdxError::Other(format!(
+                    "another idx is syncing the ownership database {} ({} is locked); try again when it finishes",
+                    db_path.display(),
+                    path.display()
+                )))
+            }
+            Err(e) => return Err(err(e)),
+        }
+    }
 }
 
 fn invalid(m: &SnapshotManifest, msg: impl std::fmt::Display) -> IdxError {
@@ -930,7 +999,7 @@ pub fn install(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "ownership.sqlite".into());
-    let tmp = TempFile(dir.join(format!(".{name}.snapshot-{}.tmp", std::process::id())));
+    let tmp = TempFile(unique_tmp(dir, &format!("{name}.snapshot")));
     decompress(gz, &tmp.0, m)?;
     validate(&tmp.0, m)?;
     let bak = keep_backup.then(|| backup_path(db_path));
@@ -965,7 +1034,9 @@ fn index_months(ix: &MirrorIndex) -> BTreeMap<NaiveDate, String> {
 /// `idx ownership sync`: brings the database at `db_path` up to date from
 /// the mirror at `base` (see [`plan`]), then imports the mirror's monthly
 /// files the database still lacks (months newer than the snapshot, or all of
-/// them when there is no snapshot or the database was kept).
+/// them when there is no snapshot or the database was kept). One sync of a
+/// database runs at a time; a second one waits for it and then finds the
+/// database up to date.
 pub async fn sync(
     db_path: &Path,
     base: &str,
@@ -973,6 +1044,7 @@ pub async fn sync(
     timeout: Duration,
 ) -> Result<Sourced<SyncReport>> {
     let timeout = timeout.max(MIN_TIMEOUT);
+    let _lock = lock_sync(db_path, timeout).await?;
     let mut warnings = Vec::new();
     let manifest = fetch_manifest(base, timeout).await?;
     let index = match mirror::index(base, timeout).await {
@@ -1238,7 +1310,7 @@ pub fn build(
     std::fs::create_dir_all(out)?;
     let generated_at = generated_at.trunc_subsecs(0);
     let stamp = generated_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let tmp = TempFile(out.join(format!(".build-{}.sqlite", std::process::id())));
+    let tmp = TempFile(unique_tmp(out, "build"));
     let _ = std::fs::remove_file(&tmp.0);
     let err = db_err(db_path);
     {
@@ -1954,5 +2026,107 @@ mod tests {
             one,
             "text 1 differs from integer 1"
         );
+    }
+
+    // ---- sync against a file:// mirror ----------------------------------
+
+    /// A `file://` URL for a directory, as `IDX_OWNERSHIP_MIRROR` takes it.
+    fn file_url(dir: &Path) -> String {
+        let p = dir.display().to_string().replace('\\', "/");
+        if p.starts_with('/') {
+            format!("file://{p}")
+        } else {
+            format!("file:///{p}")
+        }
+    }
+
+    /// The monthly files of a mirror in `dir` and their index.json.
+    fn write_index(dir: &Path, files: &[(&str, Vec<u8>)]) {
+        let releases: Vec<serde_json::Value> = files
+            .iter()
+            .map(|(as_of, bytes)| {
+                let file = format!("ksei-above1-{as_of}.xlsx");
+                std::fs::write(dir.join(&file), bytes).unwrap();
+                serde_json::json!({
+                    "as_of": as_of, "format": "xlsx", "file": file, "sha256": sha256_hex(bytes),
+                })
+            })
+            .collect();
+        let index = serde_json::json!({"schema": mirror::INDEX_SCHEMA, "releases": releases});
+        std::fs::write(dir.join("index.json"), index.to_string()).unwrap();
+    }
+
+    fn july_august() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("2026-07-31", std::fs::read(JULY).unwrap()),
+            ("2026-08-31", std::fs::read(AUGUST).unwrap()),
+        ]
+    }
+
+    /// A mirror under `root`: the snapshot of July and August and both as
+    /// monthly files. Returns its directory and base URL.
+    fn snapshot_mirror(root: &Path) -> (PathBuf, String) {
+        let dir = root.join("mirror");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = root.join("mirror-src.sqlite");
+        imported_db(&src, &[JULY, AUGUST]);
+        build(&src, &dir, None, t0()).unwrap();
+        write_index(&dir, &july_august());
+        let base = file_url(&dir);
+        (dir, base)
+    }
+
+    const T: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn temp_files_are_unique_per_call() {
+        let dir = Path::new("x");
+        assert_ne!(unique_tmp(dir, "o.snapshot"), unique_tmp(dir, "o.snapshot"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_syncs_run_one_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        let (_, base) = snapshot_mirror(root.path());
+        let live = root.path().join("live").join("ownership.sqlite");
+        let tasks: Vec<_> = (0..4)
+            .map(|_| {
+                let (live, base) = (live.clone(), base.clone());
+                tokio::spawn(async move { sync(&live, &base, false, T).await })
+            })
+            .collect();
+        let mut actions = Vec::new();
+        for t in tasks {
+            actions.push(t.await.unwrap().unwrap().data.action);
+        }
+        let count = |a: SyncAction| actions.iter().filter(|x| **x == a).count();
+        assert_eq!(
+            (count(SyncAction::Installed), count(SyncAction::UpToDate)),
+            (1, 3),
+            "{actions:?}"
+        );
+        assert!(!backup_path(&live).exists(), "nothing was replaced");
+        assert!(leftovers(live.parent().unwrap()).is_empty());
+        assert_eq!(inspect(&live).unwrap().months.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_sync_waits_for_one_in_another_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("o.sqlite");
+        // Another idx process holding the lock, as SQLite sees it.
+        let other = Connection::open(lock_path(&live)).unwrap();
+        other.busy_timeout(Duration::ZERO).unwrap();
+        other.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let e = lock_sync(&live, Duration::from_millis(300))
+            .await
+            .err()
+            .expect("locked");
+        assert!(e.to_string().contains("another idx is syncing"), "{e}");
+        other.execute_batch("COMMIT").unwrap();
+        let held = lock_sync(&live, Duration::from_millis(300)).await.unwrap();
+        assert!(other.execute_batch("BEGIN EXCLUSIVE").is_err());
+        drop(held);
+        other.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
     }
 }
