@@ -3872,6 +3872,16 @@ fn mcp_setup_prints_recipes_offline() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Bearer t0k"));
+    // --npx: the ihsg-mcp npm package, which runs `idx mcp` by itself.
+    idx(&sb.cache, &sb.config)
+        .args(["mcp", "setup", "claude-code", "--npx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "claude mcp add --scope user idx -- ",
+        ))
+        .stdout(predicate::str::contains("npx -y ihsg-mcp\n"))
+        .stdout(predicate::str::contains("ihsg-cli").not());
     idx(&sb.cache, &sb.config)
         .args(["mcp", "setup", "nope"])
         .assert()

@@ -8,25 +8,89 @@
 use serde::Serialize;
 use serde_json::json;
 
+/// The npm package whose only command runs `idx mcp` (`npm-mcp/` in this
+/// repository); it downloads and verifies the idx binary on first start.
+pub const NPM_MCP_PACKAGE: &str = "ihsg-mcp";
+
 /// How the client should launch or reach idx.
 #[derive(Debug, Clone)]
 pub enum Launcher {
     /// Absolute path of the idx binary, run as `idx mcp`.
     Binary(String),
-    /// `npx -y ihsg-cli mcp` (no install step).
+    /// `npx -y ihsg-mcp` (npm package, no install step); `cmd /c npx -y
+    /// ihsg-mcp` on Windows, where clients start commands without a shell
+    /// and npx is a .cmd script.
     Npx,
     /// A running `idx mcp --http` endpoint, usually behind a tunnel.
     Http { url: String, token: Option<String> },
+}
+
+/// The npx command line for a client on Windows (`windows`) or elsewhere.
+fn npx_command(windows: bool) -> (String, Vec<String>) {
+    let args = ["-y", NPM_MCP_PACKAGE];
+    if windows {
+        let all = ["/c", "npx"].iter().chain(&args);
+        ("cmd".into(), all.map(|s| s.to_string()).collect())
+    } else {
+        ("npx".into(), args.iter().map(|s| s.to_string()).collect())
+    }
+}
+
+/// Caveats of the Windows npx form (`cmd /c npx ...`, which only a Windows
+/// host prints) for a recipe whose launcher is `command args`.
+fn cmd_c_notes(command: &str, args: &[String], steps: &[Step]) -> Vec<String> {
+    if command != "cmd" || args.first().map(String::as_str) != Some("/c") {
+        return Vec::new();
+    }
+    let mut notes = vec![format!(
+        "`cmd /c` is the Windows form: a config file also used on macOS or Linux, such as one committed with a project, needs the plain `npx -y {NPM_MCP_PACKAGE}` command (what `idx mcp setup <client> --npx` prints there)."
+    )];
+    // Git Bash (MSYS) rewrites an argument that is exactly `/c` into `C:/`.
+    let typed = steps.iter().any(|s| {
+        s.lang == "sh"
+            && s.body
+                .lines()
+                .any(|l| shell_words(l).iter().any(|w| w == "/c"))
+    });
+    if typed {
+        notes.push("In Git Bash, which turns a lone `/c` into `C:/`, start the command with `MSYS_NO_PATHCONV=1` or write `cmd //c`; PowerShell and cmd.exe take it as printed.".into());
+    }
+    notes
+}
+
+/// The arguments a POSIX shell passes for `line`: quotes and backslashes
+/// removed, a word starting with `#` opens a comment. Enough for the command
+/// lines this module prints.
+fn shell_words(line: &str) -> Vec<String> {
+    let (mut words, mut word) = (Vec::new(), None::<String>);
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') | (None, '\\') => {
+                let w = word.get_or_insert_with(String::new);
+                w.extend(chars.next());
+            }
+            (Some(_), c) => word.get_or_insert_with(String::new).push(c),
+            (None, '"' | '\'') => {
+                quote = Some(ch);
+                word.get_or_insert_with(String::new);
+            }
+            (None, '#') if word.is_none() => break,
+            (None, c) if c.is_whitespace() => words.extend(word.take()),
+            (None, c) => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    words
 }
 
 impl Launcher {
     fn command(&self) -> (String, Vec<String>) {
         match self {
             Launcher::Binary(p) => (p.clone(), vec!["mcp".into()]),
-            Launcher::Npx => (
-                "npx".into(),
-                vec!["-y".into(), "ihsg-cli".into(), "mcp".into()],
-            ),
+            Launcher::Npx => npx_command(cfg!(windows)),
             Launcher::Http { .. } => (String::new(), vec![]),
         }
     }
@@ -838,7 +902,9 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
                         "export IDX_MCP_TOKEN={token}\n{} --http 127.0.0.1:8765 --allowed-host '*'",
                         match l {
                             Launcher::Binary(p) => format!("{p} mcp"),
-                            _ => "idx mcp".into(),
+                            // Typed into a terminal, where npx resolves on every OS.
+                            Launcher::Npx => format!("npx -y {NPM_MCP_PACKAGE}"),
+                            Launcher::Http { .. } => "idx mcp".into(),
                         }
                     ),
                 ));
@@ -856,6 +922,10 @@ pub fn setup(client: &'static Client, l: &Launcher) -> Setup {
             notes.push("These products never launch local processes, so idx has to be reachable over HTTPS. Keep the token: the endpoint exposes your machine's network access to Yahoo and friends.".into());
         }
         _ => {}
+    }
+    if client.kind != Kind::Remote {
+        let (c, a) = l.command();
+        notes.extend(cmd_c_notes(&c, &a, &steps));
     }
 
     Setup {
@@ -1020,7 +1090,180 @@ mod tests {
             v["mcpServers"]["idx"]["headers"]["Authorization"],
             "Bearer s3cret"
         );
-        let npx = setup(find("claude-code").unwrap(), &Launcher::Npx);
-        assert!(npx.steps[0].body.contains("npx -y ihsg-cli mcp"));
+    }
+
+    #[test]
+    fn npx_recipes_run_the_ihsg_mcp_package() {
+        // The command a client spawns, on both kinds of host.
+        assert_eq!(
+            npx_command(false),
+            ("npx".to_string(), vec!["-y".to_string(), "ihsg-mcp".into()])
+        );
+        assert_eq!(
+            npx_command(true),
+            (
+                "cmd".to_string(),
+                vec!["/c", "npx", "-y", "ihsg-mcp"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        let l = Launcher::Npx;
+        let (cmd, args) = npx_command(cfg!(windows));
+        let line = if cfg!(windows) {
+            "cmd /c npx -y ihsg-mcp"
+        } else {
+            "npx -y ihsg-mcp"
+        };
+        assert_eq!(l.shell(), line);
+
+        let claude = setup(find("claude-code").unwrap(), &l);
+        assert_eq!(
+            claude.steps[0].body,
+            format!("claude mcp add --scope user idx -- {line}")
+        );
+        assert_eq!(claude.launcher, line);
+        let cursor = setup(find("cursor").unwrap(), &l);
+        let v: serde_json::Value = serde_json::from_str(&cursor.steps[0].body).unwrap();
+        assert_eq!(v["mcpServers"]["idx"]["command"], cmd.as_str());
+        assert_eq!(v["mcpServers"]["idx"]["args"], json!(args));
+        let codex = setup(find("codex").unwrap(), &l);
+        assert!(codex.steps[1].body.contains(&format!(
+            "command = {}\nargs = {}",
+            toml_str(&cmd),
+            toml_arr(&args)
+        )));
+
+        // ChatGPT's first step is typed into a terminal, where plain npx works
+        // on every OS; it must not tell the user to run an `idx` they lack.
+        let chatgpt = setup(find("chatgpt").unwrap(), &l);
+        assert!(chatgpt.steps[0]
+            .body
+            .contains("\nnpx -y ihsg-mcp --http 127.0.0.1:8765 --allowed-host '*'"));
+
+        // Every client: the package name, never the old `ihsg-cli mcp` form
+        // (the package runs `idx mcp` itself, so no `mcp` argument follows),
+        // and every JSON entry launches exactly the npx command.
+        fn values<'a>(v: &'a serde_json::Value, key: &str, out: &mut Vec<&'a serde_json::Value>) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k, x) in m {
+                        if k == key {
+                            out.push(x);
+                        }
+                        values(x, key, out);
+                    }
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|x| values(x, key, out)),
+                _ => {}
+            }
+        }
+        let mut full = vec![cmd.clone()];
+        full.extend(args.clone());
+        for c in CLIENTS {
+            let s = setup(c, &l);
+            let text = render(&s);
+            assert!(!text.contains("ihsg-cli"), "{}: old package\n{text}", c.id);
+            assert!(!text.contains("ihsg-mcp mcp"), "{}:\n{text}", c.id);
+            if c.kind != Kind::Remote {
+                assert!(text.contains("ihsg-mcp"), "{}:\n{text}", c.id);
+            }
+            for st in &s.steps {
+                if st.lang != "json" {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_str(&st.body)
+                    .unwrap_or_else(|e| panic!("{}: invalid JSON {e}\n{}", c.id, st.body));
+                let (mut a, mut cmds) = (Vec::new(), Vec::new());
+                values(&v, "args", &mut a);
+                values(&v, "command", &mut cmds);
+                for x in a {
+                    assert_eq!(x, &json!(args), "{}: {}", c.id, st.body);
+                }
+                for x in cmds {
+                    // OpenCode takes the command line as one array.
+                    assert!(
+                        x == &json!(cmd) || x == &json!(full),
+                        "{}: {}",
+                        c.id,
+                        st.body
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_words_split_like_a_posix_shell() {
+        let w = |s: &str| shell_words(s);
+        assert_eq!(
+            w("claude mcp add idx -- cmd /c npx"),
+            ["claude", "mcp", "add", "idx", "--", "cmd", "/c", "npx"]
+        );
+        assert_eq!(
+            w("droid mcp add idx \"cmd /c npx -y ihsg-mcp\""),
+            ["droid", "mcp", "add", "idx", "cmd /c npx -y ihsg-mcp"]
+        );
+        assert_eq!(
+            w(r#"code --add-mcp "{\"args\":[\"/c\"]}""#),
+            ["code", "--add-mcp", r#"{"args":["/c"]}"#]
+        );
+        assert_eq!(
+            w("goose configure   # command: cmd /c npx"),
+            ["goose", "configure"]
+        );
+        assert_eq!(w("a '' b'#c' d#e"), ["a", "", "b#c", "d#e"]);
+    }
+
+    #[test]
+    fn windows_npx_form_carries_its_caveats() {
+        let (wc, wa) = npx_command(true);
+        let (pc, pa) = npx_command(false);
+        let sh = |body: &str| vec![step("Register", None, "sh", body.into())];
+        let typed = sh("claude mcp add --scope user idx -- cmd /c npx -y ihsg-mcp");
+        let n = cmd_c_notes(&wc, &wa, &typed);
+        assert_eq!(n.len(), 2, "{n:?}");
+        assert!(n[0].contains("macOS or Linux") && n[0].contains("`npx -y ihsg-mcp`"));
+        assert!(n[1].contains("MSYS_NO_PATHCONV=1") && n[1].contains("cmd //c"));
+        assert_eq!(
+            cmd_c_notes(&wc, &wa, &sh("kiro-cli mcp add --args /c")).len(),
+            2
+        );
+        // One quoted argument, a JSON file and a comment pass no lone `/c`.
+        for body in [
+            "droid mcp add idx \"cmd /c npx -y ihsg-mcp\"",
+            "goose configure   # command: cmd /c npx -y ihsg-mcp",
+        ] {
+            assert_eq!(cmd_c_notes(&wc, &wa, &sh(body)).len(), 1, "{body}");
+        }
+        let file = vec![step("File", None, "json", r#"{"args": ["/c"]}"#.into())];
+        assert_eq!(cmd_c_notes(&wc, &wa, &file).len(), 1);
+        // Neither the plain npx form nor a binary path has these caveats.
+        assert!(cmd_c_notes(&pc, &pa, &typed).is_empty());
+        assert!(cmd_c_notes("/opt/idx/bin/idx", &["mcp".into()], &typed).is_empty());
+
+        // Through setup(), on whichever host runs the test.
+        let notes = |id: &str| setup(find(id).unwrap(), &Launcher::Npx).notes;
+        let has = |id: &str, s: &str| notes(id).iter().any(|n| n.contains(s));
+        for id in [
+            "claude-code",
+            "codex",
+            "gemini",
+            "copilot-cli",
+            "kiro",
+            "qwen",
+        ] {
+            assert_eq!(has(id, "MSYS_NO_PATHCONV"), cfg!(windows), "{id}");
+            assert_eq!(has(id, "macOS or Linux"), cfg!(windows), "{id}");
+        }
+        for id in ["cursor", "vscode", "droid", "goose", "zed", "opencode"] {
+            assert!(!has(id, "MSYS_NO_PATHCONV"), "{id}");
+            assert_eq!(has(id, "macOS or Linux"), cfg!(windows), "{id}");
+        }
+        assert!(!has("chatgpt", "cmd /c") && !has("chatgpt", "MSYS_NO_PATHCONV"));
+        let bin = Launcher::Binary("C:\\idx\\idx.exe".into());
+        let s = setup(find("claude-code").unwrap(), &bin);
+        assert!(!s.notes.iter().any(|n| n.contains("cmd /c")));
     }
 }

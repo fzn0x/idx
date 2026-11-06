@@ -36,7 +36,7 @@ pub struct McpArgs {
 pub enum McpCmd {
     /// Print the registration command or config snippet for an agent, with this binary's absolute path filled in.
     #[command(
-        after_help = "Examples:\n  idx mcp setup --list\n  idx mcp setup codex\n  idx mcp setup muse\n  idx mcp setup cursor --npx                       # launch through npx instead of a path\n  idx mcp setup chatgpt --http https://x.trycloudflare.com/mcp --token s3cret\n  idx -o json mcp setup claude-code                # machine-readable steps"
+        after_help = "Examples:\n  idx mcp setup --list\n  idx mcp setup codex\n  idx mcp setup muse\n  idx mcp setup cursor --npx                       # launch through npx (npm package ihsg-mcp) instead of a path\n  idx mcp setup chatgpt --http https://x.trycloudflare.com/mcp --token s3cret\n  idx -o json mcp setup claude-code                # machine-readable steps"
     )]
     Setup {
         /// Client id or alias (see --list): claude-code, codex, muse, antigravity, gemini, copilot-cli, vscode, cursor, windsurf, kiro, jetbrains, zed, cline, continue, opencode, goose, warp, droid, vibe, qwen, crush, trae, augment, chatgpt.
@@ -51,7 +51,7 @@ pub enum McpCmd {
         /// Bearer token to embed in the remote form.
         #[arg(long, value_name = "TOKEN", requires = "http")]
         token: Option<String>,
-        /// Use `npx -y ihsg-cli mcp` as the command instead of this binary's path.
+        /// Use `npx -y ihsg-mcp` (the npm MCP package; `cmd /c npx -y ihsg-mcp` on Windows) as the command instead of this binary's path.
         #[arg(long, conflicts_with = "http")]
         npx: bool,
     },

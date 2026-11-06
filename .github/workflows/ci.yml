@@ -45,11 +45,14 @@ jobs:
         with:
           node-version: 22
       - run: node --test web/test/*.mjs
+      - name: npm launchers (ihsg-cli, ihsg-mcp)
+        run: node --test npm/test/*.mjs
       - run: node --check web/src/worker.js
-      - name: Versions agree (Cargo.toml, package.json, npm/package.json)
+      - name: Versions agree (Cargo.toml, package.json, npm/package.json, npm-mcp/package.json)
         run: |
           cargo_ver="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
           root_ver="$(node -p "require('./package.json').version")"
           npm_ver="$(node -p "require('./npm/package.json').version")"
-          echo "Cargo.toml $cargo_ver · package.json $root_ver · npm/package.json $npm_ver"
-          [ "$cargo_ver" = "$root_ver" ] && [ "$cargo_ver" = "$npm_ver" ] || { echo "versions differ: bump all three together"; exit 1; }
+          mcp_ver="$(node -p "require('./npm-mcp/package.json').version")"
+          echo "Cargo.toml $cargo_ver · package.json $root_ver · npm/package.json $npm_ver · npm-mcp/package.json $mcp_ver"
+          [ "$cargo_ver" = "$root_ver" ] && [ "$cargo_ver" = "$npm_ver" ] && [ "$cargo_ver" = "$mcp_ver" ] || { echo "versions differ: bump all four together"; exit 1; }

@@ -186,11 +186,19 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
 
   npm:
-    # Publishes ihsg-cli to npm. Enable with NPM_PUBLISH=true, then either add an
-    # NPM_TOKEN secret or configure npm Trusted Publishing for this workflow.
+    # Publishes both npm packages: ihsg-cli (npm/, the CLI) and ihsg-mcp
+    # (npm-mcp/, `npx -y ihsg-mcp` runs `idx mcp`). Enable with
+    # NPM_PUBLISH=true, then either add an NPM_TOKEN secret or configure npm
+    # Trusted Publishing for this workflow on each package. Trusted Publishing
+    # can only be set up on a package that already exists, so a new package
+    # is published once by hand (with 2FA) before this job takes it over.
     needs: release
     runs-on: ubuntu-latest
     if: ${{ vars.NPM_PUBLISH == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [npm, npm-mcp]
     permissions:
       contents: read
       id-token: write
@@ -203,15 +211,16 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - name: Set version from tag
-        working-directory: npm
+        working-directory: ${{ matrix.dir }}
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           npm version --no-git-tag-version --allow-same-version "${tag#v}"
       - name: npm publish
-        working-directory: npm
+        working-directory: ${{ matrix.dir }}
         run: |
+          name="$(node -p "require('./package.json').name")"
           ver="$(node -p "require('./package.json').version")"
-          if npm view "ihsg-cli@$ver" version >/dev/null 2>&1; then echo "ihsg-cli $ver is already on npm"; exit 0; fi
+          if npm view "$name@$ver" version >/dev/null 2>&1; then echo "$name $ver is already on npm"; exit 0; fi
           npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
