@@ -91,6 +91,11 @@ test("graph walk like the CLI", () => {
   assert.deepEqual(amb.root, { holder: "GARIBALDI THOHIR" });
   assert.match(amb.warning, /^graph starts at GARIBALDI THOHIR; 1 other holder matches "thohir"/);
   assert.equal(own.rootFor(SEP, "ZZZZ", false, "ZZZZ"), null);
+  // A root whose stakes are all below minPct keeps its names, type and flag.
+  const tall = own.walk(SEP, { issuer: "AADI" }, 1, 99);
+  assert.deepEqual([tall.issuers[0].issuer_name, tall.holders.length, tall.links.length], ["ADARO ANDALAN INDONESIA Tbk", 0, 0]);
+  const dw = own.walk(SEP, { holder: "DWIMURIA INVESTAMA ANDALAN" }, 2, 60).holders[0];
+  assert.deepEqual([dw.holder, dw.investor_type, dw.local_foreign], ["PT DWIMURIA INVESTAMA ANDALAN", "CORPORATE", "L"]);
 });
 
 /** A D1 stand-in that answers by the first table named in the SQL. */

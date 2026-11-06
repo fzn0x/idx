@@ -1397,6 +1397,44 @@ fn ownership_analytics_work_offline() {
         .success()
         .stdout(predicate::str::contains("truncated"))
         .stderr(predicate::str::contains("stopped at 5 nodes"));
+    // A root whose stakes are all below --min-pct keeps its names, type and flag.
+    let out = own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "graph",
+            "AADI",
+            "--min-pct",
+            "99",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["data"]["issuers"][0]["issuer_name"],
+        "ADARO ANDALAN INDONESIA Tbk"
+    );
+    assert_eq!(v["data"]["links"].as_array().unwrap().len(), 0);
+    let out = own()
+        .args([
+            "-o",
+            "json",
+            "ownership",
+            "graph",
+            "PT Dwimuria Investama Andalan",
+            "--min-pct",
+            "60",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let root = &v["data"]["holders"][0];
+    assert_eq!(root["holder"], "PT DWIMURIA INVESTAMA ANDALAN");
+    assert_eq!(root["investor_type"], "CORPORATE");
+    assert_eq!(root["local_foreign"], "L");
     own().args(["ownership", "graph", "ZZZZ"]).assert().code(4);
     own()
         .args(["ownership", "graph", "AADI", "--depth", "0"])

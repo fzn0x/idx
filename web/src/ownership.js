@@ -149,11 +149,14 @@ export function rankConcentration(rows, by = "hhi", ascending = false) {
 export const issuerId = (s) => `ticker:${s}`;
 export const holderId = (k) => `holder:${k}`;
 
-/** Mirrors analytics::walk. root: {issuer: "AADI"} or {holder: "<entity_key>"}. */
+/**
+ * Mirrors analytics::walk. root: {issuer: "AADI"} or {holder: "<entity_key>"}. Links follow
+ * stakes of at least minPct; node names, types and flags come from every stake.
+ */
 export function walk(stakes, root, depth = 2, minPct = 0, maxNodes = 100) {
-  const kept = stakes.filter((s) => s.pct + EPS >= minPct);
+  const keeps = (s) => s.pct + EPS >= minPct;
   const byIssuer = new Map(), byHolder = new Map();
-  for (const s of kept) {
+  for (const s of stakes) {
     if (!byIssuer.has(s.symbol)) byIssuer.set(s.symbol, []);
     byIssuer.get(s.symbol).push(s);
     if (!byHolder.has(s.entity_key)) byHolder.set(s.entity_key, []);
@@ -169,8 +172,8 @@ export function walk(stakes, root, depth = 2, minPct = 0, maxNodes = 100) {
     const next = [];
     for (const node of frontier) {
       const neighbours = node.startsWith("ticker:")
-        ? (byIssuer.get(node.slice(7)) || []).map((x) => holderId(x.entity_key))
-        : (byHolder.get(node.slice(7)) || []).map((x) => issuerId(x.symbol));
+        ? (byIssuer.get(node.slice(7)) || []).filter(keeps).map((x) => holderId(x.entity_key))
+        : (byHolder.get(node.slice(7)) || []).filter(keeps).map((x) => issuerId(x.symbol));
       for (const n of neighbours) {
         if (hops.has(n)) continue;
         if (hops.size >= maxNodes) { truncated = true; break walking; }
@@ -193,7 +196,8 @@ export function walk(stakes, root, depth = 2, minPct = 0, maxNodes = 100) {
     }
   }
   const links = [];
-  for (const s of kept) {
+  for (const s of stakes) {
+    if (!keeps(s)) continue;
     const a = hops.get(holderId(s.entity_key)), b = hops.get(issuerId(s.symbol));
     if (a == null || b == null) continue;
     links.push({ from: holderId(s.entity_key), to: issuerId(s.symbol), holder: s.holder, symbol: s.symbol, shares_total: s.shares_total, pct: r4(s.pct), hops: Math.max(a, b) });

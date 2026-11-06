@@ -361,12 +361,15 @@ enum Node<'a> {
 /// `min_pct` percent. Within a hop, nodes expand in the order they were
 /// reached and each node's neighbours by percent (largest first), so
 /// `max_nodes` keeps the strongest links; reaching it stops the walk with
-/// `truncated`. Links are every holding between two reached nodes.
+/// `truncated`. Links are every holding between two reached nodes. Node
+/// attributes (holder name, type and flag from its largest position, the
+/// issuer name) come from every stake, so a root whose stakes are all
+/// below `min_pct` keeps them.
 pub fn walk(stakes: &[Stake], root: &Root, depth: usize, min_pct: f64, max_nodes: usize) -> Walk {
-    let kept: Vec<&Stake> = stakes.iter().filter(|s| s.pct + EPS >= min_pct).collect();
+    let keeps = |s: &Stake| s.pct + EPS >= min_pct;
     let mut by_issuer: HashMap<&str, Vec<&Stake>> = HashMap::new();
     let mut by_holder: HashMap<&str, Vec<&Stake>> = HashMap::new();
-    for s in &kept {
+    for s in stakes {
         by_issuer.entry(s.symbol.as_str()).or_default().push(s);
         by_holder.entry(s.entity_key.as_str()).or_default().push(s);
     }
@@ -392,13 +395,19 @@ pub fn walk(stakes: &[Stake], root: &Root, depth: usize, min_pct: f64, max_nodes
                     .get(s)
                     .map(|l| {
                         l.iter()
+                            .filter(|x| keeps(x))
                             .map(|x| Node::Holder(x.entity_key.as_str()))
                             .collect()
                     })
                     .unwrap_or_default(),
                 Node::Holder(k) => by_holder
                     .get(k)
-                    .map(|l| l.iter().map(|x| Node::Issuer(x.symbol.as_str())).collect())
+                    .map(|l| {
+                        l.iter()
+                            .filter(|x| keeps(x))
+                            .map(|x| Node::Issuer(x.symbol.as_str()))
+                            .collect()
+                    })
                     .unwrap_or_default(),
             };
             for n in neighbours {
@@ -448,8 +457,9 @@ pub fn walk(stakes: &[Stake], root: &Root, depth: usize, min_pct: f64, max_nodes
             }
         }
     }
-    let mut links: Vec<GraphLink> = kept
+    let mut links: Vec<GraphLink> = stakes
         .iter()
+        .filter(|s| keeps(s))
         .filter_map(|s| {
             let a = hops.get(&Node::Holder(s.entity_key.as_str()))?;
             let b = hops.get(&Node::Issuer(s.symbol.as_str()))?;
@@ -1101,6 +1111,32 @@ mod tests {
         assert_eq!(syms, ["TAPG", "ASSA", "AADI"]);
         assert_eq!(holder.links[0].from, "holder:PERMADI");
         assert_eq!(holder.links[0].to, "ticker:AADI");
+    }
+
+    #[test]
+    fn walk_names_nodes_from_every_stake() {
+        let mut s = graph_stakes();
+        let i = s.iter().position(|x| x.symbol == "BBCA").unwrap();
+        s[i] = Stake {
+            holder: "PT DWIMURIA".into(),
+            ..typed(s[i].clone(), "CORPORATE", "L")
+        };
+        // Every stake of the root is below --min-pct: no links, but the root
+        // keeps its name, type and flag.
+        let w = walk(&s, &Root::Holder("DWIMURIA".into()), 2, 60.0, 100);
+        assert!(w.issuers.is_empty() && w.links.is_empty());
+        let h = &w.holders[0];
+        assert_eq!(
+            (
+                h.holder.as_str(),
+                h.investor_type.as_deref(),
+                h.local_foreign.as_deref()
+            ),
+            ("PT DWIMURIA", Some("CORPORATE"), Some("L"))
+        );
+        let w = walk(&s, &Root::Issuer("AADI".into()), 1, 99.0, 100);
+        assert!(w.holders.is_empty() && w.links.is_empty());
+        assert_eq!(w.issuers[0].issuer_name.as_deref(), Some("AADI Tbk"));
     }
 
     #[test]
