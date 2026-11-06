@@ -203,7 +203,8 @@ sessions in a row, -2 = two distribution sessions) and
 `cumulative_net_value`), `reasons[]` and `rounded`. A range without trades
 reads `neutral` with a single reason. `foreign_net_value` over several
 sessions is rebuilt from single sessions as described for `idx.broker.v1`;
-`bandar screen` and `bandar broker` read their ranges the same way. With an
+`bandar screen` reads its ranges the same way, while `bandar broker`, which
+shows no foreign net, reads only the range pages. With an
 `investor` filter the brokers are that side's, while `total_value`,
 `total_lots` and every percentage stay those of the stock's value traded,
 read from the all-investor summary of the same range and board (one more

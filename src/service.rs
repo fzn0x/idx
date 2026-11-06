@@ -1296,24 +1296,23 @@ pub struct BandarScreenOptions {
 }
 
 /// One scanned ticker's range summary; owned arguments keep the stream's
-/// future general over lifetimes.
+/// future general over lifetimes. `foreign_net`: rebuild the range's foreign
+/// net from single sessions (see `ipot::broker_summary_range`); a caller
+/// that never shows the net reads the range page alone.
 async fn screen_summary(
     fetcher: &Arc<Fetcher>,
     symbol: Symbol,
     from: NaiveDate,
     to: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> (Symbol, Result<Sourced<BrokerSummary>>) {
-    let r = ipot::broker_summary_range(
-        fetcher,
-        &symbol,
-        from,
-        to,
-        BrokerInvestor::All,
-        BrokerBoard::All,
-        today,
-    )
-    .await;
+    let (investor, board) = (BrokerInvestor::All, BrokerBoard::All);
+    let r = if foreign_net {
+        ipot::broker_summary_range(fetcher, &symbol, from, to, investor, board, today).await
+    } else {
+        ipot::broker_summary(fetcher, &symbol, from, to, investor, board, today).await
+    };
     (symbol, r)
 }
 
@@ -1411,17 +1410,19 @@ async fn scan_end(
 }
 
 /// Every candidate's summary over `from..=end`, three at a time, then one
-/// sequential pass over provider failures (not unknown codes).
+/// sequential pass over provider failures (not unknown codes). `foreign_net`
+/// as for [`screen_summary`].
 async fn scan_summaries(
     fetcher: &Arc<Fetcher>,
     candidates: &[Symbol],
     from: NaiveDate,
     end: NaiveDate,
     today: NaiveDate,
+    foreign_net: bool,
 ) -> Vec<(Symbol, Result<Sourced<BrokerSummary>>)> {
     let mut fetched: Vec<(Symbol, Result<Sourced<BrokerSummary>>)> =
         stream::iter(candidates.to_vec())
-            .map(|s| screen_summary(fetcher, s, from, end, today))
+            .map(|s| screen_summary(fetcher, s, from, end, today, foreign_net))
             .buffer_unordered(3)
             .collect()
             .await;
@@ -1433,7 +1434,7 @@ async fn scan_summaries(
     if !retry.is_empty() {
         tokio::time::sleep(ipot::RECOVER_PAUSE).await;
         for sym in retry {
-            let again = screen_summary(fetcher, sym.clone(), from, end, today).await;
+            let again = screen_summary(fetcher, sym.clone(), from, end, today, foreign_net).await;
             if let Some(slot) = fetched.iter_mut().find(|(s, _)| *s == sym) {
                 *slot = again;
             }
@@ -1469,7 +1470,7 @@ pub async fn bandar_screen(
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
     let period = opts.period.as_str();
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, true).await;
     let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
     let mut failed = 0usize;
     let mut reports: Vec<BandarReport> = Vec::new();
@@ -1635,7 +1636,8 @@ pub async fn bandar_broker(
     }
     let end = scan_end(fetcher, &candidates, today).await?;
     let from = opts.period.start(end);
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today).await;
+    // The rows carry no foreign net: the range pages alone.
+    let fetched = scan_summaries(fetcher, &candidates, from, end, today, false).await;
 
     let mut failed = 0usize;
     let mut checked = 0usize;
@@ -2383,7 +2385,7 @@ mod tests {
 
         #[tokio::test]
         async fn broker_activity_finds_one_member_across_the_scan() {
-            let (f, _be, _d) = fetcher(others(days()));
+            let (f, be, _d) = fetcher(others(days()));
             let opts = BrokerActivityOptions {
                 code: " yp ".into(),
                 period: BandarPeriod::Week1,
@@ -2431,6 +2433,11 @@ mod tests {
             assert_eq!(tb.net_value, Some(v(tb) - v(ts)));
             let total: f64 = a.bought.iter().map(v).sum();
             assert!((a.bought_value - total).abs() < 1e-6);
+            // No foreign net in these rows: the week pages alone, none of the
+            // pages the screen rebuilds its net from.
+            assert_eq!(be.calls_matching("start=10/12/2026&end=10/14/2026"), 0);
+            assert_eq!(be.calls_matching("start=10/15/2026&end=10/15/2026"), 0);
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
 
             let bad = BrokerActivityOptions {
                 code: "MIRAE".into(),
