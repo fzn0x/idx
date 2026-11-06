@@ -415,7 +415,7 @@ export function growthLens(symbol, f, fin) {
     else r.add("revenue_consistency", 0, `revenue grew in ${ups} of the last ${k} fiscal years`);
   } else {
     const c = nz(g.revenue_cagr_5y_pct);
-    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("revenue_cagr", p, `revenue 5-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
+    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("revenue_cagr_5y", p, `revenue 5-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
     else r.note("revenue CAGR: fewer than three fiscal years and no 5-year figure from the source");
     r.note("revenue consistency: fewer than three fiscal years");
   }
@@ -430,7 +430,7 @@ export function growthLens(symbol, f, fin) {
     else r.note(`net income CAGR: losses in both FY${a} and FY${b}`);
   } else {
     const c = nz(g.eps_growth_3y_pct);
-    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("net_income_cagr", p, `EPS 3-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
+    if (c != null) { const [p, band] = growthBand(c, 10, 0); r.add("eps_growth_3y", p, `EPS 3-year growth ${signed(c, 1)}% a year, as reported (${band})`); }
     else r.note("net income CAGR: fewer than three fiscal years and no 3-year EPS figure from the source");
   }
 

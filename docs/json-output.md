@@ -480,9 +480,11 @@ more), `shrinking` (-2 or less), `mixed` (points both ways), `stable`,
 | --- | --- |
 | `revenue_growth`, `earnings_growth` | latest quarter over +10 %: +1; below 0 %: -1; else 0 (a figure beyond ±100 % is marked "from a small or negative base") |
 | `eps_forward_growth` | forward EPS against trailing over +10 %: +1; below -10 %: -1; else 0 |
-| `revenue_cagr` | over +10 %: +1; below 0 %: -1; else 0. From three or more fiscal years, else MSN's 5-year figure |
+| `revenue_cagr` | idx's CAGR over three or more fiscal years: over +10 %: +1; below 0 %: -1; else 0 |
+| `revenue_cagr_5y` | only with fewer than three fiscal years: MSN's 5-year revenue rate, as reported, same bands |
 | `revenue_consistency` | revenue grew every year: +1; in fewer than half the years: -1; else 0 (three or more fiscal years) |
-| `net_income_cagr` | over +10 %: +1; below 0 %: -1; else 0. A profit turning into a loss: -1; a loss turning into a profit: +1. Else MSN's 3-year EPS figure |
+| `net_income_cagr` | idx's CAGR over three or more fiscal years: over +10 %: +1; below 0 %: -1; else 0. A profit turning into a loss: -1; a loss turning into a profit: +1 |
+| `eps_growth_3y` | only with fewer than three fiscal years: MSN's 3-year EPS growth, as reported, same bands |
 
 ### `idx.risk.v1`: points add risk
 

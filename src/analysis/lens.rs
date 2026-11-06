@@ -451,11 +451,12 @@ pub fn growth(
         };
         r.add("revenue_consistency", points, reason);
     } else {
+        // The source's own rate, under its own rule id (not `revenue_cagr`).
         match g.and_then(|g| g.revenue_cagr_5y_pct) {
             Some(c) => {
                 let (points, band) = growth_band(c, 10.0, 0.0);
                 r.add(
-                    "revenue_cagr",
+                    "revenue_cagr_5y",
                     points,
                     format!("revenue 5-year growth {c:+.1}% a year, as reported ({band})"),
                 );
@@ -493,11 +494,12 @@ pub fn growth(
             None => r.note(format!("net income CAGR: losses in both FY{a} and FY{b}")),
         }
     } else {
+        // EPS is another metric than net income: its own rule id.
         match g.and_then(|g| g.eps_growth_3y_pct) {
             Some(c) => {
                 let (points, band) = growth_band(c, 10.0, 0.0);
                 r.add(
-                    "net_income_cagr",
+                    "eps_growth_3y",
                     points,
                     format!("EPS 3-year growth {c:+.1}% a year, as reported ({band})"),
                 );
@@ -1325,11 +1327,20 @@ mod tests {
         f.growth.revenue_cagr_5y_pct = Some(12.0);
         f.growth.eps_growth_3y_pct = Some(-2.0);
         let g = growth(&f.symbol, Some(&f), None);
+        // Under their own ids: `revenue_cagr` and `net_income_cagr` always
+        // mean idx's CAGR over the fiscal years.
         assert_eq!(
             ids(&g.reading),
-            [("revenue_cagr", 1), ("net_income_cagr", -1)]
+            [("revenue_cagr_5y", 1), ("eps_growth_3y", -1)]
         );
-        assert!(g.reading.rules[0].reason.contains("as reported"));
+        assert_eq!(
+            g.reading.rules[0].reason,
+            "revenue 5-year growth +12.0% a year, as reported (over +10%)"
+        );
+        assert_eq!(
+            g.reading.rules[1].reason,
+            "EPS 3-year growth -2.0% a year, as reported (below 0%)"
+        );
         assert!(has_note(
             &g.reading,
             "revenue consistency: fewer than three fiscal years"
@@ -1337,7 +1348,13 @@ mod tests {
         // Two fiscal years are not enough for a CAGR either.
         let a = fin(&[(2024, Some(1.0), Some(1.0)), (2025, Some(2.0), Some(2.0))]);
         let g = growth(&f.symbol, Some(&f), Some(&a));
-        assert_eq!(points(&g.reading, "revenue_cagr"), Some(1), "MSN's figure");
+        assert_eq!(
+            points(&g.reading, "revenue_cagr_5y"),
+            Some(1),
+            "MSN's figure"
+        );
+        assert_eq!(points(&g.reading, "revenue_cagr"), None);
+        assert_eq!(points(&g.reading, "net_income_cagr"), None);
         assert_eq!(g.revenue_cagr_pct, None);
     }
 

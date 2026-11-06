@@ -280,6 +280,17 @@ test("a price that does not move is illiquid, not calm", () => {
   assert.ok(noted(short, "beta: 14 matched daily returns with IHSG, needs 120"));
 });
 
+test("the source's growth rates score under their own rule ids", () => {
+  const f = blank();
+  f.growth.revenue_cagr_5y_pct = 12; f.growth.eps_growth_3y_pct = -2;
+  const g = an.growthLens("TEST", f, null);
+  assert.deepEqual(ruleIds(g), [["revenue_cagr_5y", 1], ["eps_growth_3y", -1]]);
+  assert.deepEqual(g.reading.rules.map((x) => x.reason), [
+    "revenue 5-year growth +12.0% a year, as reported (over +10%)",
+    "EPS 3-year growth -2.0% a year, as reported (below 0%)",
+  ]);
+});
+
 test("lens reasons round exact ties as Rust does (half to even)", () => {
   // rustc 1.9x: format!("{:.0}", 12.5) = "12", format!("{:.1}", 4.25) = "4.2",
   // format!("{:.1}", 4.75) = "4.8", format!("{:.2}", 0.125) = "0.12", format!("{:.1}", -0.25) = "-0.2".
