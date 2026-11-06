@@ -276,7 +276,7 @@ Engraved, outlined, inverting.
 ### Navigation
 - **Top bar links:** dim caps labels, 12px padding, full bar height; hover lifts to lit; the current page is lit with a 2px lit bottom rule.
 - **Tabs (Saham Teraktif):** equal-width caps labels split by rules, the selected tab lit with a 2px lit bottom rule.
-- **Star control:** outlined, label plus a condensed count cell split by a rule; hover inverts.
+- **Star control:** outlined, label plus a condensed count cell split by a rule; hover inverts. Below 26rem the label drops to the star icon beside the count, and below 22rem the top bar shows the mark without the wordmark, so the bar fits a 320px screen.
 
 ### Panels
 The addressable unit of the world.

@@ -597,4 +597,11 @@ pre.json { max-height: 30rem; overflow: auto; padding: 10px var(--gutter); borde
 }
 @media (max-width: 26rem) {
   .nav a[href^="https://github.com"] { display: none; }
+  /* The star icon and count stay; the link's aria-label still names it. */
+  .star .star-w { display: none; }
+  .nav a { padding: 0 6px; letter-spacing: 0.04em; }
+}
+@media (max-width: 22rem) {
+  /* The mark alone carries the brand; its link is labelled "idx home". */
+  .brand span { display: none; }
 }
