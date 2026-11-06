@@ -1446,7 +1446,8 @@ async fn scan_summaries(
 /// Bandarmology screener: reads the most traded stocks (or the given ones)
 /// over the period ending on the latest session and keeps those matching
 /// the preset and filters. One broker-summary request per scanned ticker;
-/// on multi-day periods up to three more for the rebuilt foreign net (see
+/// on multi-day periods usually three more for the rebuilt foreign net (up
+/// to six when the latest sessions had no trades; see
 /// `ipot::broker_summary_range`) and one history request per row the other
 /// filters left.
 pub async fn bandar_screen(

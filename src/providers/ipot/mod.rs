@@ -177,7 +177,11 @@ pub fn range_net_suspect(
 /// which then ends before both: whether the source doubles its latest
 /// completed session or the one still trading, neither is inside that rest.
 /// A range that ended before the last two trading days costs no extra
-/// request; one that reaches them costs up to three, most of them cached.
+/// request. One that reaches them usually costs three more (four when it
+/// reaches a session still trading, which has no lists yet): the walk reads
+/// up to [`REBUILD_WALK`] single sessions until two had trades, then the
+/// rest, so six when the latest sessions had no trades, and more only when a
+/// cached rest has to be split again. Most of them are cached.
 /// Totals, lots and the broker lists stay those of the range page. A rebuild
 /// that fails leaves the net `null` with a warning.
 pub async fn broker_summary_range(

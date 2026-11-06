@@ -49,9 +49,9 @@ turnover (value traded), conc (top buyers' share of value, %), price, signal=...
 Operators < <= > >= = !=; numbers accept K/M/B/T and %.
 
 One broker-summary request per scanned stock (cached; closed sessions for a week), and on
-1w/1m/3m up to three more for its foreign net (the source counts its latest session twice over
-a range, so the net is rebuilt from single sessions) and one history request per row the other
-filters leave.";
+1w/1m/3m usually three more for its foreign net, up to six when the latest sessions had no
+trades (the source counts its latest session twice over a range, so the net is rebuilt from
+single sessions), and one history request per row the other filters leave.";
 
 const BROKER_HELP: &str = "Examples:
   idx bandar broker YP                       # last week, the 100 most traded stocks

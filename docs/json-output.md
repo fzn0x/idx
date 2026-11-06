@@ -170,9 +170,13 @@ Over a range that starts before the source's latest session and contains it,
 the source's foreign net counts that session twice (its value, lots and lists
 are right). When a range reached the last two trading days at the time it
 was read, `foreign_net_value` is therefore the sum of the last two sessions
-with trades, each read on its own, and of the rest of the range: one to
-three more requests, most of them cached. If those cannot be read it is
-`null` with a warning.
+with trades, each read on its own, and of the rest of the range. That is
+usually three more requests (four when the range reaches a session still
+trading), up to six when the latest sessions had no trades (single sessions
+are read back from the end, at most five, until two had trades), and more
+only when a part of the range cached while it was current has to be split
+again; most of them are cached. If those cannot be read it is `null` with a
+warning.
 With `-o csv` the rows are one broker per side: `symbol, from, to, investor,
 board, side (buy|sell), rank, code, name, kind, lots, value, average_price`.
 
