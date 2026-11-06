@@ -59,7 +59,13 @@ src/
                      presets), sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility, beta
                      against a benchmark on shared dates), lens.rs (growth, valuation and risk lenses),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,
-                     phase, screen filters and presets), intraday.rs (session bars, VWAP); no network
+                     phase, screen filters and presets), intraday.rs (session bars, VWAP), stats.rs (Welch t,
+                     Student t p-values), astro.rs (returns backtest by lunar phase, Mercury, pasaran, Sun
+                     sign); no network
+  astro/             offline ephemeris for `market astro`: time.rs (instants, Delta T), ephem.rs (Standish
+                     elements, Schlyter Jupiter/Saturn, nutation, precession, aberration), moon.rs (Meeus ch. 47),
+                     events.rs (phases, stations, ingresses, Mercury), calendar.rs (weton, Imlek, shio), natal.rs
+                     (IHSG's chart, transits); checked against JPL Horizons/USNO in tests/fixtures/astro/
   universe.rs        bundled data/universe.csv (IDX issuers) + ownership-db issuers; IDX_UNIVERSE override
   brokers.rs         bundled data/brokers.csv (IDX exchange members: code -> name)
   holidays.rs        bundled data/holidays.csv (trading holidays, transcribed from IDX's yearly image);
@@ -73,7 +79,8 @@ src/
                      service/lenses.rs: growth, valuation and risk lenses (fundamentals, statements,
                      a year of candles for the stock and IHSG);
                      service/stockbit.rs: Stockbit reads over several requests (actions, calendar,
-                     movement pages)
+                     movement pages);
+                     service/astro.rs: market astro (provider `computed`, or the history's with --backtest)
   ownership/         KSEI >1% register: discover.rs (idx.co.id page and its families, Cloudflare strategy,
                      `discover --family`), mirror.rs (GitHub mirror fallback), ingest.rs (XLSX/PDF, text
                      numbers, controller column), normalize.rs (entity keys), db.rs (SQLite schema with
@@ -92,7 +99,7 @@ src/
                      per-agent registration recipes behind `idx mcp setup` (keep docs/mcp.md in step)
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
                      dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, institutions.rs, lenses.rs,
-                     intraday.rs)
+                     intraday.rs, astro.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
                      jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
                      mod.rs OutputSetting (auto resolved against the terminal) and print_notice
@@ -112,8 +119,9 @@ scripts/smoke.sh     hits live providers; run manually, never in CI's test job
 docs/                json-output.md, configuration.md, mcp.md, ownership.md
 web/                 Cloudflare Worker for ihsg.midoriresearch.com: landing page, browser terminal, D1 board;
                      src/analysis.js, src/extras.js and src/bandar.js are JS ports of src/analysis/* tested on
-                     the same fixtures, src/ownership.js of src/ownership/analytics.rs; src/bandar-scan.js is
-                     the nightly scan behind the web bandar screen
+                     the same fixtures, src/ownership.js of src/ownership/analytics.rs; src/astro.js ports
+                     src/astro/ and the astro backtest (golden payloads in tests/fixtures/astro/ keep the two
+                     identical); src/bandar-scan.js is the nightly scan behind the web bandar screen
 npm/                 ihsg-cli wrapper on npm: lib/binary.js downloads + verifies the release
                      (postinstall when allowed, otherwise on first run)
 scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: mirrors the KSEI
@@ -124,7 +132,7 @@ scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: 
 CLI groups: `stocks` (quote, history, intraday, profile, financials, earnings, dividends, returns,
 fundamental, growth, valuation, risk, technical, brief, compare, screen, news, sentiment, actions,
 foreign, list),
-`market` (overview, indices, foreign, brokers, calendar, holidays, members),
+`market` (overview, indices, foreign, brokers, calendar, holidays, members, astro),
 `ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
 composition, institutions, releases, sync, status, discover, path; hidden build-snapshot),
 `broker`, `bandar` (detect, screen, broker), `stockbit` (login, status, logout, orderbook, actions,

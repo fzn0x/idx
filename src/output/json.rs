@@ -6,10 +6,10 @@ use serde::Serialize;
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
-    CorporateActions, CorporateEvents, DiscoveredFile, DividendHistory, Earnings, EntityReport,
-    Financials, ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens, History,
-    HolderMovements, HoldersReport, Holidays, ImportReport, IndexBoard, Insights,
+    Astro, BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport,
+    CompositionReport, CorporateActions, CorporateEvents, DiscoveredFile, DividendHistory,
+    Earnings, EntityReport, Financials, ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens,
+    History, HolderMovements, HoldersReport, Holidays, ImportReport, IndexBoard, Insights,
     InstitutionalOwnership, InstrumentList, Intraday, MarketOverview, MemberList, NewsReport,
     OrderBook, Performance, Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport,
     SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, ValuationLens, Watchlist,
@@ -82,6 +82,7 @@ pub const SCHEMA_BANDAR_SCREEN: &str = "idx.bandar.screen.v1";
 pub const SCHEMA_BANDAR_BROKER: &str = "idx.bandar.broker.v1";
 pub const SCHEMA_WATCHLIST: &str = "idx.watchlist.v1";
 pub const SCHEMA_HOLIDAYS: &str = "idx.holidays.v1";
+pub const SCHEMA_ASTRO: &str = "idx.astro.v1";
 pub const SCHEMA_INSTRUMENTS: &str = "idx.instruments.v1";
 pub const SCHEMA_MEMBERS: &str = "idx.members.v1";
 pub const SCHEMA_INDICES: &str = "idx.indices.v1";
@@ -145,6 +146,7 @@ pub type BandarScreenEnvelope = Envelope<BandarScreen>;
 pub type BandarBrokerEnvelope = Envelope<BrokerActivity>;
 pub type WatchlistEnvelope = Envelope<Watchlist>;
 pub type HolidaysEnvelope = Envelope<Holidays>;
+pub type AstroEnvelope = Envelope<Astro>;
 pub type InstrumentsEnvelope = Envelope<InstrumentList>;
 pub type MembersEnvelope = Envelope<MemberList>;
 pub type IndicesEnvelope = Envelope<IndexBoard>;
@@ -240,6 +242,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "bandar-broker",
         "watchlist",
         "holidays",
+        "astro",
         "instruments",
         "members",
         "indices",
@@ -307,6 +310,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "bandar-broker" => schemars::schema_for!(BandarBrokerEnvelope),
         "watchlist" => schemars::schema_for!(WatchlistEnvelope),
         "holidays" => schemars::schema_for!(HolidaysEnvelope),
+        "astro" => schemars::schema_for!(AstroEnvelope),
         "instruments" => schemars::schema_for!(InstrumentsEnvelope),
         "members" => schemars::schema_for!(MembersEnvelope),
         "indices" => schemars::schema_for!(IndicesEnvelope),

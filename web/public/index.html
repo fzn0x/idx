@@ -206,7 +206,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
 }</pre>
       </div>
       <div class="face">
-        <h3 class="stmt-title">For agents<small>idx mcp · 46 tools · stdio or HTTP</small></h3>
+        <h3 class="stmt-title">For agents<small>idx mcp · 47 tools · stdio or HTTP</small></h3>
         <table class="tbl tbl-mcp" aria-label="MCP tools">
           <tbody>
             <tr><td>idx_brief</td><td>one call, every section</td></tr>
@@ -222,11 +222,12 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_market_brokers · idx_indices</td><td>top brokers, every index</td></tr>
             <tr><td>idx_corporate_actions · idx_calendar · idx_holidays</td><td>dividends, rights, RUPS, holidays</td></tr>
             <tr><td>idx_instruments · idx_members</td><td>listed stocks, broker codes</td></tr>
+            <tr><td>idx_astro</td><td>sky, weton, shio, backtest</td></tr>
             <tr><td>idx_ownership_*</td><td>holders, search, rankings, networks, changes, foreign flow, composition, snapshot sync, institutions</td></tr>
             <tr><td>idx_orderbook · idx_stockbit_*</td><td>Stockbit, your login (opt-in): book, corporate actions, holder movements</td></tr>
           </tbody>
         </table>
-        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 46 tools with their CLI and web commands</a></p>
+        <p class="foot"><code>idx mcp setup &lt;client&gt;</code> prints the registration for Claude Code, Codex, Muse Code, Cursor and twenty other agents; <code>idx mcp --http</code> serves URL-only products such as ChatGPT. <a href="#cmd-h">All 47 tools with their CLI and web commands</a></p>
       </div>
     </div>
     <p class="mline"><span class="sr-only">One envelope behind the table, the JSON and the MCP tool.</span><span aria-hidden="true">TABLE&lt;&lt;JSON&lt;&lt;MCP&lt;&lt;ONE&lt;ENVELOPE&lt;&lt;2026-10-16</span></p>
@@ -246,7 +247,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
   </section>
 
   <section class="panel" id="perintah" aria-labelledby="cmd-h" tabindex="-1">
-    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 46 MCP tools, the CLI command behind each, and 34 that run in the web terminal</p><p class="age">Static</p></header>
+    <header class="ph"><span class="no">06</span><h2 id="cmd-h">Daftar Perintah</h2><p class="sub">Commands and tools · 47 MCP tools, the CLI command behind each, and 35 that run in the web terminal</p><p class="age">Static</p></header>
     <div class="tbl-wrap">
       <table class="tbl tbl-tools" aria-label="MCP tools, CLI commands and web terminal commands">
         <thead><tr><th class="l">MCP tool</th><th class="l">CLI</th><th class="l">Web terminal</th><th class="l">What</th></tr></thead>
@@ -277,6 +278,7 @@ Last trade 2026-10-16 16:14 WIB · market closed</pre>
             <tr><td>idx_calendar</td><td><code>idx market calendar</code></td><td><span class="muted">CLI and MCP only</span></td><td class="muted">dividend and rights dates, RUPS, public exposes</td></tr>
             <tr><td>idx_holidays</td><td><code>idx market holidays --upcoming</code></td><td><a href="/terminal?cmd=holidays%20--upcoming">holidays --upcoming</a></td><td class="muted">trading holidays and the next trading day</td></tr>
             <tr><td>idx_members</td><td><code>idx market members</code></td><td><a href="/terminal?cmd=members">members</a></td><td class="muted">exchange members: broker codes and names</td></tr>
+            <tr><td>idx_astro</td><td><code>idx market astro</code></td><td><a href="/terminal?cmd=astro">astro</a></td><td class="muted">planets, Moon phase, Mercury retrograde, weton and shio for IHSG, with a returns backtest</td></tr>
             <tr><td>idx_broker</td><td><code>idx broker BBCA</code></td><td><a href="/terminal?cmd=broker%20BBCA">broker BBCA</a></td><td class="muted">top 10 buyers and sellers of a stock</td></tr>
             <tr><td>idx_bandar</td><td><code>idx bandar detect BBCA --daily</code></td><td><a href="/terminal?cmd=bandar%20BBCA%20--daily">bandar BBCA --daily</a></td><td class="muted">bandarmology: accumulation or distribution</td></tr>
             <tr><td>idx_bandar_screen</td><td><code>idx bandar screen --preset big-accumulation</code></td><td><a href="/terminal?cmd=bandar%20screen%20--preset%20big-accumulation">bandar screen --preset big-accumulation</a></td><td class="muted">the most traded stocks the top brokers accumulate</td></tr>

@@ -200,7 +200,9 @@ test("a stale benchmark makes the returns stale, as in the CLI", async () => {
     assert.ok(!("stale_reason" in warm));
 
     // Only the benchmark's copy is expired, and only its fetch fails.
-    env.DB.rows.get("history:^JKSE:5y:1d").expires_at = 0;
+    // History rows are keyed on the chart URL (one per request).
+    const benchKey = [...env.DB.rows.keys()].find((k) => k.startsWith("history:") && k.includes("/^JKSE?"));
+    env.DB.rows.get(benchKey).expires_at = 0;
     down.add("^JKSE");
     const r = await returns(env, "BBCA", "^JKSE");
     assert.equal(r.data[0].benchmark.returns.length, warm.data[0].benchmark.returns.length);

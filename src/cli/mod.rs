@@ -54,6 +54,7 @@ Examples:
   idx stocks actions BBCA                  # dividends, splits, rights, RUPS
   idx market foreign                       # top foreign net buying and selling
   idx market calendar --type dividend      # cum, ex and payment dates ahead
+  idx market astro --backtest              # lunar phase, Mercury, weton vs IHSG returns
   idx ownership import --latest            # KSEI >1% holders into local SQLite
   idx ownership ticker BBCA                # who holds more than 1%
   idx mcp                                  # MCP server over stdio for agents
@@ -141,7 +142,7 @@ pub enum Command {
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 
-    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members.
+    /// Whole market: overview, indices, foreign flow, top brokers, the exchange calendar, holidays, members, astro.
     #[command(subcommand)]
     Market(market::MarketCmd),
 
@@ -194,14 +195,14 @@ sessions the foreign net is rebuilt from single sessions (the source counts the 
 
     /// MCP server over stdio (default) or HTTP; `mcp setup <client>` prints the registration recipe for any agent.
     #[command(
-        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n46 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_intraday, idx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_insights, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
+        after_help = "Serve:\n  idx mcp                                   # stdio, what every local agent launches\n  idx mcp --http 127.0.0.1:8765 --token T   # streamable HTTP at /mcp for URL-only clients\n\nRegister (prints the exact command or snippet, with this binary's absolute path):\n  idx mcp setup --list\n  idx mcp setup claude-code | codex | muse | antigravity | gemini | copilot-cli | vscode | cursor | windsurf |\n                kiro | jetbrains | zed | cline | continue | opencode | goose | warp | droid | vibe | qwen |\n                crush | trae | augment | chatgpt\n\n47 tools returning the same JSON as -o json: idx_brief (start here), idx_market, idx_quote, idx_history,\nidx_intraday, idx_profile, idx_financials, idx_earnings, idx_dividends, idx_returns, idx_fundamental, idx_technical,\nidx_compare, idx_screen, idx_news, idx_sentiment, idx_insights, idx_corporate_actions, idx_foreign, idx_instruments,\nidx_market_foreign, idx_market_brokers, idx_indices, idx_calendar, idx_holidays, idx_astro, idx_members, idx_broker,\nidx_bandar, idx_bandar_screen, idx_bandar_broker,
 idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|composition|snapshot|institutions,\nand the Stockbit tools on your own session: idx_orderbook, idx_stockbit_actions, idx_stockbit_movements,\nidx_stockbit_status, idx_stockbit_login.\nLogs go to stderr; stdout carries only the protocol."
     )]
     Mcp(mcp_cmd::McpArgs),
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
+        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | astro | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
         name: Option<String>,
     },
 

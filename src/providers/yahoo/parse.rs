@@ -73,12 +73,18 @@ fn chart_result(body: &str) -> Result<Value> {
         .ok_or_else(|| IdxError::provider(NAME, "chart response has no result"))
 }
 
-/// Parses a `v8/finance/chart` body into candles.
+/// Parses a `v8/finance/chart` body into candles. The interval is the bar
+/// size Yahoo reports (`meta.dataGranularity`) when it is one idx knows and
+/// differs from the one asked for; otherwise the requested one.
 pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<History> {
     let r = chart_result(body)?;
     let meta = r.get("meta").cloned().unwrap_or(Value::Null);
     let m = J(&meta);
     let symbol = Symbol::from_yahoo(&m.str("symbol").unwrap_or_default());
+    let interval = m
+        .str("dataGranularity")
+        .and_then(|g| granularity(&g))
+        .unwrap_or(interval);
 
     let ts: Vec<Option<i64>> = r
         .get("timestamp")
@@ -180,6 +186,14 @@ fn exchange_offset(m: &J) -> FixedOffset {
 /// The exchange's calendar date of a unix time.
 fn local_date(secs: i64, offset: FixedOffset) -> Option<NaiveDate> {
     wib_from_unix(secs).map(|t| t.with_timezone(&offset).date_naive())
+}
+
+/// Yahoo's `dataGranularity` as an [`Interval`] (`60m` is its other name for `1h`).
+fn granularity(g: &str) -> Option<Interval> {
+    match g {
+        "60m" => Some(Interval::Hour1),
+        g => g.parse().ok(),
+    }
 }
 
 /// Parses the `events` block of a chart response (`events=div,splits`) into
@@ -411,6 +425,35 @@ mod tests {
         // 40 timestamps, 34 complete bars.
         assert_eq!(h.candles.len(), 34);
         assert_eq!(h.candles[0].time.to_rfc3339(), "2026-10-12T09:00:00+07:00");
+    }
+
+    const CHART_MAX_DAILY: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_period1_max_1d.json");
+    const CHART_RANGE_MAX: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_range_max_1d.json");
+
+    #[test]
+    fn chart_max_daily_from_period1() {
+        let h = parse_chart(CHART_MAX_DAILY, Period::Max, Interval::Day1).unwrap();
+        assert_eq!(h.symbol.as_str(), "^JKSE");
+        assert_eq!(h.interval, Interval::Day1);
+        // 9,221 rows; holidays and the unfinished last session have null prices.
+        assert_eq!(h.candles.len(), 8905);
+        assert_eq!(h.candles[0].date().to_string(), "1990-04-06");
+        assert!(h
+            .candles
+            .windows(2)
+            .all(|w| (w[1].date() - w[0].date()).num_days() < 15));
+    }
+
+    #[test]
+    fn chart_range_max_is_labelled_with_the_granularity_yahoo_returned() {
+        // `range=max&interval=1d` comes back monthly (dataGranularity 1mo).
+        let h = parse_chart(CHART_RANGE_MAX, Period::Max, Interval::Day1).unwrap();
+        assert_eq!(h.interval, Interval::Month1);
+        assert_eq!(h.candles.len(), 440);
+        assert_eq!(granularity("60m"), Some(Interval::Hour1));
+        assert_eq!(granularity("3mo"), None);
     }
 
     #[test]

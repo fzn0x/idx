@@ -10,6 +10,7 @@ import * as own from "./ownership.js";
 import * as ipot from "./ipot.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
+import * as astroLib from "./astro.js";
 import * as msn from "./msn-insights.js";
 import * as msnScreen from "./msn-screen.js";
 import { fetchWithin, redactUrls } from "./net.js";
@@ -229,20 +230,42 @@ export function checkPeriod(period, interval) {
   if (interval === "2m" && !["1d","5d","1mo"].includes(period)) throw usage("2-minute bars cover at most a month; use period 1d, 5d or 1mo");
 }
 
+/** A D1 row holds at most 2,000,000 bytes; the margin covers the key, the other columns and a non-ASCII name. */
+const CACHE_ROW_BUDGET = 1_900_000;
+/** More than any candle's JSON takes (91 bytes of keys and time, six numbers), so shorter histories skip the measuring. */
+const CANDLE_BYTES_MAX = 256;
+
+/** Keeps the most recent candles of a parsed history that fit one D1 cache row (all daily bars of an old
+ * index since 1970 do not); its summary still covers every candle Yahoo returned. */
+export function fitCacheRow(h, budget = CACHE_ROW_BUDGET) {
+  if (h.candles.length * CANDLE_BYTES_MAX < budget) return h;
+  let size = JSON.stringify(h).length, keep = h.candles.length, out = h;
+  while (size > budget && keep > 0) {
+    keep = Math.floor((keep * budget * 0.98) / size);
+    out = { ...h, candles: h.candles.slice(-keep) };
+    size = JSON.stringify(out).length;
+  }
+  return out;
+}
+
 export async function history(env, symbolRaw, period = "1y", interval = "1d", limit = 0) {
   const symbol = parseSymbol(symbolRaw);
   if (!PERIODS.includes(period)) throw usage(`invalid period "${period}"; use ${PERIODS.join(",")}`);
   if (!INTERVALS.includes(interval)) throw usage(`invalid interval "${interval}"; use ${INTERVALS.join(",")}`);
   checkPeriod(period, interval);
   const intraday = INTRADAY.includes(interval);
-  const r = await cached(env, `history:${symbol}:${period}:${interval}`, intraday ? 120 : 3600, async () => {
+  // Keyed on the request, so a row written for an older URL (0.8.1 asked range=max and got monthly bars
+  // labelled 1d) is never served, not even as a stale copy.
+  const r = await cached(env, `history:${y.chartUrl(symbol, period, interval)}`, intraday ? 120 : 3600, async () => {
     const res = await y.fetchChart(symbol, period, interval);
     if (res.notFound) return { notFound: res.message };
-    return y.parseChart(res.body, period, interval);
+    return fitCacheRow(y.parseChart(res.body, period, interval));
   });
   if (r.value.notFound) throw notFound(`${symbol}: ${r.value.notFound}`);
   const data = { ...r.value };
   const warnings = r.warning ? [r.warning] : [];
+  if (data.interval !== interval) warnings.push(`Yahoo returned ${data.interval} bars for ${period}/${interval}; the candles are labelled ${data.interval}`);
+  if (data.summary && data.summary.candles > data.candles.length) warnings.push(`the web terminal keeps the last ${data.candles.length} of ${data.summary.candles} candles (one cache row); summary covers all of them; the CLI returns every candle`);
   if (limit > 0 && data.candles.length > limit) {
     data.candles = data.candles.slice(-limit);
     warnings.push(`candles truncated to the last ${limit}; summary covers the full period`);
@@ -689,7 +712,9 @@ const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400e
 function isoDate(raw, what) {
   if (raw == null || raw === "") return null;
   const s = String(raw).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(`${s}T00:00:00Z`))) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
+  const ms = Date.parse(`${s}T00:00:00Z`);
+  // Date.parse rolls 2026-02-30 over to 2 March; only a real date survives the round trip.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== s) throw usage(`invalid ${what} "${raw}"; use YYYY-MM-DD`);
   return s;
 }
 
@@ -917,6 +942,47 @@ export function holidays(yearRaw, allRaw, upcomingRaw) {
   }
   const { data, warnings } = hol.holidays(year, truthy(upcomingRaw), today);
   return envelope("idx.holidays.v1", data, { provider: "bundled", cached: true, warnings });
+}
+
+// ---- astro --------------------------------------------------------------
+
+/** The web lists up to 90 days of events; the CLI takes 366. */
+const ASTRO_WEB_MAX_DAYS = 90;
+/** The web backtests up to 10y (default 5y); max is CLI-only (9,000+ sessions). */
+const ASTRO_WEB_PERIODS = ["1y", "2y", "5y", "10y"];
+
+/** idx.astro.v1: the sky for a date (computed here) and, with backtest, IHSG's daily returns by factor. */
+export async function astro(env, dateRaw, daysRaw, natalRaw, backtestRaw, periodRaw) {
+  const truthy = (v) => v === "1" || v === "true" || v === true;
+  const date = isoDate(dateRaw, "date") || wibToday();
+  if (date < astroLib.FIRST_DATE || date > astroLib.LAST_DATE) throw usage(`astro covers ${astroLib.FIRST_DATE} to ${astroLib.LAST_DATE}, the range of the planetary elements; got ${date}`);
+  const days = daysRaw == null || daysRaw === "" ? 30 : Number(daysRaw);
+  if (!Number.isInteger(days) || days < 1 || days > ASTRO_WEB_MAX_DAYS) throw usage(`days must be 1 to ${ASTRO_WEB_MAX_DAYS} in the web terminal (the CLI takes 366); got ${daysRaw}`);
+  const natal = String(natalRaw || "launch").trim().toLowerCase();
+  if (!["launch", "base", "none"].includes(natal)) throw usage(`invalid natal chart "${natalRaw}"; use launch, base or none`);
+  // As on the CLI (--period requires --backtest) and over MCP.
+  if (!truthy(backtestRaw) && periodRaw != null && String(periodRaw).trim() !== "") throw usage("period is the backtest's look-back; pass it with backtest=1 (astro --backtest --period 2y)");
+  const period = String(periodRaw || "5y").trim().toLowerCase();
+  if (period === "max") throw usage("the web terminal backtests up to 10y; the CLI runs max (idx market astro --backtest)");
+  if (!ASTRO_WEB_PERIODS.includes(period)) throw usage(`invalid backtest period "${periodRaw}"; use ${ASTRO_WEB_PERIODS.join(", ")}`);
+  const { data, warnings } = astroLib.sky(date, days, natal);
+  if (!truthy(backtestRaw)) return envelope("idx.astro.v1", data, { provider: "computed", warnings });
+  // The result, not the candles, is cached: one D1 row per period, refreshed every 6 hours.
+  const r = await cached(env, `astro_backtest:${period}`, 6 * 3600, async () => {
+    const h = await history(env, "^JKSE", period, "1d", 0);
+    const hist = { ...h.data };
+    const leftOut = astroLib.dropUnfinished(hist, Date.parse(h.fetched_at));
+    try {
+      return { backtest: astroLib.backtest(hist, period), left_out: leftOut };
+    } catch (e) {
+      if (e instanceof astroLib.BacktestError) throw e.code === "not_found" ? notFound(e.message) : provider(`backtest: ${e.message}`);
+      throw e;
+    }
+  });
+  data.backtest = r.value.backtest;
+  if (r.value.left_out) warnings.push(`the backtest leaves out ${r.value.left_out}, a session that had not closed when the history was fetched`);
+  if (r.warning) warnings.push(r.warning);
+  return envelope("idx.astro.v1", data, { provider: "yahoo", cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
 }
 
 // ---- bandarmology ------------------------------------------------------
@@ -1468,6 +1534,7 @@ export async function route(env, url) {
     case "/bandar/broker": return bandarBroker(env, q.get("code"), q.get("period"), q.get("limit"));
     case "/actions": return actions(env, q.get("symbol"), q.get("since"));
     case "/holidays": return holidays(q.get("year"), q.get("all"), q.get("upcoming"));
+    case "/astro": return astro(env, q.get("date"), q.get("days"), q.get("natal"), q.get("backtest"), q.get("period"));
     case "/instruments": return instruments(q.get("search"), q.get("board"));
     case "/members": return members(q.get("search"));
     case "/ownership/ticker": return ownershipTicker(env, q.get("symbol"), q.get("as_of"));

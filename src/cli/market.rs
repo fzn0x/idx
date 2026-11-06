@@ -4,10 +4,10 @@ use chrono::Datelike;
 use clap::Subcommand;
 
 use crate::error::Result;
-use crate::model::{BrokerSort, CalendarCategory, ForeignSort, Symbol};
+use crate::model::{AstroPeriod, BrokerSort, CalendarCategory, ForeignSort, NatalChoice, Symbol};
 use crate::output::json::{
-    SCHEMA_CALENDAR, SCHEMA_HOLIDAYS, SCHEMA_INDICES, SCHEMA_MARKET, SCHEMA_MARKET_BROKERS,
-    SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
+    SCHEMA_ASTRO, SCHEMA_CALENDAR, SCHEMA_HOLIDAYS, SCHEMA_INDICES, SCHEMA_MARKET,
+    SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
 };
 use crate::output::table_exchange as tx;
 use crate::output::table_reports as reports;
@@ -131,6 +131,39 @@ pub enum MarketCmd {
         #[arg(long)]
         upcoming: bool,
     },
+    /// Astrology for IHSG: planets, Moon phase, Mercury retrograde, weton and shio for a date, with an optional returns backtest.
+    #[command(after_help = "Examples:
+  idx market astro                         # today at the close: planets, Moon, Mercury, weton, shio, next 30 days
+  idx market astro --date 2026-12-24 --days 7
+  idx market astro --natal base            # transits to the base-date chart (10 Aug 1982 = 100)
+  idx market astro --backtest              # IHSG daily returns by lunar phase, Mercury, pasaran and Sun sign since 1990
+  idx market astro --backtest --period 10y
+  idx -o json market astro | jq '.data.moon'
+  idx -o csv market astro                  # the planet table
+
+Positions are computed on this machine for 16:00 WIB (the IDX close) from JPL's Keplerian elements,
+Schlyter's Jupiter-Saturn terms and Meeus's lunar theory, checked against JPL Horizons (Sun and Moon within
+0.01°, planets within 0.04°, 1800-2050), so it works offline. IHSG's chart is cast for noon WIB on its launch
+(1983-04-01) or base date (1982-08-10), both from secondary sources. --backtest fetches ^JKSE daily closes and
+tests each group against all other days (Welch's t, Bonferroni). Traditional astrology, not a forecast or
+investment advice.")]
+    Astro {
+        /// Date, YYYY-MM-DD (1800-01-01 to 2050-12-31). Default: today in Jakarta.
+        #[arg(long, short = 'd', value_name = "DATE")]
+        date: Option<chrono::NaiveDate>,
+        /// Days of lunar phases, stations and sign ingresses to list from the date (1-366).
+        #[arg(long, value_name = "N", default_value_t = service::ASTRO_DEFAULT_DAYS)]
+        days: u32,
+        /// IHSG chart the transits refer to.
+        #[arg(long, value_enum, value_name = "CHART", default_value_t = NatalChoice::Launch)]
+        natal: NatalChoice,
+        /// Add the backtest of IHSG daily returns (fetches ^JKSE history).
+        #[arg(long)]
+        backtest: bool,
+        /// Backtest look-back. Default: max, all of the history (^JKSE on Yahoo: from 1990-04-06).
+        #[arg(long, value_enum, value_name = "PERIOD", requires = "backtest")]
+        period: Option<AstroPeriod>,
+    },
 }
 
 pub async fn run(ctx: &Context, cmd: MarketCmd) -> Result<()> {
@@ -211,6 +244,24 @@ pub async fn run(ctx: &Context, cmd: MarketCmd) -> Result<()> {
             };
             let result = service::holidays(year, upcoming, today)?;
             emit(ctx, SCHEMA_HOLIDAYS, result, |d| tx::holidays(d, ctx.color))
+        }
+        MarketCmd::Astro {
+            date,
+            days,
+            natal,
+            backtest,
+            period,
+        } => {
+            let q = service::AstroQuery {
+                date: date.unwrap_or_else(service::today_wib),
+                days,
+                natal,
+                backtest: backtest.then(|| period.unwrap_or(AstroPeriod::Max)),
+            };
+            let result = service::astro(ctx.provider.as_ref(), &q).await?;
+            emit(ctx, SCHEMA_ASTRO, result, |d| {
+                crate::output::table_astro::astro(d, ctx.color)
+            })
         }
     }
 }

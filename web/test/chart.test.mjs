@@ -76,3 +76,22 @@ test("the crosshair snaps to the nearest candle", () => {
   assert.equal(nearest(306, 600, 50), 25);
   assert.equal(nearest(10, 600, 1), 0);
 });
+
+test("max daily and weekly history ask Yahoo for period1=0, and bars are labelled with the granularity Yahoo returned", () => {
+  assert.equal(y.chartUrl("^JKSE", "max", "1d"), "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1d&includePrePost=false");
+  assert.equal(y.chartUrl("BBCA", "max", "1wk"), "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?period1=0&period2=9999999999&interval=1wk&includePrePost=false");
+  assert.equal(y.chartUrl("^JKSE", "max", "1mo"), "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=max&interval=1mo&includePrePost=false");
+  assert.equal(y.chartUrl("^JKSE", "2y", "1d"), "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=2y&interval=1d&includePrePost=false");
+  const read = (f) => JSON.parse(readFileSync(join(root, "tests", "fixtures", "yahoo", f), "utf8"));
+  const daily = y.parseChart(read("chart_jkse_period1_max_1d.json"), "max", "1d");
+  assert.equal(daily.interval, "1d");
+  assert.equal(daily.candles.length, 8905);
+  assert.equal(daily.candles[0].time.slice(0, 10), "1990-04-06");
+  // range=max&interval=1d comes back monthly (dataGranularity 1mo).
+  const monthly = y.parseChart(read("chart_jkse_range_max_1d.json"), "max", "1d");
+  assert.equal(monthly.interval, "1mo");
+  assert.equal(monthly.candles.length, 440);
+  assert.equal(y.granularity("60m"), "1h");
+  assert.equal(y.granularity("3mo"), null);
+  assert.ok(JSON.stringify(daily).length < 1_900_000, "fits one D1 cache row");
+});

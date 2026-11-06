@@ -233,6 +233,18 @@ echo "holidays (bundled)"
 "$IDX" market holidays --year 2026 >"$TMP/hd.txt" || fail "holidays"
 expect "$TMP/hd.txt" "239 trading days" "2026 has IDX's 239 trading days"
 
+echo "astro (computed here; the backtest reads ^JKSE daily history from Yahoo)"
+"$IDX" -o json stocks history ^JKSE --period max >"$TMP/hm.json" || fail "max history"
+expect "$TMP/hm.json" '"interval": "1d"' "max history is daily"
+n="$(grep -c '"close":' "$TMP/hm.json")"
+[ "$n" -gt 8000 ] && pass "max history has $n daily candles" || fail "max history has only $n candles"
+"$IDX" market astro --date 2026-11-06 >"$TMP/as.txt" || fail "astro table"
+expect "$TMP/as.txt" "IHSG astro · Jumat Pahing 2026-11-06" "astro table header"
+"$IDX" -o json market astro --backtest >"$TMP/ab.json" || fail "astro backtest"
+expect "$TMP/ab.json" '"symbol": "^JKSE"' "astro backtest read ^JKSE"
+n="$(grep -o '"returns": [0-9]*' "$TMP/ab.json" | grep -o '[0-9]*$')"
+[ "$n" -gt 8000 ] && pass "astro backtest over $n daily returns" || fail "astro backtest has only $n returns"
+
 echo "idx.co.id (needs a connection Cloudflare lets through)"
 set +e
 "$IDX" -o json market indices LQ45 >"$TMP/ix.json" 2>"$TMP/ix.err"; code=$?

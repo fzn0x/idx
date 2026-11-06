@@ -150,12 +150,13 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 46, "{names:?}");
+    assert_eq!(names.len(), 47, "{names:?}");
     assert!(names.contains(&"idx_ownership_institutions"), "{names:?}");
     assert!(names.contains(&"idx_insights"), "{names:?}");
     assert!(names.contains(&"idx_intraday"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_actions"), "{names:?}");
     assert!(names.contains(&"idx_stockbit_movements"), "{names:?}");
+    assert!(names.contains(&"idx_astro"), "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -629,6 +630,21 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     for arg in ["method", "port", "force", "timeout"] {
         assert!(login["inputSchema"]["properties"][arg].is_object(), "{arg}");
     }
+
+    // idx_astro needs no network: the sky is computed by the server.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 30, "method": "tools/call",
+        "params": {"name": "idx_astro", "arguments": {"date": "2026-11-06", "days": 7}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 30);
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["schema"], "idx.astro.v1");
+    assert_eq!(body["provider"], "computed");
+    assert_eq!(body["data"]["weton"]["pasaran"], "Pahing");
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

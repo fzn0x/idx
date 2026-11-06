@@ -5,7 +5,9 @@
 //!   No auth. Used for `history`, `stocks intraday` and as the quote fallback.
 //!   One-minute bars cover at most 8 days per request and two-minute bars the
 //!   last 60 days (HTTP 422 beyond); `Interval::check_period` keeps requests
-//!   inside both. Minutes without a trade come back as null rows.
+//!   inside both. Minutes without a trade come back as null rows. Full daily or
+//!   weekly history uses `period1=0&period2=9999999999` instead of
+//!   `range=max`, which Yahoo answers with monthly bars.
 //! - `GET https://query1.finance.yahoo.com/v7/finance/quote?symbols=A.JK,B.JK&crumb=..`
 //!   Needs the `A3` cookie from `https://fc.yahoo.com` plus the crumb from
 //!   `https://query2.finance.yahoo.com/v1/test/getcrumb`. Returns the rich quote
@@ -52,6 +54,8 @@ const TIMESERIES_BASE: &str =
     "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/";
 /// Intraday candles move constantly; cache them briefly regardless of config.
 const INTRADAY_TTL: Duration = Duration::from_secs(120);
+/// End of the `period=max` window for daily and weekly bars (year 2286).
+const MAX_PERIOD2: u64 = 9_999_999_999;
 
 pub struct Yahoo {
     fetcher: Arc<Fetcher>,
@@ -64,6 +68,17 @@ impl Yahoo {
     }
 
     pub fn chart_url(symbol: &Symbol, period: Period, interval: Interval) -> String {
+        // Yahoo answers `range=max` with monthly bars whatever interval is
+        // asked for (`dataGranularity: "1mo"`), so full daily or weekly
+        // history asks for the whole epoch instead. The fixed `period2`
+        // keeps the URL, and with it the cache key, stable.
+        if period == Period::Max && matches!(interval, Interval::Day1 | Interval::Week1) {
+            return format!(
+                "{CHART_BASE}{}?period1=0&period2={MAX_PERIOD2}&interval={}&includePrePost=false",
+                symbol.yahoo(),
+                interval.as_str()
+            );
+        }
         format!(
             "{CHART_BASE}{}?range={}&interval={}&includePrePost=false",
             symbol.yahoo(),
@@ -324,7 +339,17 @@ impl Provider for Yahoo {
                 ),
             ));
         }
-        Ok(Self::sourced(parse_chart(&f.body, period, interval)?, &f))
+        let history = parse_chart(&f.body, period, interval)?;
+        let mut warnings = vec![];
+        if history.interval != interval {
+            warnings.push(format!(
+                "Yahoo returned {} bars for {period}/{interval}; the candles are labelled {}",
+                history.interval, history.interval
+            ));
+        }
+        let mut out = Self::sourced(history, &f);
+        out.warnings.extend(warnings);
+        Ok(out)
     }
 
     async fn profile(&self, symbol: &Symbol) -> Result<Sourced<Profile>> {
@@ -603,6 +628,52 @@ mod tests {
         assert!(err.to_string().contains("delisted"), "{err}");
     }
 
+    const CHART_MAX_DAILY: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_period1_max_1d.json");
+    const CHART_RANGE_MAX: &str =
+        include_str!("../../../tests/fixtures/yahoo/chart_jkse_range_max_1d.json");
+
+    #[tokio::test]
+    async fn max_daily_history_asks_for_period1() {
+        let be = FixtureBackend::new().route(
+            "^JKSE?period1=0&period2=9999999999&interval=1d",
+            200,
+            CHART_MAX_DAILY,
+        );
+        let (y, be, _d) = yahoo(be, CacheMode::Normal);
+        let h = y
+            .history(
+                &Symbol::parse("^JKSE").unwrap(),
+                Period::Max,
+                Interval::Day1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.data.interval, Interval::Day1);
+        assert_eq!(h.data.candles.len(), 8905);
+        assert!(h.warnings.is_empty(), "{:?}", h.warnings);
+        assert_eq!(be.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn coarser_bars_than_asked_are_relabelled_with_a_warning() {
+        let be = FixtureBackend::new().route("^JKSE?period1=0", 200, CHART_RANGE_MAX);
+        let (y, _be, _d) = yahoo(be, CacheMode::Normal);
+        let h = y
+            .history(
+                &Symbol::parse("^JKSE").unwrap(),
+                Period::Max,
+                Interval::Day1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.data.interval, Interval::Month1);
+        assert_eq!(
+            h.warnings,
+            ["Yahoo returned 1mo bars for max/1d; the candles are labelled 1mo"]
+        );
+    }
+
     #[tokio::test]
     async fn one_minute_history_and_the_422_beyond_eight_days() {
         let be = FixtureBackend::new()
@@ -742,6 +813,23 @@ mod tests {
         assert!(
             Yahoo::chart_url(&Symbol::parse("^jkse").unwrap(), Period::D1, Interval::Min1)
                 .ends_with("/^JKSE?range=1d&interval=1m&includePrePost=false")
+        );
+        let jkse = Symbol::parse("^JKSE").unwrap();
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1d&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Week1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?period1=0&period2=9999999999&interval=1wk&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Max, Interval::Month1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=max&interval=1mo&includePrePost=false"
+        );
+        assert_eq!(
+            Yahoo::chart_url(&jkse, Period::Y2, Interval::Day1),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^JKSE?range=2y&interval=1d&includePrePost=false"
         );
         assert_eq!(urlencode("a/b c"), "a%2Fb%20c");
     }

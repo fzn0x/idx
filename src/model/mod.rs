@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{IdxError, Result};
 
 pub mod actions;
+pub mod astro;
 pub mod bandar;
 pub mod brief;
 pub mod broker;
@@ -37,6 +38,11 @@ pub mod watchlist;
 
 pub use actions::{
     ActionKind, CorporateAction, CorporateActions, ShareholderMeeting, WarrantRight,
+};
+pub use astro::{
+    Aspect, Astro, AstroBacktest, AstroBody, AstroEvent, AstroEventKind, AstroPeriod, AstroWindow,
+    BacktestFactor, BacktestGroup, Body, IhsgChart, MercuryState, MoonPhase, MoonState, NatalBody,
+    NatalChart, NatalChoice, RetrogradePeriod, Shio, Transit, Weton, ZodiacSign,
 };
 pub use bandar::{
     BandarDaily, BandarDay, BandarPeriod, BandarPhase, BandarReport, BandarScreen, BandarScreenRow,

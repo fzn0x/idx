@@ -32,6 +32,7 @@ export const WAITS = {
   actions: { on: "IPOT corporate actions", slow: IPOT_SLOW },
   market: { on: "the minute board" },
   ownership: { on: "the KSEI register" },
+  astro: { on: "the sky computed by the API; --backtest also reads ^JKSE history from Yahoo Finance (cached 6 hours)" },
 };
 
 /** The entry for a command (aliases resolved) and its first argument; {} for local commands. */

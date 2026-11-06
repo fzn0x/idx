@@ -27,9 +27,11 @@ use crate::providers::news as newsfeed;
 use crate::providers::{Provider, Sourced};
 use crate::universe::Issuer;
 
+mod astro;
 mod exchange;
 mod lenses;
 mod stockbit;
+pub use astro::*;
 pub use exchange::*;
 pub use lenses::*;
 pub use stockbit::*;

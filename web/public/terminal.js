@@ -39,6 +39,7 @@ const COMMANDS = [
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
   { name: "market", usage: "market", help: "IHSG, breadth, gainers, losers, most traded" },
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
+  { name: "astro", usage: "astro [DATE] [--days N] [--natal launch|base|none] [--backtest] [--period 1y|2y|5y|10y]", help: "IHSG astrology: planets, Moon phase, Mercury retrograde, weton and shio for a date (16:00 WIB), upcoming phases and ingresses, transits to IHSG's chart; --backtest tests them on IHSG's daily returns (5y by default). Traditional astrology, not a forecast" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
   { name: "members", usage: "members [--search TEXT]", help: "exchange members: the broker codes broker and bandar report, with names" },
   { name: "tools", usage: "tools [idx_TOOL]", help: "the MCP tools with their CLI and web commands; tools idx_quote runs one" },
@@ -664,6 +665,63 @@ const R = {
     frag.append(el("p", { class: "warn", text: `Covers ${h.years_covered.join(", ")}, from the calendar idx.co.id publishes. Weekend holidays are not listed; IDX can add a holiday later.` }));
     return frag;
   },
+  astro(a) {
+    const frag = document.createDocumentFragment();
+    const name = (s) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+    const hm = (iso) => (iso ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : fmt.text(null));
+    // Minutes truncated, never rounded up into the next degree (as the CLI prints them).
+    const dms = (deg) => { const d = Math.floor(deg); return `${d}°${String(Math.min(59, Math.floor((deg - d) * 60 + 1e-9))).padStart(2, "0")}'`; };
+    const signed = (v, d) => (v > 0 ? `+${fmt.num(v, d)}` : fmt.num(v, d));
+    const orNa = (v, f) => (v == null ? fmt.text(null) : f(v));
+    frag.append(el("p", { class: "prose", html: `<b>IHSG astro · ${a.weton.day} ${a.weton.pasaran} ${a.date}</b> · positions at ${a.at.slice(11, 16)} WIB, the IDX close` }));
+    frag.append(wrapScroll(table([
+      { h: "Body", f: (b) => name(b.body), l: true, cls: "sym" }, { h: "Sign", f: (b) => name(b.sign), l: true },
+      { h: "Position", f: (b) => `${dms(b.degree)}${b.retrograde ? " R" : ""}`, l: true }, { h: "Speed/day", f: (b) => `${signed(b.speed, 3)}°`, cls: (b) => `num ${signClass(b.speed)}` },
+    ], a.bodies)));
+    const m = a.moon, me = a.mercury;
+    frag.append(el("p", { class: "prose", text: `Moon: ${m.phase.replace(/_/g, " ")}, ${fmt.num(m.illumination * 100, 0)}% lit, ${fmt.num(m.age_days, 1)} days old · new moon ${hm(m.next_new_moon)} · full moon ${hm(m.next_full_moon)}` }));
+    let merc = me.retrograde ? `Mercury: retrograde${me.retrograde_since ? ` since ${hm(me.retrograde_since)}` : ""}${me.retrograde_until ? `, direct ${hm(me.retrograde_until)}` : ""}` : "Mercury: direct";
+    if (me.next_retrograde) merc += ` · next retrograde ${me.next_retrograde.from.slice(0, 10)}${me.next_retrograde.until ? ` to ${me.next_retrograde.until.slice(0, 10)}` : ""}`;
+    frag.append(el("p", { class: "prose", text: merc }));
+    const w = a.weton, sh = a.shio;
+    frag.append(el("p", { class: "prose", text: `Weton: ${w.day} ${w.pasaran}, neptu ${w.neptu_day} + ${w.neptu_pasaran} = ${w.neptu} · Shio: ${sh ? `${sh.animal_id} (${sh.element} ${sh.animal}) since Imlek ${sh.year_start}` : "not computed before 1924 or after 2050"}` }));
+    const days = Math.round((Date.parse(a.upcoming.to) - Date.parse(a.upcoming.from)) / 86400e3);
+    const what = (e) => {
+      const sign = name(e.sign);
+      if (e.kind === "ingress") return `${name(e.body)} enters ${sign}`;
+      if (e.kind === "station_retrograde") return `${name(e.body)} stations retrograde in ${sign}`;
+      if (e.kind === "station_direct") return `${name(e.body)} stations direct in ${sign}`;
+      return `${name(e.kind)}${e.kind === "new_moon" || e.kind === "full_moon" ? "" : " moon"} in ${sign}`;
+    };
+    frag.append(el("h3", { class: "stmt-title", text: `Next ${days} day${days === 1 ? "" : "s"}` }));
+    if (a.upcoming.events.length) frag.append(wrapScroll(table([{ h: "WIB", f: (e) => hm(e.at), l: true, cls: "sym" }, { h: "Event", f: what, l: true }], a.upcoming.events)));
+    else frag.append(el("p", { class: "warn", text: "No exact phases, stations or ingresses." }));
+    if (a.natal) {
+      frag.append(el("h3", { class: "stmt-title", text: `Transits to IHSG's chart (${a.natal.chart === "launch" ? "launch" : "base date"} ${a.natal.date}, noon WIB; orb 2°)` }));
+      if (a.natal.transits.length) frag.append(wrapScroll(table([
+        { h: "Transit", f: (t) => name(t.transit), l: true, cls: "sym" }, { h: "Aspect", k: "aspect", l: true }, { h: "Natal", f: (t) => `natal ${name(t.natal)}`, l: true },
+        { h: "Orb", f: (t) => `${fmt.num(t.orb, 2)}°` }, { h: "Motion", f: (t) => (t.applying ? "applying" : "separating"), l: true },
+      ], a.natal.transits)));
+      else frag.append(el("p", { class: "warn", text: "No aspects within 2° today." }));
+    }
+    const b = a.backtest;
+    if (b) {
+      frag.append(el("h3", { class: "stmt-title", text: `Backtest · ${b.symbol} daily close-to-close returns · ${b.from} to ${b.to} · ${fmt.int(b.returns)} sessions` }));
+      frag.append(el("p", { class: "prose", text: `All sessions: mean ${signed(b.mean_pct, 4)}%, median ${signed(b.median_pct, 4)}%, up ${fmt.num(b.win_rate_pct, 2)}%` }));
+      const FACTORS = { moon_phase: "Moon phase", mercury: "Mercury", pasaran: "Pasaran", sun_sign: "Sun sign" };
+      const rows = b.factors.flatMap((f) => f.groups.map((g) => ({ ...g, factor: FACTORS[f.factor] || f.factor })));
+      frag.append(wrapScroll(table([
+        { h: "Factor", k: "factor", l: true }, { h: "Group", f: (g) => name(g.group), l: true, cls: "sym" }, { h: "Days", f: (g) => fmt.int(g.n) },
+        { h: "Mean %", f: (g) => orNa(g.mean_pct, (v) => signed(v, 4)), cls: (g) => `num ${signClass(g.mean_pct)}` },
+        { h: "Median %", f: (g) => orNa(g.median_pct, (v) => signed(v, 4)) }, { h: "Up %", f: (g) => orNa(g.win_rate_pct, (v) => fmt.num(v, 1)) },
+        { h: "t", f: (g) => orNa(g.t_stat, (v) => fmt.num(v, 2)) }, { h: "p", f: (g) => orNa(g.p_value, (v) => `${fmt.num(v, 4)}${g.significant ? " *" : ""}`) },
+      ], rows)));
+      const verdict = b.significant === 0 ? "none pass" : `${b.significant} pass (marked *)`;
+      frag.append(el("p", { class: "prose", text: `${b.tests} tests against all other sessions (Welch's t); Bonferroni needs p < ${b.bonferroni_alpha} at ${b.alpha * 100}%: ${verdict}. Sun signs follow the calendar, so they also carry month-of-year effects. Descriptive, not a trading signal.` }));
+    }
+    frag.append(el("p", { class: "warn", text: `${a.disclaimer}${b ? "" : " Add --backtest to see how IHSG's daily returns split by these factors; the web runs 1y to 10y, the CLI all of it since 1990."}` }));
+    return frag;
+  },
   sentiment(s) {
     const frag = document.createDocumentFragment();
     const cls = s.label === "positive" ? "up" : s.label === "negative" ? "dn" : "";
@@ -893,6 +951,12 @@ async function run(line) {
       render = R.holidays;
       break;
     }
+    case "astro": {
+      const date = pos[0] || opt.date;
+      env = await api(`astro?${qs({ date, days: opt.days, natal: opt.natal, backtest: opt.backtest ? "1" : null, period: opt.period })}`);
+      render = R.astro;
+      break;
+    }
     case "ownership": {
       const sub = (pos[0] || "").toLowerCase();
       if (sub === "ticker") { need(pos, 2, cmd.usage); env = await api(`ownership/ticker?${qs({ symbol: pos[1], as_of: opt["as-of"] })}`); render = R.holders; }
@@ -1080,7 +1144,8 @@ function paintHistory() {
 
 // ---- the gate, the rail and the keys ------------------------------------------
 
-const SAMPLE = ["market", "brief BBCA", "quote BBCA", "returns BBCA BBRI BMRI", "dividends TLKM", "fundamental BBCA", "technical BBRI", "screen pe<10,div>5,mcap>5T --sort div", "news TLKM", "broker BBCA", "bandar BBCA --daily", "bandar screen --preset big-accumulation", "bandar broker YP", "actions BBCA", "holidays --upcoming", "compare BBCA BBRI BMRI", "ownership ticker BBCA", "tools", "help"];
+// hints + deep links (?cmd=)
+const SAMPLE = ["market", "brief BBCA", "quote BBCA", "returns BBCA BBRI BMRI", "dividends TLKM", "fundamental BBCA", "technical BBRI", "screen pe<10,div>5,mcap>5T --sort div", "news TLKM", "broker BBCA", "bandar BBCA --daily", "bandar screen --preset big-accumulation", "bandar broker YP", "actions BBCA", "holidays --upcoming", "astro", "compare BBCA BBRI BMRI", "ownership ticker BBCA", "tools", "help"];
 document.getElementById("hints").append(...SAMPLE.map((s) => el("button", { type: "button", text: s, onclick: () => runLine(s) })));
 
 const takesArgs = (usage) => /<[^>]+>/.test(usage.split(" | ")[0]);

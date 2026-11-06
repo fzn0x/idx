@@ -68,8 +68,17 @@ async function getWithSession(env, url) {
 
 // ---- raw fetchers ----------------------------------------------------------
 
+/** Mirrors Yahoo::chart_url: `range=max` comes back monthly whatever the
+ * interval, so full daily or weekly history asks for the whole epoch. */
+export function chartUrl(symbol, period = "1y", interval = "1d") {
+  if (period === "max" && (interval === "1d" || interval === "1wk")) {
+    return `${CHART}${yahooSymbol(symbol)}?period1=0&period2=9999999999&interval=${interval}&includePrePost=false`;
+  }
+  return `${CHART}${yahooSymbol(symbol)}?range=${period}&interval=${interval}&includePrePost=false`;
+}
+
 export async function fetchChart(symbol, period = "1y", interval = "1d") {
-  const url = `${CHART}${yahooSymbol(symbol)}?range=${period}&interval=${interval}&includePrePost=false`;
+  const url = chartUrl(symbol, period, interval);
   const r = await fetchWithin(url, { headers: { "User-Agent": UA } });
   const body = await r.json().catch(() => null);
   if (r.status === 404 || body?.chart?.error?.code === "Not Found") {
@@ -202,10 +211,20 @@ export function parseV7Quote(q) {
 /** Interval::bar_seconds: the intraday bar sizes in seconds. */
 const BAR_SECONDS = { "1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600 };
 
-export function parseChart(body, period, interval) {
+const INTERVALS = ["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"];
+/** Yahoo's dataGranularity as an interval idx knows ("60m" is its other name for "1h"), or null. */
+export function granularity(g) {
+  if (g === "60m") return "1h";
+  return INTERVALS.includes(g) ? g : null;
+}
+
+/** Mirrors parse::parse_chart: the interval is the bar size Yahoo reports
+ * (meta.dataGranularity) when idx knows it, otherwise the one asked for. */
+export function parseChart(body, period, requested) {
   const r = body?.chart?.result?.[0];
   if (!r) throw new Error("chart response has no result");
   const meta = r.meta || {};
+  const interval = granularity(meta.dataGranularity) || requested;
   const ts = r.timestamp || [];
   const q = r.indicators?.quote?.[0] || {};
   const adj = r.indicators?.adjclose?.[0]?.adjclose || [];
