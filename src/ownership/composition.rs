@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, NaiveDate};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
@@ -457,7 +457,10 @@ fn now() -> String {
 }
 
 /// Stores a parsed archive as the month for its `as_of`, replacing an earlier
-/// import of the same month.
+/// import of the same month. The write lock is taken up front (`BEGIN
+/// IMMEDIATE`): a deferred read-then-write transaction fails at once with
+/// "database is locked" when another connection commits in between, while
+/// this one waits for the other import to finish.
 pub fn import(
     db: &mut OwnershipDb,
     parsed: &ParsedComposition,
@@ -468,7 +471,10 @@ pub fn import(
     let database = db.path().display().to_string();
     let as_of = parsed.as_of.to_string();
     let imported_at = now();
-    let tx = db.conn_mut().transaction().map_err(db_err)?;
+    let tx = db
+        .conn_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_err)?;
     let existing: Option<i64> = tx
         .query_row(
             "SELECT id FROM composition_releases WHERE as_of = ?1",
@@ -705,13 +711,24 @@ fn next_month_end(d: NaiveDate) -> NaiveDate {
         .unwrap_or(d)
 }
 
-/// Downloads one listed archive and imports it.
+/// One automatic import at a time in this process.
+static AUTO_IMPORT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Downloads one listed archive and imports it, unless the month is in the
+/// database by the time it is this call's turn: `None` then. Parallel calls
+/// on a fresh database (an agent asking for several stocks at once) take
+/// turns, so the archive is downloaded once; another process importing the
+/// same month is waited for by [`import`].
 pub async fn import_listed(
     db: &mut OwnershipDb,
     file: &DiscoveredFile,
     timeout: Duration,
-) -> Result<(ImportReport, Vec<String>)> {
-    super::import_url(db, &file.url, timeout).await
+) -> Result<Option<(ImportReport, Vec<String>)>> {
+    let _turn = AUTO_IMPORT.lock().await;
+    if months(db)?.contains(&file.as_of) {
+        return Ok(None);
+    }
+    super::import_url(db, &file.url, timeout).await.map(Some)
 }
 
 /// `ownership composition`: [`read`], importing from ksei.co.id first when
@@ -753,10 +770,11 @@ pub async fn report(
                         .unwrap_or_else(|| "none".into())
                 ))
             })?;
-            let (r, w) = import_listed(db, file, timeout).await?;
-            warnings.extend(w);
-            warnings.push(imported_note(&r));
-            imported = true;
+            if let Some((r, w)) = import_listed(db, file, timeout).await? {
+                warnings.extend(w);
+                warnings.push(imported_note(&r));
+                imported = true;
+            }
         }
         None => {
             let newest = have.last().copied();
@@ -778,11 +796,12 @@ pub async fn report(
                         warnings.extend(listing.warnings);
                         match (newer, newest) {
                             (Some(f), _) => match import_listed(db, &f, timeout).await {
-                                Ok((r, w)) => {
+                                Ok(Some((r, w))) => {
                                     warnings.extend(w);
                                     warnings.push(imported_note(&r));
                                     imported = true;
                                 }
+                                Ok(None) => {}
                                 Err(e) if newest.is_some() => warnings.push(format!(
                                     "could not import the newer KSEI composition {} ({e}); showing {}",
                                     f.as_of,
@@ -1071,6 +1090,61 @@ mod tests {
         assert!(db.releases().unwrap().is_empty());
         assert_eq!(db.holders("BBCA", None).unwrap_err().exit_code(), 4);
         assert_eq!(read(&db, "BBCA", None).unwrap().source, "b.zip");
+    }
+
+    #[test]
+    fn an_import_waits_for_one_in_progress_on_another_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ownership.sqlite");
+        let mut other = OwnershipDb::open(&path).unwrap();
+        let mut db = OwnershipDb::open(&path).unwrap();
+        let (p, fmt) = parse_any("BalanceposEfek20261030.zip", OCT_ZIP).unwrap();
+        let (holding, held) = std::sync::mpsc::channel();
+        // Another connection is importing the same month: it holds the write
+        // lock for a while, then commits.
+        let writer = std::thread::spawn(move || {
+            let tx = other
+                .conn_mut()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            tx.execute(
+                "INSERT INTO composition_releases (as_of, format, source, sha256, row_count, other_types, imported_at)
+                 VALUES ('2026-10-30', 'zip', 'other.zip', 's0', 0, 0, 'now')",
+                [],
+            )
+            .unwrap();
+            holding.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            tx.commit().unwrap();
+        });
+        held.recv().unwrap();
+        // A deferred transaction would read before the commit and fail with
+        // "database is locked" on its first write.
+        let r = import(&mut db, &p, fmt, "a.zip", "s1").unwrap();
+        writer.join().unwrap();
+        assert!(r.replaced, "the other import was committed first");
+        assert_eq!(months(&db).unwrap(), [d(2026, 10, 30)]);
+        assert_eq!(read(&db, "BBCA", None).unwrap().source, "a.zip");
+    }
+
+    #[tokio::test]
+    async fn a_listed_month_imported_meanwhile_is_not_downloaded_again() {
+        let mut db = loaded();
+        let file = DiscoveredFile {
+            as_of: d(2026, 10, 30),
+            title: "Kepemilikan Efek 30 Oktober 2026".into(),
+            url: "file:///no/such/BalanceposEfek20261030.zip".into(),
+            format: "zip".into(),
+            origin: ksei::ORIGIN.into(),
+            sha256: None,
+            source_url: None,
+            family: "composition".into(),
+            importable: true,
+        };
+        let got = import_listed(&mut db, &file, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(got.is_none(), "the URL would fail if it were read");
     }
 
     #[test]
