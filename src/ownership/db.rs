@@ -36,6 +36,8 @@ use crate::model::{
 use super::ingest::{self, Parsed};
 use super::normalize;
 
+mod analytics;
+
 /// `PRAGMA user_version` this idx writes. 0 is a file created by idx 0.8.1
 /// or older (the pragma was never set) or a brand-new file; 2 adds register
 /// lines and summed positions. A later schema change adds an `if v < 3`
@@ -873,6 +875,17 @@ impl OwnershipDb {
     /// The query needs at least 3 letters or digits once normalised: `%%%` or
     /// `!!!` would otherwise normalise to an empty key and match everyone.
     pub fn entity(&self, query: &str, as_of: Option<NaiveDate>) -> Result<EntityReport> {
+        self.entity_matching(query, as_of, false)
+    }
+
+    /// [`Self::entity`], or with `exact` only the holder whose key is the
+    /// normalised query (a key from `ownership search`).
+    pub fn entity_matching(
+        &self,
+        query: &str,
+        as_of: Option<NaiveDate>,
+        exact: bool,
+    ) -> Result<EntityReport> {
         let key = normalize::entity_key(query);
         if key.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
             return Err(IdxError::Usage(
@@ -880,8 +893,12 @@ impl OwnershipDb {
             ));
         }
         let (release_id, date) = self.release_for(as_of)?;
-        let pattern = format!("%{key}%");
-        let holdings = self.holdings_where(release_id, date, "e.entity_key LIKE ?2", &pattern)?;
+        let holdings = if exact {
+            self.holdings_where(release_id, date, "e.entity_key = ?2", &key)?
+        } else {
+            let pattern = format!("%{key}%");
+            self.holdings_where(release_id, date, "e.entity_key LIKE ?2", &pattern)?
+        };
         if holdings.is_empty() {
             return Err(IdxError::NotFound(format!(
                 "no holder matching {query:?} as of {date}"

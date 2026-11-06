@@ -1361,7 +1361,7 @@ impl IdxServer {
                     return Err(IdxError::Usage("name needs at least 3 characters".into()));
                 }
                 let as_of = parse_date(&a.as_of)?;
-                let report = ownership::entity(&self.db()?, &a.name, as_of)?;
+                let report = ownership::entity(&self.db()?, &a.name, as_of, false)?;
                 ok(SCHEMA_OWNERSHIP_ENTITY, report)
             }
             .await,

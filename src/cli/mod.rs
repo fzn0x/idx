@@ -23,6 +23,7 @@ pub mod config_cmd;
 pub mod market;
 pub mod mcp_cmd;
 pub mod ownership;
+pub mod ownership_analytics;
 pub mod stockbit;
 pub mod stocks;
 pub mod watch;
@@ -122,7 +123,7 @@ pub enum Command {
     #[command(subcommand)]
     Stocks(stocks::StocksCmd),
 
-    /// KSEI shareholder register (holders above 1 %): import monthly files, query holders, entities, changes.
+    /// KSEI shareholder register (holders above 1 %): import monthly files; holders, entities, search, cross-holders, concentration, network graph, changes.
     #[command(subcommand)]
     Ownership(ownership::OwnershipCmd),
 

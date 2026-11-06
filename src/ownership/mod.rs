@@ -10,6 +10,9 @@
 //! the CLI, the MCP server and `stocks brief` call: each returns the report
 //! with the database's notes about the releases it read (imported by an old
 //! idx, rows dated otherwise) in `warnings`.
+//!
+//! `analytics` ranks a release's positions (search, cross-holders,
+//! concentration, the network graph).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -19,11 +22,13 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{IdxError, Result};
 use crate::model::{
-    ChangesReport, DiscoveredFile, EntityReport, ForeignFlowReport, ForeignReport, HoldersReport,
-    ImportReport, Release,
+    ChangesReport, ConcentrationReport, ConcentrationSort, CrossHoldersReport, DiscoveredFile,
+    EntityReport, ForeignFlowReport, ForeignReport, GraphReport, HoldersReport, ImportReport,
+    Release, SearchReport, Symbol,
 };
 use crate::providers::Sourced;
 
+pub mod analytics;
 pub mod db;
 pub mod discover;
 pub mod ingest;
@@ -83,13 +88,15 @@ pub fn holders(
     sourced(db, r, &[date])
 }
 
-/// `ownership entity`: every position of the holders matching `name`.
+/// `ownership entity`: every position of the holders matching `name`
+/// (with `exact`, of the one holder whose key it is).
 pub fn entity(
     db: &OwnershipDb,
     name: &str,
     as_of: Option<NaiveDate>,
+    exact: bool,
 ) -> Result<Sourced<EntityReport>> {
-    let r = db.entity(name, as_of)?;
+    let r = db.entity_matching(name, as_of, exact)?;
     let date = r.as_of;
     sourced(db, r, &[date])
 }
@@ -137,6 +144,70 @@ pub fn releases(db: &OwnershipDb) -> Result<Sourced<Vec<Release>>> {
             .push("no ownership data imported yet; run `idx ownership import --latest`".into());
     }
     Ok(s)
+}
+
+fn with_notes<T>(
+    db: &OwnershipDb,
+    data: T,
+    dates: &[NaiveDate],
+    warnings: Vec<String>,
+) -> Result<Sourced<T>> {
+    let mut s = sourced(db, data, dates)?;
+    s.warnings.extend(warnings);
+    Ok(s)
+}
+
+/// `ownership search`: holders of every release matching `query`.
+pub fn search(
+    db: &OwnershipDb,
+    query: &str,
+    as_of: Option<NaiveDate>,
+    limit: Option<usize>,
+) -> Result<Sourced<SearchReport>> {
+    let (r, w) = db.search(query, as_of, limit)?;
+    let date = r.as_of;
+    with_notes(db, r, &[date], w)
+}
+
+/// `ownership cross-holders`: holders ranked by issuers held.
+pub fn cross_holders(
+    db: &OwnershipDb,
+    filter: &analytics::CrossFilter,
+    limit: Option<usize>,
+    as_of: Option<NaiveDate>,
+) -> Result<Sourced<CrossHoldersReport>> {
+    let r = db.cross_holders(filter, limit, as_of)?;
+    let date = r.as_of;
+    sourced(db, r, &[date])
+}
+
+/// `ownership concentration`: issuers ranked by HHI, top-1 or top-3 stake.
+pub fn concentration(
+    db: &OwnershipDb,
+    symbols: Option<&[Symbol]>,
+    by: ConcentrationSort,
+    ascending: bool,
+    limit: Option<usize>,
+    as_of: Option<NaiveDate>,
+) -> Result<Sourced<ConcentrationReport>> {
+    let (r, w) = db.concentration(symbols, by, ascending, limit, as_of)?;
+    let date = r.as_of;
+    with_notes(db, r, &[date], w)
+}
+
+/// `ownership graph`: the network around a ticker or holder.
+pub fn graph(
+    db: &OwnershipDb,
+    root: &str,
+    force_holder: bool,
+    depth: usize,
+    min_pct: f64,
+    max_nodes: usize,
+    as_of: Option<NaiveDate>,
+) -> Result<Sourced<GraphReport>> {
+    let (r, w) = db.graph(root, force_holder, depth, min_pct, max_nodes, as_of)?;
+    let date = r.as_of;
+    with_notes(db, r, &[date], w)
 }
 
 pub fn import_file(db: &mut OwnershipDb, path: &Path) -> Result<(ImportReport, Vec<String>)> {
