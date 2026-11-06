@@ -29,3 +29,15 @@ source's latest session and contains it counts that session twice; the
 | brokersummary_tlkm_20261012_20261014.html, brokersummary_tlkm_20261015.html, brokersummary_tlkm_20261016.html | TLKM, 10-12 to 10-14, then one session each | 2026-11-06 08:52 | `F. NVal` -96.6 B, -17.9 B, -90.2 B |
 | brokersummary_zzzz_invalid.html | `code=ZZZZ` | 2026-10-17 | `Invalid stock code!`, HTTP 200 |
 | corporateaction_*.html | `corporateaction.php?code=CODE&start=MM/DD/YYYY` | 2026-10-18 | corporate actions, RUPS, warrants and rights (see `actions.rs`) |
+
+One investor side (`fd=F` foreign, `fd=D` domestic) and one board: the
+footer's `T. Val`, `T.Lot` and `Avg` are that side's buying, and `F. NVal`
+is the all-board foreign net on every page.
+
+| file | request | recorded | notes |
+| --- | --- | --- | --- |
+| brokersummary_bbca_20261016_foreign.html | BBCA 10-16, `fd=F` | by 2026-10-18 | from 0xrsydn/idx-cli (MIT, added there 2026-10-18), `ipot_brokersummary_bbca_20261016_foreign_all.html`, byte-identical: `T. Val` 1.7 T (foreign buying), `F. NVal` -2.3 T |
+| brokersummary_bbca_20261016_domestic.html | BBCA 10-16, `fd=D` | by 2026-10-18 | from 0xrsydn/idx-cli (MIT, added there 2026-10-18), `ipot_brokersummary_bbca_20261016_domestic_all.html`, byte-identical: `T. Val` 4.9 T (domestic buying) |
+| brokersummary_bbca_20261016_foreign_regular.html | BBCA 10-16, `fd=F&board=RG` | by 2026-10-18 | from 0xrsydn/idx-cli (MIT, added there 2026-10-18), `ipot_brokersummary_bbca_20261016_foreign_regular.html`, byte-identical: `T. Val` 1.6 T, `F. NVal` still the all-board -2.3 T |
+| brokersummary_bbca_20261105_foreign.html | BBCA 11-05, `fd=F` | 2026-11-06 06:49 | `T. Val` 605.4 B, `F. NVal` 303.9 B: foreign investors sold 301.5 B |
+| brokersummary_bbca_20261105_domestic.html | BBCA 11-05, `fd=D` | 2026-11-06 06:51 | `T. Val` 242.8 B: with the foreign 605.4 B, the 848.3 B traded |

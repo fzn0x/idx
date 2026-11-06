@@ -39,6 +39,13 @@ pub struct Parsed {
 impl Parsed {
     /// The summary for `symbol`; `from` and `to` stand in when the page did
     /// not echo its range. Names are left for the caller to fill in.
+    ///
+    /// What the footer means depends on the filters (verified 2026-11-06):
+    /// for one investor side `T. Val`, `T.Lot` and `Avg` are that side's
+    /// buying (BBCA 11-05: foreign 605.4 B + domestic 242.8 B = the 848.3 B
+    /// traded), so they become `buy_value` and the totals stay `null`;
+    /// `F. NVal` is the same on every page and ignores the board filter, so
+    /// with a board filter there is no net for that board.
     pub fn into_summary(
         self,
         symbol: Symbol,
@@ -47,6 +54,8 @@ impl Parsed {
         investor: BrokerInvestor,
         board: BrokerBoard,
     ) -> BrokerSummary {
+        let all = investor == BrokerInvestor::All;
+        let foreign_net_value = self.foreign_net_value.filter(|_| board == BrokerBoard::All);
         BrokerSummary {
             symbol,
             name: None,
@@ -56,12 +65,26 @@ impl Parsed {
             board,
             buyers: self.buyers,
             sellers: self.sellers,
-            total_value: self.total_value,
-            total_lots: self.total_lots,
-            foreign_net_value: self.foreign_net_value,
-            average_price: self.average_price,
+            total_value: self.total_value.filter(|_| all),
+            total_lots: self.total_lots.filter(|_| all),
+            foreign_net_value,
+            average_price: self.average_price.filter(|_| all),
+            buy_value: self.total_value,
+            sell_value: sell_value(investor, self.total_value, foreign_net_value),
             rounded: self.rounded,
         }
+    }
+}
+
+/// What the selected investors sold, from what they bought and the foreign
+/// net: every trade has a buyer and a seller, so all investors sold what
+/// they bought, foreign investors sold their buying less the net, and
+/// domestic investors their buying plus it.
+pub fn sell_value(investor: BrokerInvestor, buy: Option<f64>, net: Option<f64>) -> Option<f64> {
+    match investor {
+        BrokerInvestor::All => buy,
+        BrokerInvestor::Foreign => Some(buy? - net?),
+        BrokerInvestor::Domestic => Some(buy? + net?),
     }
 }
 
@@ -314,6 +337,76 @@ mod tests {
         assert_eq!(p.average_price, None, "Avg : 0 means no average");
         assert!(!p.rounded);
         assert_eq!(p.to, Some(d(2026, 10, 17)));
+    }
+
+    fn side(html: &str, investor: BrokerInvestor, board: BrokerBoard) -> BrokerSummary {
+        let day = d(2026, 10, 16);
+        summary(html).into_summary(Symbol::parse("BBCA").unwrap(), day, day, investor, board)
+    }
+
+    #[test]
+    fn one_investor_side_is_its_buying_and_selling_not_a_total() {
+        use BrokerBoard as B;
+        use BrokerInvestor as I;
+        let foreign =
+            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261016_foreign.html");
+        let domestic =
+            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261016_domestic.html");
+        let regular = include_str!(
+            "../../../tests/fixtures/ipot/brokersummary_bbca_20261016_foreign_regular.html"
+        );
+
+        let all = side(DAY, I::All, B::All);
+        assert_eq!(all.total_value, Some(6_600_000_000_000.0));
+        assert_eq!(
+            (all.buy_value, all.sell_value),
+            (all.total_value, all.total_value)
+        );
+
+        // Foreign: T. Val 1.7 T is their buying; F. NVal -2.3 T, so they sold 4.0 T.
+        let f = side(foreign, I::Foreign, B::All);
+        assert_eq!(
+            (f.total_value, f.total_lots, f.average_price),
+            (None, None, None)
+        );
+        assert_eq!(f.buy_value, Some(1_700_000_000_000.0));
+        assert_eq!(f.sell_value, Some(4_000_000_000_000.0));
+        assert_eq!(f.foreign_net_value, Some(-2_300_000_000_000.0));
+        assert_eq!(f.buyers.len(), 10, "the broker lists stay");
+
+        // Domestic: bought 4.9 T, sold 4.9 T - 2.3 T = 2.6 T.
+        let dm = side(domestic, I::Domestic, B::All);
+        assert_eq!(dm.total_value, None);
+        assert_eq!(dm.buy_value, Some(4_900_000_000_000.0));
+        assert_eq!(dm.sell_value, Some(2_600_000_000_000.0));
+
+        // Regular board: the page still shows the all-board net, so none is kept.
+        let r = side(regular, I::Foreign, B::Regular);
+        assert_eq!(r.buy_value, Some(1_600_000_000_000.0));
+        assert_eq!((r.sell_value, r.foreign_net_value), (None, None));
+        let r = side(regular, I::All, B::Regular);
+        assert_eq!(r.foreign_net_value, None);
+        assert_eq!(
+            r.total_value, r.sell_value,
+            "every board trade has both sides"
+        );
+
+        // BBCA 11-05, probed 2026-11-06: foreign 605.4 B + domestic 242.8 B
+        // bought the 848.3 B traded; foreign investors sold 301.5 B.
+        let f = side(
+            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261105_foreign.html"),
+            I::Foreign,
+            B::All,
+        );
+        assert_eq!(f.buy_value, Some(605_400_000_000.0));
+        assert_eq!(f.sell_value, Some(301_500_000_000.0));
+        let dm = side(
+            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261105_domestic.html"),
+            I::Domestic,
+            B::All,
+        );
+        assert_eq!(dm.buy_value, Some(242_800_000_000.0));
+        assert_eq!(dm.sell_value, Some(546_700_000_000.0));
     }
 
     #[test]

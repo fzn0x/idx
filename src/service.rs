@@ -1105,11 +1105,20 @@ async fn bandar_one(
             }
         }
     };
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        let (from, to) = (s.data.from, s.data.to);
+        if let Err(e) = with_value_traded(fetcher, &symbol, from, to, q.board, today, &mut s).await
+        {
+            s.warnings.push(format!(
+                "{symbol}: no value traded from {from} to {to}, so no percentages ({e})"
+            ));
+        }
+    }
     let mut sessions = Vec::new();
     if q.daily {
         let days = bd::weekdays(s.data.from, s.data.to);
         let got: Vec<Result<Sourced<BrokerSummary>>> = stream::iter(days)
-            .map(|d| ipot::broker_summary(fetcher, &symbol, d, d, q.investor, q.board, today))
+            .map(|d| bandar_session(fetcher, &symbol, d, q, today))
             .buffered(3)
             .collect()
             .await;
@@ -1126,6 +1135,42 @@ async fn bandar_one(
         }
     }
     Ok((s, sessions))
+}
+
+/// For one investor side the source publishes that side's buying, not the
+/// value traded, while bandar's percentages are shares of the stock's value
+/// traded: take `total_value` and `total_lots` from the all-investor summary
+/// of the same range and board (one more request, cached).
+async fn with_value_traded(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    from: NaiveDate,
+    to: NaiveDate,
+    board: BrokerBoard,
+    today: NaiveDate,
+    side: &mut Sourced<BrokerSummary>,
+) -> Result<()> {
+    let all =
+        ipot::broker_summary(fetcher, symbol, from, to, BrokerInvestor::All, board, today).await?;
+    side.absorb(&all);
+    side.data.total_value = all.data.total_value;
+    side.data.total_lots = all.data.total_lots;
+    Ok(())
+}
+
+/// One session of the daily series, with the value traded for one side.
+async fn bandar_session(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    day: NaiveDate,
+    q: BandarQuery,
+    today: NaiveDate,
+) -> Result<Sourced<BrokerSummary>> {
+    let mut s = ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today).await?;
+    if q.investor != BrokerInvestor::All && !s.data.is_empty() {
+        with_value_traded(fetcher, symbol, day, day, q.board, today, &mut s).await?;
+    }
+    Ok(s)
 }
 
 /// Bandarmology for each ticker: the top 1/3/5/10 buyers against the top
@@ -2205,6 +2250,53 @@ mod tests {
             assert_eq!(r.foreign_net_value, Some(-1_823_100_000_000.0));
             // Base for a range that starts on the 12th is the close of the 9th.
             assert!((r.price_change_pct.unwrap() - (5_175.0 / 6_050.0 - 1.0) * 100.0).abs() < 1e-9);
+        }
+
+        #[tokio::test]
+        async fn one_investor_side_reads_against_the_value_traded() {
+            let (f, be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=F&",
+                        200,
+                        include_str!(
+                            "../tests/fixtures/ipot/brokersummary_bbca_20261016_foreign.html"
+                        ),
+                    )
+                    .route(
+                        "code=BBCA&start=10/16/2026&end=10/16/2026&fd=all&",
+                        200,
+                        DAY,
+                    ),
+            );
+            let mut query = q(BandarPeriod::Day1);
+            query.investor = BrokerInvestor::Foreign;
+            query.daily = true;
+            let got = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), query, d(10, 17))
+                .await
+                .unwrap();
+            let r = &got.data[0];
+            assert_eq!(r.investor, BrokerInvestor::Foreign);
+            // The foreign page's T. Val (1.7 T) is their buying; the
+            // percentages are of the 6.6 T BBCA traded.
+            assert_eq!(r.total_value, Some(6_600_000_000_000.0));
+            assert_eq!(r.total_lots, Some(12_600_000.0));
+            let head = r.tiers.iter().find(|t| t.top == 5).unwrap();
+            let pct = head.net_pct.unwrap();
+            assert!(
+                (pct - head.net_value / 6.6e12 * 100.0).abs() < 1e-9,
+                "{pct}"
+            );
+            let fpct = r.foreign_net_pct.unwrap();
+            assert!((fpct - -2.3 / 6.6 * 100.0).abs() < 1e-9, "{fpct}");
+            let daily = r.daily.as_ref().unwrap();
+            assert_eq!(daily.days[0].total_value, Some(6_600_000_000_000.0));
+            assert_eq!(
+                be.call_count(),
+                2,
+                "the side's page and the all-investor page, cached"
+            );
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
         }
 
         #[tokio::test]

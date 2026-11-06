@@ -67,6 +67,30 @@ export function parse(html) {
   };
 }
 
+// ---- what the footer means ----------------------------------------------
+
+/** What the selected investors sold, like ipot::parse::sell_value: all investors what they bought, foreign their buying less the net, domestic plus it. */
+export function sellValue(investor, buy, net) {
+  if (investor === "all") return buy;
+  if (buy == null || net == null) return null;
+  return investor === "foreign" ? buy - net : buy + net;
+}
+
+/**
+ * The footer read like ipot::parse::Parsed::into_summary: for one investor
+ * side T. Val, T.Lot and Avg are that side's buying, so the totals are null
+ * and T. Val is buy_value; the foreign net covers every board, so a board
+ * filter leaves it out.
+ */
+export function totals(p, investor = "all", board = "all") {
+  const all = investor === "all";
+  const net = board === "all" ? p.foreign_net_value : null;
+  return {
+    total_value: all ? p.total_value : null, total_lots: all ? p.total_lots : null, foreign_net_value: net,
+    average_price: all ? p.average_price : null, buy_value: p.total_value, sell_value: sellValue(investor, p.total_value, net),
+  };
+}
+
 // ---- range foreign net -------------------------------------------------
 
 const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);

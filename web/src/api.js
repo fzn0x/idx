@@ -462,9 +462,10 @@ async function ipotPage(env, symbol, from, to, investor, board, today) {
 async function brokerRange(env, symbol, from, to, investor, board, today) {
   const r = await ipotPage(env, symbol, from, to, investor, board, today);
   const p = r.value;
+  const t = ipot.totals(p, investor, board);
   const warnings = r.warning ? [r.warning] : [];
-  let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at, net = p.foreign_net_value;
-  if (ipot.rangeNetSuspect(from, to, p, ipot.wibDate(r.fetched_at), today)) {
+  let cachedAll = r.cached, stale = r.stale, fetchedAt = r.fetched_at, net = t.foreign_net_value;
+  if (ipot.rangeNetSuspect(from, to, { ...p, foreign_net_value: net }, ipot.wibDate(r.fetched_at), today)) {
     try {
       net = await ipot.rebuildNet(from, to, today, async (f, t) => {
         const x = await ipotPage(env, symbol, f, t, investor, board, today);
@@ -481,9 +482,28 @@ async function brokerRange(env, symbol, from, to, investor, board, today) {
   const data = {
     symbol, name: NAME_BY_SYMBOL.get(symbol) || null, from: p.from || from, to: p.to || to, investor, board,
     buyers: p.buyers.map(flow), sellers: p.sellers.map(flow),
-    total_value: p.total_value, total_lots: p.total_lots, foreign_net_value: net, average_price: p.average_price, rounded: p.rounded,
+    total_value: t.total_value, total_lots: t.total_lots, foreign_net_value: net, average_price: t.average_price,
+    buy_value: t.buy_value, sell_value: ipot.sellValue(investor, t.buy_value, net), rounded: p.rounded,
   };
   return { data, cached: cachedAll, stale, fetched_at: fetchedAt, warnings };
+}
+
+/**
+ * For one investor side the page's totals are that side's buying; bandar's
+ * percentages need the stock's value traded, so they come from the
+ * all-investor page of the same range and board, like service::with_value_traded.
+ */
+async function withValueTraded(env, sum, investor, board, today) {
+  const d = sum.data;
+  if (investor === "all" || (!d.buyers.length && !d.sellers.length)) return;
+  try {
+    const all = await ipotPage(env, d.symbol, d.from, d.to, "all", board, today);
+    d.total_value = all.value.total_value;
+    d.total_lots = all.value.total_lots;
+    sum.cached &&= all.cached; sum.stale ||= all.stale; sum.fetched_at = Math.min(sum.fetched_at, all.fetched_at);
+  } catch (e) {
+    sum.warnings.push(`${d.symbol}: no value traded from ${d.from} to ${d.to}, so no percentages (${e.message})`);
+  }
 }
 
 async function brokerLatest(env, symbol, investor, board, today) {
@@ -573,14 +593,29 @@ async function boardQuotes(env) {
   return new Map((b?.value?.quotes || []).map((q) => [q.symbol, q]));
 }
 
-/** Every weekday's summary of the range as one cached row (one D1 read, one write). */
+/**
+ * Every weekday's summary of the range as one cached row (one D1 read, one
+ * write), read like ipot::parse::Parsed::into_summary; for one investor side
+ * each session's value traded comes from its all-investor page.
+ */
 async function bandarSessions(env, symbol, from, to, investor, mboard, today) {
   const ttl = to < today ? 7 * 86400 : 5 * 60;
-  return cached(env, `bandar_daily:${symbol}:${from}:${to}:${investor}:${mboard}`, ttl, async () => {
+  return cached(env, `bandar_days:${symbol}:${from}:${to}:${investor}:${mboard}`, ttl, async () => {
     const days = bd.weekdays(from, to), out = [];
+    const page = async (d, who) => ipot.parse(await ipot.fetchPage(ipot.url(symbol, d, d, who, mboard)));
     for (let i = 0; i < days.length; i += 3) {
-      const pages = await Promise.all(days.slice(i, i + 3).map(async (d) => [d, ipot.parse(await ipot.fetchPage(ipot.url(symbol, d, d, investor, mboard)))]));
-      for (const [d, p] of pages) if (!p.invalid) out.push({ ...p, from: p.from || d, to: p.to || d });
+      const pages = await Promise.all(days.slice(i, i + 3).map(async (d) => {
+        const p = await page(d, investor);
+        if (p.invalid) return [d, p, null];
+        const traded = p.buyers.length || p.sellers.length;
+        return [d, p, investor !== "all" && traded ? await page(d, "all") : null];
+      }));
+      for (const [d, p, all] of pages) {
+        if (p.invalid) continue;
+        const t = ipot.totals(p, investor, mboard);
+        if (all && !all.invalid) Object.assign(t, { total_value: all.total_value, total_lots: all.total_lots });
+        out.push({ ...p, ...t, from: p.from || d, to: p.to || d });
+      }
     }
     return out;
   });
@@ -601,6 +636,7 @@ async function bandarOne(env, s, q) {
       sum.cached &&= latest.cached;
     }
   }
+  await withValueTraded(env, sum, investor, mboard, today);
   const d = sum.data, warnings = [...sum.warnings];
   const empty = !d.buyers.length && !d.sellers.length;
   if (from && empty) warnings.push(`${s}: no trades from ${from} to ${to}`);
@@ -651,6 +687,11 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
   if (daily && symbols.length > 1) throw usage("the daily series on the web takes one ticker; the CLI takes three");
   if (daily && ((!from && period === "3m") || (from && bd.weekdays(from, to).length > BANDAR_DAILY_MAX_SESSIONS))) {
     throw usage(`the daily series on the web covers at most ${BANDAR_DAILY_MAX_SESSIONS} sessions (1m); the CLI goes further`);
+  }
+  // One investor side reads two pages a session (its own and the value traded).
+  const sideMax = Math.floor(BANDAR_DAILY_MAX_SESSIONS / 2);
+  if (daily && investor !== "all" && ((!from && period !== "1d" && period !== "1w") || (from && bd.weekdays(from, to).length > sideMax))) {
+    throw usage(`the daily series for one investor side on the web covers at most ${sideMax} sessions (1w), two requests each; the CLI goes further`);
   }
   const quotes = await boardQuotes(env);
   const q = { period, from, to, top, investor, mboard, daily, today, quotes };

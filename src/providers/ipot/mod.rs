@@ -188,6 +188,7 @@ pub async fn broker_summary_range(
             ));
         }
     }
+    s.data.sell_value = parse::sell_value(investor, s.data.buy_value, s.data.foreign_net_value);
     Ok(s)
 }
 

@@ -370,7 +370,11 @@ const R = {
       const range = s.from === s.to ? s.from : `${s.from} to ${s.to}`;
       frag.append(el("p", { class: "prose", html: `<b>${s.symbol}</b>${s.name ? ` · ${s.name}` : ""} · ${range} · ${s.investor} investors · ${s.board === "all" ? "all boards" : `${s.board} board`}` }));
       if (!s.buyers.length && !s.sellers.length) { frag.append(el("p", { class: "warn", text: `No trades from ${s.from} to ${s.to}.` })); continue; }
-      frag.append(el("p", { class: "prose", html: `Value ${fmt.compact(s.total_value)} · lots ${fmt.compact(s.total_lots)} · avg ${fmt.price(s.average_price)} · foreign net <span class="${signClass(s.foreign_net_value)}">${fmt.compact(s.foreign_net_value)}</span>` }));
+      // One investor side: the source's totals are that side's buying, so it reads as bought and sold.
+      const totals = s.investor === "all"
+        ? `Value ${fmt.compact(s.total_value)} · lots ${fmt.compact(s.total_lots)} · avg ${fmt.price(s.average_price)}`
+        : `${s.investor === "foreign" ? "Foreign" : "Domestic"} investors bought ${fmt.compact(s.buy_value)} · sold ${fmt.compact(s.sell_value)}`;
+      frag.append(el("p", { class: "prose", html: `${totals} · foreign net <span class="${signClass(s.foreign_net_value)}">${fmt.compact(s.foreign_net_value)}</span>` }));
       const grid = el("div", { class: "two" });
       grid.append(
         el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: "Top buyers" }), wrapScroll(table(cols, s.buyers))]),
@@ -378,7 +382,7 @@ const R = {
       );
       frag.append(grid);
     }
-    frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}` }));
+    frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}${list.some((s) => s.board !== "all") ? " The source's foreign net covers every board, so a board filter leaves it out." : ""}` }));
     return frag;
   },
   actions(c) {

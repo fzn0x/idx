@@ -615,6 +615,62 @@ fn seed(cache: &std::path::Path, url: &str, fixture: &str) {
 }
 
 #[test]
+fn broker_one_investor_side_carries_its_buying_and_selling() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        "https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=10/16/2026&end=10/16/2026&fd=F&board=all",
+        "ipot/brokersummary_bbca_20261016_foreign.html",
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "json",
+            "broker",
+            "BBCA",
+            "--date",
+            "2026-10-16",
+            "--investor",
+            "foreign",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let s = &v["data"][0];
+    assert_eq!(s["investor"], "foreign");
+    assert!(s["total_value"].is_null(), "{s}");
+    assert!(s["total_lots"].is_null() && s["average_price"].is_null());
+    assert_eq!(s["buy_value"], 1.7e12);
+    assert_eq!(s["sell_value"], 4.0e12);
+    assert_eq!(s["foreign_net_value"], -2.3e12);
+    idx(&sb.cache, &sb.config)
+        .args([
+            "broker",
+            "BBCA",
+            "--date",
+            "2026-10-16",
+            "--investor",
+            "foreign",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Foreign investors bought 1.70T · sold 4.00T · foreign net -2.30T",
+        ));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "broker"])
+        .output()
+        .unwrap();
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(schema.contains("buy_value") && schema.contains("sell_value"));
+}
+
+#[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();
     seed(

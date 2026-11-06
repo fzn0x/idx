@@ -146,7 +146,23 @@ ranked by lots, most first: `rank`, `code`, `name` from the bundled IDX member
 list or `null`, `kind` = `local` | `foreign` | `state_owned` or `null`, `lots`
 (1 lot = 100 shares), `value` in IDR, `average_price`), and the range totals
 `total_value`, `total_lots`, `foreign_net_value` (foreign buy minus sell),
-`average_price` (`null` when nothing traded). The source abbreviates figures
+`average_price` (`null` when nothing traded), `buy_value` and `sell_value`
+(what the selected investors bought and sold, IDR). What the source's
+totals mean depends on the filters:
+
+- All investors: `total_value`, `total_lots` and `average_price` are the
+  range's; `buy_value` and `sell_value` both equal the value traded.
+- One side (`investor` `foreign` or `domestic`): the source's totals are that
+  side's buying, so `total_value`, `total_lots` and `average_price` are
+  `null`, `buy_value` is the side's buying as published, and `sell_value` is
+  computed by idx from the foreign net: foreign `buy_value -
+  foreign_net_value`, domestic `buy_value + foreign_net_value`. BBCA on
+  2026-11-05: foreign investors bought 605.4 B and sold 301.5 B, domestic
+  investors bought 242.8 B, of 848.3 B traded.
+- A board filter: the source's foreign net covers every board whatever the
+  filter, so `foreign_net_value` is `null`, and so is a side's `sell_value`.
+
+The source abbreviates figures
 of a million and more to one decimal (`1.6 M`); those arrive as plain numbers
 at that precision and the summary carries `rounded: true`. Nothing is netted
 per broker or estimated. A range without trades has empty lists and a warning.
@@ -187,7 +203,11 @@ sessions in a row, -2 = two distribution sessions) and
 `cumulative_net_value`), `reasons[]` and `rounded`. A range without trades
 reads `neutral` with a single reason. `foreign_net_value` over several
 sessions is rebuilt from single sessions as described for `idx.broker.v1`;
-`bandar screen` and `bandar broker` read their ranges the same way.
+`bandar screen` and `bandar broker` read their ranges the same way. With an
+`investor` filter the brokers are that side's, while `total_value`,
+`total_lots` and every percentage stay those of the stock's value traded,
+read from the all-investor summary of the same range and board (one more
+request per range, and per session with `--daily`).
 
 ## `idx.bandar.screen.v1` (`bandar screen`)
 

@@ -131,6 +131,22 @@ test("a range through the latest session gets its foreign net rebuilt like the R
   assert.equal(ipot.wibDate(Date.parse("2026-11-05T17:30:00Z") / 1000), "2026-11-06");
 });
 
+test("one investor side is its buying and selling, not a total, like the Rust side", () => {
+  const foreign = ipot.totals(ipot.parse(fixture("brokersummary_bbca_20261016_foreign.html")), "foreign", "all");
+  assert.deepEqual(foreign, {
+    total_value: null, total_lots: null, average_price: null, foreign_net_value: -2_300_000_000_000,
+    buy_value: 1_700_000_000_000, sell_value: 4_000_000_000_000,
+  });
+  const domestic = ipot.totals(ipot.parse(fixture("brokersummary_bbca_20261016_domestic.html")), "domestic", "all");
+  assert.deepEqual([domestic.total_value, domestic.buy_value, domestic.sell_value], [null, 4_900_000_000_000, 2_600_000_000_000]);
+  const regular = ipot.totals(ipot.parse(fixture("brokersummary_bbca_20261016_foreign_regular.html")), "foreign", "regular");
+  assert.deepEqual([regular.buy_value, regular.sell_value, regular.foreign_net_value], [1_600_000_000_000, null, null]);
+  const all = ipot.totals(ipot.parse(DAY));
+  assert.deepEqual([all.total_value, all.buy_value, all.sell_value], [6_600_000_000_000, 6_600_000_000_000, 6_600_000_000_000]);
+  const nov5 = ipot.totals(ipot.parse(fixture("brokersummary_bbca_20261105_foreign.html")), "foreign");
+  assert.deepEqual([nov5.buy_value, nov5.sell_value], [605_400_000_000, 301_500_000_000]);
+});
+
 // Minimal D1 stand-in: every read misses, writes succeed.
 const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => null, run: async () => ({}) }) }) } };
 
@@ -146,12 +162,27 @@ test("the /api/broker envelope names brokers and reports failed tickers", async 
     assert.equal(s.name, "BANK CENTRAL ASIA Tbk");
     assert.equal(s.buyers[0].name, "SEMESTA INDOVEST SEKURITAS");
     assert.equal(s.investor, "all");
+    assert.deepEqual([s.buy_value, s.sell_value], [6_600_000_000_000, 6_600_000_000_000]);
     assert.ok(out.warnings.includes("no broker summary for ZZZZ"), out.warnings);
     await assert.rejects(broker(env, "ZZZZ", "2026-10-16"), (e) => e.code === "not_found");
     await assert.rejects(broker(env, "BBCA", "2026-10-16", "2026-10-01"), (e) => e.code === "usage");
     await assert.rejects(broker(env, "BBCA", null, "2026-10-16", "2026-10-01"), (e) => e.code === "usage");
     await assert.rejects(broker(env, "BBCA", "16/10/2026"), (e) => e.code === "usage");
     await assert.rejects(broker(env, "BBCA", null, null, null, "retail"), (e) => e.code === "usage");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("/api/broker for one investor side carries no total", async () => {
+  const realFetch = globalThis.fetch;
+  const FOREIGN = fixture("brokersummary_bbca_20261016_foreign.html");
+  globalThis.fetch = async (u) => new Response(String(u).includes("fd=F") ? FOREIGN : DAY, { status: 200 });
+  try {
+    const s = (await broker(env, "BBCA", "2026-10-16", null, null, "foreign")).data[0];
+    assert.equal(s.investor, "foreign");
+    assert.deepEqual([s.total_value, s.total_lots, s.average_price], [null, null, null]);
+    assert.deepEqual([s.buy_value, s.sell_value, s.foreign_net_value], [1_700_000_000_000, 4_000_000_000_000, -2_300_000_000_000]);
   } finally {
     globalThis.fetch = realFetch;
   }

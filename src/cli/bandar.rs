@@ -26,7 +26,9 @@ bandar value; in lots the bandar volume), as a share of all value traded. +15% o
 big accumulation, +5% accumulation, -5% distribution, -15% big distribution. The phase sets
 that against the price move: accumulation with the price within +2% is quiet accumulation,
 distribution with the price within -2% quiet distribution. The top buyers' average price
-against the last price says whether they sit on a gain. Heuristic, not advice.";
+against the last price says whether they sit on a gain. With --investor foreign or domestic the
+brokers are that side's, and the percentages stay shares of the stock's value traded (one more
+request). Heuristic, not advice.";
 
 const SCREEN_HELP: &str = "Examples:
   idx bandar screen --preset big-accumulation          # last week, 100 most traded stocks

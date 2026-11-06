@@ -141,14 +141,29 @@ pub struct BrokerSummary {
     pub buyers: Vec<BrokerFlow>,
     /// Top sellers by lots, most first, as published (up to 10).
     pub sellers: Vec<BrokerFlow>,
-    /// Value traded over the range, IDR.
+    /// Value traded over the range, IDR. `null` for one investor side: the
+    /// source's total there is that side's buying (see `buy_value`).
     pub total_value: Option<f64>,
-    /// Lots traded over the range.
+    /// Lots traded over the range; `null` for one investor side, where the
+    /// source counts that side's bought lots.
     pub total_lots: Option<f64>,
-    /// Foreign buy value minus foreign sell value, IDR, as published.
+    /// Foreign buy value minus foreign sell value, IDR, as published for a
+    /// single session. Over a range that reached the latest sessions it is
+    /// rebuilt from single sessions (the source counts its latest session
+    /// twice there). `null` with a board filter: the source's net covers
+    /// every board whatever the filter.
     pub foreign_net_value: Option<f64>,
-    /// Average traded price, IDR; `null` when nothing traded.
+    /// Average traded price, IDR; `null` when nothing traded, and for one
+    /// investor side, where the source gives that side's buying average.
     pub average_price: Option<f64>,
+    /// Value the selected investors bought, IDR, as published. For all
+    /// investors that is the value traded.
+    pub buy_value: Option<f64>,
+    /// Value the selected investors sold, IDR. All investors: the value
+    /// traded. Foreign: `buy_value - foreign_net_value`; domestic:
+    /// `buy_value + foreign_net_value` (computed by idx). `null` for one
+    /// side with a board filter, where no net for that board is published.
+    pub sell_value: Option<f64>,
     /// `true` when the source abbreviated at least one figure (`1.6 M`), so
     /// those numbers carry only its one-decimal precision.
     pub rounded: bool,

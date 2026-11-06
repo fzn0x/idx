@@ -55,7 +55,8 @@ function recordedFetch(calls = []) {
     const d = url.match(/start=(\d\d)\/(\d\d)\/(\d{4})&end=(\d\d)\/(\d\d)\/(\d{4})/);
     const [start, end] = [d[3] + d[1] + d[2], d[6] + d[4] + d[5]];
     if (code === "zzzz") return new Response(page("brokersummary_zzzz_invalid.html"), { status: 200 });
-    const exact = start === end ? `brokersummary_${code}_${end}.html` : `brokersummary_${code}_${start}_${end}.html`;
+    const side = url.includes("fd=F") ? "_foreign" : url.includes("fd=D") ? "_domestic" : "";
+    const exact = start === end ? `brokersummary_${code}_${end}${side}.html` : `brokersummary_${code}_${start}_${end}${side}.html`;
     let body;
     try { body = page(exact); } catch { body = page(`brokersummary_${code}_20261012_20261016.html`); }
     return new Response(body, { status: 200 });
@@ -156,6 +157,23 @@ test("a holiday is noticed and skipped", async () => {
     assert.deepEqual(await bandarScanStep(env, { now: new Date("2026-10-17T03:00:00Z") }), { holiday: "2026-10-16" });
     assert.equal((await scanStatus(env)).holiday, true);
     assert.equal(env.scan.size, 0);
+  });
+});
+
+test("/api/bandar for one investor side reads against the value traded", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8)] }));
+  await withFetch(recordedFetch(), async () => {
+    const out = await bandar(env, "BBCA", null, "2026-10-16", null, null, null, "foreign", "all", "1");
+    const r = out.data[0];
+    assert.equal(r.investor, "foreign");
+    // Like the Rust test: the foreign page's 1.7 T is their buying; percentages are of the 6.6 T traded.
+    assert.equal(r.total_value, 6_600_000_000_000);
+    const head = r.tiers.find((t) => t.top === 5);
+    assert.ok(Math.abs(head.net_pct - (head.net_value / 6.6e12) * 100) < 1e-9);
+    assert.ok(Math.abs(r.foreign_net_pct - (-2.3 / 6.6) * 100) < 1e-9);
+    assert.equal(r.daily.days[0].total_value, 6_600_000_000_000);
+    await assert.rejects(bandar(env, "BBCA", "1m", null, null, null, null, "foreign", "all", "1"), (e) => e.code === "usage" && /one investor side/.test(e.message));
   });
 });
 
