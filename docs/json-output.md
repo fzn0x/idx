@@ -11,9 +11,9 @@ opt-in, the default stays `table`. Commands without an envelope (`version`,
 status|logout`) follow the same flag, `IDX_OUTPUT` and config file.
 
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
-`profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`,
-`financials`, `earnings`, `dividends`, `returns`, `market`, `brief`,
-`technical`, `screen`, `news`, `sentiment`, `insights`,
+`intraday`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`,
+`compare`, `financials`, `earnings`, `dividends`, `returns`, `market`,
+`brief`, `technical`, `screen`, `news`, `sentiment`, `insights`,
 `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
 `ownership-import`, `ownership-discover`, `ownership-search`,
@@ -180,6 +180,78 @@ clock, so a Toronto close at 16:00 EST counts for that day, not the next.
 - `adj_close` is present when the source supplies split/dividend adjusted
   closes.
 - `summary` is `null` when there are no candles.
+- `interval` is one of `1m 2m 5m 15m 30m 1h 1d 1wk 1mo`. One-minute bars
+  cover at most 5 days (`period` `1d` or `5d`) and two-minute bars at most
+  `1mo`; a longer window is a usage error (exit 2), because Yahoo answers
+  HTTP 422 beyond 8 days of 1m and 60 days of 2m data.
+
+## `idx.intraday.v1` (`stocks intraday`)
+
+The latest session of one stock or index by the minute (or the bar size asked
+for): today's session while the market trades, otherwise the last one.
+Yahoo's chart runs about 10 minutes behind the market (its quote says
+`exchangeDataDelayedBy: 10`; on 2026-11-06 at 09:13:21 WIB the last row was
+stamped 09:03:20), so its one-day window is empty for the first minutes after
+the 09:00 open (no bars, and the previous session has dropped out; the first
+row of the day came at 09:10 WIB). idx then reads the five-day window and
+shows its last session, with a warning naming the date.
+
+```json
+{
+  "symbol": "BBCA",
+  "name": "PT Bank Central Asia Tbk",
+  "session": "2026-11-05",
+  "interval": "1m",
+  "quote": { "symbol": "BBCA", "price": 5125.0, "change": 195.0, "change_pct": 3.955,
+             "previous_close": 4930.0, "open": 5050.0, "volume": 166336900,
+             "market_state": "PREPRE", "market_time": "2026-11-05T16:14:43+07:00", "...": "..." },
+  "bars": [
+    { "time": "2026-11-05T09:00:00+07:00", "open": 5025.0, "high": 5100.0, "low": 5025.0,
+      "close": 5100.0, "adj_close": null, "volume": 0 }
+  ],
+  "summary": {
+    "first_bar": "2026-11-05T09:00:00+07:00", "last_bar": "2026-11-05T16:14:00+07:00",
+    "bars": 333, "open": 5025.0, "high": 5125.0, "low": 5025.0, "close": 5125.0,
+    "bars_volume": 155142100, "vwap": 5089.98
+  }
+}
+```
+
+| field | type | notes |
+| --- | --- | --- |
+| `session` | date? | WIB date of the bars; `null` when there are none |
+| `interval` | string | Bar size asked for: `1m` (default), `2m`, `5m`, `15m`, `30m`, `1h` |
+| `quote` | object? | The `idx.quotes.v1` quote object as its source reports it; `null` (with a warning) when the quote could not be fetched |
+| `bars` | array | Candles as in `idx.history.v1`, oldest first; `-o json` carries every bar (`--limit` only trims the table), the MCP tool keeps the last 120 by default |
+| `summary` | object? | Over every bar of the session; `null` without bars |
+| `summary.open`, `close` | number | First bar's open, last bar's close |
+| `summary.high`, `low` | number | Highest high, lowest low |
+| `summary.bars_volume` | integer | Sum of the bars' volume, shares |
+| `summary.vwap` | number? | Volume-weighted average of each bar's typical price, (high + low + close) / 3, computed by idx and rounded to 2 decimals; `null` when no bar has volume |
+
+- The summary describes the bars, the quote the session as the source reports
+  it, and the two differ: on Yahoo the opening auction's volume is in no bar
+  (the 09:00 bar shows volume 0, so `bars_volume` is below `quote.volume`), the
+  first bar's open is not always the opening price, the pre-closing auction
+  lands in the 16:00 bar, and 16:01 to 16:14 are trades at the closing price.
+- Minutes without a trade have no bar; the lunch break has none (Monday to
+  Thursday 12:00 to 13:30, Friday 11:30 to 14:00).
+- VWAP is an approximation: IDX's average price is the regular market's value
+  divided by its volume, which needs every trade. For BBCA on 2026-11-05 the
+  bars give 5,089.98 against IDX's 5,088.5.
+- Indices carry no volume on Yahoo, so their `vwap` is `null` and
+  `bars_volume` is 0.
+- Warnings: no quote (and why), the five-day retry when the 1-day window is
+  empty (for some minutes after the open, or no trade today), no bars (the
+  stock did not trade, or the source has none outside trading hours), and bars
+  and quote from different dates.
+- In session, and in multi-day windows after the close, Yahoo ends with a row
+  stamped at the last trade time (e.g. 09:02:16 or 16:14:43); it is a snapshot,
+  not a bar, and is left out, in `idx.history.v1` too. Bars sit on the
+  interval's grid from the window's first bar (09:00), so a row off that grid,
+  or one that repeats the time of the row before it, is the snapshot.
+- With `--provider stockbit` the bars are Stockbit's realtime one-minute
+  candles for the day (none outside the session).
 
 ## `idx.screen.v1` (`stocks screen`)
 

@@ -2,7 +2,10 @@
 //!
 //! Endpoints (all unofficial, no key):
 //! - `GET https://query1.finance.yahoo.com/v8/finance/chart/{SYM}.JK?range=..&interval=..`
-//!   No auth. Used for `history` and as the quote fallback.
+//!   No auth. Used for `history`, `stocks intraday` and as the quote fallback.
+//!   One-minute bars cover at most 8 days per request and two-minute bars the
+//!   last 60 days (HTTP 422 beyond); `Interval::check_period` keeps requests
+//!   inside both. Minutes without a trade come back as null rows.
 //! - `GET https://query1.finance.yahoo.com/v7/finance/quote?symbols=A.JK,B.JK&crumb=..`
 //!   Needs the `A3` cookie from `https://fc.yahoo.com` plus the crumb from
 //!   `https://query2.finance.yahoo.com/v1/test/getcrumb`. Returns the rich quote
@@ -601,6 +604,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_minute_history_and_the_422_beyond_eight_days() {
+        let be = FixtureBackend::new()
+            .route(
+                "BBCA.JK?range=1d&interval=1m",
+                200,
+                include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m.json"),
+            )
+            .route(
+                "BBCA.JK?range=1mo&interval=1m",
+                422,
+                include_str!("../../../tests/fixtures/yahoo/chart_bbca_1mo_1m_error.json"),
+            );
+        let (y, _be, _d) = yahoo(be, CacheMode::Normal);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        let h = y.history(&bbca, Period::D1, Interval::Min1).await.unwrap();
+        assert_eq!(h.data.candles.len(), 333);
+        // A caller that skips Interval::check_period sees Yahoo's reason.
+        let err = y
+            .history(&bbca, Period::M1, Interval::Min1)
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        assert!(err.to_string().contains("HTTP 422"), "{err}");
+        assert!(err.to_string().contains("Only 8 days"), "{err}");
+    }
+
+    #[tokio::test]
     async fn offline_without_cache_is_exit_5() {
         let (y, _be, _d) = yahoo(FixtureBackend::new(), CacheMode::Offline);
         let err = y.quotes(&syms(&["BBCA"])).await.unwrap_err();
@@ -708,6 +738,10 @@ mod tests {
         assert_eq!(
             u,
             "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1y&interval=1wk&includePrePost=false"
+        );
+        assert!(
+            Yahoo::chart_url(&Symbol::parse("^jkse").unwrap(), Period::D1, Interval::Min1)
+                .ends_with("/^JKSE?range=1d&interval=1m&includePrePost=false")
         );
         assert_eq!(urlencode("a/b c"), "a%2Fb%20c");
     }

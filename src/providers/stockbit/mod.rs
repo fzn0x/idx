@@ -281,6 +281,10 @@ impl Provider for Stockbit {
         }
         Ok(out)
     }
+
+    fn serves_interval(&self, period: Period, interval: Interval) -> bool {
+        parse::serves_interval(period, interval)
+    }
 }
 
 /// The bar size Stockbit returns for a request, in idx's interval vocabulary:
@@ -543,7 +547,7 @@ mod tests {
         for &period in Period::value_variants() {
             for &interval in Interval::value_variants() {
                 let w = granularity_warning(period, interval);
-                if period == Period::D1 && interval.is_intraday() {
+                if period == Period::D1 && interval.is_intraday() && interval != Interval::Min1 {
                     assert!(
                         w.unwrap().contains("one-minute bars"),
                         "{period} {interval}"

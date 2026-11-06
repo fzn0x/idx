@@ -15,7 +15,8 @@ const input = document.getElementById("cmd");
 
 const COMMANDS = [
   { name: "quote", usage: "quote <SYMBOLS>", help: "delayed quotes, e.g. quote BBCA,BBRI; one symbol adds a price chart (1D to 5Y)" },
-  { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 5m 15m 30m 1h 1d 1wk 1mo" },
+  { name: "history", usage: "history <SYMBOL> [period] [interval]", help: "OHLCV candles; periods 1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max, intervals 1m 2m 5m 15m 30m 1h 1d 1wk 1mo (1m up to 5d, 2m up to 1mo)" },
+  { name: "intraday", usage: "intraday <SYMBOL> [interval]", help: "the latest session by the minute: OHLCV bars, VWAP, change against the previous close (Yahoo, about 10 minutes behind); intervals 1m 2m 5m 15m 30m 1h" },
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
   { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm] [--statement income,balance,cash]", help: "income statement, balance sheet, cash flow; --statement shows only those" },
   { name: "earnings", usage: "earnings <SYMBOL> [--annual|--quarterly] [--reported|--estimates]", help: "quarterly EPS vs estimates, revenue and earnings, analyst consensus, next date; the flags keep only those rows (--history and --forecast work too)" },
@@ -173,6 +174,33 @@ const R = {
       { h: "Chg %", f: (c) => fmt.pct(c.chg), cls: (c) => `num ${signClass(c.chg)}` }, { h: "Volume", f: (c) => fmt.int(c.volume) },
     ], withChg)));
     if (d.candles.length > 40) frag.append(el("p", { class: "warn", text: `Showing the last 40 of ${d.candles.length} candles; use json history … for all.` }));
+    return frag;
+  },
+  intraday(d) {
+    const frag = document.createDocumentFragment();
+    const q = d.quote, s = d.summary;
+    const head = [d.symbol, d.name, d.session && `session ${d.session}`, `${d.interval} bars`, q?.market_state && `market ${q.market_state.toLowerCase()}`].filter(Boolean);
+    frag.append(el("p", { class: "prose", text: head.join(" · ") }));
+    if (q) {
+      frag.append(el("p", { class: "prose" }, [
+        `Last ${fmt.price(q.price)} `, el("span", { class: signClass(q.change), text: `${fmt.change(q.change)} (${fmt.pct(q.change_pct)})` }),
+        ` · prev close ${fmt.price(q.previous_close)} · open ${fmt.price(q.open)} · high ${fmt.price(q.day_high)} · low ${fmt.price(q.day_low)}${q.volume ? ` · volume ${fmt.compact(q.volume)}` : ""}${q.market_time ? ` · last trade ${fmt.wib(q.market_time)}` : ""}`,
+      ]));
+    }
+    const source = "Yahoo's chart, about 10 minutes behind the market. Minutes without a trade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the day's.";
+    if (!s) { frag.append(el("p", { class: "warn", text: "No bars for this session." }), el("p", { class: "warn", text: source })); return frag; }
+    frag.append(el("p", { class: "prose", text: `Bars ${s.first_bar.slice(11, 16)} to ${s.last_bar.slice(11, 16)} WIB · ${s.bars} bar${s.bars === 1 ? "" : "s"} · open ${fmt.price(s.open)} · high ${fmt.price(s.high)} · low ${fmt.price(s.low)} · close ${fmt.price(s.close)}${s.bars_volume ? ` · volume ${fmt.compact(s.bars_volume)}` : ""} · ${s.vwap == null ? "no VWAP (the bars carry no volume)" : `VWAP ${fmt.price(s.vwap)}`}` }));
+    frag.append(sparkline(d.bars.map((c, i) => [i, c.close]), { cls: "spark" }));
+    const rows = d.bars.slice(-30);
+    let prev = d.bars.length > 30 ? d.bars[d.bars.length - 31].close : null;
+    const withChg = rows.map((c) => { const chg = prev ? ((c.close - prev) / prev) * 100 : null; prev = c.close; return { ...c, chg }; });
+    frag.append(wrapScroll(table([
+      { h: "Time (WIB)", f: (c) => c.time.slice(11, 16), l: true },
+      { h: "Open", f: (c) => fmt.price(c.open) }, { h: "High", f: (c) => fmt.price(c.high) }, { h: "Low", f: (c) => fmt.price(c.low) }, { h: "Close", f: (c) => fmt.price(c.close) },
+      { h: "Chg %", f: (c) => fmt.pct(c.chg), cls: (c) => `num ${signClass(c.chg)}` }, { h: "Volume", f: (c) => fmt.int(c.volume) },
+    ], withChg)));
+    if (d.bars.length > 30) frag.append(el("p", { class: "warn", text: `Showing the last 30 of ${d.bars.length} bars; json intraday ${d.symbol} carries all.` }));
+    frag.append(el("p", { class: "warn", text: `${source} VWAP is computed from the bars' typical prices, an approximation of IDX's average price.` }));
     return frag;
   },
   profile(p) {
@@ -792,6 +820,7 @@ async function run(line) {
     case "clear": return { clear: true };
     case "quote": need(pos, 1, cmd.usage); env = await api(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
     case "history": need(pos, 1, cmd.usage); env = await api(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
+    case "intraday": need(pos, 1, cmd.usage); env = await api(`intraday?${qs({ symbol: sym(), interval: pos[1] || opt.interval || "1m", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.intraday; break;
     case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
     case "financials": {
       need(pos, 1, cmd.usage);

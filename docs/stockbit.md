@@ -47,6 +47,7 @@ Once logged in, point any quote/history command at the provider:
 ```sh
 idx --provider stockbit stocks quote BBCA BBRI      # realtime, not delayed
 idx --provider stockbit stocks history BBCA --period 1mo
+idx --provider stockbit stocks intraday BBCA        # today's one-minute bars, realtime
 idx config set provider stockbit                    # make it the default
 idx config set history_provider stockbit            # or: candles only, free providers for the rest
 ```
@@ -97,6 +98,11 @@ leaves them empty, with a warning that says why (on stderr in a table, in
 where idx's books say `ORDER_BOOK_FEATURE_FOREIGN_BS`), so it is still open
 whether the flag follows the session clock or an account feature. idx reads only
 the flag, so either way the figures show only when Stockbit marks them current.
+
+`stocks intraday` uses whichever provider is selected, so with
+`--provider stockbit` it shows today's realtime one-minute bars from your
+session during trading hours (none outside them; the quote still answers),
+while the default providers serve Yahoo's delayed bars without a login.
 
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run

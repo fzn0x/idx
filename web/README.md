@@ -38,7 +38,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   (the whole-market return windows, one POST) port `src/providers/msn` and are
   tested on the same `tests/fixtures/msn`. `/api/fundamental?lens=growth|valuation|risk`
   returns a lens, as MCP `idx_fundamental` does with `lens`.
-- Endpoints under `/api`: `market`, `quote`, `history`, `profile`,
+- Endpoints under `/api`: `market`, `quote`, `history`, `intraday`, `profile`,
   `fundamental`, `earnings`, `financials`, `dividends`, `returns`, `technical`,
   `brief`, `compare`, `screen` (`preset`, `returns`), `news`, `sentiment`,
   `insights`, `broker`, `bandar`,

@@ -42,6 +42,14 @@ n="$(grep -c '"close":' "$TMP/h.json")"
 "$IDX" stocks history BBRI --period 5d --interval 1h --limit 3 >"$TMP/i.txt" || fail "intraday history"
 expect "$TMP/i.txt" "Time (WIB)" "intraday history uses time column"
 
+"$IDX" stocks history ^JKSE --period 1d --interval 1m --limit 3 >"$TMP/m.txt" || fail "1m history"
+expect "$TMP/m.txt" "1d / 1m" "IHSG one-minute bars"
+"$IDX" -o json stocks intraday BBCA >"$TMP/id.json" || fail "intraday json"
+expect "$TMP/id.json" '"schema": "idx.intraday.v1"' "intraday json schema"
+expect "$TMP/id.json" '"vwap":' "intraday summary has VWAP"
+"$IDX" stocks intraday BBCA --limit 3 >"$TMP/id.txt" || fail "intraday table"
+expect "$TMP/id.txt" "1m bars" "intraday table header"
+
 set +e
 "$IDX" stocks quote ZZZZ >/dev/null 2>"$TMP/e.txt"; code=$?
 set -e

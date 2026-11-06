@@ -13,7 +13,7 @@ const IPOT_SLOW = `IPOT sometimes answers 404 before the data; each one is retri
 const YAHOO = { on: "Yahoo Finance" };
 
 export const WAITS = {
-  quote: YAHOO, history: YAHOO, profile: YAHOO, financials: YAHOO, earnings: YAHOO, fundamental: YAHOO, technical: YAHOO, dividends: YAHOO,
+  quote: YAHOO, history: YAHOO, intraday: YAHOO, profile: YAHOO, financials: YAHOO, earnings: YAHOO, fundamental: YAHOO, technical: YAHOO, dividends: YAHOO,
   valuation: YAHOO,
   growth: { on: "Yahoo Finance: fundamentals and the annual statements" },
   risk: { on: "Yahoo Finance: fundamentals and a year of daily candles for the stock and IHSG" },

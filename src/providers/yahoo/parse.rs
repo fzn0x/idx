@@ -108,6 +108,15 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
         .map(|a| a.iter().map(Value::as_f64).collect())
         .unwrap_or_default();
 
+    // In session, and in multi-day windows after the close, an intraday window
+    // ends with a row stamped at the last trade time (09:02:16, 16:14:43): a
+    // snapshot (volume 0, open = high = low = close), not a bar. Bars start on
+    // the minute and on the interval's grid, counted from the window's first
+    // row (09:00 on IDX), so a row off that grid is the snapshot. A snapshot
+    // that lands on the grid repeats the time of the row before it (the
+    // in-progress or last bar), so such a repeat is dropped too.
+    let step = interval.bar_seconds();
+    let anchor = ts.iter().flatten().next().copied();
     let mut candles = Vec::with_capacity(ts.len());
     for (i, t) in ts.iter().enumerate() {
         let (Some(t), Some(o), Some(h), Some(l), Some(c)) = (
@@ -119,6 +128,13 @@ pub fn parse_chart(body: &str, period: Period, interval: Interval) -> Result<His
         ) else {
             continue; // holiday / missing bar
         };
+        if let (Some(step), Some(anchor)) = (step, anchor) {
+            let off_grid = t % 60 != 0 || (t - anchor).rem_euclid(step) != 0;
+            let repeat = i > 0 && ts[i - 1] == Some(t);
+            if off_grid || repeat {
+                continue;
+            }
+        }
         let Some(time) = wib_from_unix(t) else {
             continue;
         };
@@ -395,6 +411,161 @@ mod tests {
         // 40 timestamps, 34 complete bars.
         assert_eq!(h.candles.len(), 34);
         assert_eq!(h.candles[0].time.to_rfc3339(), "2026-10-12T09:00:00+07:00");
+    }
+
+    #[test]
+    fn chart_one_minute_session() {
+        let h = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(h.interval, Interval::Min1);
+        // 435 rows; the null ones (lunch break, quiet minutes) are dropped.
+        assert_eq!(h.candles.len(), 333);
+        let first = &h.candles[0];
+        assert_eq!(first.time.to_rfc3339(), "2026-11-05T09:00:00+07:00");
+        assert_eq!(first.volume, 0, "the opening auction is in no bar");
+        assert_eq!(
+            h.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        let hm = |c: &Candle| c.time.format("%H:%M").to_string();
+        assert!(!h
+            .candles
+            .iter()
+            .any(|c| ("12:00".."13:30").contains(&hm(c).as_str())));
+        let closing = h.candles.iter().find(|c| hm(c) == "16:00").unwrap();
+        assert!(closing.volume > 20_000_000, "pre-closing auction bar");
+
+        let ix = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_jkse_1d_1m.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(ix.symbol.as_str(), "^JKSE");
+        assert_eq!(ix.candles.len(), 320);
+        assert!(ix.candles.iter().all(|c| c.volume == 0));
+        assert_eq!(hm(ix.candles.last().unwrap()), "16:00");
+    }
+
+    #[test]
+    fn chart_at_the_open_and_over_five_days() {
+        let empty = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m_open_empty.json"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert!(empty.candles.is_empty() && empty.summary.is_none());
+        assert_eq!(empty.symbol.as_str(), "BBCA");
+
+        let five = parse_chart(
+            include_str!("../../../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json"),
+            Period::D5,
+            Interval::Min1,
+        )
+        .unwrap();
+        // 1,335 priced rows; the 16:14:43 last-trade snapshot is not a bar.
+        assert_eq!(five.candles.len(), 1_334);
+        assert!(five.candles.iter().all(|c| c.time.timestamp() % 60 == 0));
+        assert_eq!(
+            five.candles.last().unwrap().time.to_rfc3339(),
+            "2026-11-05T16:14:00+07:00"
+        );
+        assert_eq!(
+            five.candles[0].time.to_rfc3339(),
+            "2026-11-02T09:00:00+07:00"
+        );
+    }
+
+    /// A chart body from (unix time, price, volume) rows; a `None` price is a
+    /// null row. Open, high, low and close all take the price.
+    fn chart_body(rows: &[(i64, Option<f64>, u64)]) -> String {
+        let ts: Vec<i64> = rows.iter().map(|r| r.0).collect();
+        let px: Vec<Option<f64>> = rows.iter().map(|r| r.1).collect();
+        let vol: Vec<Option<u64>> = rows.iter().map(|r| r.1.map(|_| r.2)).collect();
+        serde_json::json!({"chart": {"result": [{
+            "meta": {"symbol": "BBCA.JK", "currency": "IDR"},
+            "timestamp": ts,
+            "indicators": {"quote": [{
+                "open": px, "high": px, "low": px, "close": px, "volume": vol
+            }]}
+        }], "error": null}})
+        .to_string()
+    }
+
+    #[test]
+    fn last_trade_snapshot_on_a_whole_minute_is_not_a_bar() {
+        let hm = |h: &History| -> Vec<String> {
+            h.candles
+                .iter()
+                .map(|c| c.time.format("%H:%M").to_string())
+                .collect()
+        };
+        // After the close, the five-day window's snapshot stamped 16:14:00
+        // instead of 16:14:43: one 16:14 bar, the real one.
+        let five = parse_chart(
+            &include_str!("../../../tests/fixtures/yahoo/chart_bbca_5d_1m_open.json")
+                .replace(",1793870083]", ",1793870040]"),
+            Period::D5,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(five.candles.len(), 1_334);
+        let last = five.candles.last().unwrap();
+        assert_eq!(last.time.to_rfc3339(), "2026-11-05T16:14:00+07:00");
+        assert_eq!(last.volume, 20_200);
+
+        // In session at 1m: a null 09:02 row, then the snapshot at 09:02:00.
+        let session = parse_chart(
+            &include_str!("../../../tests/fixtures/yahoo/chart_bbca_1d_1m_session.json")
+                .replace(",1793930536]", ",1793930520]"),
+            Period::D1,
+            Interval::Min1,
+        )
+        .unwrap();
+        assert_eq!(hm(&session), ["09:00", "09:01"]);
+
+        // In session at 5m (2026-11-06 from 09:00): the in-progress 09:25 bar,
+        // then a snapshot at 09:28:00 (off the grid) or 09:25:00 (a repeat).
+        let open = 1_793_930_400;
+        for snap in [open + 28 * 60, open + 25 * 60, open + 28 * 60 + 41] {
+            let body = chart_body(&[
+                (open + 20 * 60, Some(5025.0), 1_000),
+                (open + 25 * 60, Some(5050.0), 500),
+                (snap, Some(5050.0), 0),
+            ]);
+            let h = parse_chart(&body, Period::D1, Interval::Min5).unwrap();
+            assert_eq!(hm(&h), ["09:20", "09:25"], "snapshot at {snap}");
+            assert_eq!(h.candles[1].volume, 500);
+        }
+
+        // The grid is counted from the window's first row, so hourly bars that
+        // start on the half hour (an index elsewhere) are all kept.
+        let half = open + 30 * 60;
+        let body = chart_body(&[
+            (half, Some(100.0), 10),
+            (half + 3600, Some(101.0), 10),
+            (half + 2 * 3600 + 1800, Some(101.0), 0),
+        ]);
+        let h = parse_chart(&body, Period::D1, Interval::Hour1).unwrap();
+        assert_eq!(hm(&h), ["09:30", "10:30"]);
+
+        // Daily bars are left alone.
+        let body = chart_body(&[(open, Some(1.0), 1), (open + 1234, Some(2.0), 1)]);
+        let h = parse_chart(&body, Period::M1, Interval::Day1).unwrap();
+        assert_eq!(h.candles.len(), 2);
+    }
+
+    #[test]
+    fn chart_window_too_long_for_one_minute_bars() {
+        let body = include_str!("../../../tests/fixtures/yahoo/chart_bbca_1mo_1m_error.json");
+        let e = parse_chart(body, Period::M1, Interval::Min1).unwrap_err();
+        assert_eq!(e.exit_code(), 3);
+        assert!(chart_error(body).starts_with("Unprocessable Entity: 1m data not available"));
     }
 
     #[test]

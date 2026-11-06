@@ -89,6 +89,11 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         "yahoo/quote_v7_wika_suspended_kaef_bbca.json",
     );
     seed_ipot_week(dir.path());
+    seed(
+        dir.path(),
+        "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1d&interval=1m&includePrePost=false",
+        "yahoo/chart_bbca_1d_1m.json",
+    );
     let mut child = spawn_server(dir.path());
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -142,9 +147,10 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 43, "{names:?}");
+    assert_eq!(names.len(), 44, "{names:?}");
     assert!(names.contains(&"idx_ownership_institutions"), "{names:?}");
     assert!(names.contains(&"idx_insights"), "{names:?}");
+    assert!(names.contains(&"idx_intraday"), "{names:?}");
     assert!(names.contains(&"idx_broker"), "{names:?}");
     assert!(names.contains(&"idx_bandar"), "{names:?}");
     assert!(names.contains(&"idx_bandar_screen"), "{names:?}");
@@ -462,6 +468,29 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
             serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["error"]["code"], "usage", "{body}");
     }
+
+    // Minute bars from the seeded chart; the quote is not cached, so it is a
+    // warning and `quote` is null rather than a failed call.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 18, "method": "tools/call",
+        "params": {"name": "idx_intraday", "arguments": {"symbol": "BBCA", "limit": 30}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["schema"], "idx.intraday.v1");
+    assert_eq!(body["data"]["session"], "2026-11-05");
+    assert_eq!(body["data"]["interval"], "1m");
+    assert_eq!(body["data"]["bars"].as_array().unwrap().len(), 30);
+    assert_eq!(body["data"]["summary"]["bars"], 333);
+    assert_eq!(body["data"]["summary"]["bars_volume"], 155_142_100);
+    assert_eq!(body["data"]["summary"]["vwap"], 5089.98);
+    assert!(body["data"]["quote"].is_null());
+    let warnings = body["warnings"].to_string();
+    assert!(warnings.contains("no quote for BBCA"), "{warnings}");
+    assert!(warnings.contains("truncated to the last 30"), "{warnings}");
 
     drop(stdin);
     let status = child.wait().expect("server exits after stdin closes");

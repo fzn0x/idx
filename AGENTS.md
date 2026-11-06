@@ -51,7 +51,7 @@ src/
                      presets), sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility, beta
                      against a benchmark on shared dates), lens.rs (growth, valuation and risk lenses),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,
-                     phase, screen filters and presets); no network
+                     phase, screen filters and presets), intraday.rs (session bars, VWAP); no network
   universe.rs        bundled data/universe.csv (IDX issuers) + ownership-db issuers; IDX_UNIVERSE override
   brokers.rs         bundled data/brokers.csv (IDX exchange members: code -> name)
   holidays.rs        bundled data/holidays.csv (trading holidays, transcribed from IDX's yearly image);
@@ -60,7 +60,7 @@ src/
     news/            Kontan + CNBC Indonesia RSS feeds through the Fetcher (rss crate)
   service.rs         provider call + analysis, shared by cli/ and mcp/ (fundamentals, technical, compare,
                      screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
-                     bandar_screen, bandar_broker); service/exchange.rs: holidays, instruments,
+                     bandar_screen, bandar_broker, intraday); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers;
                      service/lenses.rs: growth, valuation and risk lenses (fundamentals, statements,
                      a year of candles for the stock and IHSG)
@@ -81,7 +81,8 @@ src/
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
                      per-agent registration recipes behind `idx mcp setup` (keep docs/mcp.md in step)
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
-                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, institutions.rs, lenses.rs)
+                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, institutions.rs, lenses.rs,
+                     intraday.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
                      jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
                      mod.rs OutputSetting (auto resolved against the terminal) and print_notice
@@ -110,7 +111,7 @@ scripts/ownership_mirror.py  CI scraper behind .github/workflows/ownership.yml: 
                      publishes the prebuilt snapshot (`snapshot-v{V}.json` + `ownership-v{V}-*.sqlite.gz`)
 ```
 
-CLI groups: `stocks` (quote, history, profile, financials, earnings, dividends, returns,
+CLI groups: `stocks` (quote, history, intraday, profile, financials, earnings, dividends, returns,
 fundamental, growth, valuation, risk, technical, brief, compare, screen, news, sentiment, actions,
 foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members),

@@ -11,13 +11,14 @@ use crate::model::{
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_FUNDAMENTALS, SCHEMA_GROWTH,
-    SCHEMA_HISTORY, SCHEMA_INSIGHTS, SCHEMA_INSTRUMENTS, SCHEMA_NEWS, SCHEMA_PROFILE,
-    SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_SCREEN, SCHEMA_SENTIMENT, SCHEMA_TECHNICAL,
-    SCHEMA_VALUATION,
+    SCHEMA_HISTORY, SCHEMA_INSIGHTS, SCHEMA_INSTRUMENTS, SCHEMA_INTRADAY, SCHEMA_NEWS,
+    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
+    SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
 use crate::output::table_insights as tins;
+use crate::output::table_intraday as intraday_table;
 use crate::output::table_lenses as lenses;
 use crate::output::table_news as newstbl;
 use crate::output::table_reports::{self as reports, StatementFlags};
@@ -61,7 +62,7 @@ pub enum StocksCmd {
 
     /// OHLCV price history.
     #[command(
-        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history D05.SI --period 5d             # another Yahoo Finance market, by its suffix"
+        after_help = "Examples:\n  idx stocks history BBCA\n  idx stocks history TLKM --period 5y --interval 1mo\n  idx stocks history BBRI --period 5d --interval 1h --limit 0\n  idx stocks history ^JKSE --period 1d --interval 1m\n  idx stocks history D05.SI --period 5d             # another Yahoo Finance market, by its suffix\n\nFor the latest session by the minute with the quote and VWAP, see `idx stocks intraday`."
     )]
     History {
         /// Ticker: BBCA (IDX, .JK optional) or another Yahoo Finance market's with its suffix (D05.SI). A bare code takes IDX_EXCHANGE (default IDX).
@@ -70,11 +71,27 @@ pub enum StocksCmd {
         /// Look-back window.
         #[arg(long, short = 'p', value_enum, default_value = "1y")]
         period: Period,
-        /// Bar size. Intraday sizes (5m..1h) only work with short periods.
+        /// Bar size. 1m needs --period 1d or 5d, 2m at most 1mo; the other intraday sizes (5m..1h) only work with short periods.
         #[arg(long, short = 'i', value_enum, default_value = "1d")]
         interval: Interval,
         /// Rows shown in table mode (most recent first kept); 0 shows everything. JSON, JSONL and CSV are never limited.
         #[arg(long, short = 'n', default_value_t = 30)]
+        limit: usize,
+    },
+
+    /// The latest session by the minute: OHLCV bars, the quote and a session summary with VWAP.
+    #[command(
+        after_help = "Examples:\n  idx stocks intraday BBCA\n  idx stocks intraday ^JKSE --interval 5m\n  idx stocks intraday BBRI --limit 0\n  idx -o json stocks intraday TLKM | jq '.data.summary'\n  idx -o csv stocks intraday BBCA > bbca-minutes.csv\n\nToday's session while the market trades, otherwise the last one (weekends, holidays, before\nthe open, and the first minutes after it, before Yahoo has bars for the day; a warning says so).\nFrom Yahoo's chart, no login, about 10 minutes behind the market. Minutes without a\ntrade have no bar; the opening auction's volume is in no bar, so the bars' volume is below the\nday's, and the closing auction lands in the 16:00 bar. VWAP is computed by idx from the bars'\ntypical prices, an approximation of IDX's average price. With --provider stockbit (after\n`idx stockbit login`) the bars come from your Stockbit session in real time."
+    )]
+    Intraday {
+        /// IDX ticker or index, e.g. BBCA or ^JKSE.
+        #[arg(value_name = "SYMBOL")]
+        symbol: String,
+        /// Bar size: 1m, 2m, 5m, 15m, 30m or 1h.
+        #[arg(long, short = 'i', value_enum, default_value = "1m")]
+        interval: Interval,
+        /// Most recent bars shown in table mode; 0 shows all. JSON and CSV carry every bar.
+        #[arg(long, short = 'n', default_value_t = 15)]
         limit: usize,
     },
 
@@ -372,6 +389,20 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             interval,
             limit,
         } => history(ctx, &symbol, period, interval, limit).await,
+        StocksCmd::Intraday {
+            symbol,
+            interval,
+            limit,
+        } => {
+            let sym = Symbol::parse(&symbol)?;
+            let list = universe::load(None).unwrap_or_default();
+            let result = service::intraday(ctx.provider.as_ref(), &list, &sym, interval).await?;
+            let provider = result.provider;
+            let limit = (limit > 0).then_some(limit);
+            emit(ctx, SCHEMA_INTRADAY, result, |d| {
+                intraday_table::intraday(d, limit, provider, ctx.color)
+            })
+        }
         StocksCmd::Profile { symbol } => profile(ctx, &symbol).await,
         StocksCmd::Financials {
             symbol,
@@ -552,6 +583,7 @@ async fn history(
     limit: usize,
 ) -> Result<()> {
     let symbol = Symbol::parse_on(raw, &ctx.settings.exchange)?;
+    interval.check_period(period)?;
     let result = ctx.provider.history(&symbol, period, interval).await?;
     let limit = if limit == 0 { None } else { Some(limit) };
     emit(ctx, SCHEMA_HISTORY, result, |d| {

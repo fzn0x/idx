@@ -1092,6 +1092,149 @@ fn stocks_foreign_from_ipot_in_rupiah() {
 }
 
 #[test]
+fn intraday_reads_minute_bars_from_the_cache() {
+    let sb = sandbox();
+    let chart = |sym: &str| {
+        format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=1m&includePrePost=false")
+    };
+    let quote =
+        |sym: &str| format!("https://query1.finance.yahoo.com/v7/finance/quote?symbols={sym}");
+    seed(&sb.cache, &chart("BBCA.JK"), "yahoo/chart_bbca_1d_1m.json");
+    seed(&sb.cache, &quote("BBCA.JK"), "yahoo/quote_v7_bbca.json");
+    seed(&sb.cache, &chart("^JKSE"), "yahoo/chart_jkse_1d_1m.json");
+    seed(&sb.cache, &quote("^JKSE"), "yahoo/quote_v7_jkse.json");
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "intraday", "BBCA"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "BBCA · PT Bank Central Asia Tbk · session 2026-11-05 · 1m bars",
+        ))
+        .stdout(predicate::str::contains("prev close 4,930"))
+        .stdout(predicate::str::contains("VWAP 5,089.98"))
+        .stdout(predicate::str::contains("Showing the last 15 of 333 bars"))
+        .stdout(predicate::str::contains(
+            "opening auction's volume is in no bar",
+        ))
+        .stderr(predicate::str::contains("warning").not());
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "intraday", "bbca.jk"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.intraday.v1");
+    assert_eq!(v["provider"], "yahoo");
+    assert!(v.get("warnings").is_none(), "{v}");
+    let d = &v["data"];
+    assert_eq!(d["symbol"], "BBCA");
+    assert_eq!(d["session"], "2026-11-05");
+    assert_eq!(d["interval"], "1m");
+    assert_eq!(
+        d["bars"].as_array().unwrap().len(),
+        333,
+        "JSON is never limited"
+    );
+    assert_eq!(d["bars"][0]["time"], "2026-11-05T09:00:00+07:00");
+    assert_eq!(d["quote"]["previous_close"], 4930.0);
+    assert_eq!(d["quote"]["volume"], 166_336_900);
+    assert_eq!(d["summary"]["bars_volume"], 155_142_100);
+    assert_eq!(d["summary"]["vwap"], 5089.98);
+    assert_eq!(d["summary"]["first_bar"], "2026-11-05T09:00:00+07:00");
+
+    // The index: Yahoo has no index volume, so VWAP is null.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "intraday", "^jkse"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["summary"]["bars"], 320);
+    assert!(v["data"]["summary"]["vwap"].is_null());
+    assert_eq!(v["data"]["quote"]["previous_close"], 4904.29);
+
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "stocks", "intraday", "BBCA"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        csv.starts_with("time,open,high,low,close,adj_close,volume\n"),
+        "{csv}"
+    );
+    assert_eq!(csv.lines().count(), 334);
+
+    // stocks history takes the new sizes, inside their windows only.
+    idx(&sb.cache, &sb.config)
+        .args([
+            "stocks",
+            "history",
+            "BBCA",
+            "--period",
+            "1d",
+            "--interval",
+            "1m",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1d / 1m · 333 candles"));
+    for (period, interval, hint) in [("1mo", "1m", "1d or 5d"), ("3mo", "2m", "1d, 5d or 1mo")] {
+        idx(&sb.cache, &sb.config)
+            .args([
+                "stocks",
+                "history",
+                "BBCA",
+                "--period",
+                period,
+                "--interval",
+                interval,
+            ])
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(hint));
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "intraday", "BBCA", "--interval", "1d"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "intraday takes 1m, 2m, 5m, 15m, 30m or 1h",
+        ));
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "intraday", "BBRI"])
+        .assert()
+        .code(5);
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "intraday", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "idx stocks intraday ^JKSE --interval 5m",
+        ))
+        .stdout(predicate::str::contains("VWAP"));
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "intraday"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        schema.contains("vwap") && schema.contains("bars_volume"),
+        "{schema}"
+    );
+}
+
+#[test]
 fn foreign_commands_read_the_exchange_summaries() {
     let sb = sandbox();
     seed(

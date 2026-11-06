@@ -111,7 +111,8 @@ idx completions powershell | Out-String | Invoke-Expression
 | command | what it does |
 | --- | --- |
 | `stocks quote <SYMBOLS>` | Delayed quote for one or many tickers (`BBCA,BBRI` or `BBCA BBRI`; `.JK` optional; `-` reads them from stdin; another Yahoo Finance market by its suffix, e.g. `D05.SI`) |
-| `stocks history <SYMBOL> [--period 1y] [--interval 1d] [--limit 30]` | OHLCV candles with a summary line. Periods `1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max`, intervals `5m 15m 30m 1h 1d 1wk 1mo` |
+| `stocks history <SYMBOL> [--period 1y] [--interval 1d] [--limit 30]` | OHLCV candles with a summary line. Periods `1d 5d 1mo 3mo 6mo 1y 2y 5y 10y ytd max`, intervals `1m 2m 5m 15m 30m 1h 1d 1wk 1mo` (`1m` covers at most `5d`, `2m` at most `1mo`) |
+| `stocks intraday <SYMBOL> [--interval 1m] [--limit 15]` | The latest session by the minute (today's while the market trades, otherwise the last one): OHLCV bars, the quote with its previous close and change, and a summary of the bars with VWAP computed by idx. Yahoo's chart, no login, about 10 minutes behind the market; works for IHSG (`^JKSE`) too. `--provider stockbit` makes the bars realtime |
 | `stocks profile <SYMBOL>` | Sector, industry, description, size, headquarters, management |
 | `stocks financials <SYMBOL> [--period annual\|quarterly\|ttm] [--statement income,balance,cash]` | Income statement, balance sheet, cash flow; `--statement` (comma-separated or repeated, `all` by default) picks the tables shown |
 | `stocks earnings <SYMBOL> [--annual\|--quarterly] [--reported\|--estimates]` | Quarterly EPS vs estimates with surprise, yearly and quarterly revenue/earnings, analyst consensus for this and next quarter and fiscal year, next earnings date; the flags keep only those rows in every format (`--history`/`--forecast` are aliases) |
@@ -157,8 +158,8 @@ idx completions powershell | Out-String | Invoke-Expression
 | `ownership institutions <SYMBOL>` | Institutional and fund holders from MSN Money (live, no import): shares, % of shares outstanding, the change since each holder's last report and a `new`/`buyer`/`seller`/`exited`/`unchanged` signal, with institutional, fund and free-float percentages and counts per list. See [docs/ownership.md](docs/ownership.md#institutional-and-fund-holders-msn) |
 | `watch [add\|rm\|list\|clear\|returns]` | Plain-text watchlist next to the config; `idx watch` quotes it |
 | `ownership releases\|discover [--family F --limit N]\|path` | Imported months, files published on idx.co.id and ksei.co.id (families `above1`, `above5`, `investor-type`, `classification`, `composition`, `all`, each marked `importable`), database path |
-| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 43 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_insights`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_ownership_search`, `idx_ownership_rankings`, `idx_ownership_graph`, `idx_ownership_composition`, `idx_ownership_snapshot`, `idx_ownership_institutions`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
-| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `insights`, `actions`, `foreign`, `foreign-value`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
+| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 44 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_intraday`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_insights`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_ownership_search`, `idx_ownership_rankings`, `idx_ownership_graph`, `idx_ownership_composition`, `idx_ownership_snapshot`, `idx_ownership_institutions`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login` |
+| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `intraday`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `insights`, `actions`, `foreign`, `foreign-value`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `watchlist`, `error`, ...) |
 | `config init\|set\|get\|path` | Config file management |
 | `cache stats\|clear\|path` | Response cache management |
 | `completions <shell>` | bash, zsh, fish, powershell, elvish |
@@ -250,7 +251,7 @@ substitutes the absolute path, and `--npx` swaps in
 `npx -y github:fzn0x/idx mcp`). Each entry's remote (HTTP) form and the
 config file locations are in [docs/mcp.md](docs/mcp.md).
 
-The server lists 43 tools with typed input schemas kept to the subset every
+The server lists 44 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
 and one-paragraph descriptions. `idx_brief` is the one-call starting point;
 `idx_fundamental` takes an optional `lens` (`growth`, `valuation` or `risk`)
@@ -296,7 +297,7 @@ idx bandar screen -f 'acc>=5,fpct>=5,gain<0'   # with foreigners, under the band
 
 | source | used for | auth | notes |
 | --- | --- | --- | --- |
-| Yahoo Finance `v8/finance/chart` | history, quote fallback | none | IDX tickers carry the `.JK` suffix; another market's suffix (`D05.SI`) passes through for the Yahoo-backed commands |
+| Yahoo Finance `v8/finance/chart` | history, intraday minute bars, quote fallback | none | IDX tickers carry the `.JK` suffix; another market's suffix (`D05.SI`) passes through for the Yahoo-backed commands. One-minute bars for up to 8 days per request and two-minute bars for the last 60 days (HTTP 422 beyond); minutes without a trade have no bar and the opening auction's volume is in no bar |
 | Yahoo Finance `v7/finance/quote` | quotes | anonymous cookie + crumb, cached 6 h | Falls back to the chart endpoint (fewer fields) if rejected |
 | Yahoo Finance `v10/finance/quoteSummary` | profile, fundamentals, earnings | same session | Statement modules are empty at the source, so they are not used |
 | Yahoo Finance `fundamentals-timeseries` | financials | none | Annual, quarterly and TTM statement items |
@@ -319,7 +320,7 @@ advice and not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.
 ## Web terminal
 
 **https://ihsg.midoriresearch.com/terminal** runs the same commands in a
-browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `returns BBCA BBRI`,
+browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `intraday BBCA`, `returns BBCA BBRI`,
 `screen pe<10,div>5,mcap>5T --sort div`, `screen --preset top-performers`,
 `insights BBCA`, `news ASII`, `ownership ticker BBCA`,
 `ownership foreign`, `bandar BBCA --daily`, `bandar screen --preset

@@ -20,6 +20,7 @@ pub mod fundamentals;
 pub mod insights;
 pub mod institutions;
 pub mod instruments;
+pub mod intraday;
 pub mod lenses;
 pub mod market;
 pub mod news;
@@ -61,6 +62,7 @@ pub use institutions::{
     InstitutionalOwnership,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
+pub use intraday::{Intraday, IntradaySummary};
 pub use lenses::{
     AnnualGrowth, GrowthLabel, GrowthLens, Lens, LensRule, PriceRisk, Reading, RiskLabel, RiskLens,
     ValuationLabel, ValuationLens,
@@ -485,6 +487,12 @@ impl std::fmt::Display for Period {
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
 )]
 pub enum Interval {
+    #[value(name = "1m")]
+    #[serde(rename = "1m")]
+    Min1,
+    #[value(name = "2m")]
+    #[serde(rename = "2m")]
+    Min2,
     #[value(name = "5m")]
     #[serde(rename = "5m")]
     Min5,
@@ -511,6 +519,8 @@ pub enum Interval {
 impl Interval {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Interval::Min1 => "1m",
+            Interval::Min2 => "2m",
             Interval::Min5 => "5m",
             Interval::Min15 => "15m",
             Interval::Min30 => "30m",
@@ -524,8 +534,44 @@ impl Interval {
     pub fn is_intraday(&self) -> bool {
         matches!(
             self,
-            Interval::Min5 | Interval::Min15 | Interval::Min30 | Interval::Hour1
+            Interval::Min1
+                | Interval::Min2
+                | Interval::Min5
+                | Interval::Min15
+                | Interval::Min30
+                | Interval::Hour1
         )
+    }
+
+    /// The bar size in seconds for the intraday sizes; `None` for daily and
+    /// longer bars, whose length varies.
+    pub fn bar_seconds(&self) -> Option<i64> {
+        match self {
+            Interval::Min1 => Some(60),
+            Interval::Min2 => Some(120),
+            Interval::Min5 => Some(300),
+            Interval::Min15 => Some(900),
+            Interval::Min30 => Some(1800),
+            Interval::Hour1 => Some(3600),
+            Interval::Day1 | Interval::Week1 | Interval::Month1 => None,
+        }
+    }
+
+    /// Refuses a look-back window the bar size cannot cover. Yahoo serves
+    /// one-minute bars for at most 8 days per request (HTTP 422 beyond) and
+    /// two-minute bars for 60 days; the larger sizes keep their old behaviour.
+    pub fn check_period(&self, period: Period) -> Result<()> {
+        match (self, period) {
+            (Interval::Min1, Period::D1 | Period::D5) => Ok(()),
+            (Interval::Min1, _) => Err(IdxError::Usage(
+                "1-minute bars cover at most 5 days; use period 1d or 5d".into(),
+            )),
+            (Interval::Min2, Period::D1 | Period::D5 | Period::M1) => Ok(()),
+            (Interval::Min2, _) => Err(IdxError::Usage(
+                "2-minute bars cover at most a month; use period 1d, 5d or 1mo".into(),
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -534,7 +580,7 @@ impl std::str::FromStr for Interval {
     fn from_str(s: &str) -> Result<Self> {
         <Interval as clap::ValueEnum>::from_str(s, true).map_err(|_| {
             IdxError::Usage(format!(
-                "invalid interval {s:?}; use 5m,15m,30m,1h,1d,1wk,1mo"
+                "invalid interval {s:?}; use 1m,2m,5m,15m,30m,1h,1d,1wk,1mo"
             ))
         })
     }
@@ -747,12 +793,56 @@ mod tests {
         ] {
             assert_eq!(p.parse::<Period>().unwrap().as_str(), p);
         }
-        for i in ["5m", "15m", "30m", "1h", "1d", "1wk", "1mo"] {
+        for i in ["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"] {
             assert_eq!(i.parse::<Interval>().unwrap().as_str(), i);
         }
+        assert!(
+            "1M".parse::<Interval>().is_ok(),
+            "clap value names are case-insensitive"
+        );
+        assert!("3m"
+            .parse::<Interval>()
+            .unwrap_err()
+            .to_string()
+            .contains("1m,2m,5m"));
+        assert_eq!(serde_json::to_string(&Interval::Min1).unwrap(), "\"1m\"");
         assert!("7d".parse::<Period>().is_err());
         assert_eq!(serde_json::to_string(&Period::M1).unwrap(), "\"1mo\"");
         assert_eq!(serde_json::to_string(&Interval::Week1).unwrap(), "\"1wk\"");
+    }
+
+    #[test]
+    fn minute_bars_and_their_windows() {
+        assert!(Interval::Min1.is_intraday() && Interval::Min2.is_intraday());
+        assert!(!Interval::Day1.is_intraday());
+        for i in [
+            Interval::Min1,
+            Interval::Min2,
+            Interval::Min5,
+            Interval::Min15,
+            Interval::Min30,
+            Interval::Hour1,
+        ] {
+            assert!(i.is_intraday() && i.bar_seconds().is_some(), "{i}");
+        }
+        assert_eq!(Interval::Min2.bar_seconds(), Some(120));
+        assert_eq!(Interval::Hour1.bar_seconds(), Some(3600));
+        assert_eq!(Interval::Day1.bar_seconds(), None);
+        for p in [Period::D1, Period::D5] {
+            assert!(Interval::Min1.check_period(p).is_ok());
+            assert!(Interval::Min2.check_period(p).is_ok());
+        }
+        assert!(Interval::Min2.check_period(Period::M1).is_ok());
+        let e = Interval::Min1.check_period(Period::M1).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(e.to_string().contains("use period 1d or 5d"), "{e}");
+        for p in [Period::M3, Period::Y1, Period::Max, Period::Ytd] {
+            assert!(Interval::Min1.check_period(p).is_err());
+            assert!(Interval::Min2.check_period(p).is_err());
+        }
+        // Other sizes keep today's behaviour: the source decides.
+        assert!(Interval::Min5.check_period(Period::Y1).is_ok());
+        assert!(Interval::Day1.check_period(Period::Max).is_ok());
     }
 
     #[test]

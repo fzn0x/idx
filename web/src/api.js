@@ -220,13 +220,21 @@ export async function quote(env, symbolsRaw, now = new Date()) {
 }
 
 const PERIODS = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","ytd","max"];
-const INTERVALS = ["5m","15m","30m","1h","1d","1wk","1mo"];
+const INTERVALS = ["1m","2m","5m","15m","30m","1h","1d","1wk","1mo"];
+const INTRADAY = ["1m","2m","5m","15m","30m","1h"];
+
+/** Interval::check_period: Yahoo serves 1m bars for 8 days per request and 2m for 60 days. */
+export function checkPeriod(period, interval) {
+  if (interval === "1m" && !["1d","5d"].includes(period)) throw usage("1-minute bars cover at most 5 days; use period 1d or 5d");
+  if (interval === "2m" && !["1d","5d","1mo"].includes(period)) throw usage("2-minute bars cover at most a month; use period 1d, 5d or 1mo");
+}
 
 export async function history(env, symbolRaw, period = "1y", interval = "1d", limit = 0) {
   const symbol = parseSymbol(symbolRaw);
   if (!PERIODS.includes(period)) throw usage(`invalid period "${period}"; use ${PERIODS.join(",")}`);
   if (!INTERVALS.includes(interval)) throw usage(`invalid interval "${interval}"; use ${INTERVALS.join(",")}`);
-  const intraday = ["5m","15m","30m","1h"].includes(interval);
+  checkPeriod(period, interval);
+  const intraday = INTRADAY.includes(interval);
   const r = await cached(env, `history:${symbol}:${period}:${interval}`, intraday ? 120 : 3600, async () => {
     const res = await y.fetchChart(symbol, period, interval);
     if (res.notFound) return { notFound: res.message };
@@ -240,6 +248,59 @@ export async function history(env, symbolRaw, period = "1y", interval = "1d", li
     warnings.push(`candles truncated to the last ${limit}; summary covers the full period`);
   }
   return envelope("idx.history.v1", data, { cached: r.cached, stale: r.stale, fetched_at: r.fetched_at, warnings });
+}
+
+/**
+ * service::intraday: the latest session's bars (history 1d at `interval`), the
+ * quote alongside (board snapshot, live fallback; a failure is a warning) and
+ * the bars' summary with VWAP. Yahoo's 1-day window is empty for the first
+ * minutes after the open (and for a stock with no trade today), so an empty one
+ * is retried over 5 days.
+ */
+export async function intraday(env, symbolRaw, interval = "1m", limit = 0) {
+  const symbol = parseSymbol(symbolRaw);
+  if (!INTRADAY.includes(interval)) throw usage(`intraday takes 1m, 2m, 5m, 15m, 30m or 1h, not ${interval}; use history (stocks history, idx_history) for daily bars`);
+  let [h, q] = await Promise.all([
+    history(env, symbol, "1d", interval, 0),
+    quote(env, symbol).catch((error) => ({ error })),
+  ]);
+  const retry = [];
+  let window = "the latest session";
+  if (!h.data.candles.length) {
+    try {
+      const wider = await history(env, symbol, "5d", interval, 0);
+      const last = wider.data.candles[wider.data.candles.length - 1];
+      if (last) {
+        retry.push(`no ${interval} bars in the source's 1-day window (empty for some minutes after the open, or no trade today); showing the last session with bars, ${last.time.slice(0, 10)}`);
+        h = wider;
+      } else window = "the last 5 days";
+    } catch (e) {
+      retry.push(`retrying over 5 days failed: ${e.message}`);
+    }
+  }
+  const warnings = [...(h.warnings || []), ...retry];
+  let qt = null;
+  if (q.error) warnings.push(`no quote for ${symbol}: ${q.error.message}`);
+  else {
+    qt = q.data.find((x) => x.symbol === symbol) || null;
+    for (const w of q.warnings || []) if (!warnings.includes(w)) warnings.push(w);
+    if (!qt) warnings.push(`no quote for ${symbol}`);
+  }
+  const bars = ex.sessionBars(h.data.candles);
+  const session = bars.length ? bars[bars.length - 1].time.slice(0, 10) : null;
+  if (!bars.length) warnings.push(`no bars for ${symbol}: it did not trade in ${window}, or the source has none outside trading hours`);
+  const quoteDay = qt?.market_time ? qt.market_time.slice(0, 10) : null;
+  if (session && quoteDay && session !== quoteDay) warnings.push(`the bars are from ${session} but the quote's last trade is from ${quoteDay}; the source updates them separately`);
+  const data = {
+    symbol, name: h.data.name || qt?.name || NAME_BY_SYMBOL.get(symbol) || null, session, interval,
+    quote: qt, bars, summary: ex.intradaySummary(bars),
+  };
+  if (limit > 0 && data.bars.length > limit) {
+    data.bars = data.bars.slice(-limit);
+    warnings.push(`bars truncated to the last ${limit}; the summary covers the whole session`);
+  }
+  const at = Math.min(Date.parse(h.fetched_at), q.error ? Infinity : Date.parse(q.fetched_at)) / 1000;
+  return envelope("idx.intraday.v1", data, { cached: h.cached && (q.error ? true : q.cached), stale: h.stale || !!q.stale, fetched_at: at, warnings });
 }
 
 async function summary(env, symbol, modules, ttl = 6 * 3600) {
@@ -1379,6 +1440,7 @@ export async function route(env, url) {
     case "/market": return market(env);
     case "/quote": return quote(env, q.get("symbols") || q.get("symbol"));
     case "/history": return history(env, q.get("symbol"), q.get("period") || "1y", q.get("interval") || "1d", num(q.get("limit"), 0));
+    case "/intraday": return intraday(env, q.get("symbol"), q.get("interval") || "1m", num(q.get("limit"), 0));
     case "/profile": return profile(env, q.get("symbol"));
     case "/fundamental": return fundamentals(env, q.get("symbol"), q.get("lens"));
     case "/earnings": return earnings(env, q.get("symbol"), q.get("period"), q.get("kind"));

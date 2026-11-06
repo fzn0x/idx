@@ -9,10 +9,10 @@ use crate::model::{
     BandarReport, BandarScreen, Brief, BrokerSummary, Calendar, ChangesReport, CompositionReport,
     CorporateActions, DiscoveredFile, DividendHistory, Earnings, EntityReport, Financials,
     ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens, History, HoldersReport, Holidays,
-    ImportReport, IndexBoard, Insights, InstitutionalOwnership, InstrumentList, MarketOverview,
-    MemberList, NewsReport, OrderBook, Performance, Profile, Quote, Release, RiskLens,
-    ScreenReport, SentimentReport, SnapshotManifest, StaleReason, StatusReport, SyncReport,
-    Technical, ValuationLens, Watchlist,
+    ImportReport, IndexBoard, Insights, InstitutionalOwnership, InstrumentList, Intraday,
+    MarketOverview, MemberList, NewsReport, OrderBook, Performance, Profile, Quote, Release,
+    RiskLens, ScreenReport, SentimentReport, SnapshotManifest, StaleReason, StatusReport,
+    SyncReport, Technical, ValuationLens, Watchlist,
 };
 use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign};
 use crate::model::{
@@ -63,6 +63,7 @@ impl<T> Envelope<T> {
 
 pub const SCHEMA_QUOTES: &str = "idx.quotes.v1";
 pub const SCHEMA_HISTORY: &str = "idx.history.v1";
+pub const SCHEMA_INTRADAY: &str = "idx.intraday.v1";
 pub const SCHEMA_PROFILE: &str = "idx.profile.v1";
 pub const SCHEMA_FUNDAMENTALS: &str = "idx.fundamentals.v1";
 pub const SCHEMA_GROWTH: &str = "idx.growth.v1";
@@ -123,6 +124,7 @@ pub const SCHEMA_OWNERSHIP_INSTITUTIONS: &str = "idx.ownership.institutions.v1";
 
 pub type QuotesEnvelope = Envelope<Vec<Quote>>;
 pub type HistoryEnvelope = Envelope<History>;
+pub type IntradayEnvelope = Envelope<Intraday>;
 pub type ProfileEnvelope = Envelope<Profile>;
 pub type FundamentalsEnvelope = Envelope<Fundamentals>;
 pub type GrowthEnvelope = Envelope<GrowthLens>;
@@ -215,6 +217,7 @@ pub fn schema_names() -> &'static [&'static str] {
     &[
         "quotes",
         "history",
+        "intraday",
         "profile",
         "fundamentals",
         "growth",
@@ -278,6 +281,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
     let root = match name {
         "quotes" => schemars::schema_for!(QuotesEnvelope),
         "history" => schemars::schema_for!(HistoryEnvelope),
+        "intraday" => schemars::schema_for!(IntradayEnvelope),
         "profile" => schemars::schema_for!(ProfileEnvelope),
         "fundamentals" => schemars::schema_for!(FundamentalsEnvelope),
         "growth" => schemars::schema_for!(GrowthEnvelope),

@@ -283,7 +283,7 @@ the source the candles came from.
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 43 tools; several
+plain `GET /healthz`. It is the same server and the same 44 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -308,7 +308,8 @@ local agents can share one process and one cache this way.
 | `idx_holidays` | `year?` (0 = every year), `upcoming?` | `idx.holidays.v1`: trading holidays, trading days, today and the next trading day (bundled, offline) |
 | `idx_members` | `search?` | `idx.members.v1`: exchange members (broker codes) with licences |
 | `idx_quote` | `symbols` ("BBCA,BBRI"; `^JKSE` is IHSG) | `idx.quotes.v1`; each row's `behind_session` flags a last trade dated before the latest IDX session (suspended, not traded, or the source lags) |
-| `idx_history` | `symbol`, `period?`, `interval?`, `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
+| `idx_history` | `symbol`, `period?`, `interval?` (`1m` needs `period` `1d` or `5d`, `2m` at most `1mo`), `limit?` (default 60 most recent candles, 0 = all) | `idx.history.v1` |
+| `idx_intraday` | `symbol` (`^JKSE` is IHSG), `interval?` (`1m` default, `2m`, `5m`, `15m`, `30m`, `1h`), `limit?` (default 120 most recent bars, 0 = all) | `idx.intraday.v1`: the latest session by the minute, the quote, and a summary of the bars with VWAP computed by idx |
 | `idx_profile` | `symbol` | `idx.profile.v1` |
 | `idx_financials` | `symbol`, `period?` (`annual` \| `quarterly` \| `ttm`) | `idx.financials.v1` |
 | `idx_earnings` | `symbol`, `period?` (`annual` \| `quarterly`), `kind?` (`reported` \| `estimates`) | `idx.earnings.v1` |
