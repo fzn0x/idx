@@ -172,6 +172,15 @@ impl Provider for HistoryRouted {
         self.inner.quotes(symbols).await
     }
 
+    /// Asks the source that would serve these candles: the first of [`plan`].
+    fn serves_interval(&self, period: Period, interval: Interval) -> bool {
+        let (sources, _) = plan(self.kind, self.mode, period, interval);
+        sources
+            .first()
+            .and_then(|s| self.source(*s))
+            .is_some_and(|p| p.serves_interval(period, interval))
+    }
+
     async fn history(
         &self,
         symbol: &Symbol,
@@ -442,6 +451,41 @@ mod tests {
                 .unwrap();
             assert_eq!((h.provider, h.data.holders.len()), ("msn", 9));
         }
+    }
+
+    /// `serves_interval` answers for the source that would serve the
+    /// candles: pinned to Stockbit, its five-day window is hourly.
+    #[tokio::test]
+    async fn serves_interval_follows_the_planned_source() {
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path().join("cache")),
+            CacheMode::Normal,
+        ));
+        let sb = || -> Box<dyn Provider> {
+            Box::new(stockbit::Stockbit::new(
+                fetcher.clone(),
+                super::super::Ttls::default(),
+                Arc::new(stockbit::SessionStore::new(
+                    dir.path().join("session.json"),
+                    None,
+                    None,
+                )),
+            ))
+        };
+        let (inner, _) = Fake::ok("yahoo");
+        let pinned = HistoryRouted::new(inner, P::Auto, H::Stockbit, None, Some(sb()));
+        assert!(!pinned.serves_interval(Period::D5, Interval::Min1));
+        assert!(pinned.serves_interval(Period::D5, Interval::Hour1));
+        assert!(pinned.serves_interval(Period::D1, Interval::Min1));
+        // Stockbit selected, auto: a five-day 1m request goes to Yahoo, which
+        // serves it.
+        let (y, _) = Fake::ok("yahoo");
+        let auto = HistoryRouted::new(sb(), P::Stockbit, H::Auto, Some(y), None);
+        assert!(auto.serves_interval(Period::D5, Interval::Min1));
     }
 
     fn no_session() -> IdxError {

@@ -156,10 +156,15 @@ where idx's books say `ORDER_BOOK_FEATURE_FOREIGN_BS`), so it is still open
 whether the flag follows the session clock or an account feature. idx reads only
 the flag, so either way the figures show only when Stockbit marks them current.
 
-`stocks intraday` uses whichever provider is selected, so with
-`--provider stockbit` it shows today's realtime one-minute bars from your
-session during trading hours (none outside them; the quote still answers),
-while the default providers serve Yahoo's delayed bars without a login.
+`stocks intraday` takes its bars where candles come from, so with
+`--provider stockbit` or `history_provider = "stockbit"` it shows today's
+realtime one-minute bars from your session during trading hours; the default
+providers serve Yahoo's delayed bars without a login. When the day's window is
+still empty, idx retries over five days only with a source whose five-day
+window has the bars asked for: under `--provider stockbit` that is Yahoo (the
+last session's bars, with a warning naming its date), while with
+`history_provider = "stockbit"` there are no bars until Stockbit has some
+(Stockbit's five-day window is hourly; the quote still answers).
 
 The Stockbit provider covers `quote`, `history` and `orderbook`. The other
 commands (fundamentals, financials, news, …) stay on the free providers; run
