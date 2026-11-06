@@ -15,7 +15,7 @@ export const TOOLS = [
   { tool: "idx_earnings", cli: "idx stocks earnings TLKM", web: "earnings TLKM", what: "EPS vs estimates, next earnings date" },
   { tool: "idx_dividends", cli: "idx stocks dividends TLKM", web: "dividends TLKM", what: "payments, yearly totals, TTM yield, streak" },
   { tool: "idx_returns", cli: "idx stocks returns BBCA BBRI BMRI", web: "returns BBCA BBRI BMRI", what: "1w..5y returns, CAGR, drawdown, excess over IHSG" },
-  { tool: "idx_fundamental", cli: "idx stocks fundamental BBCA", web: "fundamental BBCA", what: "ratios with a plain-language verdict" },
+  { tool: "idx_fundamental", cli: "idx stocks fundamental BBCA", web: "fundamental BBCA", what: "ratios with a plain-language verdict; lens growth, valuation or risk for a focused reading" },
   { tool: "idx_technical", cli: "idx stocks technical BBRI", web: "technical BBRI", what: "RSI, MACD, averages, levels, signal" },
   { tool: "idx_compare", cli: "idx stocks compare BBCA BBRI BMRI", web: "compare BBCA BBRI BMRI", what: "side-by-side fundamentals" },
   { tool: "idx_screen", cli: "idx stocks screen -f 'pe<10,div>5,mcap>5T'", web: "screen pe<10,div>5,mcap>5T --sort div", what: "screener over ~950 tickers" },

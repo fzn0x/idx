@@ -128,6 +128,149 @@ test("USD statements: ITMG's P/B is not scored, BBCA's is", () => {
   assert.ok(an.verdict(same).reasons.some((x) => x.includes("is rich")));
 });
 
+// ---- growth, valuation and risk lenses: same fixtures and figures as the
+// Rust tests in src/analysis/lens.rs (mod fixtures), Yahoo only.
+
+const quoteSummary = (s) => JSON.parse(fixture(`yahoo/quote_summary_fundamentals_${s}.json`)).quoteSummary.result[0];
+const lensInputs = (s, statements) => {
+  const f = y.parseFundamentals(quoteSummary(s), s.toUpperCase());
+  const fin = y.parseTimeseries(JSON.parse(fixture(`yahoo/${statements}`)), s.toUpperCase(), "annual");
+  const h = y.parseChart(JSON.parse(fixture(`yahoo/chart_${s}_1y_1d.json`)), "1y", "1d");
+  const b = y.parseChart(JSON.parse(fixture("yahoo/chart_jkse_1y_1d.json")), "1y", "1d");
+  return { f, fin, h, b, v: an.valuationLens(f), g: an.growthLens(f.symbol, f, fin), r: an.riskLens(f.symbol, f, h, b) };
+};
+const lensSummary = (x) => [x.reading.label, x.reading.score, x.reading.inputs_available];
+const ruleIds = (x) => x.reading.rules.map((r) => [r.rule, r.points]);
+const noted = (x, needle) => x.reading.notes.some((n) => n.includes(needle));
+
+test("lenses on BBCA (a bank) match the Rust test bbca_bank", () => {
+  const { v, g, r } = lensInputs("bbca", "timeseries_bbca.json");
+  assert.deepEqual(lensSummary(v), ["cheap", 3, 5]);
+  assert.deepEqual(ruleIds(v), [["pe_trailing", 1], ["peg", 0], ["price_to_book", 0], ["dividend_yield", 1], ["analyst_target", 1]]);
+  assert.ok(noted(v, "not scored for a financial company"));
+  assert.equal(v.target_upside_pct, 58.33);
+  assert.deepEqual(lensSummary(g), ["growing", 3, 6]);
+  assert.deepEqual(ruleIds(g), [["revenue_growth", 0], ["earnings_growth", 0], ["eps_forward_growth", 1], ["revenue_cagr", 0], ["revenue_consistency", 1], ["net_income_cagr", 1]]);
+  assert.equal(g.annual.length, 4);
+  assert.deepEqual(g.sources, ["yahoo:quoteSummary", "yahoo:timeseries"]);
+  assert.deepEqual(lensSummary(r), ["moderate", 0, 4]);
+  assert.deepEqual(ruleIds(r), [["losses", 0], ["beta", 0], ["volatility", 0], ["drawdown", 0]]);
+  assert.equal(r.price.observations, 238);
+  assert.ok(Math.abs(r.price.beta - 0.946) <= 0.002, r.price.beta);
+});
+
+test("lenses on TLKM match the Rust test tlkm_moderate_risk", () => {
+  const { v, g, r } = lensInputs("tlkm", "timeseries_tlkm.json");
+  assert.deepEqual(lensSummary(v), ["fair", 2, 7]);
+  assert.deepEqual(ruleIds(v), [["pe_trailing", 1], ["peg", -1], ["price_to_book", 0], ["price_to_sales", 0], ["ev_to_ebitda", 1], ["dividend_yield", 0], ["analyst_target", 1]]);
+  assert.equal(v.reading.rules[5].reason, "dividend yield 10.0% is high, but the payout (125%) exceeds earnings");
+  assert.deepEqual(lensSummary(g), ["mixed", 0, 6]);
+  assert.deepEqual(ruleIds(g), [["revenue_growth", 0], ["earnings_growth", 1], ["eps_forward_growth", 1], ["revenue_cagr", -1], ["revenue_consistency", 0], ["net_income_cagr", -1]]);
+  assert.deepEqual(lensSummary(r), ["moderate", 2, 6]);
+  assert.deepEqual(ruleIds(r), [["leverage", 0], ["liquidity", 1], ["losses", 0], ["beta", 0], ["volatility", 1], ["drawdown", 0]]);
+  const p = r.price;
+  assert.deepEqual([p.benchmark, p.from, p.to, p.observations], ["^JKSE", "2025-11-05", "2026-11-04", 238]);
+  assert.ok(Math.abs(p.beta - 1.122) <= 0.002 && Math.abs(p.correlation - 0.665) <= 0.002, `${p.beta} ${p.correlation}`);
+  assert.equal(r.reading.rules[4].reason, "volatility 49.2% a year is 1.68x IHSG's 29.3% (over 1.5x)");
+});
+
+test("lenses on GIAA match the Rust test giaa_high_risk_from_negative_equity", () => {
+  const { v, g, r } = lensInputs("giaa", "timeseries_annual_giaa.json");
+  assert.deepEqual(lensSummary(v), ["insufficient_data", 0, 1]);
+  assert.deepEqual(ruleIds(v), [["dividend_yield", 0]]);
+  assert.ok(noted(v, "P/B: shareholders' equity is negative"));
+  assert.ok(noted(v, "P/S 3769.72 not scored: statements in USD, price in IDR"));
+  assert.ok(noted(v, "from 1 analyst: fewer than 3"));
+  assert.deepEqual(lensSummary(g), ["mixed", 0, 4]);
+  assert.deepEqual(ruleIds(g), [["revenue_growth", 0], ["revenue_cagr", 1], ["revenue_consistency", 0], ["net_income_cagr", -1]]);
+  assert.equal(g.statements_currency, "USD");
+  assert.equal(g.reading.rules[3].reason, "net income turned from a profit in FY2022 to a loss in FY2025");
+  assert.deepEqual(lensSummary(r), ["high", 6, 6]);
+  assert.deepEqual(ruleIds(r), [["negative_equity", 2], ["liquidity", 1], ["losses", 1], ["beta", 0], ["volatility", 1], ["drawdown", 1]]);
+  assert.equal(r.negative_equity, true);
+});
+
+test("lenses on ITMG match the Rust test itmg_cheap_with_usd_multiples_skipped", () => {
+  const { v, g, r } = lensInputs("itmg", "timeseries_annual_itmg.json");
+  assert.deepEqual(lensSummary(v), ["cheap", 4, 4]);
+  assert.deepEqual(ruleIds(v), [["pe_trailing", 2], ["peg", 1], ["dividend_yield", 1], ["analyst_target", 0]]);
+  for (const m of ["P/B 14103.31", "P/S 13807.10", "EV/EBITDA 91203.7"]) assert.ok(noted(v, `${m} not scored: statements in USD, price in IDR`), m);
+  assert.ok(v.price_to_book > 14000, "shown as reported");
+  assert.deepEqual(lensSummary(g), ["mixed", 0, 6]);
+  assert.deepEqual(ruleIds(g), [["revenue_growth", 1], ["earnings_growth", 1], ["eps_forward_growth", 1], ["revenue_cagr", -1], ["revenue_consistency", -1], ["net_income_cagr", -1]]);
+  assert.ok(g.reading.rules[1].reason.endsWith("from a small or negative base"));
+  assert.deepEqual(lensSummary(r), ["low", -4, 6]);
+  assert.deepEqual(ruleIds(r), [["leverage", -1], ["liquidity", -1], ["losses", 0], ["beta", -1], ["volatility", 0], ["drawdown", -1]]);
+  assert.ok(Math.abs(r.price.beta - 0.336) <= 0.002);
+});
+
+test("lens payloads keep the Rust field order and the reasons of the Rust rules", () => {
+  const { v, g, r } = lensInputs("tlkm", "timeseries_tlkm.json");
+  assert.deepEqual(Object.keys(v), ["symbol", "name", "currency", "financial_currency", "financial_company", "negative_equity", "price", "pe_trailing", "pe_forward", "peg", "price_to_book", "price_to_sales", "ev_to_ebitda", "ev_to_revenue", "dividend_yield_pct", "payout_ratio_pct", "target_mean", "analysts", "target_upside_pct", "reading", "sources"]);
+  assert.deepEqual(Object.keys(g), ["symbol", "name", "statements_currency", "most_recent_quarter", "revenue_growth_pct", "earnings_growth_pct", "revenue_cagr_5y_pct", "eps_growth_3y_pct", "eps_ttm", "eps_forward", "eps_forward_growth_pct", "annual", "revenue_cagr_pct", "net_income_cagr_pct", "reading", "sources"]);
+  assert.deepEqual(Object.keys(g.annual[0]), ["end_date", "revenue", "net_income", "revenue_change_pct", "net_income_change_pct"]);
+  assert.deepEqual(Object.keys(r), ["symbol", "name", "currency", "financial_company", "negative_equity", "debt_to_equity", "current_ratio", "quick_ratio", "net_margin_pct", "eps_ttm", "price", "reading", "sources"]);
+  assert.deepEqual(Object.keys(r.price), ["benchmark", "from", "to", "observations", "beta", "correlation", "volatility_pct", "benchmark_volatility_pct", "max_drawdown", "benchmark_max_drawdown_pct"]);
+  assert.deepEqual(Object.keys(v.reading), ["label", "score", "inputs_available", "rules", "notes"]);
+  assert.deepEqual(g.reading.rules.map((x) => x.reason), [
+    "revenue +6.4% year on year in the latest quarter (0% to +10%)",
+    "earnings +28.0% year on year in the latest quarter (over +10%)",
+    "forward EPS 261.11 is +50.9% against trailing 173.07 (over +10%)",
+    "revenue CAGR -0.1% over FY2022 to FY2025 (below 0%)",
+    "revenue grew in 2 of the last 3 fiscal years",
+    "net income CAGR -5.5% over FY2022 to FY2025 (below 0%)",
+  ]);
+});
+
+test("lenses are null-safe: nothing reported gives insufficient_data and notes", () => {
+  const f = blank();
+  const v = an.valuationLens(f);
+  assert.deepEqual(lensSummary(v), ["insufficient_data", 0, 0]);
+  assert.ok(v.reading.notes.length >= 6);
+  assert.equal(v.target_upside_pct, null);
+  assert.deepEqual(lensSummary(an.growthLens("TEST", f, null)), ["insufficient_data", 0, 0]);
+  assert.deepEqual(lensSummary(an.growthLens("TEST", null, null)), ["insufficient_data", 0, 0]);
+  const r = an.riskLens("TEST", null, null, null);
+  assert.deepEqual(lensSummary(r), ["insufficient_data", 0, 0]);
+  assert.equal(r.price, null);
+  assert.ok(noted(r, "fundamentals unavailable") && noted(r, "no daily candles"));
+  // Without IHSG the price rules become notes and the stock keeps its own figures.
+  const h = y.parseChart(JSON.parse(fixture("yahoo/chart_tlkm_1y_1d.json")), "1y", "1d");
+  const own = an.riskLens("TLKM", null, h, null);
+  assert.equal(own.price.observations, 0);
+  assert.equal(own.price.beta, null);
+  assert.ok(own.price.volatility_pct > 40);
+  assert.ok(noted(own, "benchmark ^JKSE unavailable"));
+});
+
+test("lens rules on synthetic inputs match the Rust unit tests", () => {
+  // negative_equity_skips_pb_and_leverage_and_adds_risk
+  let f = blank();
+  f.health.debt_to_equity = -2.89; f.valuation.price_to_book = -0.55; f.health.current_ratio = 1.2; f.profitability.net_margin_pct = -9.4;
+  assert.ok(noted(an.valuationLens(f), "P/B: shareholders' equity is negative"));
+  let r = an.riskLens("TEST", f, null, null);
+  assert.deepEqual(ruleIds(r), [["negative_equity", 2], ["liquidity", 0], ["losses", 1]]);
+  assert.equal(r.reading.label, "high");
+  // analyst_target_needs_three_analysts
+  const target = (t, n) => { const g = blank(); g.price = 100; g.analyst.target_mean = t; g.analyst.analysts = n; return an.valuationLens(g); };
+  assert.deepEqual(ruleIds(target(120.01, 3)), [["analyst_target", 1]]);
+  assert.deepEqual(ruleIds(target(120, 3)), [["analyst_target", 0]]);
+  assert.deepEqual(ruleIds(target(89.9, 3)), [["analyst_target", -1]]);
+  assert.ok(noted(target(150, 2), "from 2 analysts: fewer than 3, not scored"));
+  // fiscal_years_give_cagr_consistency_and_turns
+  const fin = (rows) => ({ symbol: "TEST", currency: "IDR", period: "annual", source: "t:annual", periods: rows.map(([yr, rev, ni]) => ({ end_date: `${yr}-12-31`, period: "annual", income: { total_revenue: rev, net_income: ni }, balance: {}, cash_flow: {} })) });
+  const g = an.growthLens("TEST", blank(), fin([[2022, 100, 10], [2023, 110, 12], [2024, 121, 9], [2025, 133.1, 20]]));
+  assert.equal(g.revenue_cagr_pct, 10);
+  assert.equal(g.net_income_cagr_pct, 25.99);
+  assert.deepEqual(ruleIds(g), [["revenue_cagr", 0], ["revenue_consistency", 1], ["net_income_cagr", 1]]);
+  assert.equal(g.reading.label, "growing");
+  assert.deepEqual([g.annual[0].revenue_change_pct, g.annual[1].revenue_change_pct, g.annual[2].net_income_change_pct], [null, 10, -25]);
+  const turn = (a, b) => an.growthLens("TEST", blank(), fin([[2022, null, a], [2023, null, 1], [2025, null, b]]));
+  assert.deepEqual(ruleIds(turn(5, -1)), [["net_income_cagr", -1]]);
+  assert.deepEqual(ruleIds(turn(-5, 1)), [["net_income_cagr", 1]]);
+  assert.ok(noted(turn(-5, -1), "losses in both FY2022 and FY2025"));
+});
+
 test("earnings parse: padded zero quarters become null", () => {
   const r = JSON.parse(fixture("yahoo/quote_summary_statements_bbca.json")).quoteSummary.result[0];
   const e = y.parseEarnings(r, "BBCA");
