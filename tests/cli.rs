@@ -1150,17 +1150,27 @@ fn history_provider_routes_candles() {
         .code(2)
         .stderr(predicate::str::contains("stockbit login"));
     // ...and the flag beats the environment.
-    let v = json(&[
-        "--history-provider",
-        "yahoo",
-        "-o",
-        "json",
-        "stocks",
-        "history",
-        "BBCA",
-        "--period",
-        "1mo",
-    ]);
+    let out = idx(&sb.cache, &sb.config)
+        .env("IDX_HISTORY_PROVIDER", "stockbit")
+        .args([
+            "--history-provider",
+            "yahoo",
+            "-o",
+            "json",
+            "stocks",
+            "history",
+            "BBCA",
+            "--period",
+            "1mo",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["provider"], "yahoo");
 
     // Stockbit charts a year in daily bars: a weekly request goes to Yahoo with a note.
