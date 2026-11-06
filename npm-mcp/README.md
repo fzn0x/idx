@@ -20,6 +20,15 @@ Most clients take the same entry in their MCP config:
 On Windows use `"command": "cmd", "args": ["/c", "npx", "-y", "ihsg-mcp"]`
 (clients start commands without a shell there, and `npx` is a `.cmd`
 script); in a command line that is `claude mcp add --scope user idx -- cmd /c npx -y ihsg-mcp`.
+In Git Bash, which turns a lone `/c` into `C:/`, start that line with
+`MSYS_NO_PATHCONV=1` or write `cmd //c`. Keep the plain `npx` form in a
+config file that macOS or Linux users share, such as a committed `.mcp.json`.
+
+GUI apps that do not inherit your shell `PATH` (common on macOS with Node from
+nvm, fnm, Volta or Homebrew) fail with `spawn npx ENOENT`: give them the
+absolute path from `command -v npx` as `command` and an `env` block whose
+`PATH` holds that folder (npx starts `node` through `PATH`).
+
 `npx -y ihsg-mcp setup <client>` prints the exact command or file for Codex,
 Muse Code, Cursor, Copilot, Gemini, Zed and the other supported clients, in
 this npx form; `npx -y ihsg-mcp setup --list` names them.

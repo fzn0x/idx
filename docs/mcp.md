@@ -38,7 +38,22 @@ script, so the command is `cmd /c npx -y ihsg-mcp`
 (`"command": "cmd", "args": ["/c", "npx", "-y", "ihsg-mcp"]`).
 `idx mcp setup <client> --npx` prints any client's entry in this form for the
 machine it runs on, and so does `npx -y ihsg-mcp setup <client>` (the package
-adds `--npx` to a `setup` that names no other form).
+adds `--npx` to a `setup` that names no other form). Two things to know about
+the Windows form:
+
+- Git Bash turns a lone `/c` into `C:/`, so a command line pasted there
+  registers a broken server. Start it with `MSYS_NO_PATHCONV=1` or write
+  `cmd //c`; PowerShell and cmd.exe take it as printed.
+- `cmd /c` exists only on Windows. A config file also used on macOS or Linux,
+  such as a `.mcp.json` committed with a project, needs the plain
+  `"command": "npx", "args": ["-y", "ihsg-mcp"]`.
+
+GUI apps that do not inherit your shell `PATH` (common on macOS with Node from
+nvm, fnm, Volta or Homebrew) fail to start `npx` (`spawn npx ENOENT`). Give
+such an entry the absolute path that `command -v npx` prints as `command`, and
+an `env` block whose `PATH` holds that folder, since npx and the package start
+`node` through `PATH`; or register the idx binary itself with
+`idx mcp setup <client>`.
 
 Everything after the package name goes to `idx mcp`, and `IDX_*` variables
 from the client's `env` block apply as usual: `npx -y ihsg-mcp --http
