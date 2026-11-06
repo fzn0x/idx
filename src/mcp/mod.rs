@@ -1563,7 +1563,7 @@ impl IdxServer {
                 let given = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
                 match view.as_str() {
                     "holders" => {
-                        if given(&a.symbols) || given(&a.by) || a.ascending.is_some() {
+                        if given(&a.symbols) || given(&a.by) || a.ascending == Some(true) {
                             return Err(IdxError::Usage(
                                 "symbols, by and ascending apply to view \"issuers\"".into(),
                             ));
@@ -2180,6 +2180,15 @@ mod tests {
         assert_eq!(v["schema"], "idx.ownership.cross-holders.v1");
         assert_eq!(v["data"]["holders"][0]["entity_key"], "DRS SURONO SUBEKTI");
         assert_eq!(v["data"]["total_matches"], 8);
+        // A harmless default of the other view is fine; one that would change the answer is not.
+        let mut holders = rankings(None, None, None, None);
+        holders.ascending = Some(false);
+        let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+        let mut holders = rankings(None, None, None, None);
+        holders.ascending = Some(true);
+        let r = s.ownership_rankings(Parameters(holders)).await.unwrap();
+        assert_eq!(code(&r), "usage");
         let v = json_of(
             &s.ownership_rankings(Parameters(rankings(None, None, Some("foreign"), None)))
                 .await
