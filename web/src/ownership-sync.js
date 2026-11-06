@@ -8,8 +8,12 @@
 // visible only after every part is in and the row count matches the index.
 //
 // Limits it respects: one D1 statement per part (D1 query caps), a daily
-// rows-written budget (D1 free tier allows 100k/day; every holding is three
-// writes with its two indexes), and the newest OWN_KEEP_RELEASES months.
+// rows-written budget (D1 free tier allows 100k per UTC day; every holding is
+// three writes with its two indexes, and deleting one costs the same), and the
+// newest OWN_KEEP_RELEASES months. Replacing a month D1 already holds deletes
+// the old copy first, which hides that month until the new copy is in, so a
+// reload starts only when the delete and the whole load fit in what is left
+// of today's budget.
 //
 // A part row is one holder's position in one issuer, the holder's register
 // lines already summed by idx (`accounts`). A month reloads when the IDX file
@@ -30,7 +34,15 @@ const UA = "idx-web (+https://ihsg.midoriresearch.com)";
 export const mirrorBase = (env) => (env.OWN_MIRROR_URL || DEFAULT_MIRROR).replace(/\/+$/, "");
 const keepReleases = (env) => Math.max(2, Number(env.OWN_KEEP_RELEASES || 6));
 const dailyBudget = (env) => Math.max(5000, Number(env.OWN_DAILY_WRITE_BUDGET || 60000));
-const wibDay = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
+// D1's daily limits reset at 00:00 UTC, so the budget counts UTC days.
+const utcDay = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * Whether a step that writes `writes` rows may start when `used` of today's
+ * `limit` is spent. A step bigger than a whole day's budget (a very low
+ * OWN_DAILY_WRITE_BUDGET) starts on a fresh day instead of never. Pure, tested.
+ */
+export const fitsBudget = (used, writes, limit) => used + writes <= limit || (used === 0 && writes > limit);
 
 async function kvGet(env, k) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = ?1").bind(k).first();
@@ -41,6 +53,20 @@ async function kvPut(env, k, v) {
 }
 async function kvDel(env, k) {
   await env.DB.prepare("DELETE FROM kv WHERE k = ?1").bind(k).run();
+}
+
+async function todaysBudget(env) {
+  const b = await kvGet(env, "own:budget");
+  return b && b.day === utcDay() ? b : { day: utcDay(), rows: 0 };
+}
+async function charge(env, budget, writes) {
+  budget.rows += writes;
+  await kvPut(env, "own:budget", budget);
+}
+const waiting = (env, budget, extra) => ({ waiting_for_budget: { day: budget.day, used: budget.rows, limit: dailyBudget(env) }, ...extra });
+/** Rows D1 holds for a month: a loaded copy or what an aborted load left. */
+async function heldRows(env, asOf) {
+  return (await env.DB.prepare("SELECT COUNT(*) AS n FROM own_holdings WHERE as_of = ?1").bind(asOf).first()).n;
 }
 
 async function fetchText(url) {
@@ -104,20 +130,30 @@ export async function ownershipSync(env, { force = false } = {}) {
     const have = new Map((await env.DB.prepare("SELECT as_of, sha256, parts_key FROM own_releases").all()).results.map((r) => [r.as_of, { sha256: r.sha256, parts_key: r.parts_key }]));
     const next = plan(index, have, keepReleases(env));
     if (next.upToDate != null) return { up_to_date: next.upToDate };
+    const budget = await todaysBudget(env);
     if (next.prune) {
+      const deletes = (await heldRows(env, next.prune)) * WRITES_PER_ROW;
+      if (!fitsBudget(budget.rows, deletes, dailyBudget(env))) return waiting(env, budget, { pruning: next.prune });
       await env.DB.batch([
         env.DB.prepare("DELETE FROM own_releases WHERE as_of = ?1").bind(next.prune),
         env.DB.prepare("DELETE FROM own_holdings WHERE as_of = ?1").bind(next.prune),
       ]);
+      await charge(env, budget, deletes);
       await kvDel(env, "own:checked"); // look again next tick
       return { pruned: next.prune };
     }
     const r = next.load;
-    // Hide any older copy of this month and clear leftovers of an aborted load.
+    // Deleting D1's copy (a reload, or leftovers of an aborted load) costs as
+    // much as loading one and hides the month until the new copy is in. Start
+    // only when both fit today, so the month is back within minutes instead of
+    // after the next reset; until then the old copy stays visible.
+    const deletes = (await heldRows(env, r.as_of)) * WRITES_PER_ROW;
+    if (!fitsBudget(budget.rows, deletes + r.rows * WRITES_PER_ROW, dailyBudget(env))) return waiting(env, budget, { next_load: r.as_of });
     await env.DB.batch([
       env.DB.prepare("DELETE FROM own_releases WHERE as_of = ?1").bind(r.as_of),
       env.DB.prepare("DELETE FROM own_holdings WHERE as_of = ?1").bind(r.as_of),
     ]);
+    await charge(env, budget, deletes);
     state = {
       as_of: r.as_of, sha256: r.sha256, format: r.format, source: r.source_url || `${base}/${r.file}`,
       rows: r.rows, issuers: r.issuers ?? null, entities: r.entities ?? null, parts: r.parts, next: 0, started_at: now,
@@ -128,12 +164,9 @@ export async function ownershipSync(env, { force = false } = {}) {
     await kvPut(env, "own:sync", state);
   }
 
-  let budget = await kvGet(env, "own:budget");
-  if (!budget || budget.day !== wibDay()) budget = { day: wibDay(), rows: 0 };
+  const budget = await todaysBudget(env);
   const part = state.parts[state.next];
-  if (budget.rows + part.rows * WRITES_PER_ROW > dailyBudget(env)) {
-    return { waiting_for_budget: { day: budget.day, used: budget.rows, limit: dailyBudget(env) }, loading: state.as_of };
-  }
+  if (budget.rows + part.rows * WRITES_PER_ROW > dailyBudget(env)) return waiting(env, budget, { loading: state.as_of });
   const text = await fetchText(`${base}/${part.file}`);
   if ((await sha256Hex(text)) !== part.sha256) {
     await kvDel(env, "own:sync");
@@ -141,8 +174,7 @@ export async function ownershipSync(env, { force = false } = {}) {
     throw new Error(`${part.file} no longer matches the index it was listed in; restarting from the new index`);
   }
   await env.DB.prepare(INSERT).bind(state.as_of, text).run();
-  budget.rows += part.rows * WRITES_PER_ROW;
-  await kvPut(env, "own:budget", budget);
+  await charge(env, budget, part.rows * WRITES_PER_ROW);
   state.next += 1;
   if (state.next < state.parts.length) {
     await kvPut(env, "own:sync", state);
@@ -153,6 +185,7 @@ export async function ownershipSync(env, { force = false } = {}) {
   await kvDel(env, "own:sync");
   if (count !== state.rows) {
     await env.DB.prepare("DELETE FROM own_holdings WHERE as_of = ?1").bind(state.as_of).run();
+    await charge(env, budget, count * WRITES_PER_ROW);
     throw new Error(`${state.as_of}: loaded ${count} rows but the index lists ${state.rows}; discarded`);
   }
   await env.DB.prepare(
@@ -169,7 +202,7 @@ export async function syncStatus(env) {
     mirror: mirrorBase(env),
     loading: state ? { as_of: state.as_of, part: state.next, of: state.parts.length, started_at: new Date(state.started_at * 1000).toISOString() } : null,
     checked_at: checked ? new Date(checked * 1000).toISOString() : null,
-    writes_today: budget && budget.day === wibDay() ? budget.rows : 0,
+    writes_today: budget && budget.day === utcDay() ? budget.rows : 0,
     daily_write_budget: dailyBudget(env),
     keep_releases: keepReleases(env),
   };

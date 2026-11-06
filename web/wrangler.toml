@@ -23,7 +23,8 @@ PUBLIC_HOST = "ihsg.midoriresearch.com"
 # KSEI register mirror published by .github/workflows/ownership.yml.
 OWN_MIRROR_URL = "https://github.com/fzn0x/idx/releases/download/ownership-data"
 OWN_KEEP_RELEASES = "6"
-# D1 free tier: 100k rows written per day; the register takes ~22k per month loaded.
+# D1 free tier: 100k rows written per UTC day; the register takes ~22k per month
+# loaded, and ~43k to replace a month D1 already holds (the delete counts too).
 OWN_DAILY_WRITE_BUDGET = "60000"
 
 [[d1_databases]]

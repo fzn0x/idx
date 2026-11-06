@@ -104,14 +104,19 @@ the script:
 
 The web terminal's Worker (`web/src/ownership-sync.js`) loads the parts into
 D1 on its minute cron, newest month first, one part per minute, within a daily
-rows-written budget (`OWN_DAILY_WRITE_BUDGET`, default 60,000, inside D1's free
-tier). It keeps `OWN_KEEP_RELEASES` months (default 6). A month is published
-only after its row count matches the index; a re-published IDX file (new
-SHA-256) is reloaded, and so is a month whose parts changed in an index
-written by idx 0.8.2 or later (`parts_key`), so every kept month reloads once
-after the mirror is rebuilt with summed accounts. `/api/ownership/status`
-shows progress. There is no upload endpoint: the only input is the
-repository's own release.
+rows-written budget (`OWN_DAILY_WRITE_BUDGET`, default 60,000 per UTC day,
+inside D1's free tier of 100,000). It keeps `OWN_KEEP_RELEASES` months
+(default 6). A month is published only after its row count matches the index;
+a re-published IDX file (new SHA-256) is reloaded, and so is a month whose
+parts changed in an index written by idx 0.8.2 or later (`parts_key`), so
+every kept month reloads once after the mirror is rebuilt with summed
+accounts. A reload first deletes the copy D1 holds, which costs as many writes
+as loading it (about 21,600 each way for one month) and hides the month until
+the new copy is in, so the budget charges deletes too and a reload starts
+only when both fit in what is left of the day. With the default budget that
+is one reload a day; months not reloaded yet stay readable as their older
+copy, with a warning. `/api/ownership/status` shows progress. There is no
+upload endpoint: the only input is the repository's own release.
 
 Running the workflow by hand: Actions → "ownership data" → Run workflow
 (tick "dry run" to parse without uploading). From any machine idx.co.id
