@@ -10,7 +10,7 @@ fn round2(v: f64) -> f64 {
 }
 
 /// Closes with their dates, oldest first, one per calendar day.
-fn series(candles: &[Candle]) -> Vec<(NaiveDate, f64)> {
+pub fn series(candles: &[Candle]) -> Vec<(NaiveDate, f64)> {
     let mut out: Vec<(NaiveDate, f64)> = Vec::with_capacity(candles.len());
     for c in candles {
         let d = c.date();
@@ -119,6 +119,86 @@ pub fn volatility(s: &[(NaiveDate, f64)]) -> Option<f64> {
     let mean = r.iter().sum::<f64>() / r.len() as f64;
     let var = r.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (r.len() - 1) as f64;
     Some(round2(var.sqrt() * (252f64).sqrt() * 100.0))
+}
+
+/// Fewest matched daily returns behind a beta: about six months of sessions.
+pub const MIN_BETA_OBSERVATIONS: usize = 120;
+
+/// Daily closes with their dates, oldest first (see [`series`]).
+pub type Closes = Vec<(NaiveDate, f64)>;
+
+/// The dates both series have, oldest first, as two aligned series. Index
+/// and stock bars can lag each other by a session (Yahoo's `^JKSE` daily bar
+/// often arrives a day after the shares'), so statistics that compare the
+/// two run on these.
+pub fn common(a: &[(NaiveDate, f64)], b: &[(NaiveDate, f64)]) -> (Closes, Closes) {
+    let (mut i, mut j) = (0, 0);
+    let (mut out_a, mut out_b) = (Vec::new(), Vec::new());
+    while i < a.len() && j < b.len() {
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out_a.push(a[i]);
+                out_b.push(b[j]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    (out_a, out_b)
+}
+
+/// Beta and correlation of `stock` against `bench`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BetaStats {
+    /// Sample covariance over the benchmark's sample variance, 3 dp; `None`
+    /// under [`MIN_BETA_OBSERVATIONS`] or when the benchmark never moved.
+    pub beta: Option<f64>,
+    /// Pearson correlation, 3 dp; `None` when beta is, or the stock never moved.
+    pub correlation: Option<f64>,
+    /// Matched daily returns used.
+    pub observations: usize,
+}
+
+/// Three decimals; `+ 0.0` turns a rounded -0.0 into 0.0.
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0 + 0.0
+}
+
+/// Beta from simple daily returns between consecutive dates of two aligned
+/// series (see [`common`]); a pair is skipped when either base close is not
+/// above zero.
+pub fn beta(stock: &[(NaiveDate, f64)], bench: &[(NaiveDate, f64)]) -> BetaStats {
+    let pairs: Vec<(f64, f64)> = stock
+        .windows(2)
+        .zip(bench.windows(2))
+        .filter(|(s, b)| s[0].1 > 0.0 && b[0].1 > 0.0)
+        .map(|(s, b)| (s[1].1 / s[0].1 - 1.0, b[1].1 / b[0].1 - 1.0))
+        .collect();
+    let n = pairs.len();
+    let none = BetaStats {
+        beta: None,
+        correlation: None,
+        observations: n,
+    };
+    if n < MIN_BETA_OBSERVATIONS {
+        return none;
+    }
+    let ms = pairs.iter().map(|p| p.0).sum::<f64>() / n as f64;
+    let mb = pairs.iter().map(|p| p.1).sum::<f64>() / n as f64;
+    let dof = (n - 1) as f64;
+    let cov = pairs.iter().map(|p| (p.0 - ms) * (p.1 - mb)).sum::<f64>() / dof;
+    let var_b = pairs.iter().map(|p| (p.1 - mb).powi(2)).sum::<f64>() / dof;
+    let var_s = pairs.iter().map(|p| (p.0 - ms).powi(2)).sum::<f64>() / dof;
+    if var_b <= 0.0 {
+        return none;
+    }
+    BetaStats {
+        beta: Some(round3(cov / var_b)),
+        correlation: (var_s > 0.0).then(|| round3(cov / (var_b * var_s).sqrt())),
+        observations: n,
+    }
 }
 
 fn extremes(s: &[(NaiveDate, f64)]) -> (Option<DayMove>, Option<DayMove>) {
@@ -255,6 +335,79 @@ mod tests {
         };
         assert_eq!(r.minus(&bench).y1, Some(30.0));
         assert_eq!(r.minus(&bench).m1, None);
+    }
+
+    fn days(start: (i32, u32, u32), closes: &[f64]) -> Vec<(NaiveDate, f64)> {
+        let d0 = NaiveDate::from_ymd_opt(start.0, start.1, start.2).unwrap();
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (d0 + Duration::days(i as i64), *c))
+            .collect()
+    }
+
+    /// An index path with some variety, starting at 1000.
+    fn index_path(n: usize) -> Vec<f64> {
+        let mut out = vec![1000.0];
+        for i in 1..n {
+            let r = [0.01, -0.005, 0.002, -0.012, 0.007][i % 5];
+            out.push(out[i - 1] * (1.0 + r));
+        }
+        out
+    }
+
+    #[test]
+    fn beta_of_a_doubled_index_is_two() {
+        let idx = index_path(200);
+        let stock: Vec<f64> = {
+            let mut out = vec![500.0];
+            for i in 1..idx.len() {
+                let r = idx[i] / idx[i - 1] - 1.0;
+                out.push(out[i - 1] * (1.0 + 2.0 * r));
+            }
+            out
+        };
+        let b = beta(&days((2026, 1, 1), &stock), &days((2026, 1, 1), &idx));
+        assert_eq!(b.observations, 199);
+        assert_eq!(b.beta, Some(2.0));
+        assert_eq!(b.correlation, Some(1.0));
+        // The same series against itself.
+        let s = days((2026, 1, 1), &idx);
+        assert_eq!(beta(&s, &s).beta, Some(1.0));
+    }
+
+    #[test]
+    fn beta_needs_enough_returns_and_a_moving_index() {
+        let idx = index_path(120); // 119 returns
+        let s = days((2026, 1, 1), &idx);
+        let b = beta(&s, &s);
+        assert_eq!((b.beta, b.correlation, b.observations), (None, None, 119));
+        let flat = days((2026, 1, 1), &[100.0; 200]);
+        let moving = days((2026, 1, 1), &index_path(200));
+        assert_eq!(beta(&moving, &flat).beta, None, "index never moved");
+        let b = beta(&flat, &moving);
+        assert_eq!(b.beta, Some(0.0), "a flat stock has beta 0");
+        assert_eq!(b.correlation, None, "and no correlation");
+    }
+
+    #[test]
+    fn common_keeps_only_shared_dates() {
+        let a = days((2026, 1, 1), &[1.0, 2.0, 3.0, 4.0]); // Jan 1..4
+        let b = days((2026, 1, 2), &[20.0, 30.0, 40.0, 50.0]); // Jan 2..5
+        let (ca, cb) = common(&a, &b);
+        let dates: Vec<String> = ca.iter().map(|x| x.0.to_string()).collect();
+        assert_eq!(dates, ["2026-01-02", "2026-01-03", "2026-01-04"]);
+        assert_eq!(ca.iter().map(|x| x.1).collect::<Vec<_>>(), [2.0, 3.0, 4.0]);
+        assert_eq!(
+            cb.iter().map(|x| x.1).collect::<Vec<_>>(),
+            [20.0, 30.0, 40.0]
+        );
+        // A gap in one series drops that date from both.
+        let gappy: Vec<_> = a.iter().copied().filter(|x| x.1 != 3.0).collect();
+        let (ca, cb) = common(&gappy, &b);
+        assert_eq!(ca.len(), 2);
+        assert_eq!(cb.iter().map(|x| x.1).collect::<Vec<_>>(), [20.0, 40.0]);
+        assert_eq!(common(&a, &[]).0.len(), 0);
     }
 
     #[test]

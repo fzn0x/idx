@@ -19,7 +19,10 @@ const COMMANDS = [
   { name: "profile", usage: "profile <SYMBOL>", help: "sector, industry, description, size" },
   { name: "financials", usage: "financials <SYMBOL> [annual|quarterly|ttm]", help: "income statement, balance sheet, cash flow" },
   { name: "earnings", usage: "earnings <SYMBOL>", help: "quarterly EPS vs estimates, next date" },
-  { name: "fundamental", usage: "fundamental <SYMBOL>", help: "ratios with a plain-language verdict" },
+  { name: "fundamental", usage: "fundamental <SYMBOL> [--lens growth|valuation|risk]", help: "ratios with a plain-language verdict; --lens gives one of the readings below instead" },
+  { name: "growth", usage: "growth <SYMBOL>", help: "growth lens: latest quarter, forward EPS, fiscal-year revenue and net income, each rule with its points" },
+  { name: "valuation", usage: "valuation <SYMBOL>", help: "valuation lens: P/E, PEG, P/B, P/S, EV/EBITDA, dividend yield and analyst target, each scored" },
+  { name: "risk", usage: "risk <SYMBOL>", help: "risk lens: negative equity, leverage, liquidity, losses, and beta, volatility and largest fall against IHSG" },
   { name: "technical", usage: "technical <SYMBOL> [period]", help: "RSI, MACD, averages, levels, signal" },
   { name: "compare", usage: "compare <SYMBOLS>", help: "side-by-side fundamentals" },
   { name: "screen", usage: "screen [FILTER] [--preset P] [--sort KEY] [--asc|--desc] [--returns] [--limit N]", help: "e.g. screen pe<10,div>5,mcap>5T --sort div; --returns adds the return windows when no filter or sort needs them; presets: top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include range (52-week position, 0 to 100) and ret1w ret1m ret3m ret6m retytd ret1y (price return %, as MSN reports it)" },
@@ -91,6 +94,25 @@ const newsTable = (items) => wrapScroll(table([
 const mixedCurrency = (f) => !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
 const mixedRatio = (f, v) => (v != null && mixedCurrency(f) ? `${fmt.ratio(v)}*` : fmt.ratio(v));
 const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} ${f.financial_currency}` : s);
+
+// Growth, valuation and risk lenses (idx.growth.v1, idx.valuation.v1,
+// idx.risk.v1): the inputs, the reading, every rule with its points, then
+// the rules that could not run.
+const LENS_TONE = { cheap: "up", growing: "up", low: "up", expensive: "dn", shrinking: "dn", high: "dn" };
+const yesNo = (b) => (b == null ? null : b ? "yes" : "no");
+function lensView(d, lens, groups, direction, after = []) {
+  const frag = document.createDocumentFragment();
+  const r = d.reading;
+  frag.append(el("p", { class: "prose" }, [el("b", { text: d.name || d.symbol }), ` · ${d.symbol} · ${lens}`]));
+  const grid = el("div", { class: "three" });
+  for (const [title, pairs] of groups) grid.append(el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: title }), kv(pairs)]));
+  frag.append(grid, ...after);
+  frag.append(el("p", { class: "prose" }, [el("span", { class: `pill ${LENS_TONE[r.label] || ""}`, text: r.label.replace("_", " ") }), ` score ${r.score >= 0 ? "+" : ""}${r.score}, ${r.inputs_available} rule${r.inputs_available === 1 ? "" : "s"} · ${direction}`]));
+  frag.append(el("ul", { class: "reasons" }, r.rules.map((x) => el("li", { text: `${x.points >= 0 ? "+" : ""}${x.points}  ${x.reason}` }))));
+  if (r.notes.length) frag.append(el("ul", { class: "reasons" }, r.notes.map((n) => el("li", { text: `skipped: ${n}` }))));
+  frag.append(el("p", { class: "warn", text: `Heuristic from public data, not investment advice.${d.sources.length ? ` Sources: ${d.sources.join(", ")}` : ""}` }));
+  return frag;
+}
 
 const BANDAR_NOTE = "Bandarmology from the IPOT broker summary: the top N buyers against the top N sellers (ranked by lots), net value as a share of the value traded: +15% big accumulation, +5% accumulation, -5% distribution, -15% big distribution. Heuristic, not advice.";
 
@@ -174,6 +196,35 @@ const R = {
     }
     frag.append(el("p", { class: "warn", text: `Sources: ${f.sources.join(", ")}` }));
     return frag;
+  },
+  valuation(v) {
+    const m = (x) => mixedRatio(v, x);
+    const after = mixedCurrency(v) ? [el("p", { class: "warn", text: `* Statements in ${v.financial_currency}, price in ${v.currency}: these multiples divide the price by ${v.financial_currency} figures, so they are shown as reported and not scored.` })] : [];
+    return lensView(v, "valuation", [
+      ["Multiples", [["P/E trailing", fmt.ratio(v.pe_trailing)], ["P/E forward", fmt.ratio(v.pe_forward)], ["PEG", fmt.ratio(v.peg)], ["P/B", m(v.price_to_book)], ["P/S", m(v.price_to_sales)], ["EV/EBITDA", m(v.ev_to_ebitda)], ["EV/Revenue", m(v.ev_to_revenue)]]],
+      ["Price and income", [["Price", fmt.price(v.price)], ["Dividend yield", pct(v.dividend_yield_pct)], ["Payout", pct(v.payout_ratio_pct)], ["Negative equity", yesNo(v.negative_equity)], ["Financial company", yesNo(v.financial_company)]]],
+      ["Analysts", [["Target mean", fmt.price(v.target_mean)], ["Analysts", fmt.int(v.analysts)], ["Upside", fmt.pct(v.target_upside_pct)]]],
+    ], "points favour cheapness", after);
+  },
+  growth(g) {
+    const chg = (k) => ({ h: "Change", f: (y) => fmt.pct(y[k]), cls: (y) => `num ${signClass(y[k])}` });
+    const after = g.annual.length ? [wrapScroll(table([
+      { h: "Fiscal year", f: (y) => `FY${y.end_date.slice(0, 4)}`, l: true }, { h: `Revenue${g.statements_currency ? ` (${g.statements_currency})` : ""}`, f: (y) => fmt.compact(y.revenue) }, chg("revenue_change_pct"),
+      { h: "Net income", f: (y) => fmt.compact(y.net_income) }, chg("net_income_change_pct"),
+    ], g.annual))] : [];
+    return lensView(g, "growth", [
+      ["Latest quarter (year on year)", [["Revenue growth", fmt.pct(g.revenue_growth_pct)], ["Earnings growth", fmt.pct(g.earnings_growth_pct)], ["Quarter end", g.most_recent_quarter]]],
+      ["Earnings per share", [["EPS (ttm)", fmt.price(g.eps_ttm)], ["EPS (forward)", fmt.price(g.eps_forward)], ["Forward vs trailing", fmt.pct(g.eps_forward_growth_pct)]]],
+      ["Multi-year", [["Revenue CAGR", fmt.pct(g.revenue_cagr_pct)], ["Net income CAGR", fmt.pct(g.net_income_cagr_pct)], ["Revenue 5y (source)", fmt.pct(g.revenue_cagr_5y_pct)], ["EPS 3y (source)", fmt.pct(g.eps_growth_3y_pct)]]],
+    ], "points favour growth", after);
+  },
+  risk(r) {
+    const p = r.price, dd = p?.max_drawdown;
+    return lensView(r, "risk", [
+      ["Balance sheet", [["Negative equity", yesNo(r.negative_equity)], ["Debt / equity", x(r.debt_to_equity)], ["Current ratio", fmt.ratio(r.current_ratio)], ["Quick ratio", fmt.ratio(r.quick_ratio)], ["Financial company", yesNo(r.financial_company)], ["Net margin", pct(r.net_margin_pct)], ["EPS (ttm)", fmt.price(r.eps_ttm)]]],
+      [`Price vs ${p?.benchmark || "^JKSE"} (1y daily)`, p ? [["Window", `${p.from} – ${p.to}`], ["Daily returns", fmt.int(p.observations)], ["Zero returns", p.zero_returns == null ? null : `${fmt.int(p.zero_returns)} of ${fmt.int(p.observations)}`], ["Beta", fmt.ratio(p.beta)], ["Correlation", fmt.ratio(p.correlation)]] : [["Daily candles", null]]],
+      ["Volatility and falls", p ? [["Volatility", pct(p.volatility_pct)], ["IHSG volatility", pct(p.benchmark_volatility_pct)], ["Largest fall", dd ? pct(dd.pct) : "none"], ["Peak to trough", dd ? `${dd.peak_date} to ${dd.trough_date}` : null], ["IHSG largest fall", pct(p.benchmark_max_drawdown_pct)]] : []],
+    ], "points add risk");
   },
   technical(t) {
     const frag = document.createDocumentFragment();
@@ -691,7 +742,8 @@ async function run(line) {
     case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
     case "financials": need(pos, 1, cmd.usage); env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`); render = R.financials; break;
     case "earnings": need(pos, 1, cmd.usage); env = await api(`earnings?symbol=${encodeURIComponent(sym())}`); render = R.earnings; break;
-    case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?symbol=${encodeURIComponent(sym())}`); render = R.fundamentals; break;
+    case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: opt.lens })}`); render = opt.lens ? R[String(opt.lens).toLowerCase()] : R.fundamentals; break;
+    case "growth": case "valuation": case "risk": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: name })}`); render = R[name]; break;
     case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
     case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
     case "screen": env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;

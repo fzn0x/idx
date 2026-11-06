@@ -81,6 +81,35 @@ export function volatility(s) {
   const v = r.reduce((a, x) => a + (x - mean) ** 2, 0) / (r.length - 1);
   return r2(Math.sqrt(v) * Math.sqrt(252) * 100);
 }
+/** Mirrors analysis::returns::MIN_BETA_OBSERVATIONS. */
+export const MIN_BETA_OBSERVATIONS = 120;
+const r3 = (v) => Math.round(v * 1000) / 1000 + 0;
+/** Mirrors analysis::returns::common: the dates both series share, oldest first, as two aligned series. */
+export function common(a, b) {
+  const outA = [], outB = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i][0] < b[j][0]) i++;
+    else if (a[i][0] > b[j][0]) j++;
+    else { outA.push(a[i]); outB.push(b[j]); i++; j++; }
+  }
+  return [outA, outB];
+}
+/** Mirrors analysis::returns::beta over two aligned series (see common). */
+export function beta(s, b) {
+  const pairs = [];
+  for (let i = 1; i < Math.min(s.length, b.length); i++) {
+    if (s[i - 1][1] > 0 && b[i - 1][1] > 0) pairs.push([s[i][1] / s[i - 1][1] - 1, b[i][1] / b[i - 1][1] - 1]);
+  }
+  const n = pairs.length, none = { beta: null, correlation: null, observations: n };
+  if (n < MIN_BETA_OBSERVATIONS) return none;
+  const ms = pairs.reduce((a, p) => a + p[0], 0) / n, mb = pairs.reduce((a, p) => a + p[1], 0) / n;
+  const cov = pairs.reduce((a, p) => a + (p[0] - ms) * (p[1] - mb), 0) / (n - 1);
+  const varB = pairs.reduce((a, p) => a + (p[1] - mb) ** 2, 0) / (n - 1);
+  const varS = pairs.reduce((a, p) => a + (p[0] - ms) ** 2, 0) / (n - 1);
+  if (varB <= 0) return none;
+  return { beta: r3(cov / varB), correlation: varS > 0 ? r3(cov / Math.sqrt(varB * varS)) : null, observations: n };
+}
 function extremes(s) {
   let best = null, worst = null;
   for (let i = 1; i < s.length; i++) {

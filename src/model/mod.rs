@@ -20,6 +20,7 @@ pub mod fundamentals;
 pub mod insights;
 pub mod institutions;
 pub mod instruments;
+pub mod lenses;
 pub mod market;
 pub mod news;
 pub mod orderbook;
@@ -59,6 +60,10 @@ pub use institutions::{
     InstitutionalOwnership,
 };
 pub use instruments::{IndexBoard, IndexRow, Instrument, InstrumentList, Member, MemberList};
+pub use lenses::{
+    AnnualGrowth, GrowthLabel, GrowthLens, Lens, LensRule, PriceRisk, Reading, RiskLabel, RiskLens,
+    ValuationLabel, ValuationLens,
+};
 pub use market::{MarketOverview, MarketRow};
 pub use news::{NewsItem, NewsReport, SentimentLabel, SentimentReport};
 pub use orderbook::{BookLevel, OrderBook};

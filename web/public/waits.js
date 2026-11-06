@@ -14,6 +14,9 @@ const YAHOO = { on: "Yahoo Finance" };
 
 export const WAITS = {
   quote: YAHOO, history: YAHOO, profile: YAHOO, financials: YAHOO, earnings: YAHOO, fundamental: YAHOO, technical: YAHOO, dividends: YAHOO,
+  valuation: YAHOO,
+  growth: { on: "Yahoo Finance: fundamentals and the annual statements" },
+  risk: { on: "Yahoo Finance: fundamentals and a year of daily candles for the stock and IHSG" },
   compare: { on: "Yahoo Finance, one request per symbol" },
   returns: { on: "Yahoo Finance, one history per symbol and the benchmark" },
   screen: { on: "the board, Yahoo fundamentals and MSN's market list", slow: "fundamental filters fetch each matching ticker, up to --max-fundamentals (20); return keys read MSN's whole-market list once (cached 15 minutes)" },

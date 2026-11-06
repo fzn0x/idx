@@ -42,6 +42,7 @@ Examples:
   idx stocks quote BBCA,BBRI,TLKM
   idx stocks history TLKM --period 1y --interval 1wk
   idx stocks fundamental BBCA              # ratios plus a plain-language verdict
+  idx stocks risk TLKM                     # beta, volatility and drawdown against IHSG
   idx stocks technical BBRI                # RSI, MACD, moving averages, signal
   idx stocks compare BBCA BBRI BMRI        # side-by-side fundamentals
   idx stocks screen -f 'pe<10,div>5,mcap>5T' # screener over ~950 IDX tickers
@@ -127,7 +128,7 @@ pub struct GlobalOpts {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Quotes, history, profile, financials, earnings, fundamentals, technicals, compare, corporate actions, foreign flow.
+    /// Quotes, history, profile, financials, earnings, fundamentals, growth/valuation/risk lenses, technicals, compare, corporate actions, foreign flow.
     #[command(subcommand)]
     Stocks(stocks::StocksCmd),
 
@@ -190,7 +191,7 @@ idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|compo
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
+        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | error | quote | candle
         name: Option<String>,
     },
 

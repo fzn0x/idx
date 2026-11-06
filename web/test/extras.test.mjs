@@ -57,6 +57,34 @@ test("drawdown and extremes", () => {
   assert.equal(p.returns["1y"], null);
 });
 
+// Same cases as the Rust tests beta_of_a_doubled_index_is_two,
+// beta_needs_enough_returns_and_a_moving_index and common_keeps_only_shared_dates.
+const days = (start, closes) => closes.map((c, i) => [new Date(Date.parse(`${start}T00:00:00Z`) + i * 86400e3).toISOString().slice(0, 10), c]);
+const indexPath = (n) => { const out = [1000]; for (let i = 1; i < n; i++) out.push(out[i - 1] * (1 + [0.01, -0.005, 0.002, -0.012, 0.007][i % 5])); return out; };
+
+test("beta against a benchmark on shared dates", () => {
+  const idx = indexPath(200);
+  const stock = [500];
+  for (let i = 1; i < idx.length; i++) stock.push(stock[i - 1] * (1 + 2 * (idx[i] / idx[i - 1] - 1)));
+  assert.deepEqual(ex.beta(days("2026-01-01", stock), days("2026-01-01", idx)), { beta: 2, correlation: 1, observations: 199 });
+  const s = days("2026-01-01", indexPath(120));
+  assert.deepEqual(ex.beta(s, s), { beta: null, correlation: null, observations: 119 });
+  const flat = days("2026-01-01", Array(200).fill(100)), moving = days("2026-01-01", indexPath(200));
+  assert.equal(ex.beta(moving, flat).beta, null, "index never moved");
+  assert.deepEqual([ex.beta(flat, moving).beta, ex.beta(flat, moving).correlation], [0, null]);
+});
+
+test("common keeps only the dates both series have", () => {
+  const a = days("2026-01-01", [1, 2, 3, 4]), b = days("2026-01-02", [20, 30, 40, 50]);
+  const [ca, cb] = ex.common(a, b);
+  assert.deepEqual(ca.map((x) => x[0]), ["2026-01-02", "2026-01-03", "2026-01-04"]);
+  assert.deepEqual(cb.map((x) => x[1]), [20, 30, 40]);
+  const [ga, gb] = ex.common(a.filter((x) => x[1] !== 3), b);
+  assert.equal(ga.length, 2);
+  assert.deepEqual(gb.map((x) => x[1]), [20, 40]);
+  assert.equal(ex.common(a, [])[0].length, 0);
+});
+
 test("news: company headlines first, market context fills the limit", () => {
   const mk = (title) => ({ title, summary: "", matched_by: "all", scope: "market" });
   const matches = (it, t) => (it.title.toUpperCase().split(/[^A-Z0-9]+/).includes(t) ? "ticker" : null);

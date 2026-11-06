@@ -31,11 +31,13 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   1D, a crosshair readout (pointer, touch or arrow keys). Its layout
   functions are tested in `test/chart.test.mjs` on the recorded Yahoo charts.
 - `src/yahoo.js` the Yahoo endpoints and parsers; `src/analysis.js` ports of
-  the Rust indicators, verdict, screener DSL and sentiment lexicon;
-  `src/extras.js` ports of returns, dividends, news ordering and the
-  ownership changes summary; `src/msn-insights.js` (ticker lookup, insights,
-  peers) and `src/msn-screen.js` (the whole-market return windows, one POST)
-  port `src/providers/msn` and are tested on the same `tests/fixtures/msn`.
+  the Rust indicators, verdict, growth/valuation/risk lenses, screener DSL and
+  sentiment lexicon; `src/extras.js` ports of returns (with beta against a
+  benchmark), dividends, news ordering and the ownership changes summary;
+  `src/msn-insights.js` (ticker lookup, insights, peers) and `src/msn-screen.js`
+  (the whole-market return windows, one POST) port `src/providers/msn` and are
+  tested on the same `tests/fixtures/msn`. `/api/fundamental?lens=growth|valuation|risk`
+  returns a lens, as MCP `idx_fundamental` does with `lens`.
 - Endpoints under `/api`: `market`, `quote`, `history`, `profile`,
   `fundamental`, `earnings`, `financials`, `dividends`, `returns`, `technical`,
   `brief`, `compare`, `screen` (`preset`, `returns`), `news`, `sentiment`,

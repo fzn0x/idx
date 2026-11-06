@@ -310,7 +310,7 @@ local agents can share one process and one cache this way.
 | `idx_earnings` | `symbol` | `idx.earnings.v1` |
 | `idx_dividends` | `symbol` | `idx.dividends.v1`: payments, splits, yearly totals, TTM total/yield, streak |
 | `idx_returns` | `symbols`, `benchmark?` (`^JKSE` default, `none`) | `idx.returns.v1`: windows, CAGR, volatility, drawdowns, 52-week, excess over the benchmark |
-| `idx_fundamental` | `symbol` | `idx.fundamentals.v1` (verdict included; when `financial_currency` differs from `currency`, P/B, P/S and the EV multiples mix USD and IDR and P/B is not scored) |
+| `idx_fundamental` | `symbol`, `lens?` (`growth` \| `valuation` \| `risk`) | `idx.fundamentals.v1` (verdict included; when `financial_currency` differs from `currency`, P/B, P/S and the EV multiples mix USD and IDR and P/B is not scored); with `lens`, `idx.growth.v1`, `idx.valuation.v1` or `idx.risk.v1`: a focused reading with every rule and its points |
 | `idx_technical` | `symbol`, `period?` | `idx.technical.v1` |
 | `idx_compare` | `symbols` | `idx.compare.v1` |
 | `idx_screen` | `preset?`, `filter?`, `sort?`, `ascending?`, `limit?`, `max_fundamentals?`, `returns?` | `idx.screen.v1`: presets top-performers, worst-performers, high-dividend, low-pe, 52w-high, 52w-low, high-volume, large-cap; keys include `range` (52-week position) and `ret1w`..`ret1y` (price return %, as MSN reports it, one market-wide request) |
