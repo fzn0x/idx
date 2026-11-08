@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 
 import * as an from "../src/analysis.js";
 import * as y from "../src/yahoo.js";
-import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, newsKeyPoint } from "../src/api.js";
+import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, newsKeyPoint, ownershipKeyPoint } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
@@ -509,6 +509,13 @@ test("brief news key point agrees with the headline count (service::news_key_poi
   assert.equal(newsKeyPoint(s(0, "no_coverage", 0)), "News: no current headline mentions the company");
   assert.equal(newsKeyPoint(s(1, "positive", 0.5)), "News: 1 current headline mentions the company, lexicon sentiment positive (+0.50)");
   assert.equal(newsKeyPoint(s(2, "negative", -0.25)), "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)");
+});
+
+test("brief ownership key point agrees with the holder count (service::ownership_key_point)", () => {
+  const largest = { as_of: "2026-10-30", symbol: "BBCA", holder: "PT DWIMURIA INVESTAMA ANDALAN", local_foreign: "L", pct: 54.94 };
+  const o = { as_of: "2026-10-30", listed_pct: 54.94, foreign_pct: 0, holders_listed: 1, top_holders: [largest] };
+  assert.equal(ownershipKeyPoint(o), "Ownership (2026-10-30): 1 holder above 1% holds 54.9%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%");
+  assert.equal(ownershipKeyPoint({ ...o, holders_listed: 2, listed_pct: 56.7 }), "Ownership (2026-10-30): 2 holders above 1% hold 56.7%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%");
 });
 
 test("rss parse and name matching", () => {

@@ -1462,7 +1462,7 @@ export async function brief(env, symbolRaw) {
   if (r?.returns?.["1y"] != null) key_points.push(`1y return ${pct(r.returns["1y"])}${r.benchmark?.excess?.["1y"] != null ? ` (${r.benchmark.excess["1y"] >= 0 ? "+" : ""}${r.benchmark.excess["1y"].toFixed(1)} pp vs ${r.benchmark.symbol})` : ""}; YTD ${r.returns.ytd != null ? pct(r.returns.ytd) : "n/a"}`);
   if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");
   const own = o ? { as_of: o.as_of, listed_pct: o.listed_pct, foreign_pct: o.holders.filter((h) => h.local_foreign === "A").reduce((s, h) => s + h.pct, 0), holders_listed: o.holders.length, top_holders: o.holders.slice(0, 5) } : null;
-  if (own) key_points.push(`Ownership (${own.as_of}): ${own.holders_listed} holders above 1% hold ${own.listed_pct.toFixed(1)}%, foreign ${own.foreign_pct.toFixed(1)}%${own.top_holders[0] ? `; largest ${own.top_holders[0].holder} ${own.top_holders[0].pct.toFixed(1)}%` : ""}`);
+  if (own) key_points.push(ownershipKeyPoint(own));
   const newsSummary = n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null;
   if (newsSummary) key_points.push(newsKeyPoint(newsSummary));
   const data = {
@@ -1482,6 +1482,14 @@ export async function brief(env, symbolRaw) {
 export function newsKeyPoint(s) {
   if (!s.company_matches) return "News: no current headline mentions the company";
   return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
+}
+
+// The brief's "Ownership" key point from its ownership section; noun and verb
+// follow the count, "1 holder above 1% holds", "2 holders above 1% hold"
+// (service::ownership_key_point in the CLI).
+export function ownershipKeyPoint(o) {
+  const [holders, hold] = o.holders_listed === 1 ? ["holder", "holds"] : ["holders", "hold"];
+  return `Ownership (${o.as_of}): ${o.holders_listed} ${holders} above 1% ${hold} ${o.listed_pct.toFixed(1)}%, foreign ${o.foreign_pct.toFixed(1)}%${o.top_holders[0] ? `; largest ${o.top_holders[0].holder} ${o.top_holders[0].pct.toFixed(1)}%` : ""}`;
 }
 
 // ---- GitHub repository (the Star button) -------------------------------
