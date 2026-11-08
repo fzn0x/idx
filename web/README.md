@@ -87,9 +87,11 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   session scanned with them replaces it once it is filed with a stock
   stored), and the screen's and the broker's warnings say which session they
   show and why.
-  `/api/bandar/status` shows the progress and the last record; a maintainer
-  can force a step with `/api/refresh?token=…&what=bandar` (a rescan of the
-  shown session keeps its record until it has stored as many stocks).
+  `/api/bandar/status` shows the progress and the last record (`done_at` once
+  the session is done, `filed_at` when its record was last filed); a
+  maintainer can force a step with `/api/refresh?token=…&what=bandar` (a
+  rescan of the shown session reads the same stocks again and keeps its
+  record until it has stored as many).
   `/api/bandar` itself is live like
   `/api/broker`: up to 5 tickers, `daily` for one ticker and at most 23
   sessions.
