@@ -45,7 +45,9 @@ is the all-board foreign net on every page.
 Foreign flow (`stocks foreign --source ipot`): each session's `fd=all` and
 `fd=F` pages. During a session the source publishes today's totals so far but
 no broker lists, an empty foreign page and `F. NVal` 0; ranges are right then
-(the doubled net appears between the close and the next open).
+(the doubled net appears between the close and the next open). A closed
+session's lists come some time after the close: at 16:45 WIB on 2026-11-06
+the web scan still read that session without them.
 
 | file | request | recorded | notes |
 | --- | --- | --- | --- |
@@ -55,3 +57,4 @@ no broker lists, an empty foreign page and `F. NVal` 0; ranges are right then
 | brokersummary_truk_20261105.html, brokersummary_truk_20261105_foreign.html | TRUK 11-05, `fd=all` and `fd=F` | 2026-11-06 07:02 | the stock traded 21.6 M and no foreigner did: the foreign page is the empty template |
 | brokersummary_bbca_20261106_insession.html, brokersummary_bbca_20261106_insession_foreign.html | BBCA 11-06, `fd=all` and `fd=F` | 2026-11-06 09:15 | during the session: `T. Val` 89.5 B so far, no broker lists, `F. NVal` 0, the foreign page empty |
 | brokersummary_bbca_20261102_20261106_insession.html, brokersummary_bbca_20261102_20261105_insession.html | BBCA, 11-02 to 11-06 and 11-02 to 11-05 | 2026-11-06 09:15 | during the session both read 292.2 B: no session counted twice (11-02..11-05 read 595.4 B before the open) |
+| brokersummary_bbca_20261106.html | BBCA 11-06 | 2026-11-08 07:02 | the same session once published: ten buyers and ten sellers, `T. Val` 1.0 T, `F. NVal` 219.0 B |
