@@ -401,7 +401,7 @@ test("a session IPOT has not published waits, is probed again every 10 minutes, 
   });
 });
 
-test("while IPOT fails the probe, the probe backs off and an hour of failures logs an error", async () => {
+test("while IPOT fails the probe, the probe backs off up to the probe's own gap and an hour of failures logs an error each hour", async () => {
   const env = memoryDb();
   const traded = "2026-11-06T16:14:58+07:00";
   env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
@@ -421,11 +421,14 @@ test("while IPOT fails the probe, the probe backs off and an hour of failures lo
   } finally {
     console.error = error;
   }
-  assert.deepEqual(probed, ["16:45", "16:50", "17:00", "17:20", "18:00", "19:00"], "5, 10, 20 and 40 minutes, then an hour");
-  assert.deepEqual(errors.map((e) => e.slice(0, 5)), ["18:00", "19:00"], errors.join("\n"));
-  assert.match(errors[0], /IPOT has failed the probe of 2026-11-06 since 2026-11-06 16:45 WIB \(5 in a row, the last: HTTP 502\)/);
+  // 5 minutes, then 10: never longer than the 10 minutes between probes before 21:00 WIB, so
+  // the scan is back on that schedule as soon as IPOT answers.
+  const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  assert.deepEqual(probed, ["16:45", "16:50", ...Array.from({ length: 16 }, (_, i) => hm(17 * 60 + 10 * i))], probed.join(" "));
+  assert.deepEqual(errors.map((e) => e.slice(0, 5)), ["17:50", "18:50"], errors.join("\n"));
+  assert.match(errors[0], /IPOT has failed the probe of 2026-11-06 since 2026-11-06 16:45 WIB \(8 in a row, the last: HTTP 502\)/);
   const st = await scanStatus(env);
-  assert.deepEqual([st.phase, st.probes, st.probe_errors, st.probe_error], ["waiting", 0, 6, "HTTP 502"]);
+  assert.deepEqual([st.phase, st.probes, st.probe_errors, st.probe_error], ["waiting", 0, 18, "HTTP 502"]);
 });
 
 test("a probe stock without trades that session does not hold the scan up: the next probe asks the next stock", async () => {

@@ -68,9 +68,10 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   IPOT does not know. IPOT shows a closed session's totals without its broker
   lists until it publishes them, so the scan waits and probes again, every 10
   minutes until 21:00 WIB, every 30 after and every hour once a day has
-  passed; a probe that fails is tried again after 5 minutes, doubling up to an
-  hour. Only a page without trades on a day the quote board shows none either
-  closes the session. Then it reads three stocks a minute, inside the minute's
+  passed; a probe that fails is tried again after 5 minutes, doubling up to
+  that gap, and an hour of failures logs an error each hour. Only a page
+  without trades on a day the quote board shows none either closes the
+  session. Then it reads three stocks a minute, inside the minute's
   first 45 seconds, each over 1d, 1w, 1m and 3m plus its daily candles, into
   the `bandar_scan` table (`migrations/0003_bandar.sql`; the newest two
   sessions and the one shown are kept), rows and state in one D1 batch

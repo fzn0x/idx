@@ -9,12 +9,13 @@
 // publishes a closed session's broker lists some time after the close and
 // shows the totals without them until then, so the scan waits and probes
 // again, every 10 minutes until 21:00 WIB, every 30 after and every hour once
-// a day has passed (a probe that failed sooner, backing off); only a page
-// without trades, on a day the quote board (refreshed after that session)
-// shows no trade either, closes the session unscanned. Then PER_TICK stocks a
-// minute: for each, the IPOT broker summary over 1d, 1w, 1m and 3m ending on
-// that session and the daily candles for the price move, one D1 row per stock
-// and period in `bandar_scan`, written with the state in one batch.
+// a day has passed (a probe that failed after 5 minutes, doubling up to that
+// gap); only a page without trades, on a day the quote board (refreshed
+// after that session) shows no trade either, closes the session unscanned.
+// Then PER_TICK stocks a minute: for each, the IPOT broker summary over 1d,
+// 1w, 1m and 3m ending on that session and the daily candles for the price
+// move, one D1 row per stock and period in `bandar_scan`, written with the
+// state in one batch.
 // /api/bandar/screen and /api/bandar/broker answer from D1 alone with the
 // same rules as the CLI (src/bandar.js). The foreign net of 1w, 1m and 3m is
 // rebuilt from single sessions (the range page counts the latest session
@@ -72,8 +73,10 @@ const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
 /**
  * Minutes before a probe that failed (an error, not an answer) is tried
- * again, doubled for each failure in a row up to an hour; failures for an
- * hour in a row log an error (IPOT may block or have moved the page).
+ * again, doubled for each failure in a row up to the probe's own gap
+ * (PROBE_GAP_MIN), so an outage costs no more than one gap once IPOT answers
+ * again; failures for an hour in a row log an error, once an hour (IPOT may
+ * block or have moved the page).
  */
 const PROBE_RETRY_MIN = 5;
 const PROBE_ALARM_MS = 3600e3;
@@ -385,8 +388,10 @@ async function probe(st, now, fetchPage) {
       st.probe_error = short(e);
       st.failing_since ??= at;
       st.failures = (st.failures || 0) + 1;
-      st.next_probe_at = after(now, Math.min(PROBE_RETRY_MIN * 2 ** (st.failures - 1), PROBE_GAP_MIN.stale));
-      if (now.getTime() - Date.parse(st.failing_since) >= PROBE_ALARM_MS) {
+      st.next_probe_at = after(now, Math.min(PROBE_RETRY_MIN * 2 ** (st.failures - 1), probeGap(st, now)));
+      const alarmed = st.alarmed_at ? now.getTime() - Date.parse(st.alarmed_at) : Infinity;
+      if (now.getTime() - Date.parse(st.failing_since) >= PROBE_ALARM_MS && alarmed >= PROBE_ALARM_MS) {
+        st.alarmed_at = at;
         console.error(`bandar scan: IPOT has failed the probe of ${st.session} since ${stamp(st.failing_since)} (${st.failures} in a row, the last: ${st.probe_error}); it may block the Worker or have moved its page`);
       }
       return "error";
@@ -403,6 +408,7 @@ async function probe(st, now, fetchPage) {
   st.last_probe_at = at;
   st.probe_error = null;
   st.failing_since = null;
+  st.alarmed_at = null;
   st.failures = 0;
   if (verdict === "published") {
     Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, retry_left: 0, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, pending_left: 0, stored: 0, checked: 0 });
