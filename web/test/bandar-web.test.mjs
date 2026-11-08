@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { bandar, bandarScreen, bandarBroker } from "../src/api.js";
-import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus } from "../src/bandar-scan.js";
+import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus, scanNotes } from "../src/bandar-scan.js";
 import { budget } from "../src/budget.js";
 import worker from "../src/worker.js";
 
@@ -44,7 +44,13 @@ function memoryDb() {
     if (sql.startsWith("SELECT symbol, v FROM bandar_scan")) {
       return [...scan].filter(([k]) => k.startsWith([a[0], a[1], ""].join("|"))).map(([k, v]) => ({ symbol: k.split("|")[2], v }));
     }
-    if (sql.startsWith("DELETE FROM bandar_scan")) return null;
+    if (sql.startsWith("DELETE FROM bandar_scan")) {
+      // The newest a[0] sessions stay, and the one shown (a[1]).
+      const sessions = [...new Set([...scan.keys()].map((k) => k.split("|")[0]))].sort().reverse();
+      const keep = new Set([...sessions.slice(0, a[0]), a[1]]);
+      for (const k of [...scan.keys()]) if (!keep.has(k.split("|")[0])) scan.delete(k);
+      return null;
+    }
     throw new Error("memoryDb: unexpected SQL " + sql);
   };
   const stmt = (sql, a = []) => ({
@@ -228,6 +234,13 @@ test("in a year the calendar does not cover, a day without trades at IPOT or on 
     const st = await scanStatus(env);
     assert.deepEqual([st.phase, st.holiday, st.ranked_from], ["closed", true, "2027-12-30"]);
     assert.deepEqual(await bandarScanStep(env, { now }), { idle: true, session: "2028-01-03" });
+    // The screen says why 2028-01-03 is not shown, that it does not count as a
+    // session behind, and that the calendar does not cover the year.
+    const notes = scanNotes(JSON.parse(env.kv.get("bandar_scan")), "2027-12-30", 10, now);
+    assert.deepEqual(notes.warnings, [
+      "2028-01-03 had no trades at IPOT nor on the quote board, so it was not scanned",
+      "the bundled holiday list does not cover 2028; the scan tells that year's closures from IPOT and the quote board",
+    ]);
     // The same page while the board shows trades that day: IPOT has not published.
     const traded = memoryDb();
     traded.kv.set("board", board("2028-01-03T16:14:58+07:00"));
@@ -350,14 +363,95 @@ test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again 
     assert.ok(calls[0].includes("code=BBCA&start=11/06/2026&end=11/06/2026"), "the probe reads 11-06 again");
     let st = await scanStatus(env);
     assert.deepEqual([st.phase, st.holiday, st.complete], ["running", false, "2026-10-30"]);
-    const meanwhile = await bandarScreen(env, null, null, "1d");
+    const meanwhile = await bandarScreen(env, null, null, "1d", null, null, null, null, now);
     assert.equal(meanwhile.data.to, "2026-10-30");
-    assert.ok(meanwhile.warnings.includes("the scan of 2026-11-06 is running (3 of 4); showing 2026-10-30"), meanwhile.warnings);
+    assert.deepEqual(meanwhile.warnings, ["the scan of 2026-11-06 is running (3 of 4); showing 2026-10-30", "2026-10-30 is 5 sessions behind 2026-11-06"]);
+    assert.equal(meanwhile.fetched_at, "2026-10-30T09:45:00Z", "10-30 kept no record: 16:45 WIB that day, never the time of the request");
     assert.equal((await bandarScanStep(env, { now })).done, true);
     st = await scanStatus(env);
-    assert.deepEqual([st.complete, st.failed], ["2026-11-06", ["ZZZZ"]]);
-    const out = await bandarScreen(env, null, null, "1d");
+    assert.deepEqual([st.complete, st.failed, st.last.session, st.last.promoted], ["2026-11-06", ["ZZZZ"], "2026-11-06", true]);
+    const out = await bandarScreen(env, null, null, "1d", null, null, null, null, now);
     assert.deepEqual([out.data.to, out.data.scanned, out.data.checked], ["2026-11-06", 4, 3]);
+    assert.deepEqual(out.warnings, ["1 of 4 scanned stocks had no broker summary"]);
+    assert.equal(out.fetched_at, "2026-11-08T00:05:00Z");
+  });
+});
+
+test("a finished session keeps its numbers while the next one waits, and the warnings say why it is shown", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
+  const recorded = recordedFetch();
+  // BBCA's pages of 10-19 and 10-20 show totals without lists: IPOT has not published those sessions.
+  const fetchFn = async (u, init) => (/code=BBCA&start=10\/(19|20)\/2026&end=10\/(19|20)\/2026/.test(String(u)) ? new Response(page("brokersummary_bbca_20261106_insession.html")) : recorded(u, init));
+  const screen = (now) => bandarScreen(env, null, null, "1w", null, null, null, null, now);
+  const waiting = (d) => `the scan of ${d} is waiting for IPOT to publish that session's broker lists (checked 1 time since 16:46 WIB); showing 2026-10-16`;
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z")); // Saturday 10:00 WIB
+    // Monday 16:46 WIB: the scan of 10-19 starts and waits for IPOT.
+    assert.equal((await bandarScanStep(env, { now: new Date("2026-10-19T09:46:00Z") })).probe, "unpublished");
+    let out = await screen(new Date("2026-10-19T09:50:00Z"));
+    assert.equal(out.data.to, "2026-10-16");
+    assert.deepEqual(out.warnings, [waiting("2026-10-19"), "1 of 4 scanned stocks had no broker summary"]);
+    assert.equal(out.fetched_at, "2026-10-17T03:00:00Z", "when the scan of 10-16 ended, not the time of the request");
+    assert.deepEqual([out.data.scanned, out.data.checked], [4, 3]);
+    // Tuesday 16:30 WIB: 10-20 has closed, its scan starts at 16:45.
+    out = await screen(new Date("2026-10-20T09:30:00Z"));
+    assert.deepEqual(out.warnings, ["the scan of 2026-10-20 starts at 16:45 WIB; showing 2026-10-16", waiting("2026-10-19"), "2026-10-16 is 2 sessions behind 2026-10-20", "1 of 4 scanned stocks had no broker summary"]);
+    // Tuesday 16:46: 10-19 is filed as not published and 10-20 waits in turn.
+    await bandarScanStep(env, { now: new Date("2026-10-20T09:46:00Z") });
+    out = await screen(new Date("2026-10-20T09:50:00Z"));
+    assert.deepEqual(out.warnings, [
+      waiting("2026-10-20"),
+      "IPOT had not published the broker lists of 2026-10-19 by 2026-10-19 16:46 WIB; showing 2026-10-16",
+      "2026-10-16 is 2 sessions behind 2026-10-20",
+      "1 of 4 scanned stocks had no broker summary",
+    ]);
+    const st = await scanStatus(env);
+    assert.deepEqual([st.complete, st.last.session, st.last.scanned, st.last.reason, st.last.probes], ["2026-10-16", "2026-10-19", false, "unpublished", 1]);
+    const broker = await bandarBroker(env, "YP", "1w", null, new Date("2026-10-20T09:50:00Z"));
+    assert.deepEqual([broker.data.to, broker.data.scanned, broker.data.failed, broker.fetched_at], ["2026-10-16", 4, 1, "2026-10-17T03:00:00Z"]);
+    assert.ok(broker.warnings.includes("2026-10-16 is 2 sessions behind 2026-10-20"), broker.warnings);
+  });
+});
+
+test("a scan that read too few of its stocks is filed, and the session before it stays shown", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
+  const recorded = recordedFetch();
+  let busy = false;
+  const fetchFn = async (u, init) => (busy && /code=(TLKM|BRPT)/.test(String(u)) ? new Response("busy", { status: 503 }) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    // On Monday IPOT fails TLKM and BRPT through the pass and both retries.
+    busy = true;
+    const at = (hm) => new Date(`2026-10-19T${hm}:00+07:00`);
+    for (const hm of ["16:46", "16:47", "16:57", "17:27"]) await bandarScanStep(env, { now: at(hm) });
+    const st = await scanStatus(env);
+    assert.deepEqual([st.session, st.phase, st.complete, st.last.stored, st.last.of, st.last.promoted], ["2026-10-19", "done", "2026-10-16", 1, 4, false]);
+    const out = await bandarScreen(env, null, null, "1w", null, null, null, null, at("17:30"));
+    assert.equal(out.data.to, "2026-10-16");
+    assert.deepEqual(out.warnings, ["the scan of 2026-10-19 read only 1 of 4 stocks (3 failed, 0 not published by IPOT); showing 2026-10-16", "1 of 4 scanned stocks had no broker summary"]);
+    // Both sessions' rows stay: the shown one is never pruned.
+    assert.deepEqual([...new Set([...env.scan.keys()].map((k) => k.split("|")[0]))].sort(), ["2026-10-16", "2026-10-19"]);
+  });
+});
+
+test("a stock IPOT still had not published at the next session's 16:45 counts as unpublished, not failed", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
+  const recorded = recordedFetch();
+  const fetchFn = async (u, init) => (String(u).includes("code=TLKM&start=11/06/2026&end=11/06/2026") ? new Response(page("brokersummary_bbca_20261106_insession.html")) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    await bandarScanStep(env, { now: new Date("2026-11-06T10:00:00Z") });
+    // Monday 16:45 WIB, the probe alone: 11-06 is filed with TLKM unpublished.
+    const monday = new Date("2026-11-09T09:45:00Z");
+    await bandarScanStep(env, { now: monday, stocks: false });
+    const st = await scanStatus(env);
+    assert.deepEqual([st.session, st.complete, st.last.session, st.last.unpublished, st.last.failed, st.last.partial], ["2026-11-09", "2026-11-06", "2026-11-06", ["TLKM"], [], true]);
+    const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date("2026-11-09T09:50:00Z"));
+    assert.deepEqual(out.warnings, ["the scan of 2026-11-09 is running (0 of 2); showing 2026-11-06", "IPOT had not published 2026-11-06 for 1 of the 2 scanned stocks when its scan ended"]);
+    assert.equal(out.data.scanned, 2);
   });
 });
 

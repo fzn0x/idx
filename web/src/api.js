@@ -14,7 +14,7 @@ import * as astroLib from "./astro.js";
 import * as msn from "./msn-insights.js";
 import * as msnScreen from "./msn-screen.js";
 import { fetchWithin, redactUrls } from "./net.js";
-import { scanRows, scanStatus, scanNotes } from "./bandar-scan.js";
+import { scanRows, scanStatus, scanNotes, scanProgress } from "./bandar-scan.js";
 import { syncStatus } from "./ownership-sync.js";
 import UNIVERSE from "./universe.json" with { type: "json" };
 import BROKERS from "./brokers.json" with { type: "json" };
@@ -1114,8 +1114,14 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
   return envelope("idx.bandar.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-/** /api/bandar/screen: `idx bandar screen` over the nightly scan in D1 (idx.bandar.screen.v1). */
-export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw, sortRaw, ascRaw, limitRaw) {
+/** The screen's and the broker's answer before any session of the scan has finished. */
+const noScanYet = (st) => {
+  const where = scanProgress(st);
+  return notFound(`no session of the bandar scan has finished yet${where ? ` (${where})` : ""}: from 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
+};
+
+/** /api/bandar/screen: `idx bandar screen` over the scan of the last session in D1 (idx.bandar.screen.v1). */
+export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw, sortRaw, ascRaw, limitRaw, now = new Date()) {
   const pr = bd.preset(presetRaw);
   const filters = [...(pr ? bd.parseFilters(pr.filter) : []), ...bd.parseFilters(filterRaw || "")];
   const period = bd.checkPeriod(periodRaw || "1w");
@@ -1124,10 +1130,8 @@ export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw,
   const descending = ascRaw == null || ascRaw === "" ? !pr?.ascending : !(ascRaw === "1" || ascRaw === "true");
   const limit = num(limitRaw, 25);
   const scan = await scanRows(env, period);
-  if (!scan.session) throw notFound("the bandar scan has not run yet: after the close (from 16:45 WIB) the minute cron reads the 100 most traded stocks; the CLI scans live meanwhile");
-  const st = scan.state || {};
-  const { warnings, failed } = scanNotes(scan.state, scan.session, scan.rows.length);
-  if (failed) warnings.push(`${failed} of ${scan.rows.length + failed} scanned stocks had no broker summary`);
+  if (!scan.session) throw noScanYet(scan.state);
+  const notes = scanNotes(scan.state, scan.session, scan.rows.length, now);
   const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
   let rows = traded.map((r) => bd.screenRow(bd.report(r.summary, period, top, r.price, r.chg))).filter((r) => bd.matches(r, filters));
   bd.sortRows(rows, sort, descending);
@@ -1135,10 +1139,9 @@ export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw,
   if (limit > 0) rows = rows.slice(0, limit);
   const data = {
     period, from: traded[0]?.summary.from || bd.periodStart(period, scan.session), to: scan.session, top, preset: pr?.name ?? null,
-    filters: filters.map((f) => f.raw), sort, descending, scanned: scan.rows.length + failed, checked: traded.length, total_matches: total, rows,
+    filters: filters.map((f) => f.raw), sort, descending, scanned: notes.scanned, checked: traded.length, total_matches: total, rows,
   };
-  const at = Date.parse(st.done_at || st.started_at || "") / 1000;
-  return envelope("idx.bandar.screen.v1", data, { provider: ipot.NAME, cached: true, fetched_at: Number.isFinite(at) ? at : new Date(), warnings });
+  return envelope("idx.bandar.screen.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings: notes.warnings });
 }
 
 /** One stock where the broker is top ten on a side, like service::stock_row. */
@@ -1152,21 +1155,19 @@ function brokerStockRow(s, flow, other, buying) {
   };
 }
 
-/** Broker activity from the nightly scan: where one broker is a top-ten buyer or seller of the scanned stocks. */
-export async function bandarBroker(env, codeRaw, periodRaw, limitRaw) {
+/** Broker activity from the scan of the last session: where one broker is a top-ten buyer or seller of the scanned stocks. */
+export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new Date()) {
   const code = String(codeRaw || "").trim().toUpperCase();
   if (!/^[A-Z0-9]{2}$/.test(code)) throw usage(`"${codeRaw ?? ""}" is not a broker code; codes are two characters such as YP or CC (see members)`);
   const period = bd.checkPeriod(periodRaw || "1w");
   const limit = num(limitRaw, 20);
   const scan = await scanRows(env, period);
-  if (!scan.session) throw notFound("the bandar scan has not run yet: after the close (from 16:45 WIB) the minute cron reads the 100 most traded stocks; the CLI scans live meanwhile");
-  const st = scan.state || {};
-  const notes = scanNotes(scan.state, scan.session, scan.rows.length);
+  if (!scan.session) throw noScanYet(scan.state);
+  const notes = scanNotes(scan.state, scan.session, scan.rows.length, now);
   const warnings = [];
   if (!BROKERS[code]) warnings.push(`${code} is not on the bundled exchange-member list`);
   warnings.push(...notes.warnings);
   const failed = notes.failed;
-  if (failed) warnings.push(`${failed} of ${scan.rows.length + failed} scanned stocks had no broker summary`);
   const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
   const bought = [], sold = [];
   for (const { summary: s } of traded) {
@@ -1179,11 +1180,10 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw) {
   const sum = (rows) => rows.reduce((t, r) => t + (r.value ?? 0), 0);
   const data = {
     code, name: BROKERS[code] ?? null, period, from: traded[0]?.summary.from || bd.periodStart(period, scan.session), to: scan.session,
-    scanned: scan.rows.length + failed, checked: traded.length, failed, bought_value: sum(bought), sold_value: sum(sold),
+    scanned: notes.scanned, checked: traded.length, failed, bought_value: sum(bought), sold_value: sum(sold),
     bought: limit > 0 ? bought.slice(0, limit) : bought, sold: limit > 0 ? sold.slice(0, limit) : sold,
   };
-  const at = Date.parse(st.done_at || st.started_at || "") / 1000;
-  return envelope("idx.bandar.broker.v1", data, { provider: ipot.NAME, cached: true, fetched_at: Number.isFinite(at) ? at : new Date(), warnings });
+  return envelope("idx.bandar.broker.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings });
 }
 
 // ---- directories (bundled) ---------------------------------------------

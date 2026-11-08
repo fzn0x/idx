@@ -19,8 +19,15 @@
 // page counts the latest session twice): the session before the scanned one
 // and each period's rest, so a stock costs 9 requests (a chart, four period
 // pages, one more session, three rests), inside the invocation's budget
-// (src/budget.js). A stock whose fetch failed is tried once more at the end
-// of the pass.
+// (src/budget.js).
+//
+// A stock whose session IPOT has not published yet is read again every 10
+// minutes; one that failed gets two more passes, 10 and 30 minutes after its
+// pass. When the next session's 16:45 comes, whatever the session got is
+// filed in a record (`runs`): what it stored, failed and did not get, or
+// that IPOT never published it. A session is shown once it holds half its
+// stocks or more than the one shown before; the API's warnings come from
+// these records (scanNotes).
 
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
@@ -64,6 +71,8 @@ const PENDING_GAP_MIN = 10;
 const RETRY_GAPS_MIN = [10, 30];
 /** Failures the state keeps word for word, newest first. */
 const ERRORS_KEPT = 5;
+/** Records of finished sessions the state keeps (the API reads the shown one's and the newer ones'). */
+const RUNS_KEPT = 4;
 const DAY_MS = 24 * 3600e3;
 const NAMES = new Map(UNIVERSE.map(([s, n]) => [s, n]));
 
@@ -142,18 +151,69 @@ export const legacyHoliday = (st) => !!st?.holiday && st.phase == null && hol.co
 /** The state as this code keeps it; one written before the phases is read into them. */
 function upgrade(st) {
   if (!st || st.phase) return st;
-  const base = { v: 2, session: st.session, complete: st.complete ?? null };
+  const base = { v: 2, session: st.session, complete: st.complete ?? null, runs: [] };
   if (legacyHoliday(st)) return { ...base, phase: "new" };
   if (st.holiday) return { ...base, phase: "closed", holiday: true };
   if (st.done) {
+    // Its retry pass appended the stocks it retried to `symbols`.
     const symbols = [...new Set(st.symbols || [])], failed = st.failed || [];
-    return { ...base, phase: "done", symbols, quotes: {}, queue: [], retry: [], pass: RETRY_GAPS_MIN.length, failed, errors: {}, stored: symbols.length - failed.length, checked: st.checked || 0, started_at: st.started_at ?? null, done_at: st.done_at ?? null };
+    const done = { ...base, phase: "done", symbols, quotes: {}, queue: [], retry: [], pending: [], pass: RETRY_GAPS_MIN.length, failed, errors: {}, stored: symbols.length - failed.length, checked: st.checked || 0, started_at: st.started_at ?? null, done_at: st.done_at ?? null };
+    done.runs = [{ ...runOf(done, done.done_at), promoted: done.complete === done.session }];
+    return done;
   }
   // A pass in progress starts over.
   return { ...base, phase: "new" };
 }
 
-const fresh = (session, prev) => ({ v: 2, session, phase: "new", complete: prev?.complete ?? null });
+/** A new state for `session`: what the last one showed and its records carry over. */
+const fresh = (session, prev) => ({ v: 2, session, phase: "new", complete: prev?.complete ?? null, runs: prev?.runs ?? [] });
+
+/** The record of the scan of `st.session` as the API reads it; `at` is when it stopped reading. */
+function runOf(st, at) {
+  const pending = st.pending || [];
+  return {
+    session: st.session, scanned: true, of: st.symbols.length, stored: st.stored, checked: st.checked,
+    failed: [...st.failed], unpublished: [...pending], left: st.queue.length, errors: { ...st.errors },
+    started_at: st.started_at ?? null, published_at: st.published_at ?? null, done_at: at,
+    partial: st.failed.length + pending.length + st.queue.length > 0,
+  };
+}
+
+/**
+ * Files `run` as the newest record and makes its session the one shown when
+ * it holds enough: some stocks, and half of them or more than the shown
+ * session's record (none for a session kept from before these records). The
+ * shown session's record is kept however many came after it.
+ */
+function keep(st, run) {
+  const shown = st.runs?.find((r) => r.session === st.complete);
+  if (run.scanned && run.stored > 0 && st.complete !== run.session && (!st.complete || run.stored * 2 >= run.of || run.stored > (shown?.stored ?? 0))) st.complete = run.session;
+  run.promoted = st.complete === run.session;
+  st.runs = [run, ...(st.runs || []).filter((r) => r.session !== run.session)].filter((r, i) => i < RUNS_KEPT || r.session === st.complete);
+  st.done_at = run.done_at;
+}
+
+/**
+ * The target moved to the next session: files what `st`'s session got. A
+ * scan cut short counts the stocks still waiting for a retry as failed and
+ * those IPOT had not published as unpublished. Returns whether it filed a
+ * scan with rows, so old sessions are pruned.
+ */
+function cutoff(st, at) {
+  if (st.phase === "waiting") {
+    keep(st, { session: st.session, scanned: false, reason: "unpublished", probes: st.probes || 0, probe_errors: st.probe_errors || 0, first_probe_at: st.first_probe_at ?? null, last_probe_at: st.last_probe_at ?? null, done_at: at });
+    return false;
+  }
+  if (st.phase !== "running") return false;
+  for (const s of st.retry) {
+    st.failed.push(s);
+    const kind = st.kinds?.[s] || "other";
+    st.errors[kind] = (st.errors[kind] || 0) + 1;
+  }
+  st.retry = [];
+  keep(st, runOf(st, at));
+  return true;
+}
 
 /** Stocks of the first pass the scan has got to. */
 const attempted = (st) => (st.symbols?.length ?? 0) - (st.pass ? 0 : (st.queue?.length ?? st.symbols?.length ?? 0));
@@ -163,11 +223,14 @@ async function kvGet(env, k) {
   return row ? JSON.parse(row.v) : null;
 }
 
-/** The step's rows, the pruning of old sessions when it finished one, and the state: one D1 batch. */
+/**
+ * The step's rows, the pruning of old sessions when it finished one (the
+ * newest KEEP_SESSIONS stay, and the one shown), and the state: one D1 batch.
+ */
 async function save(env, st, rows, prune) {
   const ins = env.DB.prepare("INSERT OR REPLACE INTO bandar_scan (session, period, symbol, v) VALUES (?1, ?2, ?3, ?4)");
   const list = rows.map((r) => ins.bind(st.session, r.period, r.symbol, JSON.stringify(r.v)));
-  if (prune) list.push(env.DB.prepare("DELETE FROM bandar_scan WHERE session NOT IN (SELECT DISTINCT session FROM bandar_scan ORDER BY session DESC LIMIT ?1)").bind(KEEP_SESSIONS));
+  if (prune) list.push(env.DB.prepare("DELETE FROM bandar_scan WHERE session IS NOT ?2 AND session NOT IN (SELECT DISTINCT session FROM bandar_scan ORDER BY session DESC LIMIT ?1)").bind(KEEP_SESSIONS, st.complete));
   list.push(env.DB.prepare("INSERT OR REPLACE INTO kv (k, v, updated_at) VALUES (?1, ?2, ?3)").bind(STATE, JSON.stringify(st), Math.floor(Date.now() / 1000)));
   await env.DB.batch(list);
 }
@@ -250,7 +313,8 @@ async function probe(st, now, fetchPage) {
     // A week of these shows when IPOT publishes a session.
     console.log("bandar published", JSON.stringify({ session: st.session, published_at: at, last_unpublished_at: st.last_unpublished_at ?? null, probes: st.probes }));
   } else if (verdict === "closed") {
-    Object.assign(st, { phase: "closed", holiday: true, next_probe_at: null, done_at: at });
+    Object.assign(st, { phase: "closed", holiday: true, next_probe_at: null });
+    keep(st, { session: st.session, scanned: false, reason: "closed", probes: st.probes, first_probe_at: st.first_probe_at, last_probe_at: at, done_at: at });
   } else {
     st.last_unpublished_at = at;
     st.next_probe_at = after(now, probeGap(st, now));
@@ -299,6 +363,7 @@ function refill(st, now) {
 function failure(st, symbol, kind, e, at, seen) {
   seen[kind] = (seen[kind] || 0) + 1;
   st.last_errors = [{ symbol, kind, error: short(e), at }, ...(st.last_errors || [])].slice(0, ERRORS_KEPT);
+  (st.kinds ??= {})[symbol] = kind;
   if (kind !== "invalid" && st.pass < RETRY_GAPS_MIN.length) return void st.retry.push(symbol);
   st.failed.push(symbol);
   st.errors[kind] = (st.errors[kind] || 0) + 1;
@@ -366,15 +431,22 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
 export async function bandarScanStep(env, { now = new Date(), force = false, budget: b = budget(), stocks = true, pauseMs } = {}) {
   const fetchPage = (u) => ipot.fetchPage(u, { fetchFn: b.fetch, ...(pauseMs == null ? {} : { pauseMs }) });
   const fetchChart = (s, period, interval) => y.fetchChart(s, period, interval, { fetchFn: b.fetch });
-  const session = targetSession(now);
+  const session = targetSession(now), at = now.toISOString();
   let st = upgrade(await kvGet(env, STATE));
-  if (!st || st.session !== session || (force && (st.phase === "done" || st.phase === "closed"))) st = fresh(session, st);
+  let changed = false, prune = false;
+  if (st && st.session !== session) {
+    // The next session's 16:45 WIB: what this one got is filed first.
+    prune = cutoff(st, at);
+    st = fresh(session, st);
+    changed = true;
+  } else if (!st || (force && (st.phase === "done" || st.phase === "closed"))) {
+    st = fresh(session, st);
+  }
   if (st.phase === "done" || st.phase === "closed") return { idle: true, session };
   if (st.phase === "waiting" && !force && st.next_probe_at && now.getTime() < Date.parse(st.next_probe_at)) {
     return { idle: true, session, phase: "waiting", next_probe_at: st.next_probe_at };
   }
   const out = { session };
-  let changed = false;
   if (st.phase === "new") {
     const board = await kvGet(env, "board");
     const { symbols, ranked_from } = ranking(board?.quotes || [], session);
@@ -390,30 +462,25 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
     changed ||= out.probe !== "budget";
   }
   const rows = [];
-  let prune = false;
   if (st.phase === "running" && stocks) {
     const { read, errors } = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
     out.read = read;
     if (Object.keys(errors).length) out.errors = errors;
     changed ||= out.read > 0;
   }
-  if (st.phase === "running" && restDone(st)) {
-    // Shown from now on, though stocks IPOT has not published may still come.
-    if (st.complete !== session) {
-      Object.assign(st, { complete: session, done_at: now.toISOString() });
-      changed = prune = true;
-    }
-    if (!st.pending?.length) {
-      st.phase = "done";
-      changed = true;
-    }
+  // Every stock read or failed: the session's record, shown from now on when
+  // it holds enough, though stocks IPOT has not published may still come.
+  if (st.phase === "running" && restDone(st) && (out.read > 0 || !st.pending?.length || !(st.runs || []).some((r) => r.session === session))) {
+    if (!st.pending?.length) st.phase = "done";
+    keep(st, runOf(st, at));
+    changed = prune = true;
   }
   if (!changed) return { ...out, idle: true, phase: st.phase };
   await save(env, st, rows, prune);
   return { ...out, phase: st.phase, scanned: attempted(st), of: st.symbols.length, done: st.phase === "done" };
 }
 
-/** What the screen reads: the newest finished session, else the running one. */
+/** What the screen reads: the session shown (the newest that holds enough), else the running one. */
 export async function scanRows(env, period) {
   const st = upgrade(await kvGet(env, STATE));
   const running = st && st.phase === "running" && st.session !== st.complete ? st : null;
@@ -424,30 +491,75 @@ export async function scanRows(env, period) {
 }
 
 const hhmm = (iso) => new Date(Date.parse(iso) + WIB_MS).toISOString().slice(11, 16);
+const stamp = (iso) => `${new Date(Date.parse(iso) + WIB_MS).toISOString().slice(0, 16).replace("T", " ")} WIB`;
+const underWay = (st) => ["new", "waiting", "running"].includes(st?.phase);
+
+/** Trading days after `from` up to `to`. */
+function sessionsAfter(from, to) {
+  let n = 0;
+  for (let d = hol.nextTradingDay(from); d <= to; d = hol.nextTradingDay(d)) n++;
+  return n;
+}
 
 /**
- * The screen's and the broker's notes on the scan: which session they show
- * and why, as warnings, and how many of its stocks failed. `shown` is the
- * session the rows come from, `rows` how many stocks they hold. Pure, tested
- * through the API.
+ * Where the scan of `st.session` stands while it is under way, or null once
+ * its record says; with `shown`, which session is shown meanwhile.
  */
-export function scanNotes(st, shown, rows) {
-  const warnings = [];
-  if (!st) return { warnings, failed: 0 };
-  const of = st.symbols?.length ?? 0;
-  const pending = st.session === shown ? (st.pending || []).length : 0;
-  if (st.session === shown && st.phase === "running" && !restDone(st)) warnings.push(`the scan of ${shown} is still running: ${rows} of ${of} stocks so far`);
-  else if (pending) warnings.push(`IPOT has not published ${shown} for ${pending} of the ${of} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
-  else if (st.session > shown) {
-    if (st.phase === "new") warnings.push(`the scan of ${st.session} has not started yet; showing ${shown}`);
-    else if (st.phase === "waiting") {
-      const n = (st.probes || 0) + (st.probe_errors || 0);
-      const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${hhmm(st.first_probe_at)} WIB${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
-      warnings.push(`the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}; showing ${shown}`);
-    } else if (st.phase === "running") warnings.push(`the scan of ${st.session} is running (${st.stored + st.failed.length} of ${of}); showing ${shown}`);
-    else if (st.phase === "closed") warnings.push(`${st.session} had no trades at IPOT nor on the quote board, so it was not scanned; showing ${shown}`);
+export function scanProgress(st, shown = null) {
+  const tail = shown ? `; showing ${shown}` : "";
+  if (st?.phase === "new") return `the scan of ${st.session} has not started yet${tail}`;
+  if (st?.phase === "waiting") {
+    const n = (st.probes || 0) + (st.probe_errors || 0);
+    const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${hhmm(st.first_probe_at)} WIB${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
+    return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;
   }
-  return { warnings, failed: st.session === shown ? (st.failed || []).length : 0 };
+  if (st?.phase === "running") return `the scan of ${st.session} is running (${st.stored + st.failed.length} of ${st.symbols.length})${tail}`;
+  return null;
+}
+
+/** Why a finished session newer than the one shown is not the one shown. */
+function runNote(r, shown) {
+  if (r.reason === "closed") return `${r.session} had no trades at IPOT nor on the quote board, so it was not scanned`;
+  if (!r.scanned) return `IPOT had not published the broker lists of ${r.session} by ${stamp(r.last_probe_at ?? r.done_at)}; showing ${shown}`;
+  return `the scan of ${r.session} read only ${r.stored} of ${r.of} stocks (${r.failed.length} failed, ${r.unpublished.length} not published by IPOT); showing ${shown}`;
+}
+
+/**
+ * The screen's and the broker's notes on the scan, as of `now`: which
+ * session they show when the newest trading session is not it, and why
+ * (waiting for IPOT, running, not published by the cutoff, too few stocks,
+ * not started), how far behind it is, and what its own scan missed. `shown`
+ * is the session the rows come from, `rows` how many stocks they hold.
+ * Returns the warnings, the failed and unpublished counts, the stocks
+ * scanned and when the shown session was read. Pure, tested through the API.
+ */
+export function scanNotes(st, shown, rows, now = new Date()) {
+  const warnings = [];
+  const latest = hol.latestSession(now);
+  const runs = st?.runs || [];
+  const run = runs.find((r) => r.session === shown) ?? null;
+  const live = st?.session === shown && underWay(st);
+  if (st && latest > st.session) {
+    warnings.push(hol.wibDate(now) === latest && wibMinutes(now) < READY_MIN ? `the scan of ${latest} starts at 16:45 WIB; showing ${shown}` : `the scan has not reached ${latest} yet; showing ${shown}`);
+  }
+  if (st && st.session > shown && underWay(st)) warnings.push(scanProgress(st, shown));
+  for (const r of runs) if (r.session > shown && !(underWay(st) && r.session === st.session)) warnings.push(runNote(r, shown));
+  const behind = sessionsAfter(shown, latest) - runs.filter((r) => r.reason === "closed" && r.session > shown && r.session <= latest).length;
+  if (behind > 1) warnings.push(`${shown} is ${behind} sessions behind ${latest}`);
+  const failed = run ? run.failed.length : st?.session === shown ? (st.failed || []).length : 0;
+  const pending = live ? (st.pending || []).length : 0;
+  const unpublished = pending || (run?.unpublished.length ?? 0);
+  const scanned = rows + failed + unpublished;
+  if (live && st.phase === "running" && !restDone(st)) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
+  else if (pending) warnings.push(`IPOT has not published ${shown} for ${pending} of the ${st.symbols.length} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
+  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary`);
+  if (unpublished && !pending) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
+  if (run?.left) warnings.push(`the scan of ${shown} ended before it read ${run.left} of its ${run.of} stocks`);
+  const year = Number(latest.slice(0, 4));
+  if (!hol.covers(year)) warnings.push(`the bundled holiday list does not cover ${year}; the scan tells that year's closures from IPOT and the quote board`);
+  // A session kept from before these records: the earliest its scan could have read it.
+  const fetched_at = run?.done_at || (st?.session === shown ? st.started_at : null) || new Date(Date.parse(`${shown}T00:00:00+07:00`) + READY_MIN * 60e3).toISOString();
+  return { warnings, failed, unpublished, scanned, fetched_at };
 }
 
 export async function scanStatus(env) {
@@ -461,6 +573,6 @@ export async function scanStatus(env) {
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
     pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,
     retry: st.retry || [], retry_due: st.retry_due ?? null, pass: st.pass ?? 0, errors: st.errors || {}, last_errors: st.last_errors || [],
-    ranked_from: st.ranked_from ?? null,
+    ranked_from: st.ranked_from ?? null, last: st.runs?.[0] ?? null,
   };
 }
