@@ -564,7 +564,8 @@ export function rangePosition(price, low, high) {
 /** A screen row (idx.screen.v1) from a board quote: analysis::screen::row_from_quote. */
 export function rowFromQuote(q, nameHint = null) {
   return {
-    symbol: q.symbol, name: q.name || nameHint || null, price: q.price, change_pct: q.change_pct, market_cap: q.market_cap,
+    symbol: q.symbol, name: q.name || nameHint || null, currency: q.currency ?? null, financial_currency: q.financial_currency ?? null,
+    price: q.price, change_pct: q.change_pct, market_cap: q.market_cap,
     pe_trailing: q.pe_trailing, pe_forward: q.pe_forward, price_to_book: q.price_to_book, dividend_yield_pct: q.dividend_yield_pct,
     eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low,
     range_52w_pct: rangePosition(q.price, q.week52_low, q.week52_high),
@@ -575,14 +576,27 @@ export function rowFromQuote(q, nameHint = null) {
   };
 }
 
-/** Joins a company's fundamentals into its screen row: analysis::screen::apply_fundamentals. */
+/**
+ * Joins a company's fundamentals into its screen row: analysis::screen::apply_fundamentals.
+ * P/B and P/S divide the price by statement figures, so they come from one set of
+ * statements: a report whose statement currency (or, when it names none, its
+ * price's) is not the row's financial_currency fills neither, nor that currency.
+ */
 export function applyFundamentals(r, f) {
   Object.assign(r, {
     fundamentals_checked: true, sector: f.sector, industry: f.industry, roe_pct: f.profitability.roe_pct, roa_pct: f.profitability.roa_pct,
     net_margin_pct: f.profitability.net_margin_pct, operating_margin_pct: f.profitability.operating_margin_pct, debt_to_equity: f.health.debt_to_equity,
-    revenue_growth_pct: f.growth.revenue_growth_pct, earnings_growth_pct: f.growth.earnings_growth_pct, peg: f.valuation.peg, price_to_sales: f.valuation.price_to_sales,
+    revenue_growth_pct: f.growth.revenue_growth_pct, earnings_growth_pct: f.growth.earnings_growth_pct, peg: f.valuation.peg,
   });
-  r.pe_trailing ??= f.valuation.pe_trailing; r.price_to_book ??= f.valuation.price_to_book; r.dividend_yield_pct ??= f.dividend.yield_pct;
+  const theirs = f.financial_currency || f.currency;
+  const foreign = !!(r.financial_currency && theirs) && r.financial_currency.toUpperCase() !== theirs.toUpperCase();
+  if (!foreign) {
+    r.price_to_sales = f.valuation.price_to_sales;
+    r.price_to_book ??= f.valuation.price_to_book;
+    r.financial_currency ??= f.financial_currency ?? null;
+  }
+  r.currency ??= f.currency ?? null;
+  r.pe_trailing ??= f.valuation.pe_trailing; r.dividend_yield_pct ??= f.dividend.yield_pct;
   return r;
 }
 
