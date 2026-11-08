@@ -511,3 +511,134 @@ export function foldListedApart(r) {
   }
   return folded;
 }
+
+// ---- when the ranking can be dated (ipot::top_brokers) ------------------------
+
+const WIB_MS = 7 * 3600e3;
+/** Seconds after midnight WIB, on a trading day, from before the pre-opening (08:45) until well after the close (16:15) when the ranking may change between two reads. */
+const BUSY_FROM = 8 * 3600 + 30 * 60, BUSY_TO = 19 * 3600;
+const TTL_BUSY_SECS = 5 * 60;
+/** The longest a copy is kept outside the busy hours. */
+const TTL_QUIET_SECS = 6 * 3600;
+/** The ranking and its date count as one read when fetched this close. */
+export const READ_TOGETHER_MS = 60e3;
+/** A session's first trades: the pre-opening match starts at 08:58:00 WIB (IDX trading hours, Kep-00158/BEI/10-2026). */
+const FIRST_TRADES_SECS = 8 * 3600 + 58 * 60;
+/** How long the ranking last accepted is remembered: long past the next session. */
+export const ACCEPTED_TTL_MS = 30 * 86400e3;
+
+/** An instant (epoch ms) as its WIB day, clock (HH:MM) and seconds after midnight. */
+function wibParts(ms) {
+  const iso = new Date(ms + WIB_MS).toISOString();
+  return { day: iso.slice(0, 10), clock: iso.slice(11, 16), secs: Number(iso.slice(11, 13)) * 3600 + Number(iso.slice(14, 16)) * 60 + Number(iso.slice(17, 19)) };
+}
+
+/**
+ * How long, in seconds, a copy of the ranking (and of the page that dates
+ * it) is good for at `now`, like ipot::top_brokers_ttl: five minutes on a
+ * trading day from 08:30 to 19:00 WIB; outside them six hours at most, and
+ * never a copy read before those hours last ended, so the settled figures
+ * are read once after them.
+ */
+export function topBrokersTtl(now) {
+  const ms = Number(now);
+  const { day, secs } = wibParts(ms);
+  const trading = hol.isTradingDay(day);
+  if (trading && secs >= BUSY_FROM && secs < BUSY_TO) return TTL_BUSY_SECS;
+  const last = trading && secs >= BUSY_TO ? day : prevTradingDay(day);
+  const ended = Date.parse(`${last}T00:00:00Z`) - WIB_MS + BUSY_TO * 1000;
+  return Math.min(Math.max(0, (ms - ended) / 1000), TTL_QUIET_SECS);
+}
+
+/** `t` (epoch ms) falls on a trading day from the session's first trades (08:58) until the busy hours end (19:00 WIB), when a ranking cannot be dated. */
+export function undatedAt(t) {
+  const { day, secs } = wibParts(Number(t));
+  return hol.isTradingDay(day) && secs >= FIRST_TRADES_SECS && secs < BUSY_TO;
+}
+
+/**
+ * The two pages read as one pair, as the Worker keeps them: when each was
+ * read (epoch ms), the date page's session, and the ranking (or why its page
+ * could not be read as one: the error is kept with the copy, as the CLI's
+ * cache keeps the page that gives it).
+ */
+export function rankingPair(rankedHtml, datedHtml, rankedAt, datedAt = rankedAt) {
+  let ranking;
+  try { ranking = parseRanking(rankedHtml); } catch (e) { ranking = { error: e.message }; }
+  return { ranked_at: rankedAt, dated_at: datedAt, session: sessionDate(datedHtml), ranking };
+}
+
+/** Both pages of a pair read within READ_TOGETHER_MS of each other. */
+export const readTogether = (p) => Math.abs(p.ranked_at - p.dated_at) <= READ_TOGETHER_MS;
+
+/** A copy that can answer in the hours a page read now cannot be dated, like ipot::cached_outside_hours: both pages read together outside them. */
+export const answersInHours = (p) => !!p && readTogether(p) && !undatedAt(p.ranked_at) && !undatedAt(p.dated_at);
+
+/** Why IPOT is not asked at `now`, in those hours, without such a copy. */
+export function notAsked(now) {
+  const { day, clock } = wibParts(Number(now));
+  return `a broker ranking read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked`;
+}
+
+/** Why a pair has no date: `code` provider (IPOT's pages themselves), or network (a copy that stood in for a failed read). */
+export class RankingError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
+/**
+ * Dates a pair like ipot::top_brokers, judged by when its pages were read
+ * (a copy keeps its read times, at most `now`), not when it is served:
+ * refused when the pages were read apart, or either in a trading day's
+ * hours (08:58 to 19:00 WIB); when the date page has no Today row or names a
+ * day without a session; when a ranking with trades is dated a session that
+ * had not opened, or one without trades a session that had ended; when the
+ * ranking `accepted` before for one session (its figures' digest) is dated
+ * another; and when a ranking with trades is dated an older session than the
+ * latest that had ended, unless it is the very pair accepted for it. A
+ * refusal of a copy that stood in for a failed read (`failure`, its cause) is
+ * that failure (network). Returns the session, the brokers with those IPOT
+ * lists apart folded in (a warning names each), and the record to remember
+ * for a ranking with trades (`accept`).
+ */
+export async function dateRanking(pair, { cached = false, failure = null, now, accepted = null }) {
+  const unusable = (why) => (failure
+    ? new RankingError("network", `IPOT could not be read (${failure}), and its cached copy cannot be used: ${why}`)
+    : new RankingError("provider", `ipot: ${why}`));
+  if (!readTogether(pair)) throw unusable("the broker ranking and the page that dates it were read at different times, so the ranking has no date");
+  const readAt = (t) => (cached ? Math.min(t, Number(now)) : t);
+  const rankedAt = readAt(pair.ranked_at), datedAt = readAt(pair.dated_at);
+  if (undatedAt(rankedAt)) {
+    const { day, clock } = wibParts(rankedAt);
+    throw unusable(`the broker ranking was read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated`);
+  }
+  if (undatedAt(datedAt)) {
+    const { day, clock } = wibParts(datedAt);
+    throw unusable(`the page that dates the broker ranking was read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated`);
+  }
+  // Both reads are outside those hours and a minute apart at most, so either gives the same session below.
+  const read = Math.min(rankedAt, datedAt);
+  const { day, clock, secs } = wibParts(read);
+  const date = pair.session;
+  if (!date) throw unusable("BBCA's statistics page has no Today row to date the broker ranking");
+  if (!hol.isTradingDay(date)) throw unusable(`the page that dates the broker ranking names ${date}, which is not a trading day`);
+  if (pair.ranking.error) throw new RankingError("provider", `ipot: ${pair.ranking.error}`);
+  const r = { brokers: pair.ranking.brokers.map((b) => ({ ...b })), rounded: pair.ranking.rounded };
+  const traded = r.brokers.some(brokerTraded);
+  // A date whose session had not opened when the pages were read cannot have trades, and one whose session had ended cannot be without them.
+  const opened = date < day || (date === day && secs >= FIRST_TRADES_SECS);
+  if (!opened && traded) throw unusable(`the broker ranking read at ${clock} WIB on ${day} is dated ${date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree`);
+  const latest = hol.latestSession(new Date(read));
+  if (!traded && date <= latest) throw unusable(`the broker ranking read at ${clock} WIB on ${day} shows no trades, yet the page that dates it names ${date}, a session that had ended then: the two pages are on different sessions`);
+  let accept = null;
+  if (traded) {
+    const digest = await rankingDigest(r.brokers);
+    if (accepted && accepted.digest === digest && accepted.date !== date) throw unusable(`the broker ranking is the one IPOT showed for ${accepted.date}, yet the page that dates it now names ${date}: the ranking has not rolled over to that session`);
+    // Outside the refused hours both pages are taken to have rolled over to the latest session that had ended.
+    // A date page naming an older one may lag a ranking that has: only the very pair accepted before is that older session's.
+    const before = !!accepted && accepted.digest === digest && accepted.date === date;
+    if (date < latest && !before) throw unusable(`the broker ranking read at ${clock} WIB on ${day} is dated ${date}, yet the session of ${latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated`);
+    accept = { date, digest };
+  }
+  const warnings = foldListedApart(r).map((f) => `${f.code} (${f.name}) is counted in ${f.into}, as idx.co.id counts it; IPOT lists it apart`);
+  return { date, brokers: r.brokers, rounded: r.rounded, warnings, accept };
+}

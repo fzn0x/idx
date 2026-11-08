@@ -128,3 +128,28 @@ test("the same figures give the same fingerprint, other figures another", async 
   assert.equal(await ipot.rankingDigest(renamed), a);
   assert.notEqual(await ipot.rankingDigest(ipot.parseRanking(TOP.replace(">2.79 T<", ">2.80 T<")).brokers), a);
 });
+
+/** A WIB wall-clock time as epoch milliseconds. */
+const at = (s) => Date.parse(`${s}+07:00`);
+
+test("the ranking is kept minutes in trading hours and hours outside, like ipot::top_brokers_ttl", () => {
+  const min = (n) => n * 60;
+  for (const [now, want, why] of [
+    ["2026-11-06T08:29:00", min(360), "Friday before 08:30"],
+    ["2026-11-06T08:30:00", min(5), "from 08:30"],
+    ["2026-11-06T15:00:00", min(5), "during the session"],
+    ["2026-11-06T18:59:59", min(5), "until 19:00"],
+    ["2026-11-06T19:00:30", 30, "only copies read after 19:00"],
+    ["2026-11-06T23:00:00", min(240), "Friday night"],
+    ["2026-11-07T12:00:00", min(360), "Saturday"],
+    ["2026-11-09T07:00:00", min(360), "Monday before 08:30"],
+    ["2026-08-17T10:00:00", min(360), "Independence Day"],
+  ]) assert.equal(ipot.topBrokersTtl(at(now)), want, `${now}: ${why}`);
+});
+
+test("a trading day's hours from the first trades to 19:00 WIB cannot date a ranking", () => {
+  for (const [t, want] of [
+    ["2026-11-06T08:57:59", false], ["2026-11-06T08:58:00", true], ["2026-11-06T16:15:00", true], ["2026-11-06T18:59:59", true],
+    ["2026-11-06T19:00:00", false], ["2026-11-07T10:00:00", false], ["2026-12-24T10:00:00", false],
+  ]) assert.equal(ipot.undatedAt(at(t)), want, t);
+});
