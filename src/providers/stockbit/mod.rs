@@ -50,6 +50,7 @@ use crate::model::{
 use super::{Provider, Sourced, Ttls};
 
 pub mod auth;
+pub mod broker_summary;
 pub mod corpaction;
 pub mod login;
 pub mod movement;
