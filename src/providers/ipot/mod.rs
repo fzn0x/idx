@@ -44,12 +44,13 @@
 //!   are listed with zeros. Past sessions cannot be asked for. See
 //!   `topbroker.rs`.
 //! - The page carries no date. `.../statistic.php?code=BBCA` dates it: its
-//!   `Today` row carries the day of the stock's high and low. BBCA, the most
-//!   traded stock, trades every session. [`top_brokers`] reads both pages.
+//!   `Today` row carries the day of the stock's high and low, BBCA being
+//!   one of the most traded stocks. [`top_brokers`] reads both pages.
 //! - On Sunday 2026-11-08 the ranking matched idx.co.id's broker summary of
 //!   2026-11-06 once JB, listed apart as `[CC] BJB Sekuritas Jawa Barat`, is
 //!   counted in CC. When the two pages roll over to a new session, and
-//!   whether the ranking moves during a session, has not been measured.
+//!   whether the ranking moves during a session, has not been measured; a
+//!   ranking with trades dated a session that has not opened is refused.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,6 +88,9 @@ const TTL_TOP_BROKERS_BUSY: Duration = Duration::from_secs(5 * 60);
 const TTL_TOP_BROKERS_QUIET: Duration = Duration::from_secs(6 * 3600);
 /// The ranking and its date count as one read when fetched this close.
 const READ_TOGETHER: Duration = Duration::from_secs(60);
+/// A session's first trades: the pre-opening match starts at 08:58:00 WIB
+/// (IDX trading hours, Kep-00158/BEI/10-2026).
+const FIRST_TRADES_SECS: u32 = 8 * 3600 + 58 * 60;
 
 /// A range that ended before today no longer changes.
 const TTL_CLOSED: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -521,7 +525,9 @@ fn read_together(a: &Fetched, b: &Fetched) -> bool {
 /// The two pages count only as one read: when one comes from the network
 /// and the other from the cache, or two copies were read apart, both are
 /// read again. When they still differ (a fetch failed and an older copy
-/// stood in), the ranking cannot be dated and the call fails.
+/// stood in), the ranking cannot be dated and the call fails; so does a
+/// ranking with trades dated a session that has not opened (before 08:58
+/// WIB), which means the pages rolled over at different times.
 pub async fn top_brokers(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,
@@ -570,6 +576,20 @@ pub async fn top_brokers(
         )
     })?;
     let mut data = topbroker::ranking(&ranked.body, date)?;
+    // When the two pages roll over to a new session is not measured: a date
+    // whose session has not opened cannot have trades yet.
+    let local = now.with_timezone(&crate::model::wib());
+    let opened = date < local.date_naive()
+        || date == local.date_naive()
+            && local.time().num_seconds_from_midnight() >= FIRST_TRADES_SECS;
+    if !opened && data.brokers.iter().any(topbroker::TopBroker::traded) {
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "the broker ranking is dated {date}, a session that had not opened (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+            ),
+        ));
+    }
     let folded = topbroker::fold_listed_apart(&mut data);
     let mut s = Sourced::from_fetched(data, NAME, &ranked);
     s.absorb(&Sourced::from_fetched((), NAME, &dated));
@@ -1317,6 +1337,16 @@ mod tests {
         let (f, _be, _d) = fetcher(ranking_pages());
         let s = top_brokers(&f, at("2026-11-06T16:15:00")).await.unwrap();
         assert_eq!(s.warnings.len(), 1, "over: only the fold");
+
+        // Dated a session that has not opened, the trades are another's.
+        for early in ["2026-11-06T08:57:59", "2026-11-05T20:00:00"] {
+            let (f, _be, _d) = fetcher(ranking_pages());
+            let err = top_brokers(&f, at(early)).await.unwrap_err();
+            assert_eq!(err.code(), "provider");
+            assert!(err.to_string().contains("disagree"), "{early}: {err}");
+        }
+        let (f, _be, _d) = fetcher(ranking_pages());
+        assert!(top_brokers(&f, at("2026-11-06T08:58:00")).await.is_ok());
     }
 
     #[tokio::test]
