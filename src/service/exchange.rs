@@ -1111,7 +1111,9 @@ fn ipot_member_ranking(
 /// ([`ipot::top_brokers`]): the same members and totals, with each member's
 /// value bought and sold, its net and its class, and figures the source
 /// abbreviated to two decimals (`rounded`). Past sessions cannot be asked
-/// for: a `date` other than IPOT's session is a usage error.
+/// for: a `date` before IPOT's session is a usage error. A day without a
+/// session and one whose session has not ended are not found without a
+/// request, as is a session after IPOT's, which it has not published yet.
 pub async fn market_brokers_ipot(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -1120,17 +1122,33 @@ pub async fn market_brokers_ipot(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
     let today = now.with_timezone(&crate::model::wib()).date_naive();
-    if let Some(d) = date.filter(|d| *d > today) {
-        return Err(IdxError::Usage(format!("{d} is in the future")));
+    if let Some(d) = date {
+        if d > today {
+            return Err(IdxError::Usage(format!("{d} is in the future")));
+        }
+        if !holidays::is_trading_day(d) {
+            return Err(IdxError::NotFound(format!(
+                "no trading data: {}",
+                closed_reason(d)
+            )));
+        }
+        if d > holidays::latest_session(now) {
+            return Err(IdxError::NotFound(format!(
+                "the session of {d} has not ended (it ends at 16:15 WIB); idx.co.id publishes it after the close"
+            )));
+        }
     }
     let s = ipot::top_brokers(fetcher, now).await?;
-    if let Some(d) = date.filter(|d| *d != s.data.date) {
-        return Err(IdxError::Usage(format!(
-            "IPOT holds only its latest session, {}, not {d}; source idx (idx.co.id) has the others",
-            s.data.date
-        )));
+    let held = s.data.date;
+    match date {
+        Some(d) if d < held => Err(IdxError::Usage(format!(
+            "IPOT holds only its latest session, {held}, not {d}; source idx (idx.co.id) has the others"
+        ))),
+        Some(d) if d > held => Err(IdxError::NotFound(format!(
+            "IPOT has not published {d} yet: its latest session is {held}; source idx (idx.co.id) publishes each session after its close"
+        ))),
+        _ => ipot_member_ranking(s, top, sort),
     }
-    ipot_member_ranking(s, top, sort)
 }
 
 /// `e` with `note` after its message; its code and exit stay.
@@ -2091,6 +2109,52 @@ mod tests {
             assert!(err.to_string().contains(says), "{err}");
         }
         assert_eq!(be.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_session_ipot_cannot_hold_yet_is_not_found() {
+        use crate::model::BrokerSource;
+        let (f, be, _d) = fetcher(ipot_ranking(FixtureBackend::new(), TOP_BROKERS));
+        let ipot = |date, now| {
+            market_brokers_from(
+                &f,
+                BrokerSource::Ipot,
+                Some(date),
+                0,
+                BrokerSort::Value,
+                now,
+            )
+        };
+        // A weekend, and a session that has not ended: no request.
+        for (date, now, says) in [
+            (d(2026, 11, 7), sunday(), "no trading data: 2026-11-07 is a Saturday"),
+            (d(2026, 11, 8), sunday(), "no trading data: 2026-11-08 is a Sunday"),
+            (
+                d(2026, 11, 9),
+                wib_at("2026-11-09T08:00:00"),
+                "the session of 2026-11-09 has not ended (it ends at 16:15 WIB); idx.co.id publishes it after the close",
+            ),
+        ] {
+            let err = ipot(date, now).await.unwrap_err();
+            assert_eq!((err.code(), err.exit_code()), ("not_found", 4), "{date}");
+            assert!(err.to_string().contains(says), "{err}");
+        }
+        assert_eq!(be.call_count(), 0);
+
+        // Monday night IPOT still holds Friday: Monday is not there yet.
+        let err = ipot(d(2026, 11, 9), wib_at("2026-11-09T19:30:00"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string().contains(
+                "IPOT has not published 2026-11-09 yet: its latest session is 2026-11-06"
+            ),
+            "{err}"
+        );
+        // A session before IPOT's stays a usage error: it never holds one.
+        let err = ipot(d(2026, 11, 5), sunday()).await.unwrap_err();
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[tokio::test]
