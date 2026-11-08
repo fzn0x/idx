@@ -485,13 +485,28 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
     else assert.equal(r.kind, "cli-mcp", sub);
   }
   assert.deepEqual(variants("market.rs", "MarketCmd").filter((s) => routeLine(`market ${s}`).kind !== "web"), ["indices", "foreign", "brokers", "calendar"]);
+  // A subcommand the page runs is a CLI_FORM path the terminal handles; any other has a notice of its own.
+  const pageRuns = (path) => Object.values(CLI_FORM).some(([p]) => p === path);
+  const homes = (path) => [pageRuns(path), Object.hasOwn(MCP_ONLY, path), Object.hasOwn(CLI_ONLY, path)].filter(Boolean).length;
+  const ownershipCase = terminal.slice(terminal.indexOf('case "ownership": {'), terminal.indexOf("throw usageLine(cmd.usage);", terminal.indexOf('case "ownership": {')));
   for (const sub of variants("ownership.rs", "OwnershipCmd")) {
-    const r = routeLine(`ownership ${sub} BBCA`);
-    if (r.kind === "web") assert.equal(r.line, `ownership ${sub} BBCA`, sub);
-    else assert.ok(["cli-mcp", "cli"].includes(r.kind), sub);
+    const path = `ownership ${sub}`;
+    assert.equal(homes(path), 1, `${path} is routed once`);
+    const r = routeLine(`${path} BBCA`);
+    if (pageRuns(path)) { assert.equal(r.kind, "web", path); assert.ok(ownershipCase.includes(`sub === "${sub}"`), `the terminal runs ${path}`); }
+    else assert.equal(r.path, path, path);
   }
-  for (const sub of variants("stockbit.rs", "StockbitCmd")) assert.ok(["cli-mcp", "cli"].includes(routeLine(`stockbit ${sub}`).kind), sub);
-  for (const sub of variants("bandar.rs", "BandarCmd")) assert.equal(routeLine(`bandar ${sub} BBCA`).kind, "web", sub);
+  for (const sub of variants("stockbit.rs", "StockbitCmd")) {
+    const path = `stockbit ${sub}`;
+    assert.equal(homes(path), 1, `${path} is routed once`);
+    // Its own notice, not the general Stockbit panel.
+    assert.equal(routeLine(path).path, path, path);
+  }
+  for (const sub of variants("bandar.rs", "BandarCmd")) {
+    assert.ok(pageRuns(`bandar ${sub}`), `bandar ${sub} runs here`);
+    assert.match(terminal, new RegExp(`\\(pos\\[0\\] \\|\\| ""\\)\\.toLowerCase\\(\\) === "${sub}"`), `the terminal runs bandar ${sub}`);
+    assert.equal(routeLine(`bandar ${sub} BBCA`).kind, "web", sub);
+  }
   for (const cmd of ["watch", "config", "cache", "mcp", "schema", "completions", "version"]) assert.equal(routeLine(cmd).kind, "cli", cmd);
 });
 
