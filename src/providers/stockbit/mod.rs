@@ -120,6 +120,7 @@ const READ_PREFIXES: &[&str] = &[
     "/charts/",
     "/corpaction/",
     "/insider/company/majorholder?",
+    "/marketdetectors/",
 ];
 
 /// `true` for an exodus URL under one of [`READ_PREFIXES`].
@@ -800,6 +801,7 @@ pub(crate) mod tests {
             "https://exodus.stockbit.com/charts/BBCA/daily?timeframe=1m",
             "https://exodus.stockbit.com/corpaction/dividend?symbol=BBCA",
             "https://exodus.stockbit.com/insider/company/majorholder?page=1",
+            "https://exodus.stockbit.com/marketdetectors/BBCA?transaction_type=TRANSACTION_TYPE_GROSS",
         ] {
             assert!(is_read_url(ok), "{ok}");
         }
@@ -809,6 +811,8 @@ pub(crate) mod tests {
             "https://exodus.stockbit.com/corpaction/../order/buy",
             "https://exodus.stockbit.com/corpaction/%2e%2e/order/buy",
             "https://exodus.stockbit.com/insider/company/majorholder/../../order",
+            "https://exodus.stockbit.com/marketdetectors/../order/buy",
+            "https://exodus.stockbit.com/marketdetectors",
             "https://evil.test/corpaction/dividend",
             "https://exodus.stockbit.com.evil.test/corpaction/dividend",
             "http://exodus.stockbit.com/corpaction/dividend",
