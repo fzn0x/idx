@@ -1377,6 +1377,51 @@ mod tests {
         assert!(IPOT_SOURCE_ADVICE.mcp.contains(&limit));
     }
 
+    #[tokio::test]
+    async fn a_refused_day_with_an_empty_copy_is_not_a_day_without_trading() {
+        // 16 Oct after the close: today's summaries were cached empty two
+        // hours ago, before they were out; the 15th's are cached; idx.co.id
+        // now refuses today's.
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetBrokerSummary?date=20261016", 403, "no")
+                .route("GetStockSummary?date=20261016", 403, "no"),
+        );
+        let url = |endpoint: &str, date: &str| {
+            format!("https://www.idx.co.id/primary/TradingSummary/{endpoint}?date={date}&start=0&length=9999")
+        };
+        let two_hours_ago = chrono::Utc::now() - chrono::Duration::seconds(7200);
+        for endpoint in ["GetBrokerSummary", "GetStockSummary"] {
+            f.cache()
+                .put_at(&url(endpoint, "20261016"), 200, NO_TRADING, two_hours_ago)
+                .unwrap();
+        }
+        f.cache()
+            .put(&url("GetBrokerSummary", "20261015"), 200, BROKERS)
+            .unwrap();
+        let today = d(2026, 10, 16);
+        // Not the 15th as if the 16th had no session, nor not_found for the
+        // 16th: the refusal, as with nothing cached.
+        for date in [None, Some(today)] {
+            let err = market_brokers(&f, date, 5, BrokerSort::Value, today)
+                .await
+                .unwrap_err();
+            assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+            assert!(err.to_string().contains(" WIB is empty. "), "{err}");
+        }
+        assert_eq!(be.calls_matching("date=20261015"), 0);
+        // The market's foreign flow too, with its alternative.
+        let err = market_foreign(&f, None, 10, ForeignSort::Value, today)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string()
+                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn foreign_ranges_from_the_arguments() {
         let today = d(2026, 11, 6);

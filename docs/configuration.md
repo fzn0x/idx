@@ -147,6 +147,9 @@ a TTL applies immediately.
   tries, at most 30 s of waiting per request; the loading line shows
   `www.idx.co.id retry 1`); one met by a block page is not. A refusal is
   never cached.
+  An empty copy of a day's stock, broker or index summary does not stand in
+  for a failed fetch, as it may be from before the summary was out: the
+  error stands and names the copy.
   With nothing cached the error is `blocked` (exit 3) and says what to do;
   under `--no-cache` it says the cache was skipped and that `--offline`
   serves a copy if there is one.

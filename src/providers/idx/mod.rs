@@ -24,9 +24,11 @@
 //! asked again three times within 30 s (`CHALLENGE_PAUSES`); one met by a
 //! block page is not. A refusal that stays is a failed fetch: the cached
 //! copy is served in its place, marked stale with a warning naming it, and
-//! with no copy it becomes a `blocked` error (exit 3) naming the cause. Any
-//! other failure keeps its HTTP status as a `provider` error. Answers are
-//! cached like any other; refusals never are.
+//! with no copy it becomes a `blocked` error (exit 3) naming the cause. An
+//! empty copy of a day's summary stands in for nothing, since it may predate
+//! the summary: the error stands then too. Any other failure keeps its HTTP
+//! status as a `provider` error. Answers are cached like any other;
+//! refusals never are.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -36,7 +38,7 @@ use chrono::{Datelike, NaiveDate};
 use crate::error::{Advice, IdxError, Result};
 use crate::http::cloudflare::{self, Refusal};
 use crate::http::{CacheMode, Fetched, Fetcher, RawResponse};
-use crate::model::{CalendarEvent, IndexRow, Instrument, Member, Symbol};
+use crate::model::{CalendarEvent, IndexRow, Instrument, Member, StaleReason, Symbol};
 
 use super::Sourced;
 
@@ -128,6 +130,13 @@ fn refusal_text(kind: Refusal, r: &RawResponse, tries: usize, waited: Duration) 
     }
 }
 
+fn hint(kind: Refusal) -> &'static str {
+    match kind {
+        Refusal::Challenge => BLOCKED_HINT,
+        Refusal::Block => BLOCK_PAGE_HINT,
+    }
+}
+
 /// A refusal that stayed with nothing cached to stand in for it, and what
 /// to do now. A cached copy would have been served, unless `--no-cache`
 /// kept the fetcher from looking.
@@ -144,27 +153,69 @@ fn advise(e: IdxError, mode: CacheMode) -> IdxError {
         CacheMode::Bypass => NO_CACHE.cli,
         _ => ", and nothing is cached for it",
     };
-    let hint = match refusal {
-        Refusal::Challenge => BLOCKED_HINT,
-        Refusal::Block => BLOCK_PAGE_HINT,
-    };
     IdxError::Blocked {
         provider,
         refusal,
-        message: format!("{message}{cache}. {hint}"),
+        message: format!("{message}{cache}. {}", hint(refusal)),
     }
+}
+
+/// The failed fetch a cached copy was served in place of. A copy can be
+/// too old to answer: an empty day's summary may predate the summary, a
+/// history may stop before the sessions asked for. The caller then fails
+/// with [`error`](Self::error), as with nothing cached.
+#[derive(Debug, Clone)]
+pub struct Failure {
+    /// The refusal the last try met; `None` for another failure, such as a
+    /// network error.
+    refusal: Option<Refusal>,
+    /// What the live fetch met, as the copy's warning names it.
+    cause: String,
+    /// When the copy was fetched.
+    cached_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Failure {
+    /// The error the failure is when its copy cannot answer, `lacks` saying
+    /// why: `is empty` reads `..., and the copy cached at 2026-11-09 10:02
+    /// WIB is empty`, then what to do after a refusal.
+    pub fn error(&self, lacks: &str) -> IdxError {
+        let at = self
+            .cached_at
+            .with_timezone(&crate::model::wib())
+            .format("%Y-%m-%d %H:%M WIB");
+        let copy = format!("the copy cached at {at} {lacks}");
+        match self.refusal {
+            Some(kind) => IdxError::blocked(
+                NAME,
+                kind,
+                format!("{}, and {copy}. {}", self.cause, hint(kind)),
+            ),
+            None => IdxError::Network(format!("{}, and {copy}", self.cause)),
+        }
+    }
+}
+
+/// [`ask`], for callers that any cached copy answers.
+async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
+    Ok(ask(fetcher, path, ttl).await?.0)
 }
 
 /// One idx.co.id endpoint. A request met by a Cloudflare challenge is asked
 /// again after each of [`CHALLENGE_PAUSES`]; a challenge that stays, or a
 /// block page, is a failed fetch: the cached copy stands in for it, marked
 /// stale with a warning naming the refusal, or the call fails with a
-/// `blocked` error.
-async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
+/// `blocked` error. A copy that stands in for a failed fetch comes with
+/// that [`Failure`].
+async fn ask(
+    fetcher: &Arc<Fetcher>,
+    path: &str,
+    ttl: Duration,
+) -> Result<(Fetched, Option<Failure>)> {
     let url = format!("{BASE}/{path}");
     let headers = headers();
     let (mut tries, mut waited) = (1, Duration::ZERO);
-    let got = loop {
+    let (got, refusal) = loop {
         // The refusal this try met. The fetcher has already turned it into
         // the cached copy or the error; asking again replaces either.
         let seen = OnceLock::new();
@@ -178,7 +229,8 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
             ))
         };
         let got = fetcher.get_unless(&url, &headers, ttl, None, &refuse).await;
-        match (seen.get(), CHALLENGE_PAUSES.get(tries - 1)) {
+        let seen = seen.get().copied();
+        match (seen, CHALLENGE_PAUSES.get(tries - 1)) {
             (Some(Refusal::Challenge), Some(&pause)) => {
                 tracing::info!(
                     path,
@@ -193,7 +245,7 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
                 tries += 1;
                 waited += pause;
             }
-            _ => break got,
+            _ => break (got, seen),
         }
     };
     let f = got.map_err(|e| advise(e, fetcher.mode()))?;
@@ -203,7 +255,34 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
             format!("{path}: HTTP {}", f.status),
         ));
     }
-    Ok(f)
+    let failure = (f.stale_reason == Some(StaleReason::FetchFailed)).then(|| Failure {
+        refusal,
+        cause: f
+            .failure
+            .clone()
+            .unwrap_or_else(|| "the live fetch failed".into()),
+        cached_at: f.fetched_at,
+    });
+    Ok((f, failure))
+}
+
+/// One day's summary at `path`. An empty list is a day without trading,
+/// except in a copy served in place of a failed fetch: cached before the
+/// summary was out, it answers nothing, and the failure stands as with
+/// nothing cached.
+async fn day<T>(
+    fetcher: &Arc<Fetcher>,
+    path: &str,
+    date: NaiveDate,
+    today: NaiveDate,
+    parse: fn(&str) -> Result<Vec<T>>,
+) -> Result<Sourced<Vec<T>>> {
+    let (f, failure) = ask(fetcher, path, day_ttl(date, today)).await?;
+    let rows = parse(&f.body)?;
+    if let Some(failure) = failure.filter(|_| rows.is_empty()) {
+        return Err(failure.error("is empty"));
+    }
+    Ok(sourced(rows, &f))
 }
 
 fn sourced<T>(data: T, f: &Fetched) -> Sourced<T> {
@@ -232,8 +311,7 @@ pub async fn stock_summary(
         "TradingSummary/GetStockSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    let f = get(fetcher, &path, day_ttl(date, today)).await?;
-    Ok(sourced(parse::stock_summary(&f.body)?, &f))
+    day(fetcher, &path, date, today, parse::stock_summary).await
 }
 
 /// Every member's day on `date`; empty when nothing traded.
@@ -246,8 +324,7 @@ pub async fn broker_summary(
         "TradingSummary/GetBrokerSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    let f = get(fetcher, &path, day_ttl(date, today)).await?;
-    Ok(sourced(parse::broker_summary(&f.body)?, &f))
+    day(fetcher, &path, date, today, parse::broker_summary).await
 }
 
 /// Every index's day on `date`; empty when nothing traded.
@@ -260,8 +337,7 @@ pub async fn index_summary(
         "TradingSummary/GetIndexSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    let f = get(fetcher, &path, day_ttl(date, today)).await?;
-    Ok(sourced(parse::index_summary(&f.body)?, &f))
+    day(fetcher, &path, date, today, parse::index_summary).await
 }
 
 /// The latest `days` sessions of one stock, newest first. An unknown code
@@ -341,7 +417,6 @@ mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
-    use crate::model::StaleReason;
 
     const BROKERS: &str = include_str!("../../../tests/fixtures/idx/brokersummary_20261016.json");
     const BLOCKED: &str = include_str!("../../../tests/fixtures/idx/cloudflare_blocked.html");
@@ -572,6 +647,52 @@ mod tests {
             msg.contains(" over 0 s, and --no-cache skipped the cache (--offline serves a cached copy if there is one). idx.co.id's bot protection"),
             "{msg}"
         );
+    }
+
+    const NO_TRADING: &str =
+        include_str!("../../../tests/fixtures/idx/stocksummary_20261018_no_trading.json");
+
+    #[tokio::test]
+    async fn an_empty_copy_does_not_answer_for_a_refused_day() {
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetBrokerSummary", 403, BLOCKED)
+                .route_with_headers("GetIndexSummary", 403, CHALLENGE, FLAGGED),
+        );
+        // Today's summaries as cached two hours ago, before they were out.
+        for endpoint in ["GetBrokerSummary", "GetIndexSummary", "GetStockSummary"] {
+            let url = format!("{BASE}/TradingSummary/{endpoint}?date=20261016&start=0&length=9999");
+            f.cache()
+                .put_at(&url, 200, NO_TRADING, hours_ago(2))
+                .unwrap();
+        }
+        let today = d(2026, 10, 16);
+        // The copy cannot tell a day without trading from one not out yet:
+        // the refusal stands, as with nothing cached.
+        let err = broker_summary(&f, today, today).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("idx: idx.co.id answered with a Cloudflare block page (HTTP 403), and the copy cached at "),
+            "{msg}"
+        );
+        assert!(
+            msg.contains(
+                " WIB is empty. idx.co.id's bot protection refused the request; a block page "
+            ),
+            "{msg}"
+        );
+        let err = index_summary(&f, today, today).await.unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string()
+                .contains(" on 4 tries over 0 s, and the copy cached at "),
+            "{err}"
+        );
+        // A network failure the same way, as the network error it is.
+        let err = stock_summary(&f, today, today).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("network", 3));
+        assert!(err.to_string().ends_with(" WIB is empty"), "{err}");
     }
 
     #[tokio::test]
