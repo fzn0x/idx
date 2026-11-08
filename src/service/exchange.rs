@@ -1190,9 +1190,11 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
 /// The member ranking from `source`. `auto` asks idx.co.id and, when it
 /// refuses (code `blocked`), cannot be reached (`network`), fails
 /// (`provider`) or, offline, has no copy (`offline_miss`), answers from
-/// IPOT's latest session with a warning saying so. When IPOT cannot stand
-/// in (a `date` it does not hold, or a failure), idx.co.id's error stands
-/// with IPOT's reason after it.
+/// IPOT with a warning saying so, if IPOT holds the session asked for:
+/// `date`, or with none the latest session that has ended. When IPOT
+/// cannot stand in (another session, such as an old copy served offline or
+/// after a failed fetch, or a failure), idx.co.id's error stands with
+/// IPOT's reason after it.
 pub async fn market_brokers_from(
     fetcher: &Arc<Fetcher>,
     source: crate::model::BrokerSource,
@@ -1226,11 +1228,11 @@ pub async fn market_brokers_from(
                 Err(e) => return Err(with_note(refused, &format!("IPOT could not stand in: {e}"))),
             };
             let held = s.data.date;
-            if date.is_some_and(|d| d != held) {
-                return Err(with_note(
-                    refused,
-                    &format!("IPOT, which stands in, holds only its latest session, {held}"),
-                ));
+            // The session asked for: with no date, the latest that ended,
+            // where idx.co.id's walk begins. A copy of an older one is not
+            // the latest session.
+            if held != date.unwrap_or(ended) {
+                return Err(with_note(refused, &ipot_holds_only(&s)));
             }
             let why = match &refused {
                 IdxError::Blocked { refusal, .. } => {
@@ -1242,16 +1244,53 @@ pub async fn market_brokers_from(
                 }
                 other => format!("idx.co.id failed ({other})"),
             };
+            // A copy of an older session than the latest is no latest session.
+            let copy = copy_read_at(&s).filter(|_| held < ended);
             let mut s = ipot_member_ranking(s, top, sort)
                 .map_err(|e| with_note(refused, &format!("IPOT could not stand in: {e}")))?;
+            let whose = match copy {
+                Some(read) => format!("for {held}, from its copy read at {read}"),
+                None => format!("for its latest session, {held}"),
+            };
             s.warnings.insert(
                 0,
-                format!(
-                    "{why}, so the ranking is IPOT's (Indo Premier) for its latest session, {held}"
-                ),
+                format!("{why}, so the ranking is IPOT's (Indo Premier) {whose}"),
             );
             Ok(s)
         }
+    }
+}
+
+/// When a copy of IPOT's ranking served in place of a read (offline, or
+/// after a failed fetch) was read, as `10:00 WIB on 2026-10-17`; `None`
+/// for pages read now, or fresh in the cache.
+fn copy_read_at<T>(s: &Sourced<T>) -> Option<String> {
+    s.stale.then(|| {
+        s.fetched_at
+            .with_timezone(&crate::model::wib())
+            .format("%H:%M WIB on %Y-%m-%d")
+            .to_string()
+    })
+}
+
+/// What IPOT holds when it cannot stand in for the session asked for, for
+/// the note after idx.co.id's error: its latest session, or, for a copy
+/// served in place of a read, the session that copy holds and, after a
+/// failed fetch, why IPOT could not be read.
+fn ipot_holds_only(s: &Sourced<ipot::topbroker::Ranking>) -> String {
+    let held = s.data.date;
+    let Some(read) = copy_read_at(s) else {
+        return format!("IPOT, which stands in, holds only its latest session, {held}");
+    };
+    match s
+        .warnings
+        .iter()
+        .find_map(|w| crate::providers::fetch_failed_cause(w))
+    {
+        Some(why) => format!(
+            "IPOT, which stands in, could not be read ({why}), and its copy read at {read} holds only {held}"
+        ),
+        None => format!("IPOT's copy, read at {read}, holds only {held}"),
     }
 }
 
@@ -2292,6 +2331,95 @@ mod tests {
                 "; IPOT could not stand in: ipot: the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"
             ),
             "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_lets_ipot_stand_in_only_for_the_session_asked_for() {
+        use crate::model::BrokerSource;
+        // IPOT's pages as read on Saturday 2026-10-17, dated 2026-10-16;
+        // idx.co.id has nothing for the latest session, 2026-11-06.
+        let october = BBCA_STATISTIC.replacen("2026-11-06", "2026-10-16", 2);
+        let seed = |dir: &std::path::Path| {
+            for (url, page) in [
+                (
+                    "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+                    TOP_BROKERS,
+                ),
+                (
+                    "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+                    october.as_str(),
+                ),
+            ] {
+                Cache::new(dir)
+                    .put_fetched_at(url, 200, page, wib_at("2026-10-17T10:00:00"))
+                    .unwrap();
+            }
+        };
+        // Offline: idx.co.id's offline miss stands, saying what IPOT's copy
+        // holds, not the latest session.
+        let dir = tempfile::tempdir().unwrap();
+        seed(dir.path());
+        let offline = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path()),
+            CacheMode::Offline,
+        ));
+        let err = market_brokers_from(
+            &offline,
+            BrokerSource::Auto,
+            None,
+            5,
+            BrokerSort::Value,
+            sunday(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+        assert!(
+            err.to_string()
+                .ends_with("; IPOT's copy, read at 10:00 WIB on 2026-10-17, holds only 2026-10-16"),
+            "{err}"
+        );
+        // IPOT cannot be reached and idx.co.id is challenged: idx.co.id's
+        // refusal stands, with why IPOT has only that copy.
+        let (f, _be, dir) = fetcher(FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            CHALLENGE,
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        ));
+        seed(dir.path());
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let says = err.to_string();
+        assert!(
+            says.contains(
+                "; IPOT, which stands in, could not be read (fixture backend has no route for "
+            ),
+            "{says}"
+        );
+        assert!(
+            says.ends_with("), and its copy read at 10:00 WIB on 2026-10-17 holds only 2026-10-16"),
+            "{says}"
+        );
+        // Asked for that session, the copy stands in, named as a copy.
+        let s = market_brokers_from(
+            &f,
+            BrokerSource::Auto,
+            Some(d(2026, 10, 16)),
+            5,
+            BrokerSort::Value,
+            sunday(),
+        )
+        .await
+        .unwrap();
+        assert_eq!((s.provider, s.data.date), ("ipot", d(2026, 10, 16)));
+        assert_eq!(
+            s.warnings[0],
+            "idx.co.id answered with a Cloudflare challenge, so the ranking is IPOT's (Indo Premier) for 2026-10-16, from its copy read at 10:00 WIB on 2026-10-17"
         );
     }
 

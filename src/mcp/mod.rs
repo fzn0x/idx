@@ -3243,9 +3243,11 @@ mod tests {
             source: source.map(Into::into),
         };
 
-        // auto, the default: idx.co.id is challenged, IPOT answers.
+        // auto, the default: idx.co.id is challenged, IPOT answers for the
+        // session its copy holds. The date keeps the test off the clock:
+        // with none, auto asks for the latest session that has ended.
         let v = json_of(
-            &s.market_brokers(Parameters(call(None, None)))
+            &s.market_brokers(Parameters(call(None, Some("2026-11-06"))))
                 .await
                 .unwrap(),
         );
