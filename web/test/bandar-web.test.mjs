@@ -154,15 +154,17 @@ test("the ranking counts the stocks that traded on the session", () => {
   assert.deepEqual(ranking([idle], "2026-10-16"), { symbols: ["TMPO"], ranked_from: "2026-10-14" });
 });
 
-test("the nightly scan fills D1 and the screen reads it like the CLI", async () => {
+test("the scan fills D1 and the screen reads it like the CLI", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
   await withFetch(recordedFetch(), async () => {
     await assert.rejects(bandarScreen(env, "big-distribution"), (e) => e.code === "not_found");
     const now = new Date("2026-10-17T03:00:00Z");
-    // Three stocks a minute: the fourth, ZZZZ, takes a second step.
-    assert.deepEqual(await bandarScanStep(env, { now }), { session: "2026-10-16", scanned: 3, of: 4, done: false });
-    assert.deepEqual(await bandarScanStep(env, { now }), { session: "2026-10-16", scanned: 4, of: 4, done: true });
+    // The probe finds the lists published; three stocks a minute, so ZZZZ takes a second step.
+    const first = await bandarScanStep(env, { now });
+    assert.deepEqual([first.session, first.probe, first.read, first.scanned, first.of, first.done], ["2026-10-16", "published", 3, 3, 4, false]);
+    const second = await bandarScanStep(env, { now });
+    assert.deepEqual([second.read, second.scanned, second.done], [1, 4, true]);
     assert.deepEqual(await bandarScanStep(env, { now }), { idle: true, session: "2026-10-16" });
     const st = await scanStatus(env);
     assert.equal(st.complete, "2026-10-16");
@@ -194,13 +196,101 @@ test("the nightly scan fills D1 and the screen reads it like the CLI", async () 
   });
 });
 
-test("a holiday is noticed and skipped", async () => {
+const unix = (iso) => Math.floor(Date.parse(iso) / 1000);
+
+test("a page without trades waits for IPOT while the board shows trades that day", async () => {
   const env = memoryDb();
-  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8)] }));
-  await withFetch(async () => new Response(page("brokersummary_bbca_20261017_no_trades.html"), { status: 200 }), async () => {
-    assert.deepEqual(await bandarScanStep(env, { now: new Date("2026-10-17T03:00:00Z") }), { holiday: "2026-10-16" });
-    assert.equal((await scanStatus(env)).holiday, true);
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-10-16T16:45:00+07:00"), quotes: [quote("BBCA", 5175, 9e8)] }));
+  const calls = [];
+  await withFetch(async (u) => { calls.push(String(u)); return new Response(page("brokersummary_bbca_20261017_no_trades.html"), { status: 200 }); }, async () => {
+    // Saturday 10:00 WIB: Friday's page shows nothing, but the board's BBCA last traded on Friday.
+    assert.equal((await bandarScanStep(env, { now: new Date("2026-10-17T03:00:00Z") })).probe, "unpublished");
+    const st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.holiday, st.probes, st.next_probe_at], ["waiting", false, 1, "2026-10-17T03:30:00.000Z"]);
     assert.equal(env.scan.size, 0);
+    // Before the next probe a step reads its state and nothing else.
+    assert.equal((await bandarScanStep(env, { now: new Date("2026-10-17T03:20:00Z") })).idle, true);
+    assert.equal(calls.length, 1);
+    await bandarScanStep(env, { now: new Date("2026-10-17T03:30:00Z") });
+    assert.deepEqual([calls.length, (await scanStatus(env)).probes], [2, 2]);
+  });
+});
+
+test("in a year the calendar does not cover, a day without trades at IPOT or on the board is closed", async () => {
+  const now = new Date("2028-01-03T10:00:00Z"); // Monday 17:00 WIB; 2028 is not on the bundled list
+  const board = (market_time) => JSON.stringify({ ts: unix("2028-01-03T16:45:00+07:00"), quotes: [quote("BBCA", 5175, 9e8, market_time)] });
+  await withFetch(async () => new Response(page("brokersummary_bbca_20261017_no_trades.html"), { status: 200 }), async () => {
+    // The board, refreshed after that session, last traded on 2027-12-30.
+    const env = memoryDb();
+    env.kv.set("board", board("2027-12-30T16:14:58+07:00"));
+    const r = await bandarScanStep(env, { now });
+    assert.deepEqual([r.session, r.probe, r.phase], ["2028-01-03", "closed", "closed"]);
+    const st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.holiday, st.ranked_from], ["closed", true, "2027-12-30"]);
+    assert.deepEqual(await bandarScanStep(env, { now }), { idle: true, session: "2028-01-03" });
+    // The same page while the board shows trades that day: IPOT has not published.
+    const traded = memoryDb();
+    traded.kv.set("board", board("2028-01-03T16:14:58+07:00"));
+    assert.equal((await bandarScanStep(traded, { now })).probe, "unpublished");
+    const t = await scanStatus(traded);
+    assert.deepEqual([t.phase, t.holiday], ["waiting", false]);
+  });
+});
+
+test("a session IPOT has not published waits, is probed again every 10 minutes, then scanned", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, "2026-11-06T16:14:58+07:00")] }));
+  let published = false;
+  const calls = [];
+  const recorded = recordedFetch(calls);
+  // Until `published`, BBCA's 11-06 page is the one recorded during that session: totals, no lists.
+  const fetchFn = async (u, init) => {
+    if (!published && String(u).includes("code=BBCA&start=11/06/2026&end=11/06/2026")) { calls.push(String(u)); return new Response(page("brokersummary_bbca_20261106_insession.html")); }
+    return recorded(u, init);
+  };
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    assert.equal((await bandarScanStep(env, { now: at("16:45") })).probe, "unpublished");
+    let st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.holiday, st.next_probe_at], ["waiting", false, at("16:55").toISOString()]);
+    assert.equal((await bandarScanStep(env, { now: at("16:50") })).idle, true);
+    assert.equal(calls.length, 1, "no request before the next probe");
+    await assert.rejects(bandarScreen(env, null), (e) => e.code === "not_found");
+    assert.equal((await bandarScanStep(env, { now: at("16:55") })).probe, "unpublished");
+    // From 21:00 WIB every 30 minutes.
+    await bandarScanStep(env, { now: at("21:10") });
+    assert.equal((await scanStatus(env)).next_probe_at, at("21:40").toISOString());
+    published = true;
+    const r = await bandarScanStep(env, { now: at("21:40") });
+    assert.deepEqual([r.probe, r.read, r.done], ["published", 1, true]);
+    st = await scanStatus(env);
+    assert.deepEqual([st.complete, st.probes, st.published_at], ["2026-11-06", 4, at("21:40").toISOString()]);
+    assert.equal(env.scan.size, 4);
+  });
+});
+
+test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again and scanned", async () => {
+  const env = memoryDb();
+  // Written at 16:45:39 WIB on 2026-11-06, when IPOT had not published that session's lists.
+  env.kv.set("bandar_scan", '{"session":"2026-11-06","holiday":true,"done":true,"complete":"2026-10-30","symbols":[],"next":0,"retry":[],"failed":[],"checked":0}');
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-08T07:00:37+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded), quote("BRPT", 1210, 1e8, traded), quote("ZZZZ", 50, 1e6, traded)] }));
+  const calls = [];
+  await withFetch(recordedFetch(calls), async () => {
+    const now = new Date("2026-11-08T00:05:00Z"); // Sunday 07:05 WIB
+    const first = await bandarScanStep(env, { now });
+    assert.deepEqual([first.session, first.probe, first.read], ["2026-11-06", "published", 3]);
+    assert.ok(calls[0].includes("code=BBCA&start=11/06/2026&end=11/06/2026"), "the probe reads 11-06 again");
+    let st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.holiday, st.complete], ["running", false, "2026-10-30"]);
+    const meanwhile = await bandarScreen(env, null, null, "1d");
+    assert.equal(meanwhile.data.to, "2026-10-30");
+    assert.ok(meanwhile.warnings.includes("the scan of 2026-11-06 is running (3 of 4); showing 2026-10-30"), meanwhile.warnings);
+    assert.equal((await bandarScanStep(env, { now })).done, true);
+    st = await scanStatus(env);
+    assert.deepEqual([st.complete, st.failed], ["2026-11-06", ["ZZZZ"]]);
+    const out = await bandarScreen(env, null, null, "1d");
+    assert.deepEqual([out.data.to, out.data.scanned, out.data.checked], ["2026-11-06", 4, 3]);
   });
 });
 
