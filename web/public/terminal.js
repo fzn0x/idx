@@ -3,7 +3,7 @@
 // the results keep the CLI's English column names and words on both pages.
 import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse, copyButton } from "/app.js";
 import { priceChart } from "/chart.js";
-import { TOOLS, byName } from "/tools.js";
+import { TOOLS, byName, whatOf } from "/tools.js";
 import { routeLine, tokenize, ALIASES, INSTALL, AGENT } from "/route.js";
 import { SHOW_MS, SLOW_MS, WAITS, FEED_TIMEOUT_S, IPOT_TRIES, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
@@ -1200,7 +1200,7 @@ function toolButtons(list = TOOLS) {
   const box = el("div", { class: "hints tools" });
   box.append(...list.map((tool) => el("button", {
     type: "button", text: tool.tool, class: tool.web ? "" : "cli-only",
-    title: `${tool.what} · ${tool.web ? t(`menjalankan: ${tool.web}`, `runs: ${tool.web}`) : CLI_ONLY}`,
+    title: `${whatOf(tool)} · ${tool.web ? t(`menjalankan: ${tool.web}`, `runs: ${tool.web}`) : CLI_ONLY}`,
     onclick: () => runLine(tool.web || `tools ${tool.tool}`),
   })));
   return box;
