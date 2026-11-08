@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 
 import * as an from "../src/analysis.js";
 import * as y from "../src/yahoo.js";
-import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, newsKeyPoint, ownershipKeyPoint } from "../src/api.js";
+import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, dividendsKeyPoint, newsKeyPoint, ownershipKeyPoint } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
@@ -502,6 +502,16 @@ test("sentiment lexicon", () => {
   const r = an.aggregateSentiment("BBCA", null, items, 2);
   assert.equal(r.label, "positive");
   assert.equal(r.headlines.length, 2);
+});
+
+test("brief dividends key point agrees with its counts (service::dividends_key_point)", () => {
+  // The key point reads the yield and the counts, not the total.
+  const s = (ttm_yield_pct, ttm_payments, consecutive_years, payments_on_record) => ({ ttm_total: null, ttm_payments, ttm_yield_pct, consecutive_years, last: null, payments_on_record });
+  // A 2026 payment after a 2024 one: the streak is one year.
+  assert.equal(dividendsKeyPoint(s(2.13, 1, 1, 2)), "Dividends: TTM yield 2.13% over 1 payment, 1 consecutive year");
+  assert.equal(dividendsKeyPoint(s(4, 2, 2, 4)), "Dividends: TTM yield 4.00% over 2 payments, 2 consecutive years");
+  assert.equal(dividendsKeyPoint(s(null, 0, 1, 3)), "Dividends: none in the last twelve months");
+  assert.equal(dividendsKeyPoint(s(null, 0, 0, 0)), "Dividends: none on record");
 });
 
 test("brief news key point agrees with the headline count (service::news_key_point)", () => {

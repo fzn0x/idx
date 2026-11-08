@@ -1461,20 +1461,30 @@ export async function brief(env, symbolRaw) {
   if (valuation) key_points.push(valuation);
   if (t) key_points.push(`Technical signal: ${t.signal.label} (score ${t.signal.score >= 0 ? "+" : ""}${t.signal.score}), trend ${t.trend}${t.rsi14 != null ? `, RSI ${t.rsi14.toFixed(0)}` : ""}`);
   if (r?.returns?.["1y"] != null) key_points.push(`1y return ${pct(r.returns["1y"])}${r.benchmark?.excess?.["1y"] != null ? ` (${r.benchmark.excess["1y"] >= 0 ? "+" : ""}${r.benchmark.excess["1y"].toFixed(1)} pp vs ${r.benchmark.symbol})` : ""}; YTD ${r.returns.ytd != null ? pct(r.returns.ytd) : "n/a"}`);
-  if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");
-  const own = o ? { as_of: o.as_of, listed_pct: o.listed_pct, foreign_pct: o.holders.filter((h) => h.local_foreign === "A").reduce((s, h) => s + h.pct, 0), holders_listed: o.holders.length, top_holders: o.holders.slice(0, 5) } : null;
+  const div = d ? { ttm_total: d.ttm_total, ttm_payments: d.ttm_payments, ttm_yield_pct: d.ttm_yield_pct, consecutive_years: d.consecutive_years, last: d.last, payments_on_record: d.dividends.length } : null;
+  if (div) key_points.push(dividendsKeyPoint(div));
+  const own =o ? { as_of: o.as_of, listed_pct: o.listed_pct, foreign_pct: o.holders.filter((h) => h.local_foreign === "A").reduce((s, h) => s + h.pct, 0), holders_listed: o.holders.length, top_holders: o.holders.slice(0, 5) } : null;
   if (own) key_points.push(ownershipKeyPoint(own));
   const newsSummary = n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null;
   if (newsSummary) key_points.push(newsKeyPoint(newsSummary));
   const data = {
     symbol, name: q?.name || f?.name || t?.name || NAME_BY_SYMBOL.get(symbol) || null, generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), key_points,
     quote: q, fundamentals: f, technical: t, returns: r,
-    dividends: d ? { ttm_total: d.ttm_total, ttm_payments: d.ttm_payments, ttm_yield_pct: d.ttm_yield_pct, consecutive_years: d.consecutive_years, last: d.last, payments_on_record: d.dividends.length } : null,
+    dividends: div,
     ownership: own,
     news: newsSummary,
     sections_failed: failed,
   };
   return envelope("idx.brief.v1", data, { cached: cachedAll, stale, warnings });
+}
+
+// The brief's "Dividends" key point from its dividends section: the trailing
+// yield, its payments and the streak, or why there is no yield. Each noun
+// follows its count, "1 payment, 1 consecutive year"
+// (service::dividends_key_point in the CLI).
+export function dividendsKeyPoint(d) {
+  if (d.ttm_yield_pct == null) return d.payments_on_record ? "Dividends: none in the last twelve months" : "Dividends: none on record";
+  return `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive year${d.consecutive_years === 1 ? "" : "s"}`;
 }
 
 // The brief's "News" key point from its news section; the verb follows the
