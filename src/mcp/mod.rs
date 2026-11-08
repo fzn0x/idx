@@ -24,9 +24,9 @@ use serde::Deserialize;
 use crate::error::{IdxError, Result};
 use crate::http::Fetcher;
 use crate::model::{
-    AstroPeriod, BandarPeriod, BrokerBoard, BrokerInvestor, ConcentrationSort, CorporateEventKind,
-    EarningsFilter, ForeignSource, HolderOrigin, Interval, Lens, MovementFilter, MovementSource,
-    NatalChoice, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
+    AstroPeriod, BandarPeriod, BrokerBoard, BrokerInvestor, BrokerSummaryChoice, ConcentrationSort,
+    CorporateEventKind, EarningsFilter, ForeignSource, HolderOrigin, Interval, Lens,
+    MovementFilter, MovementSource, NatalChoice, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -79,7 +79,8 @@ when there is one, is served instead. It usually passes within a minute: call ag
 then. If it keeps refusing, the server's network is likely refused (data centres, VPNs
 and CI runners are refused more often): tell the user. Or take the alternative the
 message names; for the ownership register, the GitHub mirror.
-idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
+idx_broker shows which brokers bought and sold a ticker (IPOT's top 10 per side, or every
+broker from the user's Stockbit session when it works);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
 Ownership tools read the local SQLite register of holders above 1% (KSEI via IDX,
@@ -608,6 +609,9 @@ pub struct BrokerArgs {
     /// Market board: all (default), regular, cash or negotiated.
     #[serde(default)]
     pub board: Option<String>,
+    /// Where the summary comes from: auto (default; Stockbit, every broker, when the user's Stockbit session works, else IPOT's top 10 per side), ipot, or stockbit (needs that session; idx_stockbit_status says whether it works).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1493,7 +1497,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_broker",
-        description = "Broker summary for one or more IDX tickers (Indo Premier / IPOT): which brokers bought and sold the stock over one day or a date range. Top 10 buyers and top 10 sellers as the source ranks them (by lots), each with the broker code, name (IDX member list), class (local, foreign, state_owned = BUMN), lots, value in IDR and average price, plus total value, total lots, average price, foreign net value, buy_value and sell_value. With investor foreign or domestic the source's totals are that side's buying, so total_value, total_lots and average_price are null and buy_value/sell_value say what the side bought and sold; with a board filter foreign_net_value is null (the source's net covers every board). Over a range the foreign net is rebuilt from single sessions (the source counts its latest session twice there). Without dates each ticker gets its latest session with trades. The source rounds figures of a million and more to one decimal; such summaries carry rounded=true. Returns the idx.broker.v1 envelope; failed tickers are listed in warnings."
+        description = "Broker summary for one or more IDX tickers: which brokers bought and sold the stock over one day or a date range, each with the broker code, name (IDX member list), class (local, foreign, state_owned = BUMN), lots, value in IDR and average price, ordered by lots (rank 1 = most lots), plus total value, total lots, average price, foreign net value, buy_value and sell_value. source auto (default) reads Stockbit when the user's Stockbit session works (as idx_stockbit_status says logged_in), otherwise IPOT (Indo Premier); ipot and stockbit pick one, and stockbit without a working session is a usage error naming `idx stockbit login`. IPOT publishes the top 10 buyers and top 10 sellers and rounds figures of a million and more to one decimal (rounded=true); under auto without a session a warning says a login lists every broker. Stockbit lists every broker that bought and every one that sold, exact, its totals are sums over the full lists and its foreign net (for the board asked for) comes from a second read of foreign investors; it is not read for investor domestic or the cash and negotiated boards yet, which auto leaves to IPOT. Under auto a ticker Stockbit fails for is read from IPOT with a warning. Each summary says its source, how many brokers each side had (buyer_count, seller_count; null from IPOT unless its list is complete) and whether each list is complete (buyers_complete, sellers_complete). With investor foreign or domestic the totals are that side's buying, so total_value, total_lots and average_price are null and buy_value/sell_value say what the side bought and sold; with a board filter IPOT's foreign_net_value is null (its net covers every board). Over a range IPOT's foreign net is rebuilt from single sessions (IPOT counts its latest session twice there). Without dates each ticker gets its latest session with trades. Returns the idx.broker.v1 envelope; failed tickers are listed in warnings."
     )]
     async fn broker(
         &self,
@@ -1518,11 +1522,21 @@ impl IdxServer {
                     investor: parse_opt(&a.investor, BrokerInvestor::All)?,
                     board: parse_opt(&a.board, BrokerBoard::All)?,
                 };
+                let source = parse_opt(&a.source, BrokerSummaryChoice::Auto)?;
                 let list = universe::load(None).unwrap_or_default();
+                let sb = self.stockbit_provider();
                 ok(
                     SCHEMA_BROKER,
-                    service::broker(&self.fetcher, &list, &symbols, query, service::today_wib())
-                        .await?,
+                    service::broker_from(
+                        &self.fetcher,
+                        Some(&sb),
+                        &list,
+                        &symbols,
+                        query,
+                        source,
+                        service::today_wib(),
+                    )
+                    .await?,
                 )
             }
             .await,
@@ -2691,6 +2705,7 @@ mod tests {
             to: None,
             investor: investor.map(Into::into),
             board: None,
+            source: None,
         };
         for bad in [
             broker(Some("2026-10-16"), Some("2026-10-01"), None),
@@ -3276,6 +3291,118 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
         }
+    }
+
+    /// A server whose cache holds BBCA's broker summaries of 2026-11-06 from
+    /// IPOT and Stockbit, with a working Stockbit session or none.
+    fn broker_server(session: bool) -> (IdxServer, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::cache::Cache::new(dir.path().join("cache"));
+        let md = |investor: &str| {
+            format!(
+                "https://exodus.stockbit.com/marketdetectors/BBCA?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL&investor_type=INVESTOR_TYPE_{investor}&from=2026-11-06&to=2026-11-06&limit=1000"
+            )
+        };
+        for (url, page) in [
+            (
+                md("ALL"),
+                include_str!("../../tests/fixtures/stockbit/marketdetectors_bbca_20261106.json"),
+            ),
+            (
+                md("FOREIGN"),
+                include_str!(
+                    "../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json"
+                ),
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=11/06/2026&end=11/06/2026&fd=all&board=all".into(),
+                include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261106.html"),
+            ),
+        ] {
+            cache.put(&url, 200, page).unwrap();
+        }
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            cache,
+            crate::http::CacheMode::Normal,
+        ));
+        // A dummy access token fresh until 2100, signed by nobody.
+        let options = StockbitOptions {
+            session_path: dir.path().join("stockbit-session.json"),
+            access_seed: session
+                .then(|| "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig".to_string()),
+            refresh_seed: None,
+        };
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::new(options, Ttls::default()),
+        );
+        (s, dir)
+    }
+
+    #[tokio::test]
+    async fn broker_tool_takes_a_source_and_reads_stockbit_once_logged_in() {
+        let call = |source: Option<&str>| {
+            Parameters(BrokerArgs {
+                symbols: "BBCA".into(),
+                date: Some("2026-11-06".into()),
+                from: None,
+                to: None,
+                investor: None,
+                board: None,
+                source: source.map(Into::into),
+            })
+        };
+        let (s, _d) = broker_server(true);
+        let tool = s
+            .tools()
+            .into_iter()
+            .find(|t| t.name == "idx_broker")
+            .unwrap();
+        assert_eq!(tool.input_schema["properties"]["source"]["type"], "string");
+
+        let v = json_of(&s.broker(call(None)).await.unwrap());
+        assert_eq!(v["provider"], "stockbit", "{v}");
+        let d = &v["data"][0];
+        assert_eq!(d["source"], "stockbit");
+        assert_eq!(d["buyer_count"], 59);
+        assert_eq!(d["buyers_complete"], true);
+        assert_eq!(d["buyers"].as_array().unwrap().len(), 59);
+        assert_eq!(d["foreign_net_value"], 218_988_301_100.0);
+
+        let v = json_of(&s.broker(call(Some("IPOT"))).await.unwrap());
+        assert_eq!(v["provider"], "ipot", "{v}");
+        assert!(v.get("warnings").is_none(), "{v}");
+
+        let r = s.broker(call(Some("idx"))).await.unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert_eq!(json_of(&r)["error"]["code"], "usage");
+
+        // Without a session: IPOT with the note, and stockbit is a usage error.
+        let (s, _d) = broker_server(false);
+        let v = json_of(&s.broker(call(None)).await.unwrap());
+        assert_eq!(v["provider"], "ipot", "{v}");
+        assert!(
+            v["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap().contains("idx stockbit login")),
+            "{v}"
+        );
+        let r = s.broker(call(Some("stockbit"))).await.unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v = json_of(&r);
+        assert_eq!(v["error"]["code"], "usage", "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("idx stockbit login"),
+            "{v}"
+        );
     }
 
     #[tokio::test]
