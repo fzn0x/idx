@@ -788,6 +788,27 @@ test("a scan that read too few of its stocks is filed, and the session before it
   });
 });
 
+test("a scan the next session's 16:45 cut off in its first pass counts the stocks it never reached", async () => {
+  const env = memoryDb();
+  const board = (d) => env.kv.set("board", JSON.stringify({ ts: 0, quotes: [["BBCA", 5175, 9e8], ["TLKM", 2690, 3e8], ["BRPT", 1210, 2e8]].map(([s, p, v]) => quote(s, p, v, `${d}T16:14:58+07:00`)) }));
+  await withFetch(recordedFetch(), async () => {
+    board("2026-10-16");
+    await scanAll(env, new Date("2026-10-17T10:00:00+07:00"));
+    // Monday: the probe finds 10-19 published, then a minute with little budget left reads one stock.
+    board("2026-10-19");
+    await bandarScanStep(env, { now: new Date("2026-10-19T16:46:00+07:00"), stocks: false });
+    assert.equal((await bandarScanStep(env, { now: new Date("2026-10-19T16:47:00+07:00"), budget: budget(12) })).read, 1);
+    // Tuesday 16:45 WIB files 10-19 with the two stocks its first pass had not got to.
+    board("2026-10-20");
+    await bandarScanStep(env, { now: new Date("2026-10-20T16:45:00+07:00"), stocks: false });
+  });
+  const filed = JSON.parse(env.kv.get("bandar_scan")).runs.find((r) => r.session === "2026-10-19");
+  assert.deepEqual([filed.stored, filed.of, filed.failed.length, filed.unpublished.length, filed.left, filed.promoted], [1, 3, 0, 0, 2, false]);
+  const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-20T16:50:00+07:00"));
+  assert.equal(out.data.to, "2026-10-16");
+  assert.ok(out.warnings.includes("the scan of 2026-10-19 read only 1 of 3 stocks (0 failed, 0 not published by IPOT, 2 not reached before the next session's 16:45 WIB); showing 2026-10-16"), out.warnings.join("\n"));
+});
+
 test("a stock IPOT still had not published at the next session's 16:45 counts as unpublished, not failed", async () => {
   const env = memoryDb();
   const traded = "2026-11-06T16:14:58+07:00";

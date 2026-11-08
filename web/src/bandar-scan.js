@@ -704,7 +704,9 @@ function runNote(r, shown) {
     return n === 1 ? `IPOT did not answer the scan's check of ${r.session} (${r.probe_error}); showing ${shown}` : `IPOT did not answer the scan's ${n} checks of ${r.session} (the last failed: ${r.probe_error}); showing ${shown}`;
   }
   if (!r.scanned) return `IPOT had not published the broker lists of ${r.session} by ${stamp(r.last_probe_at ?? r.done_at)}; showing ${shown}`;
-  return `the scan of ${r.session} read only ${r.stored} of ${r.of} stocks (${r.failed.length} failed, ${r.unpublished.length} not published by IPOT); showing ${shown}`;
+  // Only the cutoff files a scan whose first pass had stocks left.
+  const left = r.left ? `, ${r.left} not reached before the next session's 16:45 WIB` : "";
+  return `the scan of ${r.session} read only ${r.stored} of ${r.of} stocks (${r.failed.length} failed, ${r.unpublished.length} not published by IPOT${left}); showing ${shown}`;
 }
 
 /**
