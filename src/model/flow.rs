@@ -259,9 +259,11 @@ pub struct BrokerDayRow {
     /// Value sold, IDR, from IPOT; `null` from idx.co.id.
     #[serde(default)]
     pub sell_value: Option<f64>,
-    /// Value bought minus value sold, IDR, as IPOT publishes it (with its own
-    /// two decimals, so not always `buy_value - sell_value` to the rupiah);
-    /// `null` from idx.co.id.
+    /// Value bought minus value sold, IDR: IPOT's figure, summed with that of
+    /// any row folded into the member (`JB` into `CC`). IPOT abbreviates it
+    /// and `buy_value` and `sell_value` each to two decimals, so it can
+    /// differ from `buy_value - sell_value` by the rounding of both, billions
+    /// for a member trading trillions. `null` from idx.co.id.
     #[serde(default)]
     pub net_value: Option<f64>,
     /// The source's class of the member (IPOT); `null` from idx.co.id.
