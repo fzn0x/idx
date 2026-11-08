@@ -13,6 +13,16 @@ use super::Symbol;
 pub struct ScreenRow {
     pub symbol: Symbol,
     pub name: Option<String>,
+    /// The price's currency, as the quote (else the fundamentals) names it.
+    #[serde(default)]
+    pub currency: Option<String>,
+    /// Currency of the statements behind `price_to_book` and `price_to_sales`
+    /// when the source names it (Yahoo's `financialCurrency`, from the quote,
+    /// else from the fundamentals). Both multiples are in its terms: a report
+    /// over statements in another currency fills neither. When it differs
+    /// from `currency` they divide the price by figures in this currency.
+    #[serde(default)]
+    pub financial_currency: Option<String>,
     pub price: Option<f64>,
     pub change_pct: Option<f64>,
     pub market_cap: Option<f64>,
@@ -53,6 +63,18 @@ pub struct ScreenRow {
     pub earnings_growth_pct: Option<f64>,
     pub peg: Option<f64>,
     pub price_to_sales: Option<f64>,
+}
+
+impl ScreenRow {
+    /// The statements are in another currency than the price (both known), as
+    /// for [`Fundamentals::mixed_currency`](super::Fundamentals::mixed_currency):
+    /// `price_to_book` and `price_to_sales` then divide one by the other.
+    pub fn mixed_currency(&self) -> bool {
+        super::fundamentals::currencies_differ(
+            self.currency.as_deref(),
+            self.financial_currency.as_deref(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

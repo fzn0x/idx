@@ -94,7 +94,7 @@ pub fn screen(r: &ScreenReport, color: bool) -> String {
             signed(f::pct(x.change_pct), x.change_pct, color),
             right(f::compact(x.market_cap)),
             right(f::ratio(x.pe_trailing)),
-            right(f::ratio(x.price_to_book)),
+            right(pb_cell(x)),
             right(pct_opt(x.dividend_yield_pct)),
         ];
         if let Some((_, get)) = ret {
@@ -143,7 +143,63 @@ pub fn screen(r: &ScreenReport, color: bool) -> String {
             "52w pos: where the price sits in its 52-week range, 0 at the low, 100 at the high.\n",
         );
     }
+    if let Some(note) = mixed_currency_note(&r.rows) {
+        out.push_str(&note);
+    }
     out
+}
+
+/// Whether the row's P/B is printed with a `*`: it divides the price by
+/// statement figures in another currency (`ScreenRow::mixed_currency`).
+fn pb_marked(x: &ScreenRow) -> bool {
+    x.mixed_currency() && x.price_to_book.is_some()
+}
+
+fn pb_cell(x: &ScreenRow) -> String {
+    let s = f::ratio(x.price_to_book);
+    if pb_marked(x) {
+        format!("{s}*")
+    } else {
+        s
+    }
+}
+
+/// The note under a screen whose table marks a P/B: the marked companies in
+/// table order, grouped by their (statements, price) currencies, as the
+/// compare table names its own.
+fn mixed_currency_note(rows: &[ScreenRow]) -> Option<String> {
+    let mut groups: Vec<((&str, &str), Vec<&str>)> = Vec::new();
+    for x in rows.iter().filter(|x| pb_marked(x)) {
+        let (Some(statements), Some(price)) =
+            (x.financial_currency.as_deref(), x.currency.as_deref())
+        else {
+            continue;
+        };
+        match groups
+            .iter_mut()
+            .find(|(pair, _)| *pair == (statements, price))
+        {
+            Some((_, symbols)) => symbols.push(x.symbol.as_str()),
+            None => groups.push(((statements, price), vec![x.symbol.as_str()])),
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = groups
+        .iter()
+        .map(|((statements, price), symbols)| {
+            format!(
+                "{} (statements in {statements}, price in {price})",
+                symbols.join(", ")
+            )
+        })
+        .collect();
+    Some(format!(
+        "* P/B divides the price by statement figures in another currency, so it is not \
+         comparable: {}. Filters and sorts on pb and ps read such P/B and P/S as missing.\n",
+        named.join("; ")
+    ))
 }
 
 fn sentiment_cell(v: f64, color: bool) -> Cell {
@@ -329,7 +385,8 @@ pub fn sentiment(r: &SentimentReport, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Symbol;
+    use crate::analysis::screen::row_from_quote;
+    use crate::model::{Quote, Symbol};
 
     fn item(scope: &str, i: usize) -> NewsItem {
         NewsItem {
@@ -343,6 +400,32 @@ mod tests {
             sentiment: 0.0,
             positive_terms: vec![],
             negative_terms: vec![],
+        }
+    }
+
+    /// A row as Yahoo's v7 quote gives it: IDR price, statements in `statements`.
+    fn row(sym: &str, statements: Option<&str>, pb: Option<f64>) -> ScreenRow {
+        let mut q = Quote::empty(Symbol::parse(sym).unwrap(), "yahoo:quote");
+        q.currency = Some("IDR".into());
+        q.financial_currency = statements.map(str::to_string);
+        q.price_to_book = pb;
+        row_from_quote(&q, None)
+    }
+
+    fn report(rows: Vec<ScreenRow>) -> ScreenReport {
+        ScreenReport {
+            preset: None,
+            filters: vec!["pe<10".into()],
+            sort: "div".into(),
+            descending: true,
+            universe: rows.len(),
+            quoted: rows.len(),
+            matched_quote_level: rows.len(),
+            fundamentals_checked: 0,
+            fundamentals_capped: false,
+            returns_source: None,
+            total_matches: rows.len(),
+            rows,
         }
     }
 
@@ -372,5 +455,39 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("Market context · 2 headlines\n"), "{s}");
+    }
+
+    #[test]
+    fn screen_marks_a_pb_over_statements_in_another_currency() {
+        // 2026-11-06: BSSR and GEMS report in USD, BBCA in IDR; PTRO has no P/B.
+        let s = screen(
+            &report(vec![
+                row("BSSR", Some("USD"), Some(48921.57)),
+                row("BBCA", Some("IDR"), Some(2.253823)),
+                row("GEMS", Some("USD"), Some(47202.797)),
+                row("PTRO", Some("USD"), None),
+            ]),
+            false,
+        );
+        assert!(s.contains("48,921.57*"), "{s}");
+        assert!(s.contains("47,202.80*"), "{s}");
+        assert!(s.contains("2.25") && !s.contains("2.25*"), "{s}");
+        assert!(
+            s.ends_with(
+                "* P/B divides the price by statement figures in another currency, so it is not \
+                 comparable: BSSR, GEMS (statements in USD, price in IDR). Filters and sorts on pb \
+                 and ps read such P/B and P/S as missing.\n"
+            ),
+            "{s}"
+        );
+        // Same currency, or one not named: no mark and no note.
+        let s = screen(
+            &report(vec![
+                row("BBCA", Some("IDR"), Some(2.25)),
+                row("TLKM", None, Some(2.1)),
+            ]),
+            false,
+        );
+        assert!(!s.contains('*'), "{s}");
     }
 }

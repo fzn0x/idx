@@ -139,6 +139,7 @@ with exit code 4.
 | `symbol` | string | IDX ticker without suffix, e.g. `BBCA`; a ticker from another Yahoo Finance market keeps its suffix, e.g. `D05.SI` (see below) |
 | `name` | string? | Company name |
 | `currency` | string? | `IDR` |
+| `financial_currency` | string? | Currency of the financial statements when the source names it (Yahoo's `financialCurrency`; `null` from MSN, Stockbit and the chart fallback). Issuers such as BSSR, GEMS and ITMG report in `USD`: their `price_to_book` then divides the IDR price by a USD book value (BSSR 48,921.57 on 2026-11-06), published as reported, never converted. P/E, EPS and the dividend yield are in the price's terms |
 | `price` | number? | Last trade |
 | `change`, `change_pct` | number? | Versus previous close; `change_pct` is in percent (`-14.81`) |
 | `previous_close`, `open`, `day_high`, `day_low` | number? | |
@@ -289,14 +290,32 @@ shows its last session, with a warning naming the date.
 `fundamentals_capped` and `total_matches` describe the funnel, so a reader can
 tell a genuine "no match" from a capped fundamentals pass.
 
-Filters apply to the values as published. `price_to_book` comes from the quote
-and is negative for a company whose shareholders' equity is below zero, so
-`pb<1` matches those too; add `pb>0` (`pb>0,pb<1`) to keep only companies
-trading below a positive book value. A negative `debt_to_equity` means the
-same, so `de<0.5` matches it too; add `de>0`. For an issuer that reports in
-USD, `price_to_book` and `price_to_sales` divide the IDR price by USD figures,
-so `pb` and `ps` filters say little about those (see `financial_currency`
-under `idx.fundamentals.v1`).
+`rows[].currency` and `rows[].financial_currency` (optional) are the price's
+currency and the statements' when the source names them: Yahoo's `currency`
+and `financialCurrency` from the quote, else from the fundamentals, as under
+`idx.quotes.v1` and `idx.fundamentals.v1`. A row's `price_to_book` and
+`price_to_sales` are both in `financial_currency` terms: a fundamentals report
+over statements in another currency fills neither (under `auto`, an MSN report
+for a company whose quote names USD statements, since MSN names no statement
+currency).
+
+Filters apply to the values as published, with one exception below.
+`price_to_book` comes from the quote and is negative for a company whose
+shareholders' equity is below zero, so `pb<1` matches those too; add `pb>0`
+(`pb>0,pb<1`) to keep only companies trading below a positive book value. A
+negative `debt_to_equity` means the same, so `de<0.5` matches it too; add
+`de>0`.
+
+The exception: when a row's `financial_currency` differs from its `currency`
+(issuers such as BSSR, GEMS and ITMG report in USD), its `price_to_book` and
+`price_to_sales` divide the IDR price by USD figures (BSSR's P/B 48,921.57 on
+2026-11-06). The row keeps them as reported, but they are not ratios, so `pb`
+and `ps` read them as missing: no `pb` or `ps` clause matches the row, low or
+high, and a `pb` or `ps` sort puts it last, as for a row without the value.
+Through 0.8.2 they were compared as published, so such a row passed `pb>3`
+and led `--sort pb`. P/E, EPS and the dividend yield are in the price's terms
+and filter as before. The table marks such a P/B with `*` and names those
+companies under it.
 
 Added in 0.8.2, all optional:
 

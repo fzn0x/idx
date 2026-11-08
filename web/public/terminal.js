@@ -149,6 +149,21 @@ const mixedCurrency = (f) => !!(f.currency && f.financial_currency) && f.currenc
 const mixedRatio = (f, v) => (v != null && mixedCurrency(f) ? `${fmt.ratio(v)}*` : fmt.ratio(v));
 const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} ${f.financial_currency}` : s);
 
+// The note under a screen whose table marks a P/B, worded as the CLI's
+// (src/output/table_news.rs): the marked companies in table order, grouped
+// by their statement and price currencies; null when none is marked.
+function screenCurrencyNote(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (r.price_to_book == null || !mixedCurrency(r)) continue;
+    const pair = `statements in ${r.financial_currency}, price in ${r.currency}`;
+    groups.set(pair, [...(groups.get(pair) || []), r.symbol]);
+  }
+  if (!groups.size) return null;
+  const named = [...groups].map(([pair, symbols]) => `${symbols.join(", ")} (${pair})`).join("; ");
+  return `* P/B divides the price by statement figures in another currency, so it is not comparable: ${named}. Filters and sorts on pb and ps read such P/B and P/S as missing.`;
+}
+
 // Growth, valuation and risk lenses (idx.growth.v1, idx.valuation.v1,
 // idx.risk.v1): the inputs, the reading, every rule with its points, then
 // the rules that could not run.
@@ -386,7 +401,7 @@ const R = {
     const cols = [
       { h: "Symbol", k: "symbol", l: true, cls: "sym" }, { h: "Name", k: "name", l: true, cls: "name" }, { h: "Price", f: (r) => fmt.price(r.price) },
       { h: "Chg %", f: (r) => fmt.pct(r.change_pct), cls: (r) => `num ${signClass(r.change_pct)}` }, { h: "Mkt Cap", f: (r) => fmt.compact(r.market_cap) },
-      { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "P/B", f: (r) => fmt.ratio(r.price_to_book) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
+      { h: "P/E", f: (r) => fmt.ratio(r.pe_trailing) }, { h: "P/B", f: (r) => mixedRatio(r, r.price_to_book) }, { h: "Div %", f: (r) => pct(r.dividend_yield_pct) },
     ];
     if (s.returns_source) cols.push({ h: win[0], f: (r) => fmt.pct(r[win[1]]), cls: (r) => `num ${signClass(r[win[1]])}` });
     if (withRange) cols.push({ h: "52w pos", f: (r) => fmt.num(r.range_52w_pct, 1) });
@@ -395,6 +410,8 @@ const R = {
     if (s.rows.length < s.total_matches) frag.append(el("p", { class: "warn", text: `Showing ${s.rows.length} of ${s.total_matches}; add --limit 0 for all.` }));
     if (s.returns_source) frag.append(el("p", { class: "warn", text: `Return windows: price return % as reported by ${s.returns_source}.` }));
     if (withRange) frag.append(el("p", { class: "warn", text: "52w pos: where the price sits in its 52-week range, 0 at the low, 100 at the high." }));
+    const mixed = screenCurrencyNote(s.rows);
+    if (mixed) frag.append(el("p", { class: "warn", text: mixed }));
     return frag;
   },
   insights(r, all) {

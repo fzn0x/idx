@@ -457,6 +457,21 @@ test("v7 quote parse", () => {
   assert.ok(q.market_time.endsWith("+07:00"));
 });
 
+test("v7 quotes name the statements' currency, as parse_v7_quotes does", () => {
+  // 2026-11-08: five issuers report in USD, BBCA in IDR; every price is IDR.
+  const qs = JSON.parse(fixture("yahoo/quote_v7_usd_reporters_bbca.json")).quoteResponse.result.map(y.parseV7Quote);
+  assert.deepEqual(qs.map((q) => [q.symbol, q.currency, q.financial_currency]), [
+    ["BSSR", "IDR", "USD"], ["GEMS", "IDR", "USD"], ["ESSA", "IDR", "USD"], ["UNIC", "IDR", "USD"], ["ITMG", "IDR", "USD"], ["BBCA", "IDR", "IDR"],
+  ]);
+  // The IDR price over a USD book value, kept as reported; P/E and EPS are in IDR terms.
+  assert.equal(qs[0].price_to_book, 48921.57);
+  assert.equal(qs[0].eps_ttm, 627.5);
+  assert.ok(Math.abs(qs[0].pe_trailing - 7.9521914) < 1e-6);
+  // The CLI's field order: financial_currency follows currency.
+  const keys = Object.keys(qs[0]);
+  assert.equal(keys[keys.indexOf("currency") + 1], "financial_currency");
+});
+
 test("screener DSL", () => {
   const f = an.parseFilters("pe<15, roe>=15,sector=Bank, mcap>10T, div>3%");
   assert.equal(f.length, 5);
@@ -501,6 +516,72 @@ test("screener presets, return windows and 52-week range like analysis::screen",
   const row = { symbol: "BBCA", range_52w_pct: 9.7, return_1y_pct: -41.092, return_1m_pct: null };
   assert.ok(an.matches(row, an.parseFilters("ret1y<-40,range<10")));
   assert.ok(!an.matches(row, an.parseFilters("ret1m>0")), "missing never matches");
+});
+
+// The cases of the Rust tests in src/analysis/screen.rs: a quote row as
+// Yahoo's v7 sends it (IDR price, statements in `statements`), and a
+// fundamentals report with its currencies and book and sales multiples.
+const reportingIn = (symbol, statements, pb) => an.rowFromQuote({ symbol, currency: "IDR", financial_currency: statements, price_to_book: pb });
+const report = (currency, statements, pb, ps) => ({ ...blank(), symbol: "ITMG", currency, financial_currency: statements, valuation: { price_to_book: pb, price_to_sales: ps }, profitability: { roe_pct: 11.12 } });
+
+test("screen rows carry the price and statement currencies, as analysis::screen does", () => {
+  // BSSR on 2026-11-06: the IDR price over a USD book value.
+  const bssr = reportingIn("BSSR", "USD", 48921.57);
+  assert.deepEqual([bssr.currency, bssr.financial_currency], ["IDR", "USD"]);
+  assert.ok(an.mixedCurrency(bssr));
+  assert.ok(!an.mixedCurrency(reportingIn("BBCA", "idr", 2.25)));
+  assert.ok(!an.mixedCurrency(reportingIn("BSSR", null, 48921.57)), "statement currency unknown");
+  assert.ok(!an.mixedCurrency({ ...bssr, currency: null }), "price currency unknown");
+  // A board stored before the quotes carried it names none.
+  assert.equal(an.rowFromQuote({ symbol: "BSSR", currency: "IDR" }).financial_currency, null);
+  // The CLI's field order: the two follow name.
+  assert.deepEqual(Object.keys(bssr).slice(0, 4), ["symbol", "name", "currency", "financial_currency"]);
+});
+
+test("fundamentals fill a screen row's currencies from one set of statements", () => {
+  // ITMG's Yahoo report: USD statements, P/B 14103.308, P/S 13807.103.
+  const yahoo = report("IDR", "USD", 14103.308, 13807.103);
+  // A quote that names no statement currency and has no P/B: the report fills both.
+  let r = an.applyFundamentals(an.rowFromQuote({ symbol: "ITMG", price: 24475, price_to_book: null }), yahoo);
+  assert.deepEqual([r.currency, r.financial_currency, r.price_to_book, r.price_to_sales], ["IDR", "USD", 14103.308, 13807.103]);
+  assert.ok(an.mixedCurrency(r));
+  // Yahoo's quote over the same statements keeps its own P/B.
+  r = an.applyFundamentals(reportingIn("ITMG", "USD", 14204.875), yahoo);
+  assert.deepEqual([r.price_to_book, r.price_to_sales], [14204.875, 13807.103]);
+  // A report that names no statement currency reads as reporting in its
+  // price's: it fills neither multiple into a row over USD statements.
+  const unnamed = report("IDR", null, 0.86, 0.84);
+  r = an.applyFundamentals(reportingIn("ITMG", "USD", null), unnamed);
+  assert.deepEqual([r.price_to_book, r.price_to_sales, r.financial_currency], [null, null, "USD"]);
+  assert.equal(r.roe_pct, 11.12, "ratios within the statements stay");
+  assert.equal(r.fundamentals_checked, true);
+  // Over IDR statements it fills both, and names no currency it was not given.
+  r = an.applyFundamentals(reportingIn("BBCA", "IDR", null), unnamed);
+  assert.deepEqual([r.price_to_book, r.price_to_sales, r.financial_currency], [0.86, 0.84, "IDR"]);
+  r = an.applyFundamentals(reportingIn("BBCA", null, null), unnamed);
+  assert.deepEqual([r.price_to_sales, r.financial_currency], [0.84, null]);
+});
+
+test("pb and ps pass over multiples that mix currencies, as analysis::screen::numeric", () => {
+  const bssr = { ...reportingIn("BSSR", "USD", 48921.57), price_to_sales: 9876.5, pe_trailing: 7.95 };
+  const bbca = { ...reportingIn("BBCA", "IDR", 2.25), price_to_sales: 5.82 };
+  const unnamed = reportingIn("TLKM", null, 2.1);
+  assert.deepEqual([an.screenValue(bssr, "price_to_book"), an.screenValue(bssr, "price_to_sales")], [null, null]);
+  assert.equal(an.screenValue(bbca, "price_to_book"), 2.25);
+  assert.equal(an.screenValue(bbca, "price_to_sales"), 5.82);
+  assert.equal(an.screenValue(unnamed, "price_to_book"), 2.1, "no currency named");
+  // Not a ratio: it matches no pb or ps clause, low or high, like a missing value.
+  for (const spec of ["pb>0", "pb<1", "pb>1000", "pb!=1", "ps>0", "ps<1"]) assert.ok(!an.matches(bssr, an.parseFilters(spec)), spec);
+  assert.ok(an.matches(bbca, an.parseFilters("pb>1,ps<10")));
+  // P/E is in the price's terms and still filters.
+  assert.ok(an.matches(bssr, an.parseFilters("pe<10")));
+  // Sorted last either way; the row keeps its value as reported.
+  const rows = [bssr, bbca, unnamed];
+  an.sortRows(rows, "price_to_book", true);
+  assert.deepEqual(rows.map((r) => r.symbol), ["BBCA", "TLKM", "BSSR"]);
+  an.sortRows(rows, "price_to_book", false);
+  assert.deepEqual(rows.map((r) => r.symbol), ["TLKM", "BBCA", "BSSR"]);
+  assert.equal(rows[2].price_to_book, 48921.57);
 });
 
 test("sentiment lexicon", () => {

@@ -187,6 +187,9 @@ export function parseV7Quote(q) {
     symbol: plainSymbol(q.symbol),
     name: q.longName || q.shortName || null,
     currency: q.currency || null,
+    // The statements' currency (USD for BSSR or ITMG): their priceToBook
+    // divides the IDR price by a USD book value. The CLI's Quote has it too.
+    financial_currency: q.financialCurrency || null,
     price: num(q.regularMarketPrice),
     change: num(q.regularMarketChange),
     change_pct: num(q.regularMarketChangePercent),
