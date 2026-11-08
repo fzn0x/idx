@@ -766,15 +766,7 @@ pub async fn brief(
         ));
     }
     if let Some(n) = &news {
-        key_points.push(match n.company_matches {
-            0 => "News: no current headline mentions the company".into(),
-            k => format!(
-                "News: {k} current headline{} mention the company, lexicon sentiment {} ({:+.2})",
-                if k == 1 { "" } else { "s" },
-                n.sentiment.as_str(),
-                n.score
-            ),
-        });
+        key_points.push(news_key_point(n));
     }
 
     let brief = Brief {
@@ -792,6 +784,25 @@ pub async fn brief(
         sections_failed: failed,
     };
     Ok(out.map(|_| brief))
+}
+
+/// The brief's "News" key point: how many current headlines mention the
+/// company, and their lexicon sentiment. The verb follows the count: "1
+/// current headline mentions", "2 current headlines mention".
+fn news_key_point(n: &NewsSummary) -> String {
+    match n.company_matches {
+        0 => "News: no current headline mentions the company".into(),
+        k => format!(
+            "News: {k} current {} the company, lexicon sentiment {} ({:+.2})",
+            if k == 1 {
+                "headline mentions"
+            } else {
+                "headlines mention"
+            },
+            n.sentiment.as_str(),
+            n.score
+        ),
+    }
 }
 
 /// Dividend and split history with totals, trailing yield and streak.
@@ -2054,6 +2065,29 @@ mod tests {
             Some("name")
         );
         assert_eq!(item_matches(&mk("BBCAX bukan BBCA?"), "BBRI", None), None);
+    }
+
+    #[test]
+    fn news_key_point_agrees_with_the_headline_count() {
+        use crate::model::SentimentLabel;
+        let summary = |company_matches, sentiment, score| NewsSummary {
+            company_matches,
+            sentiment,
+            score,
+            headlines: vec![],
+        };
+        assert_eq!(
+            news_key_point(&summary(0, SentimentLabel::NoCoverage, 0.0)),
+            "News: no current headline mentions the company"
+        );
+        assert_eq!(
+            news_key_point(&summary(1, SentimentLabel::Positive, 0.5)),
+            "News: 1 current headline mentions the company, lexicon sentiment positive (+0.50)"
+        );
+        assert_eq!(
+            news_key_point(&summary(2, SentimentLabel::Negative, -0.25)),
+            "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)"
+        );
     }
     use async_trait::async_trait;
 
