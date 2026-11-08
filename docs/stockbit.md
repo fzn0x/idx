@@ -98,16 +98,20 @@ idx stockbit logout        # delete the stored session
 ```
 
 `status` reads the stored tokens' own expiry and sends nothing. The access
-token lasts about a day and the refresh token about a week, and each refresh
-replaces both, so a session idx uses at least once a week keeps working. Left
-unused longer, the refresh token expires too: `status` then says logged in
-`no`, with a note that the session expired and that `idx stockbit login`
-renews it (`"logged_in": false, "expired": true` in JSON). While only the
-access token can still be used (its refresh token expired, or none is stored),
-logged in is `yes` with a note that the session stops working when that token
-expires (`"renewable": false`). A session Stockbit ended early (signed out
-elsewhere, or refreshed by another tool) still reads as logged in; the first
-request it fails names `idx stockbit login`.
+token lasts about a day and the refresh token about a week. idx refreshes
+only when a request needs it (the access token has expired, expires within the
+hour, or Stockbit refused it), and each refresh replaces both tokens, so a
+request made while the access token is still good renews nothing. The refresh
+token therefore runs out about a week after the last refresh, which can be up
+to a day short of a week after the last use; using idx at least every six days
+keeps the session working. Once the refresh token has run out too, `status`
+says logged in `no`, with a note that the session expired and that
+`idx stockbit login` renews it (`"logged_in": false, "expired": true` in JSON).
+While only the access token can still be used (its refresh token expired, or
+none is stored), logged in is `yes` with a note that the session stops working
+when that token expires (`"renewable": false`). A session Stockbit ended early
+(signed out elsewhere, or refreshed by another tool) still reads as logged in;
+the first request it fails names `idx stockbit login`.
 
 ## Use it
 
