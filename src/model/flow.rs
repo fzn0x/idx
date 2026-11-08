@@ -12,6 +12,10 @@
 //! ([`ForeignValueFlow`], its own schema). The two sources answer different
 //! questions (shares on the regular board against rupiah on every board) and
 //! share no field names.
+//!
+//! `idx market brokers` reads idx.co.id's broker summary or IPOT's ranking
+//! of its latest session ([`BrokerSource`]), both in [`BrokerRanking`]; only
+//! IPOT publishes each member's buying, selling and net.
 
 use chrono::NaiveDate;
 use schemars::JsonSchema;
@@ -293,6 +297,29 @@ impl std::str::FromStr for BrokerSort {
             crate::error::IdxError::Usage(format!(
                 "invalid sort {s:?}; use value, volume or frequency"
             ))
+        })
+    }
+}
+
+/// Where the member ranking comes from.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerSource {
+    /// idx.co.id, and IPOT's latest session when idx.co.id refuses or fails.
+    Auto,
+    /// idx.co.id's daily broker summary: any session.
+    Idx,
+    /// IPOT's ranking: its latest session only, with each member's buying, selling and net.
+    Ipot,
+}
+
+impl std::str::FromStr for BrokerSource {
+    type Err = crate::error::IdxError;
+    fn from_str(s: &str) -> crate::error::Result<Self> {
+        <BrokerSource as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            crate::error::IdxError::Usage(format!("invalid source {s:?}; use auto, idx or ipot"))
         })
     }
 }
