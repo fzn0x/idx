@@ -58,7 +58,9 @@ function memoryDb() {
       return [...scan].filter(([k]) => k.startsWith([a[0], a[1], ""].join("|"))).map(([k, v]) => ({ symbol: k.split("|")[2], v }));
     }
     if (sql.startsWith("DELETE FROM bandar_scan")) {
-      // The newest a[0] sessions stay, and the one shown (a[1]).
+      // Only while the state a[2] holds is the one this batch wrote (a[3]):
+      // then the newest a[0] sessions stay, and the one shown (a[1]).
+      if (kv.get(a[2]) !== a[3]) return null;
       const sessions = [...new Set([...scan.keys()].map((k) => k.split("|")[0]))].sort().reverse();
       const keep = new Set([...sessions.slice(0, a[0]), a[1]]);
       for (const k of [...scan.keys()]) if (!keep.has(k.split("|")[0])) scan.delete(k);
@@ -611,6 +613,50 @@ test("on SQLite the prune keeps the session shown however many came after it", {
   });
   assert.equal(JSON.parse(s.get("bandar_scan")).complete, "2026-10-16");
   assert.deepEqual(s.sessions(), ["2026-10-16", "2026-10-20", "2026-10-21"]);
+});
+
+test("on SQLite a minute that loses the compare-and-set prunes nothing", { skip: noSqlite }, async () => {
+  const s = sqliteDb();
+  const env = { DB: s.DB };
+  const board = (d) => s.put("board", { ts: unix(`${d}T16:45:00+07:00`), quotes: ["BBCA", "TLKM", "BRPT", "BMRI"].map((sym, i) => quote(sym, 1000, 1e8 - i, `${d}T16:14:58+07:00`)) });
+  const PUBLISHED = page("brokersummary_bbca_20261105.html");
+  let failAllBut = null, overlap = null;
+  const fetchFn = async (u) => {
+    const url = String(u);
+    if (overlap) { const run = overlap; overlap = null; await run(); }
+    if (url.includes("finance/chart")) return new Response(CHART);
+    if (failAllBut && !url.includes(`code=${failAllBut}`)) return new Response("busy", { status: 503 });
+    return new Response(PUBLISHED);
+  };
+  const wib = (iso) => new Date(`${iso}+07:00`);
+  const { warn } = console;
+  console.warn = () => {};
+  try {
+    await withFetch(fetchFn, async () => {
+      // 10-30 is scanned whole and shown.
+      board("2026-10-30");
+      await scanAll(env, wib("2026-10-31T10:00:00"));
+      // 11-06 stores one stock of four: filed, not shown.
+      board("2026-11-06");
+      failAllBut = "BBCA";
+      for (const hm of ["17:00", "17:01", "17:11", "17:41", "17:42"]) await bandarScanStep(env, { now: wib(`2026-11-06T${hm}:00`) });
+      failAllBut = null;
+      // 11-09: published, two stocks read and two left.
+      board("2026-11-09");
+      await bandarScanStep(env, { now: wib("2026-11-09T16:45:00"), stocks: false });
+      await bandarScanStep(env, { now: wib("2026-11-09T16:46:00"), budget: budget(22) });
+      // The 16:47 minute reads the last two stocks, which shows 11-09 and prunes 10-30; meanwhile the
+      // 16:48 minute, from the same revision, reads one stock and writes first.
+      let w = null;
+      overlap = async () => { w = await bandarScanStep(env, { now: wib("2026-11-09T16:48:00"), budget: budget(12) }); };
+      const l = await bandarScanStep(env, { now: wib("2026-11-09T16:47:00") });
+      assert.deepEqual([w.read, w.conflict, l.read, l.conflict], [1, undefined, 2, true]);
+    });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(JSON.parse(s.get("bandar_scan")).complete, "2026-10-30", "the state written is the 16:48 minute's");
+  assert.ok(s.sessions().includes("2026-10-30"), `the session it shows keeps its rows: ${s.sessions()}`);
 });
 
 /** IPOT answering four 404s before every page (five requests a page); the rest as recorded. */

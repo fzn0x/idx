@@ -228,23 +228,31 @@ async function kvGet(env, k) {
 }
 
 /**
- * The step's rows, the pruning of old sessions when it finished one (the
- * newest KEEP_SESSIONS stay, and the one shown), and the state: one D1 batch.
- * The state is written only over the revision the step read (`rev`): when a
- * minute that overlapped this one wrote first, this one's state is dropped
- * (its rows are the same stocks', so they may stay). Returns whether the
- * state was written.
+ * The step's rows, the state and the pruning of old sessions when it
+ * finished one (the newest KEEP_SESSIONS stay, and the one shown): one D1
+ * batch. The state is written only over the revision the step read (`rev`):
+ * when a minute that overlapped this one wrote first, this one's state is
+ * dropped (its rows are the same stocks', so they may stay), and so is its
+ * prune, which runs only while the stored state is the one this step wrote:
+ * by the dropped state's `complete` it could delete the shown session's rows.
+ * Returns whether the state was written.
  */
 async function save(env, st, rows, prune, rev) {
   st.rev = (rev ?? 0) + 1;
+  const json = JSON.stringify(st);
   const ins = env.DB.prepare("INSERT OR REPLACE INTO bandar_scan (session, period, symbol, v) VALUES (?1, ?2, ?3, ?4)");
   const list = rows.map((r) => ins.bind(st.session, r.period, r.symbol, JSON.stringify(r.v)));
-  if (prune) list.push(env.DB.prepare("DELETE FROM bandar_scan WHERE session IS NOT ?2 AND session NOT IN (SELECT DISTINCT session FROM bandar_scan ORDER BY session DESC LIMIT ?1)").bind(KEEP_SESSIONS, st.complete));
+  const write = list.length;
   list.push(env.DB.prepare(
     "INSERT INTO kv (k, v, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at WHERE json_extract(kv.v, '$.rev') IS ?4",
-  ).bind(STATE, JSON.stringify(st), Math.floor(Date.now() / 1000), rev ?? null));
+  ).bind(STATE, json, Math.floor(Date.now() / 1000), rev ?? null));
+  if (prune) {
+    list.push(env.DB.prepare(
+      "DELETE FROM bandar_scan WHERE session IS NOT ?2 AND session NOT IN (SELECT DISTINCT session FROM bandar_scan ORDER BY session DESC LIMIT ?1) AND EXISTS (SELECT 1 FROM kv WHERE k = ?3 AND v = ?4)",
+    ).bind(KEEP_SESSIONS, st.complete, STATE, json));
+  }
   const res = await env.DB.batch(list);
-  return res?.[res.length - 1]?.meta?.changes !== 0;
+  return res?.[write]?.meta?.changes !== 0;
 }
 
 const named = (symbol, p, from, to) => ({
