@@ -206,7 +206,7 @@ set -e
 if [ "$code" = 0 ]; then
   expect "$TMP/mbi.json" '"provider": "ipot"' "market brokers came from ipot"
   expect "$TMP/mbi.json" '"net_value":' "ipot market brokers carry each broker's net"
-elif grep -qF "so it cannot be dated" "$TMP/mbi.err"; then
+elif grep -qF "cannot be dated" "$TMP/mbi.err"; then
   echo "  skip ipot market brokers: read in a trading day's hours, when the ranking cannot be dated"
 else
   fail "market brokers --source ipot (exit $code): $(head -c 160 "$TMP/mbi.err")"
