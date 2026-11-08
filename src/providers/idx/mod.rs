@@ -18,10 +18,11 @@
 //! history. The site sits behind Cloudflare: ordinary connections pass,
 //! while data-centre addresses (CI runners, Cloudflare Workers) are often
 //! refused with a 403 "Attention Required" block page or a "Just a moment"
-//! challenge, which becomes a `blocked` error (exit 3) naming the cause
-//! ([`http::cloudflare`](crate::http::cloudflare)). Any other failure keeps
-//! its HTTP status as a `provider` error. Fetched responses are cached like
-//! any other.
+//! challenge ([`http::cloudflare`](crate::http::cloudflare)). A refusal is a
+//! failed fetch: the cached copy is served in its place, marked stale with a
+//! warning naming it, and with no copy it becomes a `blocked` error (exit 3)
+//! naming the cause. Any other failure keeps its HTTP status as a `provider`
+//! error. Answers are cached like any other; refusals never are.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +31,7 @@ use chrono::{Datelike, NaiveDate};
 
 use crate::error::{IdxError, Result};
 use crate::http::cloudflare::{self, Refusal};
-use crate::http::{Fetched, Fetcher};
+use crate::http::{Fetched, Fetcher, RawResponse};
 use crate::model::{CalendarEvent, IndexRow, Instrument, Member, Symbol};
 
 use super::Sourced;
@@ -68,24 +69,40 @@ fn headers() -> Vec<(String, String)> {
 /// Cloudflare's block and challenge pages. Every idx.co.id response passes
 /// through Cloudflare and the origin never answers 403 itself, so a bare 403
 /// counts as a block too.
-fn refused(f: &Fetched) -> Option<Refusal> {
-    cloudflare::refusal(f.status, &f.headers, f.body.as_bytes())
-        .or((f.status == 403).then_some(Refusal::Block))
+fn refused(r: &RawResponse) -> Option<Refusal> {
+    cloudflare::refusal(r.status, &r.headers, r.body.as_bytes())
+        .or((r.status == 403).then_some(Refusal::Block))
 }
 
+/// One idx.co.id endpoint. A refusal is a failed fetch: the cached copy
+/// stands in for it, marked stale with a warning naming the refusal, or the
+/// call fails with a `blocked` error.
 async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
     let url = format!("{BASE}/{path}");
-    let f = fetcher.get(&url, &headers(), ttl, None).await?;
-    if let Some(r) = refused(&f) {
-        return Err(IdxError::blocked(
+    let refuse = |r: &RawResponse| {
+        let kind = refused(r)?;
+        let what = cloudflare::describe(kind, r.status, &r.headers);
+        Some(IdxError::blocked(
             NAME,
-            r,
-            format!(
-                "idx.co.id answered with {}. {BLOCKED_HINT}",
-                cloudflare::describe(r, f.status, &f.headers)
-            ),
-        ));
-    }
+            kind,
+            format!("idx.co.id answered with {what}"),
+        ))
+    };
+    let f = fetcher
+        .get_unless(&url, &headers(), ttl, None, &refuse)
+        .await
+        .map_err(|e| match e {
+            IdxError::Blocked {
+                provider,
+                refusal,
+                message,
+            } => IdxError::Blocked {
+                provider,
+                refusal,
+                message: format!("{message}. {BLOCKED_HINT}"),
+            },
+            other => other,
+        })?;
     if !f.is_success() {
         return Err(IdxError::provider(
             NAME,
@@ -230,6 +247,7 @@ mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, FixtureBackend};
+    use crate::model::StaleReason;
 
     const BROKERS: &str = include_str!("../../../tests/fixtures/idx/brokersummary_20261016.json");
     const BLOCKED: &str = include_str!("../../../tests/fixtures/idx/cloudflare_blocked.html");
@@ -342,6 +360,70 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
+    }
+
+    const FLAGGED: &[(&str, &str)] = &[("cf-mitigated", "challenge"), ("server", "cloudflare")];
+
+    fn broker_url(date: &str) -> String {
+        format!("{BASE}/TradingSummary/GetBrokerSummary?date={date}&start=0&length=9999")
+    }
+
+    fn hours_ago(h: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() - chrono::Duration::seconds(h * 3600)
+    }
+
+    #[tokio::test]
+    async fn a_refusal_serves_the_cached_copy_marked_stale() {
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers("date=20261016", 403, CHALLENGE, FLAGGED)
+                .route("date=20261015", 403, BLOCKED),
+        );
+        // Today's summaries, cached an hour ago: past their 15 minutes.
+        for date in ["20261016", "20261015"] {
+            f.cache()
+                .put_at(&broker_url(date), 200, BROKERS, hours_ago(1))
+                .unwrap();
+        }
+        let s = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 16))
+            .await
+            .unwrap();
+        assert_eq!(s.data.len(), 88);
+        assert!(s.cached && s.stale);
+        assert_eq!(s.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)); showing cached copy"]
+        );
+        let s = broker_summary(&f, d(2026, 10, 15), d(2026, 10, 15))
+            .await
+            .unwrap();
+        assert!(s.stale && s.warnings[0].contains("a Cloudflare block page (HTTP 403)"));
+        assert_eq!(be.calls_matching("date=20261015"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_challenge_page_is_never_cached() {
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_times(
+                    "GetBrokerSummary",
+                    1,
+                    200,
+                    "<html><title>Just a moment...</title>",
+                    &[],
+                )
+                .route("GetBrokerSummary", 200, BROKERS),
+        );
+        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let s = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap();
+        assert!(!s.cached && s.data.len() == 88);
+        assert_eq!(be.call_count(), 2);
     }
 
     #[tokio::test]
