@@ -4,7 +4,9 @@ use chrono::Datelike;
 use clap::Subcommand;
 
 use crate::error::Result;
-use crate::model::{AstroPeriod, BrokerSort, CalendarCategory, ForeignSort, NatalChoice, Symbol};
+use crate::model::{
+    AstroPeriod, BrokerSort, BrokerSource, CalendarCategory, ForeignSort, NatalChoice, Symbol,
+};
 use crate::output::json::{
     SCHEMA_ASTRO, SCHEMA_CALENDAR, SCHEMA_HOLIDAYS, SCHEMA_INDICES, SCHEMA_MARKET,
     SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
@@ -65,7 +67,7 @@ pub enum MarketCmd {
     },
     /// Exchange members ranked by the day's value, volume or frequency (top brokers).
     #[command(
-        after_help = "Examples:\n  idx market brokers\n  idx market brokers --top 20 --sort frequency\n  idx market brokers --date 2026-10-16 --top 0\n  idx -o json market brokers | jq '.data.brokers[:3]'\n\nFrom idx.co.id's daily broker summary, latest session by default. Each member's buying and\nselling count together, so all members' value is twice the market's. Which stocks a broker\ntraded: `idx bandar broker CODE`; one stock's brokers: `idx broker SYMBOL`."
+        after_help = "Examples:\n  idx market brokers\n  idx market brokers --top 20 --sort frequency\n  idx market brokers --date 2026-10-16 --top 0\n  idx market brokers --source ipot             # with each broker's buying, selling and net\n  idx -o json market brokers | jq '.data.brokers[:3]'\n\n--source auto (default): idx.co.id's daily broker summary, latest session by default; when\nidx.co.id refuses the connection (Cloudflare) or fails, IPOT's ranking of its latest session\nanswers instead, with a warning. --source idx: idx.co.id only, any session. --source ipot:\nIndo Premier's ranking of its latest session only (another --date is a usage error), with each\nbroker's value bought, sold and net and its class; IPOT abbreviates figures to two decimals\n(rounded: true). Each member's buying and selling count together, so all members' value is\ntwice the market's. Which stocks a broker traded: `idx bandar broker CODE`; one stock's\nbrokers: `idx broker SYMBOL`."
     )]
     Brokers {
         /// Trading day, YYYY-MM-DD. Default: the latest session.
@@ -77,6 +79,9 @@ pub enum MarketCmd {
         /// Ranking figure.
         #[arg(long, value_enum, default_value_t = BrokerSort::Value)]
         sort: BrokerSort,
+        /// Where the ranking comes from.
+        #[arg(long, value_enum, default_value_t = BrokerSource::Auto)]
+        source: BrokerSource,
     },
     /// Exchange members (Anggota Bursa): broker codes, names and licences.
     #[command(
@@ -200,12 +205,24 @@ pub async fn run(ctx: &Context, cmd: MarketCmd) -> Result<()> {
                 tx::market_foreign(d, ctx.color)
             })
         }
-        MarketCmd::Brokers { date, top, sort } => {
-            let result =
-                service::market_brokers(&ctx.fetcher, date, top, sort, service::today_wib())
-                    .await?;
+        MarketCmd::Brokers {
+            date,
+            top,
+            sort,
+            source,
+        } => {
+            let result = service::market_brokers_from(
+                &ctx.fetcher,
+                source,
+                date,
+                top,
+                sort,
+                chrono::Utc::now(),
+            )
+            .await?;
+            let provider = result.provider;
             emit(ctx, SCHEMA_MARKET_BROKERS, result, |d| {
-                tx::market_brokers(d, ctx.color)
+                tx::market_brokers(d, provider, ctx.color)
             })
         }
         MarketCmd::Members { search } => {

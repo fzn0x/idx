@@ -8,7 +8,7 @@ use crate::model::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSu
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right};
 
-fn kind_label(k: Option<BrokerKind>) -> &'static str {
+pub(crate) fn kind_label(k: Option<BrokerKind>) -> &'static str {
     match k {
         Some(BrokerKind::Local) => "local",
         Some(BrokerKind::Foreign) => "foreign",

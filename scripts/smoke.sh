@@ -200,6 +200,9 @@ expect "$TMP/bk.txt" "Foreign investors bought" "one investor side says what it 
 "$IDX" -o json stocks foreign BBCA --source ipot --days 3 >"$TMP/sfi.json" || fail "stocks foreign --source ipot"
 expect "$TMP/sfi.json" '"schema": "idx.foreign.value.v1"' "ipot foreign flow schema"
 expect "$TMP/sfi.json" '"foreign_sell_value":' "ipot foreign flow has foreign selling in rupiah"
+"$IDX" -o json market brokers --source ipot --top 3 >"$TMP/mbi.json" || fail "market brokers --source ipot"
+expect "$TMP/mbi.json" '"provider": "ipot"' "market brokers came from ipot"
+expect "$TMP/mbi.json" '"net_value":' "ipot market brokers carry each broker's net"
 set +e
 "$IDX" broker ZZZZ --date 2026-10-16 >/dev/null 2>"$TMP/bke.txt"; code=$?
 set -e
