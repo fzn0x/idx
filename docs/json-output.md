@@ -597,6 +597,33 @@ An object for one session: `date`, `stocks`, the market sums `foreign_buy`,
 `symbol`, `name`, `close`, `change`, `change_pct`, `volume`, `value`,
 `foreign_buy`, `foreign_sell`, `foreign_net`, `foreign_net_value_at_close`.
 
+## `idx.market.foreign.value.v1` (`market foreign --source ipot`)
+
+The same question from Indo Premier, in rupiah, in a shape of its own: never
+mixed with `idx.market.foreign.v1`, whose figures are idx.co.id's shares.
+An object for one session: `date`, `scanned` (the stocks read: the 100 most
+traded by value on the latest quotes, the bandar screen's scan, not every
+stock), `checked` (those with a broker summary that had trades), `market`,
+`net_buy[]` / `net_sell[]` (largest first) and `rounded`. Each row:
+`symbol`, `name`, `price`, `change_pct` (from the previous session's close),
+`value` (traded on all boards, IDR), `foreign_net_value` (the broker
+summary's `F. NVal`, all boards, as published) and `foreign_net_pct` (of
+`value`, computed). `market` is IPOT's market statistics for the session:
+`value` (its `TOTAL`: regular, negotiated and cash), `foreign_buy_value`,
+`foreign_sell_value` and `foreign_net_value`, as published; IPOT does not say
+which boards its foreign figures cover. `provider` is `ipot`.
+
+The session is the latest one IPOT has published broker summaries for (the
+bandar screen's `1d`); a `--date` before it is a usage error and a later one
+`not_found`, and `--sort shares` (idx.co.id's net shares) a usage error. The
+market statistics page carries no date and is dated as IPOT's broker ranking
+is (see `idx.market.brokers.v1` below), with its own copy of BBCA's
+statistics page: when it cannot be dated, or is another session's than the
+stocks', `market` is `null` and a warning says why, so on a trading day from
+08:58 to 19:00 WIB it is `null` unless a copy read outside those hours can
+answer. Figures of a million and more are abbreviated, to one decimal on
+the broker summaries and two on the market statistics (`rounded: true`).
+
 ## `idx.market.brokers.v1` (`market brokers`)
 
 An object for one session: `date`, `members` (with trades), `total_volume`,

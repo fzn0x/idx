@@ -217,6 +217,17 @@ elif grep -qF "cannot be dated" "$TMP/mbi.err"; then
 else
   fail "market brokers --source ipot (exit $code): $(head -c 160 "$TMP/mbi.err")"
 fi
+# The 100 most traded stocks' broker summaries; the market's totals are
+# null with a warning when IPOT's statistics cannot be dated (trading hours).
+set +e
+"$IDX" -o json market foreign --source ipot --top 3 >"$TMP/mfi.json" 2>"$TMP/mfi.err"; code=$?
+set -e
+if [ "$code" = 0 ]; then
+  expect "$TMP/mfi.json" '"schema": "idx.market.foreign.value.v1"' "market foreign --source ipot has its own schema"
+  expect "$TMP/mfi.json" '"foreign_net_pct":' "ipot market foreign ranks the foreign net in rupiah"
+else
+  fail "market foreign --source ipot (exit $code): $(head -c 160 "$TMP/mfi.err")"
+fi
 set +e
 "$IDX" broker ZZZZ --date 2026-10-16 >/dev/null 2>"$TMP/bke.txt"; code=$?
 set -e
