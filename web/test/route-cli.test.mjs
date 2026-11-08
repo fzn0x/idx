@@ -379,6 +379,9 @@ const MCP_LINES = [
   "stockbit actions rups -k ipo", "movements", "movements BBCA --action sell",
   "brokers", "brokers CC", "market foreign TLKM", "market foreign --date 2026-10-16 -n 20", "ownership sync --force", "ownership status", "stockbit",
   "stockbit status", "stockbit login --page", "stockbit login --timeout 600", "idx --offline stockbit status", "market brokers --top 20 --sort frequency",
+  // Read again after stocks, or as a tool's web example.
+  "idx stocks market foreign", "stocks ownership composition BBCA", "stocks orderbook BBCA", "stocks watch", "stocks q BBCA -o csv", "idx_quote -o csv",
+  "tools idx_quote -o csv", "idx_quote --provider stockbit", "idx_ownership_changes -o csv", "json idx_bandar -o jsonl",
 ];
 
 test("a notice for what runs only in the CLI and MCP gives a CLI line the CLI takes", () => {

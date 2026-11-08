@@ -408,7 +408,8 @@ function dispatch(ctx, words) {
   if (name === "stocks") {
     if (!sub) return web(ctx, ["help"]);
     const runs = own(PAGE_CMD, `stocks ${sub}`);
-    if (!runs) return web(ctx, words.slice(1));
+    // Any other word after stocks starts a line of its own: stocks market foreign is market foreign.
+    if (!runs) return dispatch({ ...ctx, rewrite: true }, words.slice(1));
     return webCommand(ctx, runs, [runs], words.slice(2), { group: true });
   }
   if (name === "market") {
@@ -450,7 +451,8 @@ function toolLine(ctx, name, args, typedTools) {
   if (args.length) return dispatch({ ...ctx, rewrite: true }, [...path.split(" "), ...args]);
   if (!tool.web) return mcpNotice(ctx, path, tokenize(tool.cli).slice(1 + path.split(" ").length), tool);
   if (typedTools && !ctx.fromCli && !ctx.found.length) return { kind: "web", line: ctx.typed, note: null };
-  return web(ctx, tokenize(tool.web));
+  // The tool's web example is read as a line of its own, so -o csv or --provider still gets its notice.
+  return dispatch({ ...ctx, rewrite: true }, tokenize(tool.web));
 }
 
 /** A command the page runs: the CLI's flags in the page's words, or a notice for the ones it has no twin for. */

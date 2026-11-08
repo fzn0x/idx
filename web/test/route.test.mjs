@@ -322,6 +322,27 @@ test("lines in the CLI's words run as the page's own, and say what they ran as",
   assert.deepEqual(routeLine("idx -q quote BBCA").note, { line: "quote BBCA", ignored: ["-q"] });
 });
 
+test("a line read again, after stocks or as a tool's web example, still reaches its notice", () => {
+  const cases = [
+    ["idx stocks market foreign", "cli-mcp", "idx market foreign"],
+    ["stocks ownership composition BBCA", "cli-mcp", "idx ownership composition BBCA"],
+    ["stocks orderbook BBCA", "cli-mcp", "idx stockbit orderbook BBCA"],
+    ["stocks watch", "cli", "idx watch"],
+    ["stocks q BBCA -o csv", "flag", "idx -o csv stocks quote BBCA"],
+    ["idx_quote -o csv", "flag", "idx -o csv stocks quote BBCA"],
+    ["tools idx_quote -o csv", "flag", "idx -o csv stocks quote BBCA"],
+    ["idx_quote --provider stockbit", "flag", "idx --provider stockbit stocks quote BBCA"],
+  ];
+  for (const [line, kind, cli] of cases) {
+    const r = routeLine(line);
+    assert.equal(r.kind, kind, line);
+    assert.equal(r.cli[0], cli, line);
+  }
+  assert.deepEqual(routeLine("idx_quote -o csv").flags, ["-o csv"]);
+  // What follows stocks runs as typed there.
+  assert.deepEqual(routeLine("stocks q BBCA"), { kind: "web", line: "q BBCA", note: { line: "q BBCA", ignored: [] } });
+});
+
 test("every MCP tool's CLI example runs here as its web command, or reaches its notice", () => {
   for (const tool of TOOLS) {
     const r = routeLine(tool.cli);
