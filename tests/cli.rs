@@ -1843,6 +1843,43 @@ fn market_brokers_from_ipot_or_idx_co_id() {
 }
 
 #[test]
+fn market_brokers_offline_with_an_ipot_copy_that_cannot_be_dated_exits_5() {
+    let sb = sandbox();
+    // Read on Friday 2026-11-06 at 10:00 WIB, in the session's hours.
+    let friday = chrono::DateTime::parse_from_rfc3339("2026-11-06T10:00:00+07:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for (url, fixture) in [
+        (
+            "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+            "ipot/topbroker_20261106.html",
+        ),
+        (
+            "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+            "ipot/statistic_bbca_20261106.html",
+        ),
+    ] {
+        let body = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(fixture),
+        )
+        .unwrap();
+        idx::cache::Cache::new(&sb.cache)
+            .put_at(url, 200, &body, friday)
+            .unwrap();
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["--offline", "market", "brokers", "--source", "ipot"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains(
+            "offline: IPOT's cached copy cannot be used: the broker ranking was read at 10:00 WIB on 2026-11-06",
+        ))
+        .stderr(predicate::str::contains("run once without --offline"));
+}
+
+#[test]
 fn market_brokers_rank_the_members() {
     let sb = sandbox();
     seed(

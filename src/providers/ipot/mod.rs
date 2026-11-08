@@ -547,6 +547,21 @@ fn read_at(f: &Fetched, now: DateTime<Utc>, started: DateTime<Utc>) -> DateTime<
     }
 }
 
+/// The error a pair that cannot be dated is, `why` saying why. A copy the
+/// fetcher served because the call is offline only stood in for a read the
+/// call could not make, so nothing usable is cached (`offline_miss`, as for
+/// any other source); otherwise IPOT's pages themselves cannot be dated
+/// (`provider`).
+fn unusable(ranked: &Fetched, dated: &Fetched, why: String) -> IdxError {
+    let offline = [ranked, dated]
+        .iter()
+        .any(|f| f.stale_reason == Some(crate::model::StaleReason::Offline));
+    if offline {
+        return IdxError::OfflineMiss(format!("IPOT's cached copy cannot be used: {why}"));
+    }
+    IdxError::provider(NAME, why)
+}
+
 /// `t` falls in [`UNDATED`] on a trading day.
 fn undated_at(t: DateTime<Utc>) -> bool {
     let local = t.with_timezone(&crate::model::wib());
@@ -614,14 +629,16 @@ pub async fn top_brokers(
     }
     if !read_together(&ranked, &dated) {
         let failed = ranked.failure.as_deref().or(dated.failure.as_deref());
-        return Err(IdxError::provider(
-            NAME,
+        return Err(unusable(
+            &ranked,
+            &dated,
             format!(
                 "the broker ranking and the page that dates it were read at different times, so the ranking has no date{}",
                 failed.map(|w| format!(" ({w})")).unwrap_or_default()
             ),
         ));
     }
+    let refuse = |why: String| unusable(&ranked, &dated, why);
     let (ranked_at, dated_at) = (
         read_at(&ranked, now, started),
         read_at(&dated, now, started),
@@ -629,21 +646,15 @@ pub async fn top_brokers(
     let wib = |t: DateTime<Utc>| t.with_timezone(&crate::model::wib());
     if undated_at(ranked_at) {
         let (day, clock) = (wib(ranked_at).date_naive(), wib(ranked_at).format("%H:%M"));
-        return Err(IdxError::provider(
-            NAME,
-            format!(
-                "the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
-            ),
-        ));
+        return Err(refuse(format!(
+            "the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
+        )));
     }
     if undated_at(dated_at) {
         let (day, clock) = (wib(dated_at).date_naive(), wib(dated_at).format("%H:%M"));
-        return Err(IdxError::provider(
-            NAME,
-            format!(
-                "the page that dates the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated"
-            ),
-        ));
+        return Err(refuse(format!(
+            "the page that dates the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated"
+        )));
     }
     // Both reads are outside those hours and a minute apart at most, so
     // either gives the same session below.
@@ -652,18 +663,12 @@ pub async fn top_brokers(
     let (day, clock) = (local.date_naive(), local.format("%H:%M"));
     let secs = local.time().num_seconds_from_midnight();
     let date = topbroker::session_date(&dated.body).ok_or_else(|| {
-        IdxError::provider(
-            NAME,
-            "BBCA's statistics page has no Today row to date the broker ranking",
-        )
+        refuse("BBCA's statistics page has no Today row to date the broker ranking".into())
     })?;
     if !holidays::is_trading_day(date) {
-        return Err(IdxError::provider(
-            NAME,
-            format!(
-                "the page that dates the broker ranking names {date}, which is not a trading day"
-            ),
-        ));
+        return Err(refuse(format!(
+            "the page that dates the broker ranking names {date}, which is not a trading day"
+        )));
     }
     let mut data = topbroker::ranking(&ranked.body, date)?;
     let traded = data.brokers.iter().any(topbroker::TopBroker::traded);
@@ -671,20 +676,14 @@ pub async fn top_brokers(
     // have trades, and one whose session had ended cannot be without them.
     let opened = date < day || date == day && secs >= FIRST_TRADES_SECS;
     if !opened && traded {
-        return Err(IdxError::provider(
-            NAME,
-            format!(
-                "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
-            ),
-        ));
+        return Err(refuse(format!(
+            "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+        )));
     }
     if !traded && date <= holidays::latest_session(read) {
-        return Err(IdxError::provider(
-            NAME,
-            format!(
-                "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
-            ),
-        ));
+        return Err(refuse(format!(
+            "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
+        )));
     }
     if traded {
         let digest = topbroker::digest(&data);
@@ -692,13 +691,10 @@ pub async fn top_brokers(
         let seen = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED);
         if let Some(seen) = &seen {
             if seen.digest == digest && seen.date != date {
-                return Err(IdxError::provider(
-                    NAME,
-                    format!(
-                        "the broker ranking is the one IPOT showed for {}, yet the page that dates it now names {date}: the ranking has not rolled over to that session",
-                        seen.date
-                    ),
-                ));
+                return Err(refuse(format!(
+                    "the broker ranking is the one IPOT showed for {}, yet the page that dates it now names {date}: the ranking has not rolled over to that session",
+                    seen.date
+                )));
             }
         }
         // Outside the refused hours both pages are taken to have rolled over
@@ -708,12 +704,9 @@ pub async fn top_brokers(
         let latest = holidays::latest_session(read);
         let accepted = seen.is_some_and(|s| s.digest == digest && s.date == date);
         if date < latest && !accepted {
-            return Err(IdxError::provider(
-                NAME,
-                format!(
-                    "the broker ranking read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
-                ),
-            ));
+            return Err(refuse(format!(
+                "the broker ranking read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+            )));
         }
         if let Err(e) = cache.put_json(ACCEPTED_KEY, &Accepted { date, digest }) {
             tracing::warn!(error = %e, "could not write cache");
@@ -1574,7 +1567,8 @@ mod tests {
         assert!(!s.cached);
         assert_eq!(be.call_count(), 2);
 
-        // Offline they cannot be: the ranking has no date.
+        // Offline they cannot be: the ranking has no date, and nothing
+        // usable is cached.
         let dir = tempfile::tempdir().unwrap();
         seed(&Cache::new(dir.path()), 5, 65);
         let offline = Arc::new(Fetcher::new(
@@ -1583,8 +1577,11 @@ mod tests {
             CacheMode::Offline,
         ));
         let err = top_brokers(&offline, sunday).await.unwrap_err();
-        assert_eq!(err.code(), "provider");
-        assert!(err.to_string().contains("read at different times"), "{err}");
+        assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+        assert_eq!(
+            err.to_string(),
+            "offline: IPOT's cached copy cannot be used: the broker ranking and the page that dates it were read at different times, so the ranking has no date"
+        );
 
         // Copies older than six hours, and the date page cannot be read: its
         // old copy does not date the new ranking.
@@ -1635,6 +1632,16 @@ mod tests {
                     .contains("read at 10:00 WIB on 2026-11-06, in a trading day's hours"),
                 "offline {offline}: {err}"
             );
+            // Offline, the copy only stood in for a read not made: nothing
+            // usable is cached.
+            if offline {
+                assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+                assert!(
+                    err.to_string()
+                        .starts_with("offline: IPOT's cached copy cannot be used: "),
+                    "{err}"
+                );
+            }
         }
         // Read that evening, the same copies are the whole session.
         let (f, _d) = copies_read_at("2026-11-06T19:30:00", TOP, STATISTIC, true);
