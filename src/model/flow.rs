@@ -17,7 +17,7 @@ use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::Symbol;
+use super::{BrokerKind, Symbol};
 
 /// One stock on one trading day.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -248,6 +248,21 @@ pub struct BrokerDayRow {
     /// sums to 100, and all members' value is twice the market's (each trade
     /// has a buying and a selling member).
     pub value_share_pct: Option<f64>,
+    /// Value bought, IDR, from IPOT; `null` from idx.co.id, which publishes
+    /// both sides together only.
+    #[serde(default)]
+    pub buy_value: Option<f64>,
+    /// Value sold, IDR, from IPOT; `null` from idx.co.id.
+    #[serde(default)]
+    pub sell_value: Option<f64>,
+    /// Value bought minus value sold, IDR, as IPOT publishes it (with its own
+    /// two decimals, so not always `buy_value - sell_value` to the rupiah);
+    /// `null` from idx.co.id.
+    #[serde(default)]
+    pub net_value: Option<f64>,
+    /// The source's class of the member (IPOT); `null` from idx.co.id.
+    #[serde(default)]
+    pub kind: Option<BrokerKind>,
 }
 
 /// Which figure ranks the members.
@@ -293,6 +308,11 @@ pub struct BrokerRanking {
     pub total_value: f64,
     pub total_frequency: f64,
     pub sort: BrokerSort,
+    /// `true` when the source abbreviated figures (IPOT, to two decimals:
+    /// `2.79 T`), so they and the totals carry only that precision; `false`
+    /// from idx.co.id, which publishes them exact.
+    #[serde(default)]
+    pub rounded: bool,
     pub brokers: Vec<BrokerDayRow>,
 }
 

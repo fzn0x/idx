@@ -944,6 +944,10 @@ pub async fn market_brokers(
                 .value
                 .filter(|_| total_value > 0.0)
                 .map(|v| v / total_value * 100.0),
+            buy_value: None,
+            sell_value: None,
+            net_value: None,
+            kind: None,
         })
         .collect();
     let key = |r: &BrokerDayRow| {
@@ -974,6 +978,7 @@ pub async fn market_brokers(
         total_value,
         total_frequency,
         sort,
+        rounded: false,
         brokers: rows,
     };
     Ok(s.map(|_| out))
