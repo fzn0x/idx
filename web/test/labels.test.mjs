@@ -83,3 +83,11 @@ test("the fundamentals view says the verdict in the CLI's words (table_reports::
     assert.equal(pill?.attrs.text, words, label);
   }
 });
+
+test("the compare view's verdict row says each verdict in the CLI's words (table_reports::compare)", () => {
+  const R = views(["compare", "list"]);
+  const list = Object.keys(VERDICT_CLI).map((label) => fundamentals(label));
+  list.push({ ...fundamentals("fair"), verdict: null });
+  const row = R.compare(list).rows.find((r) => r.label === "Verdict");
+  assert.deepEqual(row.vals, [...Object.values(VERDICT_CLI), "n/a"]);
+});
