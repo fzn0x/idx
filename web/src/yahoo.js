@@ -24,41 +24,46 @@ export function plainSymbol(s) {
 
 // ---- session -------------------------------------------------------------
 
-async function newSession() {
-  const r = await fetchWithin("https://fc.yahoo.com", { headers: { "User-Agent": UA }, redirect: "manual" });
+async function newSession(fetchFn) {
+  const r = await fetchWithin("https://fc.yahoo.com", { headers: { "User-Agent": UA }, redirect: "manual" }, { fetchFn });
   const setCookie = r.headers.get("set-cookie") || "";
   const m = setCookie.match(/A3=[^;]+/);
   if (!m) throw new Error("yahoo: no A3 cookie");
   const cookie = m[0];
   const c = await fetchWithin("https://query2.finance.yahoo.com/v1/test/getcrumb", {
     headers: { "User-Agent": UA, Cookie: cookie },
-  });
+  }, { fetchFn });
   const crumb = (await c.text()).trim();
   if (!c.ok || !crumb || crumb.length > 64 || crumb.includes("<")) throw new Error("yahoo: bad crumb");
   return { cookie, crumb, created_at: Date.now() };
 }
 
-/** Session cached in `kv` for six hours; `force` refreshes it. */
-export async function session(env, force = false) {
+/** Session cached in `kv` for six hours; `force` refreshes it. `fetchFn` stands in for fetch. */
+export async function session(env, force = false, { fetchFn } = {}) {
   if (!force) {
     const row = await env.DB.prepare("SELECT v, updated_at FROM kv WHERE k = 'yahoo:session'").first();
     if (row && Date.now() / 1000 - row.updated_at < 6 * 3600) return JSON.parse(row.v);
   }
-  const s = await newSession();
+  const s = await newSession(fetchFn);
   await env.DB.prepare("INSERT OR REPLACE INTO kv (k, v, updated_at) VALUES ('yahoo:session', ?1, ?2)")
     .bind(JSON.stringify(s), Math.floor(Date.now() / 1000))
     .run();
   return s;
 }
 
-async function getWithSession(env, url) {
-  let s = await session(env);
+/**
+ * GET with the cookie and crumb, renewed once on a 401 or 403. `held` keeps
+ * the session between calls (a board refresh reads it from D1 once for all
+ * its batches); `fetchFn` stands in for fetch.
+ */
+async function getWithSession(env, url, { fetchFn, held = {} } = {}) {
+  held.s ??= await session(env, false, { fetchFn });
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetchWithin(`${url}&crumb=${encodeURIComponent(s.crumb)}`, {
-      headers: { "User-Agent": UA, Cookie: s.cookie, Accept: "application/json" },
-    });
+    const r = await fetchWithin(`${url}&crumb=${encodeURIComponent(held.s.crumb)}`, {
+      headers: { "User-Agent": UA, Cookie: held.s.cookie, Accept: "application/json" },
+    }, { fetchFn });
     if ((r.status === 401 || r.status === 403) && attempt === 0) {
-      s = await session(env, true);
+      held.s = await session(env, true, { fetchFn });
       continue;
     }
     return r;
@@ -77,9 +82,9 @@ export function chartUrl(symbol, period = "1y", interval = "1d") {
   return `${CHART}${yahooSymbol(symbol)}?range=${period}&interval=${interval}&includePrePost=false`;
 }
 
-export async function fetchChart(symbol, period = "1y", interval = "1d") {
+export async function fetchChart(symbol, period = "1y", interval = "1d", { fetchFn } = {}) {
   const url = chartUrl(symbol, period, interval);
-  const r = await fetchWithin(url, { headers: { "User-Agent": UA } });
+  const r = await fetchWithin(url, { headers: { "User-Agent": UA } }, { fetchFn });
   const body = await r.json().catch(() => null);
   if (r.status === 404 || body?.chart?.error?.code === "Not Found") {
     return { notFound: true, message: body?.chart?.error?.description || "not found" };
@@ -100,10 +105,10 @@ export async function fetchEvents(symbol) {
   return { body };
 }
 
-/** v7 quotes for up to ~200 symbols. Unknown symbols are silently omitted. */
-export async function fetchQuotes(env, symbols) {
+/** v7 quotes for up to ~200 symbols. Unknown symbols are silently omitted. `opts`: { fetchFn, held } as for getWithSession. */
+export async function fetchQuotes(env, symbols, opts = {}) {
   const list = symbols.map(yahooSymbol).join(",");
-  const r = await getWithSession(env, `${QUOTE}?symbols=${encodeURIComponent(list)}&formatted=false`);
+  const r = await getWithSession(env, `${QUOTE}?symbols=${encodeURIComponent(list)}&formatted=false`, opts);
   if (!r.ok) throw new Error(`yahoo quote HTTP ${r.status}`);
   const body = await r.json();
   return body?.quoteResponse?.result || [];

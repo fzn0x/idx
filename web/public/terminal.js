@@ -562,7 +562,7 @@ const R = {
       { h: "Price", f: (r) => fmt.price(r.price) }, { h: "Top buyers", f: (r) => r.top_buyers.join(" "), l: true },
     ], s.rows)));
     if (s.rows.length < s.total_matches) frag.append(el("p", { class: "warn", text: `Showing ${s.rows.length} of ${s.total_matches} matches; --limit 0 for all.` }));
-    frag.append(el("p", { class: "warn", text: `${BANDAR_NOTE} The web screen reads a nightly scan of the session's 100 most traded stocks (after 16:45 WIB); the CLI scans live.` }));
+    frag.append(el("p", { class: "warn", text: `${BANDAR_NOTE} The web screen reads the Worker's scan of the last session's 100 most traded stocks, which from 16:45 WIB waits for IPOT to publish that session and then reads it; the warnings say when an older session is shown. The CLI scans live.` }));
     return frag;
   },
   broker(list) {
@@ -678,7 +678,7 @@ const R = {
       el("div", { class: "stmt" }, [el("h3", { class: "stmt-title", text: "Top-ten seller of" }), a.sold.length ? wrapScroll(table(cols, a.sold)) : el("p", { class: "warn", text: "Not among the top ten sellers of any scanned stock." })]),
     );
     frag.append(grid);
-    frag.append(el("p", { class: "warn", text: "From the nightly scan of the session's 100 most traded stocks (IPOT broker summary). Only the top ten per side are published; net shows where both sides are visible." }));
+    frag.append(el("p", { class: "warn", text: "From the Worker's scan of the last session's 100 most traded stocks (IPOT broker summary), read once IPOT publishes that session. Only the top ten per side are published; net shows where both sides are visible." }));
     return frag;
   },
   tools() {
@@ -1138,8 +1138,8 @@ const WAITS_ID = {
   broker: { on: IPOT_ID, slow: IPOT_SLOW_ID },
   foreign: { on: `${IPOT_ID}, dua per sesi`, slow: IPOT_SLOW_ID },
   bandar: { on: `${IPOT_ID}, satu per sesi`, slow: IPOT_SLOW_ID },
-  "bandar screen": { on: "pindaian bandar tiap malam" },
-  "bandar broker": { on: "pindaian bandar tiap malam" },
+  "bandar screen": { on: "pindaian bandar sesi terakhir" },
+  "bandar broker": { on: "pindaian bandar sesi terakhir" },
   actions: { on: "aksi korporasi dari IPOT", slow: IPOT_SLOW_ID },
   market: { on: "papan harga per menit" },
   ownership: { on: "daftar pemegang saham KSEI" },

@@ -125,7 +125,9 @@ web/                 Cloudflare Worker for ihsg.midoriresearch.com: landing page
                      src/analysis.js, src/extras.js and src/bandar.js are JS ports of src/analysis/* tested on
                      the same fixtures, src/ownership.js of src/ownership/analytics.rs; src/astro.js ports
                      src/astro/ and the astro backtest (golden payloads in tests/fixtures/astro/ keep the two
-                     identical); src/bandar-scan.js is the nightly scan behind the web bandar screen;
+                     identical); src/bandar-scan.js is the scan after each close behind the web bandar
+                     screen and broker (it waits for IPOT to publish a session, then files what it got);
+                     src/cron.js runs the minute cron's jobs inside one subrequest budget (src/budget.js);
                      scripts/docs.mjs (+ md.mjs) builds /docs, /docs/<page>.md, /llms.txt and /llms-full.txt
                      from README.md and docs/*.md at deploy time (wrangler [build], outputs gitignored);
                      src/headers.js is the security header set, mirrored for static assets in public/_headers

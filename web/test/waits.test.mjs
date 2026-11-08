@@ -22,9 +22,9 @@ test("every network command says what it waits on", () => {
   for (const w of Object.values(WAITS)) assert.ok(w.on.length > 5);
 });
 
-test("bandar screen and broker read the nightly scan, bandar itself waits on IPOT", () => {
-  assert.match(waitFor("bandar", "screen").on, /nightly/);
-  assert.match(waitFor("bandar", "BROKER").on, /nightly/);
+test("bandar screen and broker read the scan of the last session, bandar itself waits on IPOT", () => {
+  assert.match(waitFor("bandar", "screen").on, /scan of the last session/);
+  assert.match(waitFor("bandar", "BROKER").on, /scan of the last session/);
   assert.match(waitFor("bandar", "BBCA").on, /IPOT/);
   assert.match(waitFor("bandar", "BBCA").slow, /404/);
   assert.deepEqual(waitFor("holidays"), {});

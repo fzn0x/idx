@@ -43,8 +43,10 @@ database_name = "idx"
 database_id = "f9359e42-2661-4757-b55b-1e8c19e7180f"
 migrations_dir = "migrations"
 
-# Snapshot refresh. The handler itself decides how much to do: every minute
-# during IDX trading hours (WIB), every 15 minutes otherwise.
+# The minute cron (src/cron.js): the board refresh, which decides how much to
+# do (every minute during IDX trading hours, WIB, every 15 minutes otherwise),
+# a step of the KSEI register sync and one of the bandar scan, inside one
+# subrequest budget per invocation.
 [triggers]
 crons = ["* * * * *"]
 
