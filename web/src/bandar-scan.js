@@ -26,9 +26,9 @@
 // minutes; one that failed gets two more passes, 10 and 30 minutes after its
 // pass. When the next session's 16:45 comes, whatever the session got is
 // filed in a record (`runs`): what it stored, failed and did not get, or
-// that IPOT never published it. A session is shown once it holds half its
-// stocks or more than the one shown before; the API's warnings come from
-// these records (scanNotes).
+// that IPOT never published it or never answered the probe. A session is
+// shown once it holds half its stocks or more than the one shown before; the
+// API's warnings come from these records (scanNotes).
 
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
@@ -218,7 +218,9 @@ function keep(st, run) {
  */
 function cutoff(st, at) {
   if (st.phase === "waiting") {
-    keep(st, { session: st.session, scanned: false, reason: "unpublished", probes: st.probes || 0, probe_errors: st.probe_errors || 0, first_probe_at: st.first_probe_at ?? null, last_probe_at: st.last_probe_at ?? null, done_at: at });
+    // Without one answer the scan cannot say IPOT had not published it.
+    const reason = st.probes ? "unpublished" : "unreachable";
+    keep(st, { session: st.session, scanned: false, reason, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null, first_probe_at: st.first_probe_at ?? null, last_probe_at: st.last_probe_at ?? null, done_at: at });
     return false;
   }
   if (st.phase !== "running") return false;
@@ -607,6 +609,10 @@ export function scanProgress(st, shown = null) {
 /** Why a finished session newer than the one shown is not the one shown. */
 function runNote(r, shown) {
   if (r.reason === "closed") return `${r.session} had no trades at IPOT nor on the quote board, so it was not scanned`;
+  if (r.reason === "unreachable") {
+    const n = r.probe_errors || 0;
+    return n ? `IPOT did not answer the scan's ${n} check${n === 1 ? "" : "s"} of ${r.session} (the last failed: ${r.probe_error}); showing ${shown}` : `the scan did not get to check ${r.session} with IPOT; showing ${shown}`;
+  }
   if (!r.scanned) return `IPOT had not published the broker lists of ${r.session} by ${stamp(r.last_probe_at ?? r.done_at)}; showing ${shown}`;
   return `the scan of ${r.session} read only ${r.stored} of ${r.of} stocks (${r.failed.length} failed, ${r.unpublished.length} not published by IPOT); showing ${shown}`;
 }

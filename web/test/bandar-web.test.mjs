@@ -563,6 +563,25 @@ test("a finished session keeps its numbers while the next one waits, and the war
   });
 });
 
+test("a session IPOT never answered for is filed as unreachable, not as unpublished", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
+  let down = false;
+  const fetchFn = async (u, init) => (down && String(u).includes("indopremier") ? new Response("bad gateway", { status: 502 }) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    // IPOT answers 502 to every probe of 10-19, from Monday 16:45 WIB to Tuesday's.
+    down = true;
+    for (let t = Date.parse("2026-10-19T16:45:00+07:00"); t <= Date.parse("2026-10-20T16:45:00+07:00"); t += 60e3) await bandarScanStep(env, { now: new Date(t), stocks: false });
+  });
+  const st = await scanStatus(env);
+  assert.deepEqual([st.session, st.last.session, st.last.scanned, st.last.reason, st.last.probes], ["2026-10-20", "2026-10-19", false, "unreachable", 0]);
+  const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-20T16:50:00+07:00"));
+  assert.ok(out.warnings.includes(`IPOT did not answer the scan's ${st.last.probe_errors} checks of 2026-10-19 (the last failed: HTTP 502); showing 2026-10-16`), out.warnings.join("\n"));
+  assert.ok(!out.warnings.some((w) => w.includes("had not published")), out.warnings.join("\n"));
+});
+
 test("a scan that read too few of its stocks is filed, and the session before it stays shown", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
