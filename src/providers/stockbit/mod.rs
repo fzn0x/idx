@@ -16,6 +16,10 @@
 //!   actions, one kind per request; paced a second apart, cached 6 h.
 //! - `GET /insider/company/majorholder?page=N&..` (`movement.rs`): insider
 //!   and 5 % holder movements, 50 rows a page; paced, cached 1 h.
+//! - `GET /marketdetectors/{SYM}?transaction_type=TRANSACTION_TYPE_GROSS&..`
+//!   (`broker_summary.rs`): every broker that bought and sold a stock over a
+//!   range, plus a foreign-investor read for the foreign net; paced, cached
+//!   a week once the range has closed.
 //! - `POST /login/refresh` — rotate the session (see `auth.rs`).
 //!
 //! Only GETs under a short allowlist of read-only paths ([`READ_PREFIXES`])
@@ -42,9 +46,11 @@ use futures::future::join_all;
 
 use crate::error::{IdxError, Result};
 use crate::http::{Fetched, Fetcher};
+use chrono::NaiveDate;
+
 use crate::model::{
-    CorporateEvent, CorporateEventKind, History, HolderMovement, Interval, OrderBook, Period,
-    Quote, Symbol,
+    BrokerBoard, BrokerInvestor, BrokerSummary, CorporateEvent, CorporateEventKind, History,
+    HolderMovement, Interval, OrderBook, Period, Quote, Symbol,
 };
 
 use super::{Provider, Sourced, Ttls};
@@ -164,6 +170,15 @@ pub const PACE: Duration = Duration::from_secs(1);
 const CORPACTION_TTL: Duration = Duration::from_secs(6 * 3600);
 /// Filings arrive through the day; an hour keeps paging consistent.
 const MOVEMENTS_TTL: Duration = Duration::from_secs(3600);
+/// A broker summary whose range ended before today no longer changes.
+const BROKER_TTL_CLOSED: Duration = Duration::from_secs(7 * 24 * 3600);
+/// One that reaches today moves with every trade.
+const BROKER_TTL_OPEN: Duration = Duration::from_secs(5 * 60);
+
+/// A side's broker count for a warning; `?` when Stockbit gave none.
+fn count_word(n: Option<u32>) -> String {
+    n.map_or_else(|| "?".into(), |n| n.to_string())
+}
 
 pub struct Stockbit {
     fetcher: Arc<Fetcher>,
@@ -202,6 +217,11 @@ impl Stockbit {
     /// carries no token, so no secret enters the cache (rule 6). Only
     /// [`READ_PREFIXES`] paths are ever requested.
     async fn get(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        self.get_as(url, url, ttl, what).await
+    }
+
+    /// [`get`](Self::get) cached under `key`, which holds no secret either.
+    async fn get_as(&self, url: &str, key: &str, ttl: Duration, what: &str) -> Result<Fetched> {
         if !is_read_url(url) {
             return Err(IdxError::Other(format!(
                 "idx does not call {url} on Stockbit's session API"
@@ -211,7 +231,7 @@ impl Stockbit {
         let mut session = self.store.valid_session(&self.fetcher, now).await?;
         for attempt in 0..2 {
             let headers = request_headers(&session.access);
-            let fetched = match self.fetcher.get(url, &headers, ttl, Some(url)).await {
+            let fetched = match self.fetcher.get(url, &headers, ttl, Some(key)).await {
                 Ok(f) => f,
                 Err(IdxError::OfflineMiss(_)) => {
                     return Err(IdxError::OfflineMiss(format!("no cached {what}")))
@@ -245,8 +265,19 @@ impl Stockbit {
     /// (cached answers cost no pause), for the commands that read several
     /// Stockbit lists in a row: a human-ish request rate.
     async fn get_paced(&self, url: &str, ttl: Duration, what: &str) -> Result<Fetched> {
+        self.get_paced_as(url, url, ttl, what).await
+    }
+
+    /// [`get_paced`](Self::get_paced) cached under `key`.
+    async fn get_paced_as(
+        &self,
+        url: &str,
+        key: &str,
+        ttl: Duration,
+        what: &str,
+    ) -> Result<Fetched> {
         let cached = self.fetcher.mode() != crate::http::CacheMode::Bypass
-            && self.fetcher.cache().get(url, ttl).is_some_and(|h| h.fresh);
+            && self.fetcher.cache().get(key, ttl).is_some_and(|h| h.fresh);
         let mut last = self.store.pacer().lock().await;
         if !cached && !self.fetcher.is_offline() {
             if let Some(t) = *last {
@@ -256,7 +287,7 @@ impl Stockbit {
                 }
             }
         }
-        let f = self.get(url, ttl, what).await;
+        let f = self.get_as(url, key, ttl, what).await;
         if matches!(&f, Ok(f) if !f.cached) {
             *last = Some(tokio::time::Instant::now());
         }
@@ -391,6 +422,103 @@ impl Stockbit {
             ));
         }
         Ok(Self::sourced(movement::parse_page(&f.body)?, &f))
+    }
+
+    /// One stock's broker summary over `from..=to` (WIB dates): every broker
+    /// that bought and every broker that sold, gross. For all investors the
+    /// foreign net comes from a second read, foreign investors over the same
+    /// range and board (a day without trades needs none); when that read
+    /// fails the net is `null` with a warning. Filters whose replies have not
+    /// been recorded ([`broker_summary::serves`]) and indices are refused
+    /// before any request. Paced; `today` decides the cache lifetime, as for
+    /// IPOT's summaries: a range that ended before it is cached for a week,
+    /// one that reaches it for five minutes under a key of its own, so it is
+    /// read again once the range has closed.
+    pub async fn broker_summary(
+        &self,
+        symbol: &Symbol,
+        from: NaiveDate,
+        to: NaiveDate,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+    ) -> Result<Sourced<BrokerSummary>> {
+        idx_only(symbol)?;
+        if symbol.is_index() {
+            return Err(IdxError::NotFound(format!(
+                "{symbol} is an index; broker summaries belong to stocks"
+            )));
+        }
+        if !broker_summary::serves(investor, board) {
+            return Err(IdxError::unsupported(
+                NAME,
+                "broker summaries for domestic investors or the cash and negotiated boards (not recorded yet)",
+            ));
+        }
+        let mut out = self
+            .broker_summary_read(symbol, from, to, investor, board, today)
+            .await?;
+        if investor == BrokerInvestor::All && out.data.foreign_net_value.is_none() {
+            let foreign = self
+                .broker_summary_read(symbol, from, to, BrokerInvestor::Foreign, board, today)
+                .await;
+            match foreign {
+                Ok(f) if f.data.foreign_net_value.is_some() => {
+                    out.absorb(&f);
+                    out.data.foreign_net_value = f.data.foreign_net_value;
+                }
+                Ok(f) => {
+                    out.absorb(&f);
+                    out.warnings.push(format!(
+                        "{symbol}: no foreign net: Stockbit listed {} of {} foreign buyers and {} of {} sellers",
+                        f.data.buyers.len(),
+                        count_word(f.data.buyer_count),
+                        f.data.sellers.len(),
+                        count_word(f.data.seller_count),
+                    ));
+                }
+                Err(e) => out.warnings.push(format!(
+                    "{symbol}: no foreign net: reading foreign investors failed ({e})"
+                )),
+            }
+        }
+        Ok(out)
+    }
+
+    /// One `/marketdetectors/` read (see [`broker_summary`](Self::broker_summary)).
+    async fn broker_summary_read(
+        &self,
+        symbol: &Symbol,
+        from: NaiveDate,
+        to: NaiveDate,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+    ) -> Result<Sourced<BrokerSummary>> {
+        let url = broker_summary::url(&stockbit_code(symbol), from, to, investor, board);
+        let (ttl, key) = if to < today {
+            (BROKER_TTL_CLOSED, url.clone())
+        } else {
+            (BROKER_TTL_OPEN, format!("{url}#open"))
+        };
+        let f = self.get_paced_as(&url, &key, ttl, "broker summary").await?;
+        if f.status == 404 || parse::is_not_found(&f.body) {
+            return Err(IdxError::NotFound(format!(
+                "{symbol} is not a stock code Stockbit knows"
+            )));
+        }
+        if !f.is_success() {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "broker summary HTTP {}: {}",
+                    f.status,
+                    parse::error_message(&f.body)
+                ),
+            ));
+        }
+        let data = broker_summary::parse(symbol, from, to, investor, board, &f.body)?;
+        Ok(Self::sourced(data, &f))
     }
 
     async fn quote_one(&self, symbol: &Symbol) -> Result<Sourced<Quote>> {
@@ -850,6 +978,186 @@ pub(crate) mod tests {
         rb.unwrap();
         assert_eq!(be.calls_matching("corpaction/"), 2);
         assert!(start.elapsed() >= pace, "{:?}", start.elapsed());
+    }
+
+    const MD_DAY: &str =
+        include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106.json");
+    const MD_FOREIGN: &str =
+        include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json");
+    const MD_EMPTY: &str = include_str!(
+        "../../../tests/fixtures/stockbit/marketdetectors_bbca_20261107_no_trades.json"
+    );
+    const MD_ZZZZ: &str =
+        include_str!("../../../tests/fixtures/stockbit/marketdetectors_zzzz.json");
+
+    fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_broker_summary_takes_its_foreign_net_from_a_second_read() {
+        use crate::model::{BrokerBoard as B, BrokerInvestor as I};
+        let (sb, be, _d) = with_backend(
+            FixtureBackend::new()
+                .route("investor_type=INVESTOR_TYPE_ALL", 200, MD_DAY)
+                .route("investor_type=INVESTOR_TYPE_FOREIGN", 200, MD_FOREIGN),
+        );
+        let sb = sb.with_pace(Duration::ZERO);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        let day = ymd(2026, 11, 6);
+        let got = sb
+            .broker_summary(&bbca, day, day, I::All, B::All, ymd(2026, 11, 8))
+            .await
+            .unwrap();
+        assert_eq!(got.provider, "stockbit");
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        assert_eq!(got.data.buyers.len(), 59);
+        assert_eq!(got.data.foreign_net_value, Some(218_988_301_100.0));
+        assert_eq!(got.data.total_value, Some(1_035_652_066_452.0));
+        assert_eq!(be.calls_matching("/marketdetectors/BBCA?"), 2);
+        assert_eq!(
+            be.calls_matching("transaction_type=TRANSACTION_TYPE_GROSS"),
+            2
+        );
+        // A closed day is cached: asking again sends nothing.
+        sb.broker_summary(&bbca, day, day, I::All, B::All, ymd(2026, 11, 8))
+            .await
+            .unwrap();
+        assert_eq!(be.call_count(), 2);
+        // One investor side carries its own net: one request.
+        let f = sb
+            .broker_summary(&bbca, day, day, I::Foreign, B::All, ymd(2026, 11, 8))
+            .await
+            .unwrap();
+        assert_eq!(f.data.foreign_net_value, Some(218_988_301_100.0));
+        assert_eq!(be.call_count(), 2, "the foreign page is the one read above");
+    }
+
+    #[tokio::test]
+    async fn a_failed_foreign_read_leaves_the_net_empty_with_a_warning() {
+        use crate::model::{BrokerBoard as B, BrokerInvestor as I};
+        let (sb, _be, _d) = with_backend(
+            FixtureBackend::new()
+                .route("investor_type=INVESTOR_TYPE_ALL", 200, MD_DAY)
+                .route(
+                    "investor_type=INVESTOR_TYPE_FOREIGN",
+                    500,
+                    r#"{"message":"oops"}"#,
+                ),
+        );
+        let sb = sb.with_pace(Duration::ZERO);
+        let day = ymd(2026, 11, 6);
+        let got = sb
+            .broker_summary(
+                &Symbol::parse("BBCA").unwrap(),
+                day,
+                day,
+                I::All,
+                B::All,
+                ymd(2026, 11, 8),
+            )
+            .await
+            .unwrap();
+        assert_eq!(got.data.foreign_net_value, None);
+        assert_eq!(got.data.buyers.len(), 59);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.contains("no foreign net") && w.contains("HTTP 500")),
+            "{:?}",
+            got.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn a_day_without_trades_needs_no_foreign_read() {
+        use crate::model::{BrokerBoard as B, BrokerInvestor as I};
+        let (sb, be, _d) =
+            with_backend(FixtureBackend::new().route("marketdetectors/", 200, MD_EMPTY));
+        let sat = ymd(2026, 11, 7);
+        let got = sb
+            .broker_summary(
+                &Symbol::parse("BBCA").unwrap(),
+                sat,
+                sat,
+                I::All,
+                B::All,
+                ymd(2026, 11, 8),
+            )
+            .await
+            .unwrap();
+        assert!(got.data.is_empty());
+        assert_eq!(got.data.foreign_net_value, Some(0.0));
+        assert_eq!(be.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_session_still_trading_is_cached_apart_from_the_closed_day() {
+        use crate::model::{BrokerBoard as B, BrokerInvestor as I};
+        let (sb, be, _d) =
+            with_backend(FixtureBackend::new().route("marketdetectors/", 200, MD_EMPTY));
+        let sb = sb.with_pace(Duration::ZERO);
+        let sat = ymd(2026, 11, 7);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        // Read on the day itself, then the day after: the copy read while
+        // the day was open is not served as the closed day's.
+        sb.broker_summary(&bbca, sat, sat, I::All, B::All, sat)
+            .await
+            .unwrap();
+        sb.broker_summary(&bbca, sat, sat, I::All, B::All, ymd(2026, 11, 8))
+            .await
+            .unwrap();
+        assert_eq!(be.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_broker_summary_refuses_what_it_cannot_answer_before_any_request() {
+        use crate::model::{BrokerBoard as B, BrokerInvestor as I};
+        let (sb, be, _d) =
+            with_backend(FixtureBackend::new().route("marketdetectors/ZZZZ", 404, MD_ZZZZ));
+        let day = ymd(2026, 11, 6);
+        let today = ymd(2026, 11, 8);
+        let bbca = Symbol::parse("BBCA").unwrap();
+        for (investor, board) in [
+            (I::Domestic, B::All),
+            (I::All, B::Cash),
+            (I::Foreign, B::Negotiated),
+        ] {
+            let e = sb
+                .broker_summary(&bbca, day, day, investor, board, today)
+                .await
+                .unwrap_err();
+            assert!(matches!(e, IdxError::Unsupported { .. }), "{e}");
+        }
+        let e = sb
+            .broker_summary(
+                &Symbol::parse("^JKSE").unwrap(),
+                day,
+                day,
+                I::All,
+                B::All,
+                today,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(e, IdxError::NotFound(_)), "{e}");
+        assert_eq!(be.call_count(), 0);
+        let e = sb
+            .broker_summary(
+                &Symbol::parse("ZZZZ").unwrap(),
+                day,
+                day,
+                I::All,
+                B::All,
+                today,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&e, IdxError::NotFound(m) if m.contains("Stockbit")),
+            "{e}"
+        );
+        assert_eq!(be.call_count(), 1, "no foreign read after a not-found");
     }
 
     #[tokio::test]
