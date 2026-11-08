@@ -486,6 +486,27 @@ function lateFetch(late) {
 }
 const lateBoard = (codes) => JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: codes.map((s, i) => quote(s, 1000, 1e8 - i, "2026-11-06T16:14:58+07:00")) });
 
+test("a page without trades for a stock the board shows trading that session waits like one IPOT has not published", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
+  const recorded = recordedFetch();
+  let published = false;
+  // BBCA's lists are out; TLKM's 11-06 page shows no trades at all until `published`.
+  const fetchFn = async (u, init) => (!published && String(u).includes("code=TLKM&start=11/06/2026&end=11/06/2026") ? new Response(page("brokersummary_bbca_20261017_no_trades.html")) : recorded(u, init));
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    await bandarScanStep(env, { now: at("17:00") });
+    let st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.pending.map((p) => p.symbol), st.with_trades], ["running", ["TLKM"], 1]);
+    assert.equal([...env.scan.keys()].filter((k) => k.endsWith("|TLKM")).length, 0, "nothing stored for TLKM");
+    published = true;
+    await bandarScanStep(env, { now: at("17:10") });
+    st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.pending, st.with_trades], ["done", [], 2]);
+  });
+});
+
 test("stocks IPOT has not published are read again apart from the pass, and count as unpublished meanwhile", async () => {
   const env = memoryDb();
   env.kv.set("board", lateBoard(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE"]));

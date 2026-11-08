@@ -306,10 +306,12 @@ export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetc
     return { page: pages.get(k), fetchedOn: today };
   };
   // The session first: until IPOT publishes the stock's lists for it, its
-  // ranges do not hold them either, so nothing more is read or stored.
+  // ranges do not hold them either, so nothing more is read or stored. Like
+  // the probe, a page without trades counts as not published while the
+  // board's quote of the stock is dated that session.
   const { page: day } = await get(session, session);
   if (day.invalid) return { invalid: true, rows: [] };
-  if (ipot.unpublished(day)) return { pending: true, rows: [] };
+  if (!day.buyers.length && !day.sellers.length && (ipot.unpublished(day) || tradedOn(quote) === session)) return { pending: true, rows: [] };
   let candles = [];
   try {
     const res = await fetchChart(symbol, "6mo", "1d");
