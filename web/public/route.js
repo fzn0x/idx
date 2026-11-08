@@ -201,17 +201,23 @@ const N = {
   search: (q) => near(webJoin(["ownership", "search", q]), "cari pemegang dan setiap ejaan yang dicetak KSEI", "find a holder and every spelling KSEI printed"),
 };
 
-/** idx schema names, by the page's command that prints that shape. */
+/** idx schema names (schema_for in src/output/json.rs), by the page's command that prints that shape; null where only the CLI and MCP print it. */
 const SCHEMA_CMD = {
   quotes: "quote BBCA", quote: "quote BBCA", history: "history BBCA", candle: "history BBCA", intraday: "intraday BBCA", profile: "profile BBCA",
   fundamentals: "fundamental BBCA", growth: "growth BBCA", valuation: "valuation BBCA", risk: "risk BBCA", compare: "compare BBCA BBRI",
   financials: "financials BBCA", earnings: "earnings BBCA", dividends: "dividends BBCA", returns: "returns BBCA", market: "market", brief: "brief BBCA",
   broker: "broker BBCA", bandar: "bandar BBCA", "bandar-screen": "bandar screen", "bandar-broker": "bandar broker YP", holidays: "holidays",
-  astro: "astro", instruments: "list --search bank", members: "members", actions: "actions BBCA", "foreign-value": "foreign BBCA", foreign: "foreign BBCA",
+  astro: "astro", instruments: "list --search bank", members: "members", actions: "actions BBCA", "foreign-value": "foreign BBCA",
   technical: "technical BBCA", screen: "screen --preset low-pe", news: "news BBCA", sentiment: "sentiment BBCA", insights: "insights BBCA",
-  "ownership-holders": "ownership ticker BBCA", "ownership-releases": "ownership releases", "ownership-foreign": "ownership foreign BBCA",
-  "ownership-foreign-flow": "ownership foreign", "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders",
-  "ownership-concentration": "ownership concentration", "ownership-graph": "ownership graph BBCA",
+  "ownership-holders": "ownership ticker BBCA", "ownership-entity": 'ownership entity "Dwimuria Investama"', "ownership-changes": "ownership changes 2026-08-31 2026-09-30",
+  "ownership-releases": "ownership releases", "ownership-foreign": "ownership foreign BBCA", "ownership-foreign-flow": "ownership foreign",
+  "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders", "ownership-concentration": "ownership concentration",
+  "ownership-graph": "ownership graph BBCA",
+  // idx.co.id's foreign flow in shares (the page's foreign prints foreign-value), the other CLI-and-MCP-only commands, the local database, the error envelope.
+  foreign: null, "market-foreign": null, "market-brokers": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
+  "stockbit-movements": null, "stockbit-status": null, watchlist: null, error: null, "ownership-import": null, "ownership-discover": null,
+  "ownership-resolve-candidates": null, "ownership-resolution": null, "ownership-resolutions": null, "ownership-composition": null,
+  "ownership-snapshot-sync": null, "ownership-status": null, "ownership-snapshot": null, "ownership-institutions": null,
 };
 
 /** An IDX ticker as typed (BBCA, bbca, BBCA.JK), and a day (2026-10-19). */
@@ -304,7 +310,8 @@ export const CLI_ONLY = {
   schema: {
     what: say("JSON Schema untuk satu bentuk keluaran", "the JSON Schema of an output shape"),
     why: say("Skemanya dibawa oleh CLI, jadi schema hanya berjalan di CLI; di sini, json di depan perintah mencetak amplopnya, dan field schema-nya menyebut bentuknya.", "The schemas ship with the CLI, so schema runs in the CLI only; here, json before a command prints its envelope, whose schema field names the shape."),
-    near: (a, words) => [N.json(own(SCHEMA_CMD, String(words.find((w) => !isFlag(w)) || "").toLowerCase()) || "quote BBCA")],
+    // A shape the page prints offers its command; one it never prints, nothing; any other name, an example.
+    near: (a, words) => { const cmd = own(SCHEMA_CMD, String(words.find((w) => !isFlag(w)) || "").toLowerCase()); return cmd === null ? [] : [N.json(cmd || "quote BBCA")]; },
   },
   config: {
     what: say("membaca atau menulis berkas konfigurasi", "read or write the config file"),

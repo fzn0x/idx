@@ -215,6 +215,30 @@ test("every CLI-only command gets the CLI-only notice, with its own reason", () 
   assert.equal(routeLine("watch").agent, false);
 });
 
+test("schema NAME offers the page's command that prints that shape, and none for a CLI-and-MCP-only one", () => {
+  const json = read("src", "output", "json.rs");
+  const body = json.slice(json.indexOf("pub fn schema_for"), json.indexOf("_ =>", json.indexOf("pub fn schema_for")));
+  const names = [...body.matchAll(/^\s+"([a-z-]+)" =>/gm)].map((m) => m[1]);
+  assert.ok(names.length > 50, `${names.length} schema names`);
+  const cliOnly = ["foreign", "market-foreign", "market-brokers", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
+    "watchlist", "error", "ownership-import", "ownership-discover", "ownership-resolve-candidates", "ownership-resolution", "ownership-resolutions",
+    "ownership-composition", "ownership-snapshot-sync", "ownership-status", "ownership-snapshot", "ownership-institutions"];
+  for (const name of names) {
+    const near = routeLine(`schema ${name}`).near;
+    if (cliOnly.includes(name)) { assert.deepEqual(near, [], name); continue; }
+    assert.equal(near.length, 1, name);
+    runsHere(near[0].line, `schema ${name}`);
+    // Every name has its own command: only quote's shapes fall to the example.
+    if (!["quotes", "quote"].includes(name)) assert.notEqual(near[0].line, "json quote BBCA", name);
+  }
+  assert.equal(routeLine("schema ownership-entity").near[0].line, 'json ownership entity "Dwimuria Investama"');
+  assert.equal(routeLine("schema ownership-changes").near[0].line, "json ownership changes 2026-08-31 2026-09-30");
+  assert.equal(routeLine("schema foreign-value").near[0].line, "json foreign BBCA");
+  // No name, or one the CLI does not know, gets the example.
+  assert.equal(routeLine("schema").near[0].line, "json quote BBCA");
+  assert.equal(routeLine("schema nope").near[0].line, "json quote BBCA");
+});
+
 test("the terminal's own lines are never intercepted: commands, aliases, subcommands, examples, tickers", () => {
   const lines = [
     ...COMMANDS, ...Object.keys(ALIASES), ...SAMPLE, ...TOOLS.filter((t) => t.web).map((t) => t.web),
