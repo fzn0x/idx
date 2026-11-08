@@ -69,8 +69,8 @@ async function heldRows(env, asOf) {
   return (await env.DB.prepare("SELECT COUNT(*) AS n FROM own_holdings WHERE as_of = ?1").bind(asOf).first()).n;
 }
 
-async function fetchText(url) {
-  const r = await fetchWithin(url, { headers: { "User-Agent": UA, Accept: "application/json, */*" }, cf: { cacheTtl: 0, cacheEverything: false } }, { ms: FETCH_TIMEOUT_MS });
+async function fetchText(url, fetchFn) {
+  const r = await fetchWithin(url, { headers: { "User-Agent": UA, Accept: "application/json, */*" }, cf: { cacheTtl: 0, cacheEverything: false } }, { ms: FETCH_TIMEOUT_MS, fetchFn });
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return r.text();
 }
@@ -115,9 +115,10 @@ const INSERT = `INSERT OR REPLACE INTO own_holdings
 
 /**
  * One step of the sync. `force` checks the mirror now instead of every 30
- * minutes. Returns what happened, for logs and the status endpoint.
+ * minutes; `fetchFn` stands in for fetch (the cron's counted one). Returns
+ * what happened, for logs and the status endpoint.
  */
-export async function ownershipSync(env, { force = false } = {}) {
+export async function ownershipSync(env, { force = false, fetchFn } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const base = mirrorBase(env);
   let state = await kvGet(env, "own:sync");
@@ -125,7 +126,7 @@ export async function ownershipSync(env, { force = false } = {}) {
   if (!state) {
     const checked = (await kvGet(env, "own:checked")) || 0;
     if (!force && now - checked < CHECK_EVERY_SECS) return { idle: true, next_check_in: CHECK_EVERY_SECS - (now - checked) };
-    const index = JSON.parse(await fetchText(`${base}/index.json`));
+    const index = JSON.parse(await fetchText(`${base}/index.json`, fetchFn));
     await kvPut(env, "own:checked", now);
     const have = new Map((await env.DB.prepare("SELECT as_of, sha256, parts_key FROM own_releases").all()).results.map((r) => [r.as_of, { sha256: r.sha256, parts_key: r.parts_key }]));
     const next = plan(index, have, keepReleases(env));
@@ -167,7 +168,7 @@ export async function ownershipSync(env, { force = false } = {}) {
   const budget = await todaysBudget(env);
   const part = state.parts[state.next];
   if (budget.rows + part.rows * WRITES_PER_ROW > dailyBudget(env)) return waiting(env, budget, { loading: state.as_of });
-  const text = await fetchText(`${base}/${part.file}`);
+  const text = await fetchText(`${base}/${part.file}`, fetchFn);
   if ((await sha256Hex(text)) !== part.sha256) {
     await kvDel(env, "own:sync");
     await kvDel(env, "own:checked");

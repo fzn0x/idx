@@ -14,6 +14,7 @@
 import { route, ApiError, refreshSnapshot } from "./api.js";
 import { ownershipSync } from "./ownership-sync.js";
 import { bandarScanStep } from "./bandar-scan.js";
+import { runCron } from "./cron.js";
 import { SECURITY_HEADERS } from "./headers.js";
 
 // The docs for agents: static assets carry no charset, and agents fetch them
@@ -86,23 +87,10 @@ export default {
     return new Response(response.body, { status: response.status, headers });
   },
 
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(
-      refreshSnapshot(env)
-        .then((r) => console.log("snapshot", JSON.stringify(r)))
-        .catch((e) => console.error("snapshot failed", e)),
-    );
-    // KSEI register: one step per minute from the GitHub mirror (no write API).
-    ctx.waitUntil(
-      ownershipSync(env)
-        .then((r) => { if (!r.idle) console.log("ownership", JSON.stringify(r)); })
-        .catch((e) => console.error("ownership sync failed", e)),
-    );
-    // Bandarmology scan of the session's most traded stocks, after the close.
-    ctx.waitUntil(
-      bandarScanStep(env)
-        .then((r) => { if (!r.idle) console.log("bandar", JSON.stringify(r)); })
-        .catch((e) => console.error("bandar scan failed", e)),
-    );
+  // The minute cron (src/cron.js): the quote board and one step of the KSEI
+  // register sync from the GitHub mirror, then one step of the bandar scan,
+  // inside one subrequest budget. The runtime waits for the returned promise.
+  scheduled(event, env) {
+    return runCron(env, { now: new Date(event?.scheduledTime ?? Date.now()) });
   },
 };

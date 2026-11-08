@@ -17,11 +17,20 @@ import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
+import { budget, isBudgetError } from "./budget.js";
 import BROKERS from "./brokers.json" with { type: "json" };
 import UNIVERSE from "./universe.json" with { type: "json" };
 
 export const SCAN_SIZE = 100;
-const PER_TICK = 4;
+/** Stocks a minute reads at most: 9 requests each, 27 of the invocation's 44. */
+const PER_TICK = 3;
+/**
+ * A stock starts only with this many subrequests left: 9 typical, 11 when a
+ * rebuild walks past sessions without trades.
+ */
+const STOCK_RESERVE = 12;
+/** ...and only this soon into the invocation, so a minute ends before the next one starts. */
+const TICK_MS = 40_000;
 const KEEP_SESSIONS = 2;
 const STATE = "bandar_scan";
 /** Minutes after midnight WIB from which the scan looks at the day's session. */
@@ -92,7 +101,11 @@ export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetc
   try {
     const res = await fetchChart(symbol, "6mo", "1d");
     if (!res.notFound) candles = y.parseChart(res.body, "6mo", "1d").candles;
-  } catch { /* no price move then; the reading itself does not need it */ }
+  } catch (e) {
+    // No price move then; the reading itself does not need it. A spent
+    // budget is not a missing chart: the stock is read again next tick.
+    if (isBudgetError(e)) throw e;
+  }
   // Each page once per stock: the 1d page is the scanned session the
   // rebuilds start from.
   const pages = new Map();
@@ -120,8 +133,17 @@ async function store(env, session, symbol, rows) {
   await env.DB.batch(rows.map((r) => stmt.bind(session, r.period, symbol, JSON.stringify(r.v))));
 }
 
-/** One cron step. Returns what it did; `{ idle: true }` when the target session is done. */
-export async function bandarScanStep(env, { now = new Date(), force = false } = {}) {
+/**
+ * One cron step. Returns what it did; `{ idle: true }` when the target
+ * session is done. `budget` is the invocation's (src/budget.js; a fresh one
+ * by default): a stock starts only while STOCK_RESERVE subrequests and some
+ * of the minute are left, and with `stocks` false (a minute the other cron
+ * jobs keep busy) the step reads no stock. `pauseMs` sets IPOT's 404 pauses
+ * (tests).
+ */
+export async function bandarScanStep(env, { now = new Date(), force = false, budget: b = budget(), stocks = true, pauseMs } = {}) {
+  const fetchPage = (u) => ipot.fetchPage(u, { fetchFn: b.fetch, ...(pauseMs == null ? {} : { pauseMs }) });
+  const fetchChart = (s, period, interval) => y.fetchChart(s, period, interval, { fetchFn: b.fetch });
   const session = targetSession(now);
   let st = await kvGet(env, STATE);
   if (st?.session === session && st.done && !force) return { idle: true, session };
@@ -130,7 +152,7 @@ export async function bandarScanStep(env, { now = new Date(), force = false } = 
     const { symbols, ranked_from } = ranking(board?.quotes || [], session);
     if (!symbols.length) return { skipped: "no quote board yet" };
     // Probe the most traded stock: no trades that day means a holiday.
-    const probe = ipot.parse(await ipot.fetchPage(ipot.url(symbols[0], session, session)));
+    const probe = ipot.parse(await fetchPage(ipot.url(symbols[0], session, session)));
     if (!probe.invalid && !probe.buyers.length && !probe.sellers.length) {
       st = { session, holiday: true, done: true, complete: st?.complete || null, symbols: [], next: 0, retry: [], failed: [], checked: 0 };
       await kvPut(env, STATE, st);
@@ -140,20 +162,24 @@ export async function bandarScanStep(env, { now = new Date(), force = false } = 
   }
   const board = await kvGet(env, "board");
   const bySym = new Map((board?.quotes || []).map((q) => [q.symbol, q]));
-  const batch = st.symbols.slice(st.next, st.next + PER_TICK);
-  for (const symbol of batch) {
+  let read = 0;
+  for (const symbol of st.symbols.slice(st.next, st.next + PER_TICK)) {
+    if (!stocks || b.left() < STOCK_RESERVE || b.elapsedMs() >= TICK_MS) break;
     try {
-      const r = await scanSymbol(symbol, session, bySym.get(symbol), { today: new Date(now.getTime() + 7 * 3600e3).toISOString().slice(0, 10) });
+      const r = await scanSymbol(symbol, session, bySym.get(symbol), { today: new Date(now.getTime() + 7 * 3600e3).toISOString().slice(0, 10), fetchPage, fetchChart });
       if (r.invalid) st.failed.push(symbol);
       else {
         await store(env, session, symbol, r.rows);
         if (r.rows[0]?.v.summary.buyers.length) st.checked++;
       }
     } catch (e) {
+      // The budget ran out under it: the stock stays next in line.
+      if (isBudgetError(e)) break;
       (st.retried ? st.failed : st.retry).push(symbol);
     }
+    read++;
   }
-  st.next += batch.length;
+  st.next += read;
   if (st.next >= st.symbols.length) {
     if (st.retry.length && !st.retried) {
       // One more pass over the stocks that failed, at the end of the list.

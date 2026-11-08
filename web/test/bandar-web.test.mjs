@@ -1,6 +1,8 @@
 // node --test web/test/*.mjs (no network). The Worker side of bandarmology:
-// /api/bandar, the nightly scan (src/bandar-scan.js) and /api/bandar/screen,
-// over an in-memory D1 and the recorded IPOT and Yahoo responses.
+// /api/bandar, the scan after each close (src/bandar-scan.js) inside the
+// minute cron's budget (src/cron.js), /api/bandar/screen and
+// /api/bandar/broker, over an in-memory D1 and the recorded IPOT and Yahoo
+// responses.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,19 +11,33 @@ import { dirname, join } from "node:path";
 
 import { bandar, bandarScreen, bandarBroker } from "../src/api.js";
 import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus } from "../src/bandar-scan.js";
+import { budget } from "../src/budget.js";
+import worker from "../src/worker.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const page = (f) => readFileSync(join(root, "tests", "fixtures", "ipot", f), "utf8");
 const CHART = readFileSync(join(root, "tests", "fixtures", "yahoo", "chart_bbca_1mo_1d.json"), "utf8");
 const quote = (symbol, price, volume, market_time = "2026-10-16T16:14:58+07:00") => ({ symbol, price, volume, previous_close: 6075, market_time });
 
-/** In-memory D1 for the statements the bandar code runs. */
+/**
+ * In-memory D1 for the statements the bandar code runs, and those of the
+ * board refresh and the register sync that share its cron minute.
+ */
 function memoryDb() {
-  const kv = new Map(), cache = new Map(), scan = new Map();
+  const kv = new Map(), kvAt = new Map(), cache = new Map(), scan = new Map();
+  // The Yahoo session's statements name their key inline.
+  const inlineKey = (sql) => sql.match(/k = '([^']+)'|VALUES \('([^']+)'/)?.slice(1).find(Boolean);
   const run = (sql, a) => {
-    if (sql.startsWith("SELECT v, updated_at FROM kv")) return kv.has(a[0]) ? { v: kv.get(a[0]), updated_at: 0 } : null;
+    if (sql.startsWith("SELECT v, updated_at FROM kv")) { const k = inlineKey(sql) ?? a[0]; return kv.has(k) ? { v: kv.get(k), updated_at: kvAt.get(k) ?? 0 } : null; }
     if (sql.startsWith("SELECT v FROM kv")) return kv.has(a[0]) ? { v: kv.get(a[0]) } : null;
-    if (sql.startsWith("INSERT OR REPLACE INTO kv")) return kv.set(a[0], a[1]);
+    if (sql.startsWith("INSERT OR REPLACE INTO kv")) {
+      const k = inlineKey(sql);
+      const [key, v, at] = k ? [k, a[0], a[1]] : a;
+      kvAt.set(key, at);
+      return kv.set(key, v);
+    }
+    if (sql.startsWith("INSERT OR REPLACE INTO ticks") || sql.startsWith("DELETE FROM ticks")) return null;
+    if (sql.startsWith("SELECT as_of, sha256, parts_key FROM own_releases")) return [];
     if (sql.startsWith("SELECT v, fetched_at, expires_at FROM cache")) return cache.get(a[0]) || null;
     if (sql.startsWith("INSERT OR REPLACE INTO cache")) return cache.set(a[0], { v: a[1], expires_at: a[2], fetched_at: a[3] });
     if (sql.startsWith("INSERT OR REPLACE INTO bandar_scan")) return scan.set([a[0], a[1], a[2]].join("|"), a[3]);
@@ -73,12 +89,21 @@ async function withFetch(fn, body) {
   }
 }
 
+/** Scan steps at `now`, one per cron minute, until the session is done; the last step's result. */
+async function scanAll(env, now, opts = {}) {
+  for (let i = 0; i < 40; i++) {
+    const r = await bandarScanStep(env, { now, ...opts });
+    if (r.done || r.idle) return r;
+  }
+  throw new Error("the scan did not finish in 40 steps");
+}
+
 test("bandar broker reads one broker across the scan like the CLI", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
   await withFetch(recordedFetch(), async () => {
     await assert.rejects(bandarBroker(env, "YP"), (e) => e.code === "not_found");
-    await bandarScanStep(env, { now: new Date("2026-10-17T03:00:00Z") });
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
     const out = await bandarBroker(env, " yp ", "1w");
     assert.equal(out.schema, "idx.bandar.broker.v1");
     assert.equal(out.provider, "ipot");
@@ -135,6 +160,8 @@ test("the nightly scan fills D1 and the screen reads it like the CLI", async () 
   await withFetch(recordedFetch(), async () => {
     await assert.rejects(bandarScreen(env, "big-distribution"), (e) => e.code === "not_found");
     const now = new Date("2026-10-17T03:00:00Z");
+    // Three stocks a minute: the fourth, ZZZZ, takes a second step.
+    assert.deepEqual(await bandarScanStep(env, { now }), { session: "2026-10-16", scanned: 3, of: 4, done: false });
     assert.deepEqual(await bandarScanStep(env, { now }), { session: "2026-10-16", scanned: 4, of: 4, done: true });
     assert.deepEqual(await bandarScanStep(env, { now }), { idle: true, session: "2026-10-16" });
     const st = await scanStatus(env);
@@ -175,6 +202,103 @@ test("a holiday is noticed and skipped", async () => {
     assert.equal((await scanStatus(env)).holiday, true);
     assert.equal(env.scan.size, 0);
   });
+});
+
+/** IPOT answering four 404s before every page (five requests a page); the rest as recorded. */
+function stormFetch(calls) {
+  const recorded = recordedFetch();
+  const tries = new Map();
+  return async (u, init) => {
+    const url = String(u);
+    calls.push(url);
+    if (url.includes("indopremier")) {
+      tries.set(url, (tries.get(url) || 0) + 1);
+      if (tries.get(url) % 5) return new Response("<html>404 Not Found</html>", { status: 404 });
+    }
+    return recorded(u, init);
+  };
+}
+
+test("a 404 storm stays inside the budget and the stock it cut short stays next", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8)] }));
+  const now = new Date("2026-10-17T03:00:00Z");
+  const calls = [];
+  await withFetch(stormFetch(calls), async () => {
+    // The probe takes 5 requests and BBCA would take 41 (a chart and eight pages): the budget stops it at 44.
+    await bandarScanStep(env, { now, budget: budget(44), pauseMs: 0 });
+    assert.equal(calls.length, 44);
+    assert.equal(env.scan.size, 0, "nothing stored from a stock cut short");
+    const st = await scanStatus(env);
+    assert.deepEqual([st.scanned, st.failed], [0, []], "BBCA is neither scanned nor failed");
+  });
+  // The next minute, with a budget of its own, reads it whole; then too little is left to start TLKM.
+  const next = [];
+  await withFetch(stormFetch(next), async () => {
+    await bandarScanStep(env, { now, budget: budget(44), pauseMs: 0 });
+    assert.equal(next.length, 41);
+    const st = await scanStatus(env);
+    assert.deepEqual([st.scanned, st.failed], [1, []]);
+    assert.equal(env.scan.size, 4, "BBCA's four periods");
+  });
+});
+
+/** Yahoo's session and quotes, the KSEI mirror's empty index, then IPOT and the charts as recorded. */
+function cronFetch(urls) {
+  const recorded = recordedFetch();
+  const time = Math.floor(Date.parse("2026-10-16T16:14:58+07:00") / 1000);
+  const board = { "BBCA.JK": [5175, 9e8], "TLKM.JK": [2690, 3e8], "BRPT.JK": [1210, 2e8] };
+  return async (u, init) => {
+    const url = String(u);
+    urls.push(url);
+    if (url.startsWith("https://fc.yahoo.com")) return new Response("", { status: 404, headers: { "set-cookie": "A3=d=test; Path=/" } });
+    if (url.includes("/getcrumb")) return new Response("crumb");
+    if (url.includes("/v7/finance/quote")) {
+      const asked = new URL(url).searchParams.get("symbols").split(",");
+      const result = asked.filter((s) => board[s] || s === "^JKSE").map((s) => (s === "^JKSE"
+        ? { symbol: s, regularMarketPrice: 7000, regularMarketTime: time }
+        : { symbol: s, regularMarketPrice: board[s][0], regularMarketVolume: board[s][1], regularMarketPreviousClose: 6075, regularMarketTime: time }));
+      return new Response(JSON.stringify({ quoteResponse: { result } }));
+    }
+    if (url.endsWith("/index.json")) return new Response(JSON.stringify({ schema: "idx.ownership.mirror.v1", releases: [] }));
+    return recorded(u, init);
+  };
+}
+
+test("the minute cron refreshes the board and the register first, then scans, inside one budget", async () => {
+  const env = memoryDb();
+  const urls = [];
+  const ctx = { waitUntil() { throw new Error("the cron leaves nothing to waitUntil"); } };
+  const minute = (iso) => ({ scheduledTime: Date.parse(iso), cron: "* * * * *" });
+  const { log, error } = console;
+  const logs = [];
+  console.log = console.error = (...a) => logs.push(a.join(" "));
+  try {
+    await withFetch(cronFetch(urls), async () => {
+      // 16:45 WIB: the 15-minute board refresh after the close and the register's check, then the scan's probe alone.
+      const first = await worker.scheduled(minute("2026-10-16T09:45:00Z"), env, ctx);
+      const scanFrom = urls.findIndex((u) => u.includes("indopremier"));
+      assert.equal(urls.filter((u) => u.includes("/v7/finance/quote")).length, 7, "the board in six batches and the index");
+      assert.ok(urls.slice(0, scanFrom).some((u) => u.endsWith("/ownership-data/index.json")), "the register's check first");
+      assert.equal(urls.length - scanFrom, 1, "the probe, and no stock in the refresh's minute");
+      assert.ok(first.subrequests.fetch + first.subrequests.d1 <= 44, JSON.stringify(first.subrequests));
+      assert.equal(first.subrequests.fetch, 12, "2 for the session, 7 quote calls, 2 for the mirror's redirect, the probe");
+      // The step ran before scheduled() resolved: its state is there.
+      assert.equal((await scanStatus(env)).session, "2026-10-16");
+      // 16:46: no refresh, the register idle: three stocks.
+      urls.length = 0;
+      const second = await worker.scheduled(minute("2026-10-16T09:46:00Z"), env, ctx);
+      assert.equal(urls.filter((u) => u.includes("indopremier")).length, 24, "eight pages a stock");
+      assert.equal(urls.length, 27, "and a chart each");
+      assert.ok(second.subrequests.fetch + second.subrequests.d1 <= 44, JSON.stringify(second.subrequests));
+      assert.equal((await scanStatus(env)).complete, "2026-10-16");
+    });
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+  assert.ok(logs.some((l) => l.startsWith("bandar ") && l.includes('"subrequests"')), logs.join("\n"));
+  assert.ok(!logs.some((l) => l.includes("failed")), logs.join("\n"));
 });
 
 test("/api/bandar for one investor side reads against the value traded", async () => {
