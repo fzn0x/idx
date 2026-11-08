@@ -22,14 +22,15 @@
 //! "Just a moment" challenge or a 403 "Attention Required" block page
 //! ([`http::cloudflare`](crate::http::cloudflare)). A challenged request is
 //! asked again three times within 30 s (`CHALLENGE_PAUSES`), except for a
-//! minute after a challenge lasted through them (`CHALLENGE_MEMORY`); one
-//! met by a block page is not. A refusal that stays is a failed fetch: the
-//! cached copy is served in its place, marked stale with a warning naming
-//! it, and with no copy it becomes a `blocked` error (exit 3) naming the
-//! cause. An empty copy of a day's summary stands in for nothing, since it
-//! may predate the summary: the error stands then too. Any other failure
-//! keeps its HTTP status as a `provider` error. Answers are cached like any
-//! other; refusals never are.
+//! minute after a challenge lasted through them (`CHALLENGE_MEMORY`) and for
+//! a caller that another source answers at once (`Patience::Once`, the
+//! broker summary only); one met by a block page is not. A refusal that
+//! stays is a failed fetch: the cached copy is served in its place, marked
+//! stale with a warning naming it, and with no copy it becomes a `blocked`
+//! error (exit 3) naming the cause. An empty copy of a day's summary stands
+//! in for nothing, since it may predate the summary: the error stands then
+//! too. Any other failure keeps its HTTP status as a `provider` error.
+//! Answers are cached like any other; refusals never are.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -85,6 +86,18 @@ const CHALLENGE_MEMORY: Duration = Duration::from_secs(60);
 /// The cache entry that remembers it, so every command and MCP call on the
 /// same cache sees it, as with the fetcher's `failed:` marks.
 const CHALLENGE_MARK: &str = "challenge-outlasted-retries:www.idx.co.id";
+
+/// Whether a request met by a Cloudflare challenge waits for it to lift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Patience {
+    /// Asked again after each of [`CHALLENGE_PAUSES`], as every request is
+    /// unless a challenge lasted through them moments ago.
+    Wait,
+    /// Asked once, for a caller that another source answers at once: the
+    /// refusal, or the cached copy in its place, comes back without a
+    /// pause. No pause was waited through, so none is remembered as such.
+    Once,
+}
 
 /// What to do when a challenge stays and nothing is cached. Most pass
 /// within a minute, but some networks are challenged on every request.
@@ -209,7 +222,7 @@ impl Failure {
 
 /// [`ask`], for callers that any cached copy answers.
 async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
-    Ok(ask(fetcher, path, ttl).await?.0)
+    Ok(ask(fetcher, path, ttl, Patience::Wait).await?.0)
 }
 
 /// One idx.co.id endpoint. A request met by a Cloudflare challenge is asked
@@ -218,11 +231,12 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
 /// or a block page, is a failed fetch: the cached copy stands in for it,
 /// marked stale with a warning naming the refusal, or the call fails with a
 /// `blocked` error. A copy that stands in for a failed fetch comes with
-/// that [`Failure`].
+/// that [`Failure`]. With [`Patience::Once`] a challenge is not asked again.
 async fn ask(
     fetcher: &Arc<Fetcher>,
     path: &str,
     ttl: Duration,
+    patience: Patience,
 ) -> Result<(Fetched, Option<Failure>)> {
     let url = format!("{BASE}/{path}");
     let headers = headers();
@@ -232,7 +246,8 @@ async fn ask(
         .then(|| fetcher.cache().get(CHALLENGE_MARK, CHALLENGE_MEMORY))
         .flatten()
         .filter(|m| m.fresh);
-    let pauses: &[Duration] = if outlasted.is_some() {
+    // So is one for a caller that another source answers at once.
+    let pauses: &[Duration] = if outlasted.is_some() || patience == Patience::Once {
         &[]
     } else {
         &CHALLENGE_PAUSES
@@ -275,7 +290,7 @@ async fn ask(
             _ => break (got, seen),
         }
     };
-    if refusal == Some(Refusal::Challenge) && outlasted.is_none() {
+    if refusal == Some(Refusal::Challenge) && !pauses.is_empty() {
         // Through every pause: the next requests are asked once.
         let what = format!("{tries} tries over {} s", waited.as_secs());
         if let Err(e) = fetcher.cache().put(CHALLENGE_MARK, 0, &what) {
@@ -310,16 +325,17 @@ async fn day<T>(
     path: &str,
     date: NaiveDate,
     today: NaiveDate,
+    patience: Patience,
     parse: fn(&str) -> Result<Vec<T>>,
 ) -> Result<Sourced<Vec<T>>> {
-    let (mut f, mut failure) = ask(fetcher, path, day_ttl(date, today)).await?;
+    let (mut f, mut failure) = ask(fetcher, path, day_ttl(date, today), patience).await?;
     let mut rows = parse(&f.body)?;
     let fetched_on = f
         .fetched_at
         .with_timezone(&crate::model::wib())
         .date_naive();
     if rows.is_empty() && date < today && f.cached && !f.stale && fetched_on <= date {
-        (f, failure) = ask(fetcher, path, TTL_TODAY).await?;
+        (f, failure) = ask(fetcher, path, TTL_TODAY, patience).await?;
         rows = parse(&f.body)?;
     }
     if let Some(failure) = failure.filter(|_| rows.is_empty()) {
@@ -354,7 +370,15 @@ pub async fn stock_summary(
         "TradingSummary/GetStockSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    day(fetcher, &path, date, today, parse::stock_summary).await
+    day(
+        fetcher,
+        &path,
+        date,
+        today,
+        Patience::Wait,
+        parse::stock_summary,
+    )
+    .await
 }
 
 /// Every member's day on `date`; empty when nothing traded.
@@ -363,11 +387,21 @@ pub async fn broker_summary(
     date: NaiveDate,
     today: NaiveDate,
 ) -> Result<Sourced<Vec<BrokerDay>>> {
+    broker_summary_with(fetcher, date, today, Patience::Wait).await
+}
+
+/// [`broker_summary`], waiting out a challenge only with [`Patience::Wait`].
+pub async fn broker_summary_with(
+    fetcher: &Arc<Fetcher>,
+    date: NaiveDate,
+    today: NaiveDate,
+    patience: Patience,
+) -> Result<Sourced<Vec<BrokerDay>>> {
     let path = format!(
         "TradingSummary/GetBrokerSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    day(fetcher, &path, date, today, parse::broker_summary).await
+    day(fetcher, &path, date, today, patience, parse::broker_summary).await
 }
 
 /// Every index's day on `date`; empty when nothing traded.
@@ -380,7 +414,15 @@ pub async fn index_summary(
         "TradingSummary/GetIndexSummary?date={}&start=0&length=9999",
         ymd(date)
     );
-    day(fetcher, &path, date, today, parse::index_summary).await
+    day(
+        fetcher,
+        &path,
+        date,
+        today,
+        Patience::Wait,
+        parse::index_summary,
+    )
+    .await
 }
 
 /// The latest `days` sessions of one stock, newest first, with the
@@ -395,7 +437,7 @@ pub async fn trading_history(
         "ListedCompany/GetTradingInfoSS?code={}&start=0&length={days}",
         symbol.as_str()
     );
-    let (f, failure) = ask(fetcher, &path, TTL_HISTORY).await?;
+    let (f, failure) = ask(fetcher, &path, TTL_HISTORY, Patience::Wait).await?;
     let rows = parse::trading_history(&f.body)?;
     if rows.is_empty() {
         return Err(IdxError::NotFound(format!(
@@ -845,6 +887,39 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(be.call_count(), 14);
+    }
+
+    #[tokio::test]
+    async fn a_hurried_request_meets_a_challenge_once_and_leaves_no_mark() {
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers("GetBrokerSummary", 403, CHALLENGE, FLAGGED)
+                .route_with_headers("GetIndexSummary", 403, CHALLENGE, FLAGGED),
+        );
+        let once = |date| broker_summary_with(&f, date, d(2026, 10, 18), Patience::Once);
+        let err = once(d(2026, 10, 16)).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        assert!(
+            err.to_string().starts_with("idx: idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge), and nothing is cached for it. "),
+            "{err}"
+        );
+        assert_eq!(be.call_count(), 1);
+        // A cached copy stands in at once.
+        f.cache()
+            .put_at(&broker_url("20261018"), 200, BROKERS, hours_ago(1))
+            .unwrap();
+        let s = once(d(2026, 10, 18)).await.unwrap();
+        assert!(s.stale && s.data.len() == 88);
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)); showing cached copy"]
+        );
+        assert_eq!(be.call_count(), 2);
+        // No pause was waited through, so none is skipped next: four tries.
+        index_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(be.calls_matching("GetIndexSummary"), 4);
     }
 
     #[tokio::test]

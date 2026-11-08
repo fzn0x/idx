@@ -616,13 +616,18 @@ fails, offline has no copy, or has not published the session yet, IPOT
 answers with a warning saying why, but only if it holds the session asked
 for: the `--date`, or with none the latest session that has ended.
 Otherwise idx.co.id's answer stands, with what IPOT holds or why it could
-not be read. Under `--source idx` (MCP `source: "idx"`) a `blocked` error
-names `--source ipot` (MCP `source: "ipot"`) when IPOT could answer: for
-no `--date` or the latest session that has ended, outside a trading day's
-08:58 to 19:00 WIB. A session idx.co.id has not published yet (its
-summary read on its own day has no rows) is named whatever the source:
-with no `--date` the session before comes with a warning, and a `--date`
-of it is `not_found`. IPOT takes no date: a `--date` before its session,
+not be read. IPOT could answer for no `--date` or the latest session that
+has ended, outside a trading day's 08:58 to 19:00 WIB. There `auto` does
+not wait out a Cloudflare challenge: idx.co.id is asked once, without the
+30 s of retries, and IPOT answers at once (a cached copy of idx.co.id's
+summary still answers first, marked stale); only if IPOT cannot stand in
+after all is idx.co.id asked again with the retries. `--source idx` (MCP
+`source: "idx"`) always retries, and its `blocked` error names
+`--source ipot` (MCP `source: "ipot"`) where IPOT could answer. A session
+idx.co.id has not published yet (its summary read on its own day has no
+rows) is named whatever the source: with no `--date` the session before
+comes with a warning, and a `--date` of it is `not_found`. IPOT takes no
+date: a `--date` before its session,
 or after today, is a usage error; a later one up to today, or a day without
 a session, is `not_found`; and under `auto` idx.co.id's error stands. It
 abbreviates figures of a million and more to two decimals (`2.79 T`, so
@@ -1348,7 +1353,7 @@ where one helps:
 | --- | --- | --- |
 | 1 | `internal`, `io` | unexpected failure |
 | 2 | `usage` | bad flags or symbol |
-| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused the request with a challenge or a block page. For idx.co.id's data a challenged request is retried for 30 s first, and a cached copy, when there is one, is served marked stale instead of the error. A challenge usually passes within a minute: retry then, and from another network if it keeps refusing. A block page can last longer: retry later, or from another network if it persists. Data centres, VPNs and CI runners are refused more often. The message names any other source for the same question (`--source ipot` for a stock's foreign flow, `idx bandar screen --period 1d --sort fnet` for the latest session's foreign net per stock, `market brokers --source ipot` for the member ranking of IPOT's latest session when that is the session asked for); for the ownership register, the GitHub mirror |
+| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused the request with a challenge or a block page. For idx.co.id's data a challenged request is retried for 30 s first (`market brokers` under `auto`, where IPOT could answer, asks idx.co.id once and lets IPOT stand in, and retries only if IPOT cannot), and a cached copy, when there is one, is served marked stale instead of the error. A challenge usually passes within a minute: retry then, and from another network if it keeps refusing. A block page can last longer: retry later, or from another network if it persists. Data centres, VPNs and CI runners are refused more often. The message names any other source for the same question (`--source ipot` for a stock's foreign flow, `idx bandar screen --period 1d --sort fnet` for the latest session's foreign net per stock, `market brokers --source ipot` for the member ranking of IPOT's latest session when that is the session asked for); for the ownership register, the GitHub mirror |
 | 4 | `not_found` | symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` and nothing cached |
 | 6 | `config`, `unsupported` | bad config file or env value; or the selected provider cannot serve this command (`--provider auto` can) |
