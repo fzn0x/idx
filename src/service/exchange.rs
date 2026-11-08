@@ -478,12 +478,24 @@ fn stock_only(symbol: &Symbol) -> Result<()> {
     Ok(())
 }
 
-/// idx.co.id refused the request: point at the source that answers the same
-/// question in rupiah from anywhere.
-fn with_ipot_hint(e: IdxError) -> IdxError {
-    const HINT: &str = "; or ask for source ipot (Indo Premier: rupiah across all boards)";
+/// When idx.co.id refuses: the same question from Indo Premier, which
+/// answers from anywhere.
+pub const IPOT_SOURCE_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or add --source ipot for Indo Premier's figures in rupiah",
+    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah",
+};
+
+/// When idx.co.id refuses the market's foreign flow: the latest session's
+/// foreign net per stock from Indo Premier's broker summaries.
+pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx bandar screen --period 1d --sort fnet",
+    mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
+};
+
+/// idx.co.id refused the request and nothing was cached: add what else
+/// answers the question. A Cloudflare refusal keeps its JSON code `blocked`.
+fn with_alternative(e: IdxError, advice: crate::error::Advice) -> IdxError {
     match e {
-        // A Cloudflare refusal keeps its JSON code `blocked`.
         IdxError::Blocked {
             provider,
             refusal,
@@ -491,18 +503,16 @@ fn with_ipot_hint(e: IdxError) -> IdxError {
         } if provider == idx::NAME => IdxError::Blocked {
             provider,
             refusal,
-            message: format!("{message}{HINT}"),
+            message: format!("{message}{}", advice.cli),
         },
-        IdxError::Provider { provider, message }
-            if provider == idx::NAME && message.starts_with(idx::BLOCKED_HINT) =>
-        {
-            IdxError::Provider {
-                provider,
-                message: format!("{message}{HINT}"),
-            }
-        }
         other => other,
     }
+}
+
+/// idx.co.id refused the request: point at the source that answers the same
+/// question in rupiah from anywhere.
+fn with_ipot_hint(e: IdxError) -> IdxError {
+    with_alternative(e, IPOT_SOURCE_ADVICE)
 }
 
 /// `+1` net buying, `-1` net selling, `0` flat or unknown.
@@ -865,7 +875,9 @@ pub async fn market_foreign(
     sort: ForeignSort,
     today: NaiveDate,
 ) -> Result<Sourced<MarketForeign>> {
-    let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today)).await?;
+    let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today))
+        .await
+        .map_err(|e| with_alternative(e, BANDAR_FNET_ADVICE))?;
     let rows: Vec<ForeignRow> = std::mem::take(&mut s.data)
         .iter()
         .filter_map(foreign_row)
@@ -1321,7 +1333,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_blocked_idx_co_id_points_at_ipot() {
-        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetTradingInfoSS", 403, "no")
+                .route("GetStockSummary", 403, "no"),
+        );
         let sym = Symbol::parse("BBCA").unwrap();
         let err = foreign_flow(&f, &[], &sym, ForeignRange::Latest(5), d(2026, 10, 18))
             .await
@@ -1329,7 +1345,21 @@ mod tests {
         assert_eq!(err.exit_code(), 3);
         assert_eq!(err.code(), "blocked");
         assert!(err.to_string().contains("Cloudflare"), "{err}");
-        assert!(err.to_string().contains("source ipot"), "{err}");
+        assert!(
+            err.to_string()
+                .ends_with("; or add --source ipot for Indo Premier's figures in rupiah"),
+            "{err}"
+        );
+        // The market's foreign flow: the bandar screen's foreign net.
+        let err = market_foreign(&f, None, 10, ForeignSort::Value, d(2026, 10, 16))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string()
+                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+            "{err}"
+        );
     }
 
     #[test]
