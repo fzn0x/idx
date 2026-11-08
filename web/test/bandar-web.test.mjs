@@ -36,6 +36,14 @@ function memoryDb() {
       kvAt.set(key, at);
       return kv.set(key, v);
     }
+    if (sql.startsWith("INSERT INTO kv") && sql.includes("ON CONFLICT(k) DO UPDATE")) {
+      // The scan's compare-and-set: written over the revision it read (a[3]), or not at all.
+      const held = kv.get(a[0]);
+      if (held != null && (JSON.parse(held).rev ?? null) !== (a[3] ?? null)) return { meta: { changes: 0 } };
+      kv.set(a[0], a[1]);
+      kvAt.set(a[0], a[2]);
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("INSERT OR REPLACE INTO ticks") || sql.startsWith("DELETE FROM ticks")) return null;
     if (sql.startsWith("SELECT as_of, sha256, parts_key FROM own_releases")) return [];
     if (sql.startsWith("SELECT v, fetched_at, expires_at FROM cache")) return cache.get(a[0]) || null;
@@ -453,6 +461,38 @@ test("a stock IPOT still had not published at the next session's 16:45 counts as
     assert.deepEqual(out.warnings, ["the scan of 2026-11-09 is running (0 of 2); showing 2026-11-06", "IPOT had not published 2026-11-06 for 1 of the 2 scanned stocks when its scan ended"]);
     assert.equal(out.data.scanned, 2);
   });
+});
+
+test("a minute that overlapped another does not write its state over the other's", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
+  const now = new Date("2026-10-17T03:00:00Z");
+  const recorded = recordedFetch();
+  await withFetch(recorded, async () => { await bandarScanStep(env, { now }); });
+  const read = JSON.parse(env.kv.get("bandar_scan"));
+  assert.equal(read.rev, 1);
+  // While this minute reads ZZZZ, a slower one that had read the same state writes first.
+  let theirs = null;
+  const overlap = async (u, init) => {
+    if (!theirs) env.kv.set("bandar_scan", (theirs = JSON.stringify({ ...read, rev: 2, written_by: "the other minute" })));
+    return recorded(u, init);
+  };
+  const { warn } = console;
+  const warned = [];
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    await withFetch(overlap, async () => {
+      const r = await bandarScanStep(env, { now });
+      assert.equal(r.conflict, true);
+    });
+  } finally {
+    console.warn = warn;
+  }
+  assert.ok(warned.some((w) => w.includes("another minute wrote the state first")), warned);
+  assert.equal(env.kv.get("bandar_scan"), theirs, "the other minute's state stands");
+  // The next minute goes on from it.
+  await withFetch(recorded, async () => { assert.equal((await bandarScanStep(env, { now })).done, true); });
+  assert.equal(JSON.parse(env.kv.get("bandar_scan")).rev, 3);
 });
 
 /** IPOT answering four 404s before every page (five requests a page); the rest as recorded. */
