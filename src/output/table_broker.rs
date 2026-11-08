@@ -173,6 +173,11 @@ mod tests {
             buy_value: Some(6.6e12),
             sell_value: Some(6.6e12),
             rounded: true,
+            buyer_count: None,
+            seller_count: None,
+            buyers_complete: false,
+            sellers_complete: false,
+            source: crate::model::BrokerSummarySource::Ipot,
         }
     }
 

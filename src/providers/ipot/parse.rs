@@ -9,7 +9,9 @@
 use chrono::NaiveDate;
 
 use crate::error::{IdxError, Result};
-use crate::model::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, Symbol};
+use crate::model::{
+    BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, BrokerSummarySource, Symbol,
+};
 
 use super::NAME;
 
@@ -56,6 +58,15 @@ impl Parsed {
     ) -> BrokerSummary {
         let all = investor == BrokerInvestor::All;
         let foreign_net_value = self.foreign_net_value.filter(|_| board == BrokerBoard::All);
+        // A side with fewer rows than the page holds lists every broker; a
+        // page with trades but no lists has not been published yet.
+        let published = !(self.buyers.is_empty()
+            && self.sellers.is_empty()
+            && self.total_value.is_some_and(|v| v > 0.0));
+        let complete = |rows: &[BrokerFlow]| published && rows.len() < ROWS;
+        let count = |rows: &[BrokerFlow]| complete(rows).then_some(rows.len() as u32);
+        let (buyers_complete, sellers_complete) = (complete(&self.buyers), complete(&self.sellers));
+        let (buyer_count, seller_count) = (count(&self.buyers), count(&self.sellers));
         BrokerSummary {
             symbol,
             name: None,
@@ -72,9 +83,17 @@ impl Parsed {
             buy_value: self.total_value,
             sell_value: sell_value(investor, self.total_value, foreign_net_value),
             rounded: self.rounded,
+            buyer_count,
+            seller_count,
+            buyers_complete,
+            sellers_complete,
+            source: BrokerSummarySource::Ipot,
         }
     }
 }
+
+/// Rows a side of the page holds: the top 10.
+pub const ROWS: usize = 10;
 
 /// What the selected investors sold, from what they bought and the foreign
 /// net: every trade has a buyer and a seller, so all investors sold what
@@ -407,6 +426,39 @@ mod tests {
         );
         assert_eq!(dm.buy_value, Some(242_800_000_000.0));
         assert_eq!(dm.sell_value, Some(546_700_000_000.0));
+    }
+
+    #[test]
+    fn a_side_is_complete_only_below_the_ten_rows_the_source_lists() {
+        use crate::model::BrokerSummarySource;
+        use BrokerBoard as B;
+        use BrokerInvestor as I;
+        // BBCA: ten a side, so brokers below tenth place may be missing.
+        let all = side(DAY, I::All, B::All);
+        assert_eq!(all.source, BrokerSummarySource::Ipot);
+        assert!(!all.buyers_complete && !all.sellers_complete);
+        assert_eq!((all.buyer_count, all.seller_count), (None, None));
+        // TRUK 11-05: two buyers (20 + 16 lots) and one seller (36 lots).
+        let truk = side(
+            include_str!("../../../tests/fixtures/ipot/brokersummary_truk_20261105.html"),
+            I::All,
+            B::All,
+        );
+        assert!(truk.buyers_complete && truk.sellers_complete);
+        assert_eq!((truk.buyer_count, truk.seller_count), (Some(2), Some(1)));
+        // No trades: nobody is missing.
+        let empty = side(EMPTY, I::All, B::All);
+        assert!(empty.buyers_complete && empty.sellers_complete);
+        assert_eq!((empty.buyer_count, empty.seller_count), (Some(0), Some(0)));
+        // Trades in the footer but no lists yet: not published, not complete.
+        let pending = side(
+            include_str!("../../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html"),
+            I::All,
+            B::All,
+        );
+        assert!(pending.is_empty() && pending.buy_value.is_some_and(|v| v > 0.0));
+        assert!(!pending.buyers_complete && !pending.sellers_complete);
+        assert_eq!((pending.buyer_count, pending.seller_count), (None, None));
     }
 
     #[test]
