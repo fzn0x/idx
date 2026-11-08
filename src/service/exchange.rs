@@ -967,22 +967,30 @@ fn member_ranking(
 /// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
 /// Before idx.co.id publishes a session its summary is an empty list, so a
 /// copy read on `day` itself without rows does not show that `day` had no
-/// session. Once that session has ended (`ended`), such a copy served
-/// because it could not be read again (the live fetch failed, or offline)
-/// is an error rather than a day without trading: the walk does not skip a
-/// session it could not read.
+/// session. Once that session has ended (`ended`), such a copy is read
+/// again: the cache keeps a past day's summary for a closed session's 30
+/// days, so it is asked for with today's short lifetime instead. A copy
+/// served because it could not be read again (the live fetch failed, or
+/// offline) is an error rather than a day without trading: the walk does
+/// not skip a session it could not read.
 async fn broker_day(
     fetcher: &Arc<Fetcher>,
     day: NaiveDate,
     today: NaiveDate,
     ended: NaiveDate,
 ) -> Result<Sourced<Vec<idx::BrokerDay>>> {
-    let s = idx::broker_summary(fetcher, day, today).await?;
-    let read = s.fetched_at.with_timezone(&crate::model::wib());
-    if !s.data.is_empty() || !s.stale || day > ended || read.date_naive() > day {
+    let read = |s: &Sourced<Vec<idx::BrokerDay>>| s.fetched_at.with_timezone(&crate::model::wib());
+    let early = |s: &Sourced<Vec<idx::BrokerDay>>| {
+        s.data.is_empty() && day <= ended && read(s).date_naive() <= day
+    };
+    let mut s = idx::broker_summary(fetcher, day, today).await?;
+    if early(&s) && s.cached && !s.stale && day < today {
+        s = idx::broker_summary(fetcher, day, day).await?;
+    }
+    if !early(&s) || !s.stale {
         return Ok(s);
     }
-    let clock = read.format("%H:%M");
+    let clock = read(&s).format("%H:%M");
     if s.stale_reason == Some(crate::model::StaleReason::Offline) {
         return Err(IdxError::OfflineMiss(format!(
             "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, as before idx.co.id publishes a session"
@@ -2362,6 +2370,47 @@ mod tests {
             err.to_string().contains(
                 "the broker summary for 2026-11-06 is cached only as read at 11:00 WIB that day"
             ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_summary_cached_before_its_session_was_published_is_read_again() {
+        use crate::model::BrokerSource;
+        // Thursday's summary read that morning, before idx.co.id published
+        // it: on Friday it would be kept as a closed session for 30 days.
+        let friday = wib_at("2026-11-06T07:00:00");
+        let early = |dir: &std::path::Path| {
+            Cache::new(dir)
+                .put_fetched_at(
+                    "https://www.idx.co.id/primary/TradingSummary/GetBrokerSummary?date=20261105&start=0&length=9999",
+                    200,
+                    NO_TRADING,
+                    wib_at("2026-11-05T11:00:00"),
+                )
+                .unwrap();
+        };
+        let (f, be, dir) =
+            fetcher(FixtureBackend::new().route("GetBrokerSummary?date=20261105", 200, BROKERS));
+        early(dir.path());
+        let latest =
+            || market_brokers_from(&f, BrokerSource::Idx, None, 5, BrokerSort::Value, friday);
+        let s = latest().await.unwrap();
+        assert_eq!((s.data.date, s.data.members), (d(2026, 11, 5), 88));
+        assert!(!s.cached);
+        // The published copy is kept.
+        assert!(latest().await.unwrap().cached);
+        assert_eq!(be.call_count(), 1);
+
+        // When it cannot be read again, the session is not skipped.
+        let (f, _be, dir) = fetcher(FixtureBackend::new());
+        early(dir.path());
+        let err = market_brokers_from(&f, BrokerSource::Idx, None, 5, BrokerSort::Value, friday)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("the broker summary for 2026-11-05 could not be read again"),
             "{err}"
         );
     }
