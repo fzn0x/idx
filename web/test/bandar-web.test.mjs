@@ -8,12 +8,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { bandar, bandarScreen, bandarBroker } from "../src/api.js";
-import { targetSession, mostTraded, bandarScanStep, scanStatus } from "../src/bandar-scan.js";
+import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus } from "../src/bandar-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const page = (f) => readFileSync(join(root, "tests", "fixtures", "ipot", f), "utf8");
 const CHART = readFileSync(join(root, "tests", "fixtures", "yahoo", "chart_bbca_1mo_1d.json"), "utf8");
-const quote = (symbol, price, volume) => ({ symbol, price, volume, previous_close: 6075, market_time: "2026-10-16T16:14:58+07:00" });
+const quote = (symbol, price, volume, market_time = "2026-10-16T16:14:58+07:00") => ({ symbol, price, volume, previous_close: 6075, market_time });
 
 /** In-memory D1 for the statements the bandar code runs. */
 function memoryDb() {
@@ -109,7 +109,24 @@ test("the scan targets the last finished session", () => {
   assert.equal(targetSession(new Date("2026-10-16T09:50:00Z")), "2026-10-16", "Friday 16:50 WIB: Friday");
   assert.equal(targetSession(new Date("2026-10-17T03:00:00Z")), "2026-10-16", "Saturday: Friday");
   assert.equal(targetSession(new Date("2026-10-19T01:00:00Z")), "2026-10-16", "Monday 08:00 WIB: Friday");
+  // Listed holidays are never targets: 12-24 and 12-25 close, 12-26 and 12-27 are a weekend.
+  assert.equal(targetSession(new Date("2026-12-24T10:00:00Z")), "2026-12-23", "Christmas Eve 17:00 WIB: the 23rd");
+  assert.equal(targetSession(new Date("2026-12-28T01:00:00Z")), "2026-12-23", "Monday 28th 08:00 WIB: the 23rd");
+  // 2028 is not on the bundled list: its weekdays are trading days, 2027-12-31 is still listed.
+  assert.equal(targetSession(new Date("2028-01-03T01:00:00Z")), "2027-12-30", "Monday 2028-01-03 08:00 WIB: past the listed 2027-12-31");
+  assert.equal(targetSession(new Date("2028-01-04T10:00:00Z")), "2028-01-04", "a weekday of an uncovered year");
   assert.deepEqual(mostTraded([quote("A", 10, 5), quote("B", 100, 5), quote("^JKSE", 7000, 9e9), quote("C", 1, 0)], 5), ["B", "A"]);
+});
+
+test("the ranking counts the stocks that traded on the session", () => {
+  const idle = quote("TMPO", 1000, 5, "2026-10-14T15:59:00+07:00"); // last traded two sessions earlier
+  assert.deepEqual(mostTraded([quote("A", 10, 5), quote("B", 100, 5), idle], 5, "2026-10-16"), ["B", "A"]);
+  assert.deepEqual(ranking([quote("A", 10, 5), idle], "2026-10-16"), { symbols: ["A"], ranked_from: "2026-10-16" });
+  // The board has moved on to the next session: the whole board, by its latest value.
+  const next = quote("B", 100, 5, "2026-10-19T10:01:00+07:00");
+  assert.deepEqual(ranking([quote("A", 10, 5), next, idle], "2026-10-16"), { symbols: ["TMPO", "B", "A"], ranked_from: "2026-10-19" });
+  // A board without a quote of the session, refreshed before it traded.
+  assert.deepEqual(ranking([idle], "2026-10-16"), { symbols: ["TMPO"], ranked_from: "2026-10-14" });
 });
 
 test("the nightly scan fills D1 and the screen reads it like the CLI", async () => {

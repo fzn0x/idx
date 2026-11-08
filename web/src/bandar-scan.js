@@ -16,6 +16,7 @@
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
 import * as bd from "./bandar.js";
+import * as hol from "./holidays.js";
 import BROKERS from "./brokers.json" with { type: "json" };
 import UNIVERSE from "./universe.json" with { type: "json" };
 
@@ -23,27 +24,48 @@ export const SCAN_SIZE = 100;
 const PER_TICK = 4;
 const KEEP_SESSIONS = 2;
 const STATE = "bandar_scan";
-/** Minutes after midnight WIB from which the session's summaries are final. */
+/** Minutes after midnight WIB from which the scan looks at the day's session. */
 const READY_MIN = 16 * 60 + 45;
 const NAMES = new Map(UNIVERSE.map(([s, n]) => [s, n]));
 
-const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
-const weekend = (iso) => [0, 6].includes(new Date(`${iso}T00:00:00Z`).getUTCDay());
-const prevWeekday = (iso) => { let d = addDays(iso, -1); while (weekend(d)) d = addDays(d, -1); return d; };
-
-/** The session to scan: today from 16:45 WIB on a weekday, otherwise the weekday before. Pure, tested. */
+/**
+ * The session to scan: today from 16:45 WIB on a trading day, otherwise the
+ * trading day before. Weekends and the bundled holidays (src/holidays.js) are
+ * never targets; in a year the list does not cover only weekends close. Pure,
+ * tested.
+ */
 export function targetSession(now = new Date()) {
   const w = new Date(now.getTime() + 7 * 3600e3);
   const today = w.toISOString().slice(0, 10);
   const mins = w.getUTCHours() * 60 + w.getUTCMinutes();
-  return weekend(today) || mins < READY_MIN ? prevWeekday(today) : today;
+  return hol.isTradingDay(today) && mins >= READY_MIN ? today : hol.previousTradingDay(today);
 }
 
-/** The board's stocks ranked by value traded (price x volume), most first. Pure, tested. */
-export function mostTraded(quotes, n = SCAN_SIZE) {
-  const value = (q) => (q.price || 0) * (q.volume || 0);
-  return quotes.filter((q) => value(q) > 0 && !q.symbol.startsWith("^")).sort((a, b) => value(b) - value(a)).slice(0, n).map((q) => q.symbol);
+const valueOf = (q) => (q.price || 0) * (q.volume || 0);
+/** The WIB date of a quote's last trade, or null. */
+const tradedOn = (q) => (q?.market_time ? hol.wibDate(q.market_time) : null);
+
+/**
+ * The board's stocks most traded on `session`, by value (price x volume),
+ * most first. A quote whose last trade is dated another day is left out: a
+ * suspended or idle stock keeps its last volume. When the board has moved
+ * past the session (quotes dated later number more than a tenth of those
+ * dated on it) or holds no quote of it, the whole board is ranked by its
+ * latest value instead, and `ranked_from` names the newest date it holds.
+ * Without a session the whole board is ranked. Pure, tested.
+ */
+export function ranking(quotes, session = null, n = SCAN_SIZE) {
+  const stocks = quotes.filter((q) => valueOf(q) > 0 && !String(q.symbol).startsWith("^"));
+  const top = (list) => [...list].sort((a, b) => valueOf(b) - valueOf(a)).slice(0, n).map((q) => q.symbol);
+  if (!session) return { symbols: top(stocks), ranked_from: null };
+  const on = stocks.filter((q) => tradedOn(q) === session);
+  const later = stocks.filter((q) => (tradedOn(q) ?? "") > session).length;
+  if (on.length && later * 10 <= on.length) return { symbols: top(on), ranked_from: session };
+  return { symbols: top(stocks), ranked_from: stocks.map(tradedOn).filter(Boolean).sort().pop() ?? null };
 }
+
+/** The symbols of {@link ranking}. Pure, tested. */
+export const mostTraded = (quotes, n = SCAN_SIZE, session = null) => ranking(quotes, session, n).symbols;
 
 async function kvGet(env, k) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = ?1").bind(k).first();
@@ -105,8 +127,7 @@ export async function bandarScanStep(env, { now = new Date(), force = false } = 
   if (st?.session === session && st.done && !force) return { idle: true, session };
   if (!st || st.session !== session || (force && st.done)) {
     const board = await kvGet(env, "board");
-    const quotes = board?.quotes || [];
-    const symbols = mostTraded(quotes);
+    const { symbols, ranked_from } = ranking(board?.quotes || [], session);
     if (!symbols.length) return { skipped: "no quote board yet" };
     // Probe the most traded stock: no trades that day means a holiday.
     const probe = ipot.parse(await ipot.fetchPage(ipot.url(symbols[0], session, session)));
@@ -115,7 +136,7 @@ export async function bandarScanStep(env, { now = new Date(), force = false } = 
       await kvPut(env, STATE, st);
       return { holiday: session };
     }
-    st = { session, symbols, next: 0, retry: [], retried: false, failed: [], checked: 0, done: false, complete: st?.complete || null, started_at: now.toISOString() };
+    st = { session, symbols, ranked_from, next: 0, retry: [], retried: false, failed: [], checked: 0, done: false, complete: st?.complete || null, started_at: now.toISOString() };
   }
   const board = await kvGet(env, "board");
   const bySym = new Map((board?.quotes || []).map((q) => [q.symbol, q]));
