@@ -309,7 +309,8 @@ impl std::str::FromStr for BrokerSort {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum BrokerSource {
-    /// idx.co.id, and IPOT's latest session when idx.co.id refuses, cannot be reached or fails.
+    /// idx.co.id, and IPOT when idx.co.id refuses, cannot be reached, fails or has not published
+    /// the session, if IPOT holds it.
     Auto,
     /// idx.co.id's daily broker summary: any session.
     Idx,

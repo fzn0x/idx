@@ -563,9 +563,16 @@ is twice the market's value.
 
 `provider` says which source answered: `idx`, idx.co.id's daily broker
 summary (any session), or `ipot`, IPOT's ranking of its latest session
-(`--source ipot`, MCP `source: "ipot"`; also `auto`, the default, when
-idx.co.id refuses (Cloudflare), cannot be reached, fails or, offline, has no
-copy, with a warning). IPOT takes no date: a `--date` before its session,
+(`--source ipot`, MCP `source: "ipot"`). `auto`, the default, asks
+idx.co.id first; when idx.co.id refuses (Cloudflare), cannot be reached,
+fails, offline has no copy, or has not published the session yet, IPOT
+answers with a warning saying why, but only if it holds the session asked
+for: the `--date`, or with none the latest session that has ended.
+Otherwise idx.co.id's answer stands, with what IPOT holds or why it could
+not be read. A session idx.co.id has not published yet (its summary read
+on its own day has no rows) is named whatever the source: with no `--date`
+the session before comes with a warning, and a `--date` of it is
+`not_found`. IPOT takes no date: a `--date` before its session,
 or after today, is a usage error; a later one up to today, or a day without
 a session, is `not_found`; and under `auto` idx.co.id's error stands. It
 abbreviates figures of a million and more to two decimals (`2.79 T`, so
