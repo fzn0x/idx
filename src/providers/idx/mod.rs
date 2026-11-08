@@ -15,10 +15,12 @@
 //! - `ExchangeMember/GetBrokerSearch?start=0&length=9999`: exchange members.
 //!
 //! A day without trading answers an empty list; an unknown code an empty
-//! history. The site sits behind Cloudflare: ordinary connections pass,
-//! while data-centre addresses (CI runners, Cloudflare Workers) are often
-//! refused with a 403 "Attention Required" block page or a "Just a moment"
-//! challenge ([`http::cloudflare`](crate::http::cloudflare)). A challenge is
+//! history. The site sits behind Cloudflare, whose bot protection now and
+//! then refuses a request from any network (1 in 10 from a home connection
+//! on 2026-11-08; the same request passed 25 s later) and refuses
+//! data-centre addresses (CI runners, Cloudflare Workers) more often, with a
+//! "Just a moment" challenge or a 403 "Attention Required" block page
+//! ([`http::cloudflare`](crate::http::cloudflare)). A challenge is
 //! asked again three times within 30 s (`CHALLENGE_PAUSES`); a block page
 //! is not. A refusal that stays is a failed fetch: the cached copy is served
 //! in its place, marked stale with a warning naming it, and with no copy it
@@ -31,9 +33,9 @@ use std::time::Duration;
 
 use chrono::{Datelike, NaiveDate};
 
-use crate::error::{IdxError, Result};
+use crate::error::{Advice, IdxError, Result};
 use crate::http::cloudflare::{self, Refusal};
-use crate::http::{Fetched, Fetcher, RawResponse};
+use crate::http::{CacheMode, Fetched, Fetcher, RawResponse};
 use crate::model::{CalendarEvent, IndexRow, Instrument, Member, Symbol};
 
 use super::Sourced;
@@ -71,7 +73,16 @@ const CHALLENGE_PAUSES: [Duration; 3] = if cfg!(test) {
     ]
 };
 
-pub const BLOCKED_HINT: &str = "idx.co.id refused the request (Cloudflare bot protection). It usually passes later or from an ordinary home or office connection; data centres, VPNs and CI runners are often blocked. Cached copies are still served (try --offline)";
+/// What to do when a challenge stays and nothing is cached. Like every hint
+/// here it ends without a full stop: callers append `; ...`.
+pub const BLOCKED_HINT: &str = "idx.co.id's bot protection refused the request, which usually passes within a minute: retry then";
+/// The same for a block page, which can last longer.
+pub const BLOCK_PAGE_HINT: &str = "idx.co.id's bot protection refused the request; a block page can last longer than a challenge: retry later, or from another network if it persists (data centres, VPNs and CI runners are refused more often)";
+/// Why no cached copy stood in under `--no-cache`.
+pub const NO_CACHE: Advice = Advice {
+    cli: ", and --no-cache skipped the cache (--offline serves a cached copy if there is one)",
+    mcp: ", and the server runs with --no-cache, which skips the cache",
+};
 
 fn headers() -> Vec<(String, String)> {
     vec![
@@ -103,6 +114,33 @@ fn refusal_text(kind: Refusal, r: &RawResponse, tries: usize, waited: Duration) 
             "idx.co.id answered with {what} on {tries} tries over {} s",
             waited.as_secs()
         )
+    }
+}
+
+/// A refusal that stayed with nothing cached to stand in for it, and what
+/// to do now. A cached copy would have been served, unless `--no-cache`
+/// kept the fetcher from looking.
+fn advise(e: IdxError, mode: CacheMode) -> IdxError {
+    let IdxError::Blocked {
+        provider,
+        refusal,
+        message,
+    } = e
+    else {
+        return e;
+    };
+    let cache = match mode {
+        CacheMode::Bypass => NO_CACHE.cli,
+        _ => ", and nothing is cached for it",
+    };
+    let hint = match refusal {
+        Refusal::Challenge => BLOCKED_HINT,
+        Refusal::Block => BLOCK_PAGE_HINT,
+    };
+    IdxError::Blocked {
+        provider,
+        refusal,
+        message: format!("{message}{cache}. {hint}"),
     }
 }
 
@@ -146,18 +184,7 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
             _ => break got,
         }
     };
-    let f = got.map_err(|e| match e {
-        IdxError::Blocked {
-            provider,
-            refusal,
-            message,
-        } => IdxError::Blocked {
-            provider,
-            refusal,
-            message: format!("{message}. {BLOCKED_HINT}"),
-        },
-        other => other,
-    })?;
+    let f = got.map_err(|e| advise(e, fetcher.mode()))?;
     if !f.is_success() {
         return Err(IdxError::provider(
             NAME,
@@ -488,6 +515,51 @@ mod tests {
         );
         assert!(s.stale);
         assert_eq!(be.calls_matching("date=20261015"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_stays_says_what_to_do() {
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers("GetBrokerSummary", 403, CHALLENGE, FLAGGED)
+                .route("GetIndexSummary", 403, BLOCKED),
+        );
+        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        assert_eq!(
+            err.to_string(),
+            "idx: idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge) on 4 tries over 0 s, and nothing is cached for it. idx.co.id's bot protection refused the request, which usually passes within a minute: retry then"
+        );
+        let msg = index_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.starts_with("idx: idx.co.id answered with a Cloudflare block page (HTTP 403), and nothing is cached for it. "),
+            "{msg}"
+        );
+        assert!(
+            msg.ends_with("from another network if it persists (data centres, VPNs and CI runners are refused more often)"),
+            "{msg}"
+        );
+
+        // `--no-cache` never looked at the copy that `--offline` would serve.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache.put(&broker_url("20261016"), 200, BROKERS).unwrap();
+        let be =
+            FixtureBackend::new().route_with_headers("GetBrokerSummary", 403, CHALLENGE, FLAGGED);
+        let f = Arc::new(Fetcher::new(Arc::new(be), cache, CacheMode::Bypass));
+        let msg = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains(" over 0 s, and --no-cache skipped the cache (--offline serves a cached copy if there is one). idx.co.id's bot protection"),
+            "{msg}"
+        );
     }
 
     #[tokio::test]

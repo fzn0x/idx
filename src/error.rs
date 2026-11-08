@@ -141,6 +141,15 @@ impl From<reqwest::Error> for IdxError {
 
 pub type Result<T, E = IdxError> = std::result::Result<T, E>;
 
+/// Advice inside an error message, worded for each face: the CLI, whose
+/// reader passes flags, and an MCP caller, who passes tool arguments
+/// instead. Messages carry the CLI wording; the MCP server swaps in its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Advice {
+    pub cli: &'static str,
+    pub mcp: &'static str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
