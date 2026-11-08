@@ -21,8 +21,9 @@
 // rebuilt from single sessions (the range page counts the latest session
 // twice): the session before the scanned one and each period's rest, so a
 // stock costs 9 requests (a chart, four period pages, one more session, three
-// rests), inside the invocation's budget (src/budget.js) and its first 45
-// seconds, so a minute ends before the next one reads the state.
+// rests), inside the invocation's budget (src/budget.js: fetches stop at 44
+// with the D1 queries counted; the step's final D1 batch may add one) and its
+// first 45 seconds, so a minute ends before the next one reads the state.
 //
 // A stock whose session IPOT has not published yet is read again on the
 // probe's schedule; one that failed is tried again in rounds 10, 30, 60 and

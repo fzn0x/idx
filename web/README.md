@@ -39,9 +39,11 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   docs/json-output.md.
 - `src/worker.js` entry: host check, security headers, `/api/*`, cron. Its
   `scheduled()` returns `runCron` (`src/cron.js`): the board refresh and the
-  KSEI register sync, then a step of the bandar scan, inside one budget of 44
-  subrequests per invocation (`src/budget.js`: fetches, a GitHub release
-  download counting two, and D1 queries, below the Free plan's 50).
+  KSEI register sync, then a step of the bandar scan, inside one subrequest
+  budget per invocation (`src/budget.js`: fetches, a GitHub release download
+  counting two, and D1 queries). Fetches stop at 44 with the D1 queries
+  counted, and the scan step's final D1 batch may add one, below the Free
+  plan's 50.
   `src/headers.js` holds the security headers (CSP, nosniff, frame and
   referrer policy); `public/_headers` gives the same set to the static assets,
   which the assets layer serves without running the Worker.

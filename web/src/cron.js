@@ -1,9 +1,11 @@
 // The minute cron (wrangler.toml [triggers]). One invocation runs the quote
 // board refresh and the KSEI register sync together, then one step of the
 // bandar scan with what is left of the invocation's subrequest budget
-// (src/budget.js), and resolves only once all three are done: the handler's
-// own promise has the cron's wall time, while work left to ctx.waitUntil
-// after scheduled() returns has no documented limit of its own.
+// (src/budget.js: fetches stop at 44 with the D1 queries counted, and the
+// scan step's final D1 batch may add one), and resolves only once all three
+// are done: the handler's own promise has the cron's wall time, while work
+// left to ctx.waitUntil after scheduled() returns has no documented limit of
+// its own.
 
 import { refreshSnapshot, marketIsOpen } from "./api.js";
 import { ownershipSync } from "./ownership-sync.js";
