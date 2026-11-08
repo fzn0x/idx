@@ -36,7 +36,8 @@
 //! ones included); see `actions.rs`.
 //!
 //! The market-wide broker ranking, verified 2026-11-08, same module (plain
-//! nginx, no Cloudflare, no cookie needed):
+//! nginx, no Cloudflare, no cookie needed) and the same spurious 404s, seen
+//! on both pages that day and retried:
 //! - `.../ma-topbroker.php` takes no parameters (`start` and `end` are
 //!   ignored) and ranks every broker of IPOT's latest session by value, with
 //!   value bought and sold, net, shares and trades; brokers without trades

@@ -553,10 +553,25 @@ An object for one session: `date`, `stocks`, the market sums `foreign_buy`,
 ## `idx.market.brokers.v1` (`market brokers`)
 
 An object for one session: `date`, `members` (with trades), `total_volume`,
-`total_value`, `total_frequency`, `sort` (`value` | `volume` | `frequency`)
-and `brokers[]`: `rank`, `code`, `name` (as idx.co.id publishes it),
-`volume`, `value`, `frequency`, `value_share_pct`. A member's buying and
-selling count together, so `total_value` is twice the market's value.
+`total_value`, `total_frequency`, `sort` (`value` | `volume` | `frequency`),
+`rounded` and `brokers[]`: `rank`, `code`, `name` (as the source publishes
+it), `volume`, `value`, `frequency`, `value_share_pct`, then `buy_value`,
+`sell_value`, `net_value` (bought minus sold) and `kind` (`local` |
+`foreign` | `state_owned`), which only IPOT publishes: `null` from
+idx.co.id. A member's buying and selling count together, so `total_value`
+is twice the market's value.
+
+`provider` says which source answered: `idx`, idx.co.id's daily broker
+summary (any session), or `ipot`, IPOT's ranking of its latest session
+(`--source ipot`, MCP `source: "ipot"`; also `auto`, the default, when
+idx.co.id refuses the connection or fails, with a warning). IPOT takes no
+date: another session is a usage error, and under `auto` idx.co.id's error
+stands. It abbreviates figures to two decimals (`2.79 T`, so `rounded:
+true`) and publishes `net_value` with its own two decimals, so it can differ
+from `buy_value - sell_value`. Members without trades are left out, as
+idx.co.id leaves them out; a broker IPOT lists apart under another member's
+code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in that member, as
+idx.co.id counts it, with a warning.
 
 ## `idx.indices.v1` (`market indices`)
 
