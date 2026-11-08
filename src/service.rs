@@ -745,18 +745,7 @@ pub async fn brief(
         }
     }
     if let Some(d) = &dividends {
-        match d.ttm_yield_pct {
-            Some(y) => key_points.push(format!(
-                "Dividends: TTM yield {y:.2}% over {} payment{}, {} consecutive years",
-                d.ttm_payments,
-                if d.ttm_payments == 1 { "" } else { "s" },
-                d.consecutive_years
-            )),
-            None if d.payments_on_record == 0 => {
-                key_points.push("Dividends: none on record".into())
-            }
-            None => key_points.push("Dividends: none in the last twelve months".into()),
-        }
+        key_points.push(dividends_key_point(d));
     }
     if let Some(o) = &ownership {
         key_points.push(ownership_key_point(o));
@@ -780,6 +769,23 @@ pub async fn brief(
         sections_failed: failed,
     };
     Ok(out.map(|_| brief))
+}
+
+/// The brief's "Dividends" key point: the trailing yield, its payments and
+/// the streak, or why there is no yield. Each noun follows its count, as in
+/// the dividends table: "1 payment, 1 consecutive year".
+fn dividends_key_point(d: &DividendSummary) -> String {
+    match d.ttm_yield_pct {
+        Some(y) => format!(
+            "Dividends: TTM yield {y:.2}% over {} payment{}, {} consecutive year{}",
+            d.ttm_payments,
+            if d.ttm_payments == 1 { "" } else { "s" },
+            d.consecutive_years,
+            if d.consecutive_years == 1 { "" } else { "s" }
+        ),
+        None if d.payments_on_record == 0 => "Dividends: none on record".into(),
+        None => "Dividends: none in the last twelve months".into(),
+    }
 }
 
 /// The brief's "News" key point: how many current headlines mention the
@@ -2082,6 +2088,37 @@ mod tests {
             Some("name")
         );
         assert_eq!(item_matches(&mk("BBCAX bukan BBCA?"), "BBRI", None), None);
+    }
+
+    #[test]
+    fn dividends_key_point_agrees_with_its_counts() {
+        // The key point reads the yield and the counts, not the total.
+        let summary =
+            |ttm_yield_pct, ttm_payments, consecutive_years, payments_on_record| DividendSummary {
+                ttm_total: None,
+                ttm_payments,
+                ttm_yield_pct,
+                consecutive_years,
+                last: None,
+                payments_on_record,
+            };
+        // A 2026 payment after a 2024 one: the streak is one year.
+        assert_eq!(
+            dividends_key_point(&summary(Some(2.13), 1, 1, 2)),
+            "Dividends: TTM yield 2.13% over 1 payment, 1 consecutive year"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(Some(4.0), 2, 2, 4)),
+            "Dividends: TTM yield 4.00% over 2 payments, 2 consecutive years"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(None, 0, 1, 3)),
+            "Dividends: none in the last twelve months"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(None, 0, 0, 0)),
+            "Dividends: none on record"
+        );
     }
 
     #[test]
