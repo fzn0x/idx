@@ -1242,7 +1242,7 @@ pub async fn market_brokers_ipot(
         }
         if d > holidays::latest_session(now) {
             return Err(IdxError::NotFound(format!(
-                "the session of {d} has not ended (it ends at 16:15 WIB); idx.co.id publishes it after the close"
+                "the session of {d} has not ended (it ends at 16:15 WIB), and IPOT's ranking of it cannot be dated before 19:00 WIB"
             )));
         }
     }
@@ -2303,7 +2303,7 @@ mod tests {
             (
                 d(2026, 11, 9),
                 wib_at("2026-11-09T08:00:00"),
-                "the session of 2026-11-09 has not ended (it ends at 16:15 WIB); idx.co.id publishes it after the close",
+                "the session of 2026-11-09 has not ended (it ends at 16:15 WIB), and IPOT's ranking of it cannot be dated before 19:00 WIB",
             ),
         ] {
             let err = ipot(date, now).await.unwrap_err();
