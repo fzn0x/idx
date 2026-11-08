@@ -4,7 +4,9 @@
 
 use comfy_table::{Attribute, Cell, Color};
 
-use crate::model::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary};
+use crate::model::{
+    BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, BrokerSummarySource,
+};
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right};
 
@@ -17,14 +19,34 @@ pub(crate) fn kind_label(k: Option<BrokerKind>) -> &'static str {
     }
 }
 
-fn side(out: &mut String, title: &str, rows: &[BrokerFlow], top: usize, buy: bool, color: bool) {
+/// One side's table under its title. `top` limits the rows (0: all); the
+/// title says how many there are when more exist than are shown: in the
+/// list, or by the source's count.
+fn side(
+    out: &mut String,
+    title: &str,
+    rows: &[BrokerFlow],
+    count: Option<u32>,
+    top: usize,
+    buy: bool,
+    color: bool,
+) {
+    let shown = if top == 0 {
+        rows.len()
+    } else {
+        rows.len().min(top)
+    };
+    let total = count.map_or(rows.len(), |n| (n as usize).max(rows.len()));
     out.push_str(title);
+    if shown < total {
+        out.push_str(&format!(" ({shown} of {total})"));
+    }
     out.push('\n');
     let mut t = base_table(color);
     t.set_header(header(&[
         "#", "Code", "Broker", "Class", "Lots", "Value", "Avg",
     ]));
-    for r in rows.iter().take(top) {
+    for r in rows.iter().take(shown) {
         let mut code = Cell::new(&r.code).add_attribute(Attribute::Bold);
         if color {
             code = code.fg(if buy { Color::Green } else { Color::Red });
@@ -97,15 +119,31 @@ fn totals_line(s: &BrokerSummary) -> String {
     )
 }
 
-/// One block per ticker; `top` limits rows per side.
+const IPOT_SOURCE: &str = "IPOT broker summary, top 10 buyers and sellers ranked by lots";
+const STOCKBIT_SOURCE: &str =
+    "Stockbit broker summary from your session: every broker that bought and sold, ordered by lots";
+
+/// One block per ticker; `top` limits rows per side (0: all). A call that
+/// mixes sources names each block's.
 pub fn broker(list: &[BrokerSummary], top: usize, color: bool) -> String {
+    let from = |src: BrokerSummarySource| list.iter().any(|s| s.source == src);
+    let (ipot, stockbit) = (
+        from(BrokerSummarySource::Ipot),
+        from(BrokerSummarySource::Stockbit),
+    );
+    let mixed = ipot && stockbit;
     let mut out = String::new();
     for (i, s) in list.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
+        let mark = match s.source {
+            _ if !mixed => "",
+            BrokerSummarySource::Ipot => " · IPOT",
+            BrokerSummarySource::Stockbit => " · Stockbit",
+        };
         out.push_str(&format!(
-            "{}{} · {} · {}\n",
+            "{}{} · {} · {}{mark}\n",
             s.symbol,
             s.name
                 .as_ref()
@@ -119,19 +157,47 @@ pub fn broker(list: &[BrokerSummary], top: usize, color: bool) -> String {
             continue;
         }
         out.push_str(&totals_line(s));
-        side(&mut out, "Top buyers", &s.buyers, top, true, color);
-        side(&mut out, "Top sellers", &s.sellers, top, false, color);
-    }
-    out.push_str(
-        "Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.",
-    );
-    if list.iter().any(|s| s.rounded) {
-        out.push_str(" The source rounds figures of a million and more to one decimal.");
-    }
-    if list.iter().any(|s| s.board != BrokerBoard::All) {
-        out.push_str(
-            " The source's foreign net covers every board, so a board filter leaves it out.",
+        side(
+            &mut out,
+            "Top buyers",
+            &s.buyers,
+            s.buyer_count,
+            top,
+            true,
+            color,
         );
+        side(
+            &mut out,
+            "Top sellers",
+            &s.sellers,
+            s.seller_count,
+            top,
+            false,
+            color,
+        );
+    }
+    let sources = match (ipot, stockbit) {
+        (true, true) => format!("{IPOT_SOURCE}; {STOCKBIT_SOURCE}"),
+        (false, true) => STOCKBIT_SOURCE.to_string(),
+        _ => IPOT_SOURCE.to_string(),
+    };
+    out.push_str(&format!("Source: {sources}. One lot = 100 shares."));
+    // Only IPOT rounds, and only IPOT's foreign net ignores the board.
+    let ipot_rows = || {
+        list.iter()
+            .filter(|s| s.source == BrokerSummarySource::Ipot)
+    };
+    if ipot_rows().any(|s| s.rounded) {
+        let who = if mixed { "IPOT" } else { "The source" };
+        out.push_str(&format!(
+            " {who} rounds figures of a million and more to one decimal."
+        ));
+    }
+    if ipot_rows().any(|s| s.board != BrokerBoard::All) {
+        let whose = if mixed { "IPOT's" } else { "The source's" };
+        out.push_str(&format!(
+            " {whose} foreign net covers every board, so a board filter leaves it out."
+        ));
     }
     out.push('\n');
     out
@@ -235,6 +301,65 @@ mod tests {
         assert!(out.contains("BUMN"));
         assert!(out.contains("841.2B"));
         assert!(out.contains("rounds figures of a million"));
+    }
+
+    fn stockbit(n: u32) -> BrokerSummary {
+        let rows: Vec<BrokerFlow> = (1..=n)
+            .map(|i| flow(i, &format!("B{i}"), None, BrokerKind::Local))
+            .collect();
+        let mut s = summary(rows.clone(), rows);
+        s.rounded = false;
+        s.source = crate::model::BrokerSummarySource::Stockbit;
+        (s.buyer_count, s.seller_count) = (Some(n), Some(n));
+        (s.buyers_complete, s.sellers_complete) = (true, true);
+        s
+    }
+
+    #[test]
+    fn a_list_longer_than_the_rows_shown_says_how_many_there_are() {
+        let out = broker(&[stockbit(12)], 10, false);
+        assert!(out.contains("Top buyers (10 of 12)\n"), "{out}");
+        assert!(out.contains("Top sellers (10 of 12)\n"), "{out}");
+        assert!(!out.contains("B11"), "{out}");
+        assert!(
+            out.contains("Source: Stockbit broker summary from your session: every broker that bought and sold, ordered by lots. One lot = 100 shares."),
+            "{out}"
+        );
+        assert!(!out.contains("IPOT"), "{out}");
+        // -n 0 shows every row.
+        let out = broker(&[stockbit(12)], 0, false);
+        assert!(out.contains("B12") && out.contains("Top buyers\n"), "{out}");
+        // A cut list says how many the source counted.
+        let mut cut = stockbit(5);
+        (cut.buyer_count, cut.buyers_complete) = (Some(59), false);
+        let out = broker(&[cut], 10, false);
+        assert!(out.contains("Top buyers (5 of 59)\n"), "{out}");
+        assert!(out.contains("Top sellers\n"), "{out}");
+        // IPOT's ten rows of an unknown number stay as they were.
+        let ipot = summary(vec![flow(1, "AK", None, BrokerKind::Foreign)], vec![]);
+        let out = broker(&[ipot], 10, false);
+        assert!(out.contains("Top buyers\n"), "{out}");
+    }
+
+    #[test]
+    fn a_call_mixing_sources_names_each_block_and_both() {
+        let ipot = summary(vec![flow(1, "AK", None, BrokerKind::Foreign)], vec![]);
+        let mut sb = stockbit(2);
+        sb.board = BrokerBoard::Regular;
+        let out = broker(&[ipot.clone(), sb.clone()], 10, false);
+        assert!(out.contains("all boards · IPOT\n"), "{out}");
+        assert!(out.contains("regular board · Stockbit\n"), "{out}");
+        assert!(out.contains("Source: IPOT broker summary, top 10 buyers and sellers ranked by lots; Stockbit broker summary from your session: every broker that bought and sold, ordered by lots."), "{out}");
+        assert!(
+            out.contains("IPOT rounds figures"),
+            "IPOT's summary is rounded: {out}"
+        );
+        assert!(
+            !out.contains("a board filter leaves it out"),
+            "Stockbit's foreign net is the board's: {out}"
+        );
+        let out = broker(&[sb], 10, false);
+        assert!(!out.contains(" · Stockbit\n"), "one source, no mark: {out}");
     }
 
     #[test]
