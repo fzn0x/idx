@@ -14,8 +14,9 @@
 // after that session) shows no trade either, closes the session unscanned.
 // Then PER_TICK stocks a minute: for each, the IPOT broker summary over 1d,
 // 1w, 1m and 3m ending on that session and the daily candles for the price
-// move, one D1 row per stock and period in `bandar_scan`, written with the
-// state in one batch.
+// move, one D1 row per stock and period in `bandar_scan`. The rows and the
+// state go in one D1 batch, and only the state is written over the revision
+// the step read: a minute that overlapped and wrote first keeps its state.
 // /api/bandar/screen and /api/bandar/broker answer from D1 alone with the
 // same rules as the CLI (src/bandar.js). The foreign net of 1w, 1m and 3m is
 // rebuilt from single sessions (the range page counts the latest session
