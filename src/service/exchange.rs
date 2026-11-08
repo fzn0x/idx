@@ -1033,7 +1033,9 @@ pub async fn market_brokers(
 /// `date` the walk back starts there: before the close the day's own
 /// summary is not asked for, and a refusal of that request cannot hide the
 /// session before it. A session that could not be read is not skipped
-/// either (see [`broker_day`]).
+/// either (see [`broker_day`]). A `date` without a session (a weekend or a
+/// listed holiday) is not found without a request, whatever a copy of it
+/// or idx.co.id would say.
 async fn members_until(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -1042,6 +1044,12 @@ async fn members_until(
     today: NaiveDate,
     ended: NaiveDate,
 ) -> Result<Sourced<BrokerRanking>> {
+    if let Some(d) = date.filter(|d| *d <= today && !holidays::is_trading_day(*d)) {
+        return Err(IdxError::NotFound(format!(
+            "no trading data: {}",
+            closed_reason(d)
+        )));
+    }
     let from = match date {
         Some(_) => today,
         None => ended,
@@ -2332,6 +2340,47 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_day_without_a_session_costs_no_request() {
+        use crate::model::BrokerSource;
+        // idx.co.id would refuse anything asked, and nothing is cached.
+        let (f, be, _d) = fetcher(FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            CHALLENGE,
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        ));
+        for source in [BrokerSource::Idx, BrokerSource::Auto] {
+            for (date, says) in [
+                (d(2026, 10, 31), "no trading data: 2026-10-31 is a Saturday"),
+                (
+                    d(2026, 8, 17),
+                    "no trading data: 2026-08-17 is a trading holiday",
+                ),
+            ] {
+                let err =
+                    market_brokers_from(&f, source, Some(date), 5, BrokerSort::Value, sunday())
+                        .await
+                        .unwrap_err();
+                assert_eq!((err.code(), err.exit_code()), ("not_found", 4), "{err}");
+                assert!(err.to_string().contains(says), "{err}");
+            }
+            // A future one stays a usage error.
+            let err = market_brokers_from(
+                &f,
+                source,
+                Some(d(2026, 11, 14)),
+                5,
+                BrokerSort::Value,
+                sunday(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{err}");
+        }
+        assert_eq!(be.call_count(), 0);
     }
 
     #[tokio::test]

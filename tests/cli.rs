@@ -1918,10 +1918,18 @@ fn market_brokers_rank_the_members() {
         .args(["market", "brokers", "--sort", "lots"])
         .assert()
         .code(2);
+    // A session that is not cached is an offline miss; a Sunday has none.
+    idx(&sb.cache, &sb.config)
+        .args(["market", "brokers", "--date", "2026-10-15"])
+        .assert()
+        .code(5);
     idx(&sb.cache, &sb.config)
         .args(["market", "brokers", "--date", "2026-10-18"])
         .assert()
-        .code(5);
+        .code(4)
+        .stderr(predicate::str::contains(
+            "no trading data: 2026-10-18 is a Sunday",
+        ));
 }
 
 #[test]
