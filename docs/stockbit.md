@@ -110,8 +110,11 @@ says logged in `no`, with a note that the session expired and that
 While only the access token can still be used (its refresh token expired, or
 none is stored), logged in is `yes` with a note that the session stops working
 when that token expires (`"renewable": false`). A session Stockbit ended early
-(signed out elsewhere, or refreshed by another tool) still reads as logged in;
-the first request it fails names `idx stockbit login`.
+(signed out elsewhere, or refreshed by another tool) still reads as logged in
+until a request finds out: that request fails naming `idx stockbit login`, and
+the process that sent it (a running `idx mcp` server, say) then reports that
+Stockbit refused the refresh token; `idx stockbit status`, a process of its
+own, cannot tell.
 
 ## Use it
 

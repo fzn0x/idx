@@ -1230,8 +1230,10 @@ renews), `access` and `refresh` (each `present`, `expires_at` in Unix seconds
 and `expires_in_secs`, negative once expired; both `null` when the token is
 absent, not a JWT or without an `exp`), and `session_file` (the absolute
 path). Nothing here asks Stockbit: a token it revoked, or another tool spent,
-still counts until its `exp`. `sign_in` is MCP only: the reply of
-`idx_stockbit_login`, and
+still counts until its `exp`, or until this process sees Stockbit refuse it (an
+`idx mcp` server remembers a refresh token Stockbit refused: `renewable` turns
+`false`, `logged_in` follows the access token alone and `reason` says so).
+`sign_in` is MCP only: the reply of `idx_stockbit_login`, and
 in `idx_stockbit_status` the latest page sign-in that tool started in the same
 server; it is absent otherwise (the CLI never sets it). Its fields: `state` (`waiting`, `signed_in`, `failed` or
 `already_signed_in`), `method` (`page`, `browser` or `none`), `url` and `port`
