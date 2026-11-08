@@ -157,7 +157,7 @@ export const SPEC = {
   astro: { short: { d: "date" }, switch: ["backtest"] },
   // --source auto reads IPOT here too (idx.co.id refuses this host), and ipot is the page's own source.
   brokers: { short: { d: "date", n: "top" }, cli: ["source"], keep: { source: ["ipot", "auto"] } },
-  broker: { short: { d: "date", n: "top" }, cli: ["top"] },
+  broker: { short: { d: "date", n: "top" }, cli: ["top", "source"], keep: { source: ["ipot"] } },
   bandar: { short: { p: "period", d: "date", n: "top" } },
   "bandar screen": { short: { f: "filter", p: "period", n: "top", l: "limit" }, cli: ["scan", "symbols"] },
   "bandar broker": { short: { p: "period", l: "limit" }, cli: ["scan", "symbols"] },
@@ -186,6 +186,7 @@ const FLAG_WHY = {
   "ownership entity exact": say("Terminal web mencocokkan sebagian nama: tanpa --exact, kata yang sama juga menemukan pemegang yang namanya memuatnya.", "The web terminal matches part of a name: without --exact the same words also find holders whose names contain them."),
   "ownership graph dot": say("Terminal web menampilkan jaringannya sebagai tabel; --dot mencetak Graphviz untuk dot di komputer Anda.", "The web terminal shows the network as a table; --dot prints Graphviz for dot on your machine."),
   "list board": say("Terminal web mendaftar kode dan nama bawaan, yang tidak memuat papan pencatatan.", "The web terminal lists the bundled codes and names, which carry no listing boards."),
+  "broker source": say("Terminal web membaca 10 pembeli dan penjual teratas dari IPOT; daftar semua broker dari Stockbit memakai sesi akun Anda sendiri, jadi hanya berjalan di CLI dan server MCP.", "The web terminal reads IPOT's top 10 buyers and sellers; the full list from Stockbit runs on your own account session, so it works in the CLI and the MCP server only."),
   "broker top": say("Terminal web selalu menampilkan 10 pembeli dan penjual teratas yang diterbitkan sumbernya.", "The web terminal always shows the top 10 buyers and sellers the source publishes."),
   "dividends limit": say("Terminal web menampilkan 12 pembayaran terakhir; json dividends memuat semuanya.", "The web terminal lists the last 12 payments; json dividends carries all of them."),
   "sentiment limit": say("Terminal web menampilkan 10 judul berita terkuat, sama dengan bawaan CLI.", "The web terminal shows the 10 strongest headlines, the CLI's default."),

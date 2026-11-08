@@ -436,6 +436,9 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     ["idx stocks dividends TLKM --limit 20", "dividends", ["--limit"], ["dividends TLKM"], "idx stocks dividends TLKM --limit 20"],
     ["dividends TLKM -n 20", "dividends", ["--limit"], ["dividends TLKM"], "idx stocks dividends TLKM -n 20"],
     ["idx broker BBCA -n 5", "broker", ["--top"], ["broker BBCA"], "idx broker BBCA -n 5"],
+    // Stockbit runs on the user's own session: the CLI and MCP only.
+    ["idx broker BBCA --source stockbit", "broker", ["--source stockbit"], ["broker BBCA"], "idx broker BBCA --source stockbit"],
+    ["idx broker BBCA -d 2026-11-06 --source stockbit", "broker", ["--source stockbit"], ["broker BBCA --date 2026-11-06"], "idx broker BBCA --date 2026-11-06 --source stockbit"],
     ["idx market overview --top 15 --min-mcap 5T", "market", ["--top", "--min-mcap"], ["market"], "idx market overview --top 15 --min-mcap 5T"],
     ["idx bandar screen --preset accumulation --scan 50", "bandar screen", ["--scan"], ["bandar screen --preset accumulation"], "idx bandar screen --preset accumulation --scan 50"],
     ["idx bandar broker YP --symbols BBCA,BBRI", "bandar broker", ["--symbols"], ["bandar broker YP"], "idx bandar broker YP --symbols BBCA,BBRI"],
@@ -455,7 +458,9 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     if (r.why) bilingual(r.why, `${line} why`);
   }
   assert.match(routeLine("market brokers --source idx").why.en, /^The web terminal reads IPOT's ranking of its latest session; idx\.co\.id refuses requests from this site's host/);
-  for (const line of ["idx -o csv stocks quote BBCA", "idx --provider stockbit stocks quote BBCA", "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan", "idx ownership graph BBRI --dot"]) assert.ok(routeLine(line).why, line);
+  for (const line of ["idx -o csv stocks quote BBCA", "idx --provider stockbit stocks quote BBCA", "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan", "idx ownership graph BBRI --dot", "idx broker BBCA --source stockbit"]) assert.ok(routeLine(line).why, line);
+  // IPOT is what the page reads anyway.
+  assert.equal(routeLine("idx broker BBCA --source ipot").kind, "web");
   // Left out, the CLI's default says so: what the CLI reads, and what the page reads instead.
   assert.match(routeLine("idx stocks foreign BBCA").why.en, /^In the CLI, stocks foreign reads idx\.co\.id unless --source ipot/);
   assert.match(routeLine("idx stocks foreign BBCA").why.id, /^Di CLI, stocks foreign membaca idx\.co\.id kecuali diberi --source ipot/);
