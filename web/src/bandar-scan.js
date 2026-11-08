@@ -652,14 +652,15 @@ function sessionsAfter(from, to) {
 
 /**
  * Where the scan of `st.session` stands while it is under way, or null once
- * its record says; with `shown`, which session is shown meanwhile.
+ * its record says; with `shown`, which session is shown meanwhile. Times
+ * carry their date when it is not `now`'s.
  */
-export function scanProgress(st, shown = null) {
+export function scanProgress(st, shown = null, now = new Date()) {
   const tail = shown ? `; showing ${shown}` : "";
   if (st?.phase === "new") return `the scan of ${st.session} has not started yet${tail}`;
   if (st?.phase === "waiting") {
     const n = (st.probes || 0) + (st.probe_errors || 0);
-    const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${hhmm(st.first_probe_at)} WIB${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
+    const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${clock(st.first_probe_at, now)}${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
     return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;
   }
   if (st?.phase === "running" && st.queue.length) return `the scan of ${st.session} is running (${attempted(st)} of ${st.symbols.length})${tail}`;
@@ -703,7 +704,7 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   if (st && latest > st.session) {
     warnings.push(hol.wibDate(now) === latest && wibMinutes(now) < READY_MIN ? `the scan of ${latest} starts at 16:45 WIB; showing ${shown}` : `the scan has not reached ${latest} yet; showing ${shown}`);
   }
-  if (st && st.session > shown && underWay(st)) warnings.push(scanProgress(st, shown));
+  if (st && st.session > shown && underWay(st)) warnings.push(scanProgress(st, shown, now));
   for (const r of runs) if (r.session > shown && !(underWay(st) && r.session === st.session)) warnings.push(runNote(r, shown));
   const behind = sessionsAfter(shown, latest) - runs.filter((r) => r.reason === "closed" && r.session > shown && r.session <= latest).length;
   if (behind > 1) warnings.push(`${shown} is ${behind} sessions behind ${latest}`);

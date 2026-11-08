@@ -1115,8 +1115,8 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
 }
 
 /** The screen's and the broker's answer before any session of the scan has finished. */
-const noScanYet = (st) => {
-  const where = scanProgress(st);
+const noScanYet = (st, now) => {
+  const where = scanProgress(st, null, now);
   return notFound(`no session of the bandar scan has finished yet${where ? ` (${where})` : ""}: from 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
 };
 
@@ -1130,7 +1130,7 @@ export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw,
   const descending = ascRaw == null || ascRaw === "" ? !pr?.ascending : !(ascRaw === "1" || ascRaw === "true");
   const limit = num(limitRaw, 25);
   const scan = await scanRows(env, period);
-  if (!scan.session) throw noScanYet(scan.state);
+  if (!scan.session) throw noScanYet(scan.state, now);
   const notes = scanNotes(scan.state, scan.session, scan.rows.map((r) => r.symbol), now);
   const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
   let rows = traded.map((r) => bd.screenRow(bd.report(r.summary, period, top, r.price, r.chg))).filter((r) => bd.matches(r, filters));
@@ -1162,7 +1162,7 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new 
   const period = bd.checkPeriod(periodRaw || "1w");
   const limit = num(limitRaw, 20);
   const scan = await scanRows(env, period);
-  if (!scan.session) throw noScanYet(scan.state);
+  if (!scan.session) throw noScanYet(scan.state, now);
   const notes = scanNotes(scan.state, scan.session, scan.rows.map((r) => r.symbol), now);
   const warnings = [];
   if (!BROKERS[code]) warnings.push(`${code} is not on the bundled exchange-member list`);

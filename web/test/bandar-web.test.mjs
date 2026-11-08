@@ -688,7 +688,7 @@ test("a finished session keeps its numbers while the next one waits, and the war
   // BBCA's pages of 10-19 and 10-20 show totals without lists: IPOT has not published those sessions.
   const fetchFn = async (u, init) => (/code=BBCA&start=10\/(19|20)\/2026&end=10\/(19|20)\/2026/.test(String(u)) ? new Response(page("brokersummary_bbca_20261106_insession.html")) : recorded(u, init));
   const screen = (now) => bandarScreen(env, null, null, "1w", null, null, null, null, now);
-  const waiting = (d) => `the scan of ${d} is waiting for IPOT to publish that session's broker lists (checked 1 time since 16:46 WIB); showing 2026-10-16`;
+  const waiting = (d, since = "16:46 WIB") => `the scan of ${d} is waiting for IPOT to publish that session's broker lists (checked 1 time since ${since}); showing 2026-10-16`;
   await withFetch(fetchFn, async () => {
     await scanAll(env, new Date("2026-10-17T03:00:00Z")); // Saturday 10:00 WIB
     // Monday 16:46 WIB: the scan of 10-19 starts and waits for IPOT.
@@ -698,9 +698,9 @@ test("a finished session keeps its numbers while the next one waits, and the war
     assert.deepEqual(out.warnings, [waiting("2026-10-19"), "1 of 4 scanned stocks had no broker summary"]);
     assert.equal(out.fetched_at, "2026-10-17T03:00:00Z", "when the scan of 10-16 ended, not the time of the request");
     assert.deepEqual([out.data.scanned, out.data.checked], [4, 3]);
-    // Tuesday 16:30 WIB: 10-20 has closed, its scan starts at 16:45.
+    // Tuesday 16:30 WIB: 10-20 has closed, its scan starts at 16:45; the wait began the day before.
     out = await screen(new Date("2026-10-20T09:30:00Z"));
-    assert.deepEqual(out.warnings, ["the scan of 2026-10-20 starts at 16:45 WIB; showing 2026-10-16", waiting("2026-10-19"), "2026-10-16 is 2 sessions behind 2026-10-20", "1 of 4 scanned stocks had no broker summary"]);
+    assert.deepEqual(out.warnings, ["the scan of 2026-10-20 starts at 16:45 WIB; showing 2026-10-16", waiting("2026-10-19", "2026-10-19 16:46 WIB"), "2026-10-16 is 2 sessions behind 2026-10-20", "1 of 4 scanned stocks had no broker summary"]);
     // Tuesday 16:46: 10-19 is filed as not published and 10-20 waits in turn.
     await bandarScanStep(env, { now: new Date("2026-10-20T09:46:00Z") });
     out = await screen(new Date("2026-10-20T09:50:00Z"));
