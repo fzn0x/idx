@@ -18,13 +18,15 @@
 //! history. The site sits behind Cloudflare: ordinary connections pass,
 //! while data-centre addresses (CI runners, Cloudflare Workers) are often
 //! refused with a 403 "Attention Required" block page or a "Just a moment"
-//! challenge ([`http::cloudflare`](crate::http::cloudflare)). A refusal is a
-//! failed fetch: the cached copy is served in its place, marked stale with a
-//! warning naming it, and with no copy it becomes a `blocked` error (exit 3)
-//! naming the cause. Any other failure keeps its HTTP status as a `provider`
-//! error. Answers are cached like any other; refusals never are.
+//! challenge ([`http::cloudflare`](crate::http::cloudflare)). A challenge is
+//! asked again three times within 30 s (`CHALLENGE_PAUSES`); a block page
+//! is not. A refusal that stays is a failed fetch: the cached copy is served
+//! in its place, marked stale with a warning naming it, and with no copy it
+//! becomes a `blocked` error (exit 3) naming the cause. Any other failure
+//! keeps its HTTP status as a `provider` error. Answers are cached like any
+//! other; refusals never are.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use chrono::{Datelike, NaiveDate};
@@ -53,6 +55,21 @@ const TTL_DIRECTORY: Duration = Duration::from_secs(24 * 3600);
 const TTL_CALENDAR: Duration = Duration::from_secs(3 * 3600);
 /// A stock's recent history, which gains a row after each close.
 const TTL_HISTORY: Duration = Duration::from_secs(30 * 60);
+/// Pauses before asking again after a Cloudflare challenge. One met from a
+/// home connection on 2026-11-08 had lifted when the next request came 25 s
+/// later, so the tries come at 0, 5, 15 and 30 s: four tries and at most
+/// 30 s of pauses per request, plus the requests, which a refusal answers
+/// in a fraction of a second. A block page is not asked again. No pauses in
+/// tests.
+const CHALLENGE_PAUSES: [Duration; 3] = if cfg!(test) {
+    [Duration::ZERO; 3]
+} else {
+    [
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        Duration::from_secs(15),
+    ]
+};
 
 pub const BLOCKED_HINT: &str = "idx.co.id refused the request (Cloudflare bot protection). It usually passes later or from an ordinary home or office connection; data centres, VPNs and CI runners are often blocked. Cached copies are still served (try --offline)";
 
@@ -74,35 +91,73 @@ fn refused(r: &RawResponse) -> Option<Refusal> {
         .or((r.status == 403).then_some(Refusal::Block))
 }
 
-/// One idx.co.id endpoint. A refusal is a failed fetch: the cached copy
-/// stands in for it, marked stale with a warning naming the refusal, or the
-/// call fails with a `blocked` error.
+/// What a refused try met, for the error and for a cached copy's warning:
+/// `idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated:
+/// challenge) on 4 tries over 30 s`.
+fn refusal_text(kind: Refusal, r: &RawResponse, tries: usize, waited: Duration) -> String {
+    let what = cloudflare::describe(kind, r.status, &r.headers);
+    if tries == 1 {
+        format!("idx.co.id answered with {what}")
+    } else {
+        format!(
+            "idx.co.id answered with {what} on {tries} tries over {} s",
+            waited.as_secs()
+        )
+    }
+}
+
+/// One idx.co.id endpoint. A Cloudflare challenge is asked again after each
+/// of [`CHALLENGE_PAUSES`]; one that stays, or a block page, is a failed
+/// fetch: the cached copy stands in for it, marked stale with a warning
+/// naming the refusal, or the call fails with a `blocked` error.
 async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
     let url = format!("{BASE}/{path}");
-    let refuse = |r: &RawResponse| {
-        let kind = refused(r)?;
-        let what = cloudflare::describe(kind, r.status, &r.headers);
-        Some(IdxError::blocked(
-            NAME,
-            kind,
-            format!("idx.co.id answered with {what}"),
-        ))
+    let headers = headers();
+    let (mut tries, mut waited) = (1, Duration::ZERO);
+    let got = loop {
+        // The refusal this try met. The fetcher has already turned it into
+        // the cached copy or the error; asking again replaces either.
+        let seen = OnceLock::new();
+        let refuse = |r: &RawResponse| {
+            let kind = refused(r)?;
+            let _ = seen.set(kind);
+            Some(IdxError::blocked(
+                NAME,
+                kind,
+                refusal_text(kind, r, tries, waited),
+            ))
+        };
+        let got = fetcher.get_unless(&url, &headers, ttl, None, &refuse).await;
+        match (seen.get(), CHALLENGE_PAUSES.get(tries - 1)) {
+            (Some(Refusal::Challenge), Some(&pause)) => {
+                tracing::info!(
+                    path,
+                    tries,
+                    "idx.co.id answered a Cloudflare challenge; asking again in {} s",
+                    pause.as_secs()
+                );
+                {
+                    let _pause = crate::progress::retrying(&url, tries);
+                    tokio::time::sleep(pause).await;
+                }
+                tries += 1;
+                waited += pause;
+            }
+            _ => break got,
+        }
     };
-    let f = fetcher
-        .get_unless(&url, &headers(), ttl, None, &refuse)
-        .await
-        .map_err(|e| match e {
-            IdxError::Blocked {
-                provider,
-                refusal,
-                message,
-            } => IdxError::Blocked {
-                provider,
-                refusal,
-                message: format!("{message}. {BLOCKED_HINT}"),
-            },
-            other => other,
-        })?;
+    let f = got.map_err(|e| match e {
+        IdxError::Blocked {
+            provider,
+            refusal,
+            message,
+        } => IdxError::Blocked {
+            provider,
+            refusal,
+            message: format!("{message}. {BLOCKED_HINT}"),
+        },
+        other => other,
+    })?;
     if !f.is_success() {
         return Err(IdxError::provider(
             NAME,
@@ -293,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn cloudflare_block_names_the_cause_and_unknown_codes_are_not_found() {
-        let (f, _be, _d) = fetcher(
+        let (f, be, _d) = fetcher(
             FixtureBackend::new()
                 .route("GetBrokerSummary", 403, BLOCKED)
                 .route("GetTradingInfoSS?code=ZZZZ", 200, HISTORY_EMPTY)
@@ -308,6 +363,7 @@ mod tests {
             err.to_string().contains("Cloudflare block page (HTTP 403)"),
             "{err}"
         );
+        assert_eq!(be.call_count(), 1, "a block page is not asked again");
         let err = trading_history(&f, &Symbol::parse("ZZZZ").unwrap(), 20)
             .await
             .unwrap_err();
@@ -321,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_challenge_is_blocked_and_an_outage_is_not_cloudflare() {
-        let (f, _be, _d) = fetcher(
+        let (f, be, _d) = fetcher(
             FixtureBackend::new()
                 .route_with_headers(
                     "GetBrokerSummary",
@@ -348,6 +404,9 @@ mod tests {
                 ..
             }
         ));
+        // Asked again after each pause: four tries in all.
+        assert!(err.to_string().contains(" on 4 tries over "), "{err}");
+        assert_eq!(be.calls_matching("GetBrokerSummary"), 4);
         // A 503 without Cloudflare's pages is an outage: its status, no Cloudflare.
         let err = index_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
             .await
@@ -355,11 +414,34 @@ mod tests {
         assert_eq!((err.code(), err.exit_code()), ("provider", 3));
         assert!(err.to_string().contains("HTTP 503"), "{err}");
         assert!(!err.to_string().contains("Cloudflare"), "{err}");
+        assert_eq!(be.calls_matching("GetIndexSummary"), 1);
         // idx.co.id never answers 403 itself: a bare one is a block.
         let err = stock_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
             .await
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
+        assert_eq!(be.calls_matching("GetStockSummary"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_challenge_is_asked_again_until_it_lifts() {
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_times("GetBrokerSummary", 2, 403, CHALLENGE, FLAGGED)
+                .route("GetBrokerSummary", 200, BROKERS),
+        );
+        let s = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap();
+        assert_eq!(s.data.len(), 88);
+        assert!(!s.cached && !s.stale && s.warnings.is_empty());
+        assert_eq!(be.call_count(), 3);
+        // The answer is cached, the challenges are not.
+        let again = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap();
+        assert!(again.cached && !again.stale);
+        assert_eq!(be.call_count(), 3);
     }
 
     const FLAGGED: &[(&str, &str)] = &[("cf-mitigated", "challenge"), ("server", "cloudflare")];
@@ -391,19 +473,25 @@ mod tests {
         assert_eq!(s.data.len(), 88);
         assert!(s.cached && s.stale);
         assert_eq!(s.stale_reason, Some(StaleReason::FetchFailed));
+        // Only after the last try (tests do not pause: 0 s).
         assert_eq!(
             s.warnings,
-            ["live fetch failed (idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge)); showing cached copy"]
+            ["live fetch failed (idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge) on 4 tries over 0 s); showing cached copy"]
         );
+        assert_eq!(be.calls_matching("date=20261016"), 4);
         let s = broker_summary(&f, d(2026, 10, 15), d(2026, 10, 15))
             .await
             .unwrap();
-        assert!(s.stale && s.warnings[0].contains("a Cloudflare block page (HTTP 403)"));
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (idx.co.id answered with a Cloudflare block page (HTTP 403)); showing cached copy"]
+        );
+        assert!(s.stale);
         assert_eq!(be.calls_matching("date=20261015"), 1);
     }
 
     #[tokio::test]
-    async fn a_challenge_page_is_never_cached() {
+    async fn a_challenge_page_with_status_200_is_never_cached() {
         let (f, be, _d) = fetcher(
             FixtureBackend::new()
                 .route_times(
@@ -415,10 +503,8 @@ mod tests {
                 )
                 .route("GetBrokerSummary", 200, BROKERS),
         );
-        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
-            .await
-            .unwrap_err();
-        assert_eq!(err.code(), "blocked");
+        // Had the challenge been cached, the second try would have read it
+        // back from the cache instead of asking.
         let s = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
             .await
             .unwrap();
