@@ -21,14 +21,15 @@
 //! data-centre addresses (CI runners, Cloudflare Workers) more often, with a
 //! "Just a moment" challenge or a 403 "Attention Required" block page
 //! ([`http::cloudflare`](crate::http::cloudflare)). A challenged request is
-//! asked again three times within 30 s (`CHALLENGE_PAUSES`); one met by a
-//! block page is not. A refusal that stays is a failed fetch: the cached
-//! copy is served in its place, marked stale with a warning naming it, and
-//! with no copy it becomes a `blocked` error (exit 3) naming the cause. An
-//! empty copy of a day's summary stands in for nothing, since it may predate
-//! the summary: the error stands then too. Any other failure keeps its HTTP
-//! status as a `provider` error. Answers are cached like any other;
-//! refusals never are.
+//! asked again three times within 30 s (`CHALLENGE_PAUSES`), except for a
+//! minute after a challenge lasted through them (`CHALLENGE_MEMORY`); one
+//! met by a block page is not. A refusal that stays is a failed fetch: the
+//! cached copy is served in its place, marked stale with a warning naming
+//! it, and with no copy it becomes a `blocked` error (exit 3) naming the
+//! cause. An empty copy of a day's summary stands in for nothing, since it
+//! may predate the summary: the error stands then too. Any other failure
+//! keeps its HTTP status as a `provider` error. Answers are cached like any
+//! other; refusals never are.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -74,6 +75,16 @@ const CHALLENGE_PAUSES: [Duration; 3] = if cfg!(test) {
         Duration::from_secs(15),
     ]
 };
+
+/// How long a challenge that lasted through every pause is remembered.
+/// Meanwhile the next idx.co.id requests are asked once, without pauses,
+/// so a command or an MCP call that makes several meets the refusal, or a
+/// cached copy, at once instead of waiting 30 s for each. A challenge
+/// usually lifts within a minute.
+const CHALLENGE_MEMORY: Duration = Duration::from_secs(60);
+/// The cache entry that remembers it, so every command and MCP call on the
+/// same cache sees it, as with the fetcher's `failed:` marks.
+const CHALLENGE_MARK: &str = "challenge-outlasted-retries:www.idx.co.id";
 
 /// What to do when a challenge stays and nothing is cached. Most pass
 /// within a minute, but some networks are challenged on every request.
@@ -202,9 +213,10 @@ async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetche
 }
 
 /// One idx.co.id endpoint. A request met by a Cloudflare challenge is asked
-/// again after each of [`CHALLENGE_PAUSES`]; a challenge that stays, or a
-/// block page, is a failed fetch: the cached copy stands in for it, marked
-/// stale with a warning naming the refusal, or the call fails with a
+/// again after each of [`CHALLENGE_PAUSES`], unless a challenge lasted
+/// through them less than [`CHALLENGE_MEMORY`] ago; a challenge that stays,
+/// or a block page, is a failed fetch: the cached copy stands in for it,
+/// marked stale with a warning naming the refusal, or the call fails with a
 /// `blocked` error. A copy that stands in for a failed fetch comes with
 /// that [`Failure`].
 async fn ask(
@@ -214,6 +226,17 @@ async fn ask(
 ) -> Result<(Fetched, Option<Failure>)> {
     let url = format!("{BASE}/{path}");
     let headers = headers();
+    // A challenge that lasted through every pause moments ago: ask once.
+    // `--no-cache` reads no mark, as the fetcher reads none of its own.
+    let outlasted = (fetcher.mode() == CacheMode::Normal)
+        .then(|| fetcher.cache().get(CHALLENGE_MARK, CHALLENGE_MEMORY))
+        .flatten()
+        .filter(|m| m.fresh);
+    let pauses: &[Duration] = if outlasted.is_some() {
+        &[]
+    } else {
+        &CHALLENGE_PAUSES
+    };
     let (mut tries, mut waited) = (1, Duration::ZERO);
     let (got, refusal) = loop {
         // The refusal this try met. The fetcher has already turned it into
@@ -222,15 +245,19 @@ async fn ask(
         let refuse = |r: &RawResponse| {
             let kind = refused(r)?;
             let _ = seen.set(kind);
-            Some(IdxError::blocked(
-                NAME,
-                kind,
-                refusal_text(kind, r, tries, waited),
-            ))
+            let mut text = refusal_text(kind, r, tries, waited);
+            if let (Refusal::Challenge, Some(m)) = (kind, &outlasted) {
+                text.push_str(&format!(
+                    "; not asked again, as a challenge {} s earlier lasted through {}",
+                    m.age.as_secs(),
+                    m.stored.body
+                ));
+            }
+            Some(IdxError::blocked(NAME, kind, text))
         };
         let got = fetcher.get_unless(&url, &headers, ttl, None, &refuse).await;
         let seen = seen.get().copied();
-        match (seen, CHALLENGE_PAUSES.get(tries - 1)) {
+        match (seen, pauses.get(tries - 1)) {
             (Some(Refusal::Challenge), Some(&pause)) => {
                 tracing::info!(
                     path,
@@ -248,6 +275,13 @@ async fn ask(
             _ => break (got, seen),
         }
     };
+    if refusal == Some(Refusal::Challenge) && outlasted.is_none() {
+        // Through every pause: the next requests are asked once.
+        let what = format!("{tries} tries over {} s", waited.as_secs());
+        if let Err(e) = fetcher.cache().put(CHALLENGE_MARK, 0, &what) {
+            tracing::warn!(error = %e, "could not write cache");
+        }
+    }
     let f = got.map_err(|e| advise(e, fetcher.mode()))?;
     if !f.is_success() {
         return Err(IdxError::provider(
@@ -752,6 +786,65 @@ mod tests {
         let err = broker_summary(&f, refused, today).await.unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert!(err.to_string().contains(" 10:00 WIB is empty. "), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_challenge_that_outlasted_the_retries_is_not_waited_out_again() {
+        let (f, be, dir) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers("GetCalendar", 403, CHALLENGE, FLAGGED)
+                .route_with_headers("GetBrokerSummary", 403, CHALLENGE, FLAGGED),
+        );
+        // Two months of the calendar, cached four hours ago: past their three.
+        let month = |m| CalendarRange::Month(d(2026, m, 1));
+        for m in ["20261001", "20261101"] {
+            let url =
+                format!("{BASE}/Home/GetCalendar?start=1&length=9999&range=m&date={m}&lang=id");
+            f.cache()
+                .put_at(&url, 200, "{\"Results\":[]}", hours_ago(4))
+                .unwrap();
+        }
+        let s = calendar(&f, month(10), None).await.unwrap();
+        assert!(s.stale);
+        assert_eq!(be.call_count(), 4);
+        // The next request, moments later, is asked once.
+        let s = calendar(&f, month(11), None).await.unwrap();
+        assert!(s.stale);
+        assert_eq!(be.call_count(), 5);
+        assert_eq!(
+            s.warnings,
+            ["live fetch failed (idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge); not asked again, as a challenge 0 s earlier lasted through 4 tries over 0 s); showing cached copy"]
+        );
+        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(err.to_string().contains("; not asked again, "), "{err}");
+        assert_eq!(be.call_count(), 6);
+
+        // A minute on, a challenge gets every pause again.
+        f.cache()
+            .put_at(
+                CHALLENGE_MARK,
+                0,
+                "4 tries over 30 s",
+                chrono::Utc::now() - CHALLENGE_MEMORY - Duration::from_secs(1),
+            )
+            .unwrap();
+        broker_summary(&f, d(2026, 10, 15), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(be.call_count(), 10);
+        // So does `--no-cache`, which reads nothing from the cache.
+        let f = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        ));
+        broker_summary(&f, d(2026, 10, 14), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(be.call_count(), 14);
     }
 
     #[tokio::test]

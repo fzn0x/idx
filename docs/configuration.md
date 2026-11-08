@@ -146,7 +146,11 @@ a TTL applies immediately.
   failure. A challenged request is asked again after 5, 10 and 15 s (four
   tries, at most 30 s of waiting per request; the loading line shows
   `www.idx.co.id retry 1`); one met by a block page is not. A refusal is
-  never cached.
+  never cached. For a minute after a challenge lasts through every pause,
+  the next idx.co.id requests (from any command or MCP call on the same
+  cache, `--no-cache` aside) are asked once, so a command that makes several
+  meets the refusal or its cached copies at once instead of waiting 30 s
+  for each.
   An empty copy of a day's stock, broker or index summary does not stand in
   for a failed fetch, as it may be from before the summary was out: the
   error stands and names the copy. So does a copy of a stock's history
