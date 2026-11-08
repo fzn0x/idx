@@ -136,7 +136,8 @@ async fn read_response(url: &str, resp: reqwest::Response) -> Result<RawResponse
 /// In-memory backend for tests: exact-URL matches first, then substring matches.
 #[derive(Default)]
 pub struct FixtureBackend {
-    routes: Mutex<Vec<(String, RawResponse)>>,
+    /// (URL or part of one, response, answers left: `None` for no limit).
+    routes: Mutex<Vec<(String, RawResponse, Option<usize>)>>,
     pub calls: Mutex<Vec<String>>,
     /// Request headers, one entry per call, in call order.
     pub headers: Mutex<Vec<Vec<(String, String)>>>,
@@ -148,15 +149,7 @@ impl FixtureBackend {
     }
 
     pub fn route(self, url_part: &str, status: u16, body: &str) -> Self {
-        self.routes.lock().unwrap().push((
-            url_part.to_string(),
-            RawResponse {
-                status,
-                body: body.to_string(),
-                headers: vec![],
-            },
-        ));
-        self
+        self.push(url_part, status, body, &[], None)
     }
 
     pub fn route_with_headers(
@@ -165,6 +158,32 @@ impl FixtureBackend {
         status: u16,
         body: &str,
         headers: &[(&str, &str)],
+    ) -> Self {
+        self.push(url_part, status, body, headers, None)
+    }
+
+    /// Like [`route_with_headers`](Self::route_with_headers), but only for the
+    /// first `times` requests it matches; later ones go to the next route
+    /// that matches. For answers that change between tries, such as a
+    /// challenge and then the page.
+    pub fn route_times(
+        self,
+        url_part: &str,
+        times: usize,
+        status: u16,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> Self {
+        self.push(url_part, status, body, headers, Some(times))
+    }
+
+    fn push(
+        self,
+        url_part: &str,
+        status: u16,
+        body: &str,
+        headers: &[(&str, &str)],
+        left: Option<usize>,
     ) -> Self {
         self.routes.lock().unwrap().push((
             url_part.to_string(),
@@ -176,6 +195,7 @@ impl FixtureBackend {
                     .map(|(k, v)| (k.to_ascii_lowercase(), v.to_string()))
                     .collect(),
             },
+            left,
         ));
         self
     }
@@ -199,11 +219,21 @@ impl FixtureBackend {
     fn answer(&self, url: &str, headers: &[(String, String)]) -> Result<RawResponse> {
         self.calls.lock().unwrap().push(url.to_string());
         self.headers.lock().unwrap().push(headers.to_vec());
-        let routes = self.routes.lock().unwrap();
-        if let Some((_, r)) = routes.iter().find(|(u, _)| u == url) {
-            return Ok(r.clone());
-        }
-        if let Some((_, r)) = routes.iter().find(|(u, _)| url.contains(u.as_str())) {
+        let mut routes = self.routes.lock().unwrap();
+        let open = |left: &Option<usize>| *left != Some(0);
+        let found = routes
+            .iter()
+            .position(|(u, _, left)| u == url && open(left))
+            .or_else(|| {
+                routes
+                    .iter()
+                    .position(|(u, _, left)| url.contains(u.as_str()) && open(left))
+            });
+        if let Some(i) = found {
+            let (_, r, left) = &mut routes[i];
+            if let Some(n) = left {
+                *n -= 1;
+            }
             return Ok(r.clone());
         }
         Err(IdxError::Network(format!(
@@ -817,6 +847,28 @@ mod tests {
         assert_eq!(got.body, "old");
         assert!(got.failure.unwrap().contains("no route"));
         assert_eq!(be.calls_matching("POST https://q.test/screen"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_counted_route_gives_way_to_the_next() {
+        let be = FixtureBackend::new()
+            .route_times("x.test/p", 2, 403, "wait", &[("cf-mitigated", "challenge")])
+            .route("x.test/p", 200, "page");
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let r = be.get("https://x.test/p", &[]).await.unwrap();
+            let flagged = r.header_values("CF-Mitigated").len();
+            got.push((r.status, r.body, flagged));
+        }
+        assert_eq!(
+            got,
+            [
+                (403, "wait".to_string(), 1),
+                (403, "wait".to_string(), 1),
+                (200, "page".to_string(), 0)
+            ]
+        );
+        assert_eq!(be.call_count(), 3);
     }
 
     #[test]
