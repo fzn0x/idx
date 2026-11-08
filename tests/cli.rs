@@ -295,15 +295,37 @@ fn stockbit_surface_and_session_commands() {
         .success()
         .stdout(predicate::str::contains("No stored"));
 
-    // A session file makes status report logged-in (presence of a refresh
-    // token, not its validity); the dummy token is never sent anywhere.
+    // Status reads each token's own exp, without the network (the dummy
+    // tokens are never sent anywhere): a refresh token good until 2100 keeps
+    // the session working, a pair that expired in 1970 does not.
     let session = sb.config.parent().unwrap().join("stockbit-session.json");
-    std::fs::write(&session, r#"{"access":"a.b.c","refresh":"d.e.f"}"#).unwrap();
+    let fresh = "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig";
+    let old = "eyJhbGciOiJub25lIn0.eyJleHAiOjF9.sig";
+    std::fs::write(
+        &session,
+        format!(r#"{{"access":"{old}","refresh":"{fresh}"}}"#),
+    )
+    .unwrap();
     idx(&sb.cache, &sb.config)
         .args(["-o", "json", "stockbit", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"logged_in\": true"));
+        .stdout(predicate::str::contains("\"logged_in\": true"))
+        .stdout(predicate::str::contains("\"renewable\": true"));
+    std::fs::write(
+        &session,
+        format!(r#"{{"access":"{old}","refresh":"{old}"}}"#),
+    )
+    .unwrap();
+    idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stockbit", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"logged_in\": false"))
+        .stdout(predicate::str::contains("\"expired\": true"))
+        .stdout(predicate::str::contains(
+            "run `idx stockbit login` to renew it",
+        ));
 }
 
 /// A session file holding a dummy access token fresh until 2100

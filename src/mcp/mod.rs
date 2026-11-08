@@ -2098,7 +2098,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_status",
-        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask). While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
+        description = "Whether the stored Stockbit session can work now, and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. logged_in is false when no session is stored or it cannot work (expired is true when its tokens have expired); renewable is false when idx cannot renew it, so a logged-in session stops working when its access token expires; reason says why and what to do. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask); when only renewable is false, suggest the same before the access token expires. While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
     )]
     async fn stockbit_status(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(

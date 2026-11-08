@@ -623,6 +623,30 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["logged_in"], false);
     assert!(body.get("sign_in").is_none(), "{body}");
+    assert_eq!(body["expired"], false, "{body}");
+    // A stored pair that expired in 1970 (dummy tokens, never sent): the
+    // reply says the session expired and names the command that renews it.
+    let session = dir.path().join("stockbit-session.json");
+    let old = "eyJhbGciOiJub25lIn0.eyJleHAiOjF9.sig";
+    std::fs::write(
+        &session,
+        format!(r#"{{"access":"{old}","refresh":"{old}"}}"#),
+    )
+    .unwrap();
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 31, "method": "tools/call",
+        "params": {"name": "idx_stockbit_status", "arguments": {}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let body = tool_body(&next());
+    assert_eq!(body["logged_in"], false, "{body}");
+    assert_eq!(body["expired"], true, "{body}");
+    assert_eq!(
+        body["reason"],
+        "the Stockbit session has expired; run `idx stockbit login` to renew it"
+    );
+    assert!(!body.to_string().contains(old), "{body}");
+    std::fs::remove_file(&session).unwrap();
     let login = tools
         .iter()
         .find(|t| t["name"] == "idx_stockbit_login")
