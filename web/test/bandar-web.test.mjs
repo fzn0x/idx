@@ -269,6 +269,45 @@ test("a session IPOT has not published waits, is probed again every 10 minutes, 
   });
 });
 
+test("a stock IPOT has not published is read again, not stored without its lists", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
+  let published = false;
+  const calls = [];
+  const recorded = recordedFetch(calls);
+  // BBCA's 11-06 lists are out; TLKM's 11-06 page shows totals without lists until `published`.
+  const fetchFn = async (u, init) => {
+    if (!published && String(u).includes("code=TLKM&start=11/06/2026&end=11/06/2026")) { calls.push(String(u)); return new Response(page("brokersummary_bbca_20261106_insession.html")); }
+    return recorded(u, init);
+  };
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  const tlkmRows = () => [...env.scan.keys()].filter((k) => k.endsWith("|TLKM")).length;
+  await withFetch(fetchFn, async () => {
+    const r = await bandarScanStep(env, { now: at("17:00") });
+    assert.deepEqual([r.probe, r.read], ["published", 2]);
+    assert.equal(tlkmRows(), 0, "nothing stored for TLKM");
+    assert.deepEqual(calls.filter((u) => u.includes("TLKM")), [calls.find((u) => u.includes("code=TLKM"))], "one request: its session's page");
+    let st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.complete, st.failed, st.pending.map((p) => p.symbol)], ["running", "2026-11-06", [], ["TLKM"]]);
+    const shown = await bandarScreen(env, null, null, "1d");
+    assert.ok(shown.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again every 10 minutes"), shown.warnings);
+    // Not before ten minutes; then once more, still without lists.
+    calls.length = 0;
+    assert.equal((await bandarScanStep(env, { now: at("17:05") })).idle, true);
+    assert.equal(calls.length, 0);
+    await bandarScanStep(env, { now: at("17:10") });
+    assert.deepEqual([calls.length, tlkmRows()], [1, 0]);
+    // IPOT publishes it: the next check reads it whole and the session is done.
+    published = true;
+    const done = await bandarScanStep(env, { now: at("17:20") });
+    assert.equal(done.done, true);
+    st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.pending, st.failed], ["done", [], []]);
+    assert.equal(tlkmRows(), 4);
+  });
+});
+
 test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again and scanned", async () => {
   const env = memoryDb();
   // Written at 16:45:39 WIB on 2026-11-06, when IPOT had not published that session's lists.

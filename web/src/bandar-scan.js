@@ -53,6 +53,8 @@ const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
 /** Minutes before a probe that failed (an error, not an answer) is tried again. */
 const PROBE_RETRY_MIN = 5;
+/** Minutes before stocks whose session IPOT had not published are read again, until the next session's 16:45 WIB. */
+const PENDING_GAP_MIN = 10;
 const DAY_MS = 24 * 3600e3;
 const NAMES = new Map(UNIVERSE.map(([s, n]) => [s, n]));
 
@@ -174,6 +176,19 @@ const named = (symbol, p, from, to) => ({
  * they were fetched.
  */
 export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetchPage, fetchChart = y.fetchChart, today = session } = {}) {
+  // Each page once per stock: the 1d page is the scanned session the
+  // rebuilds start from.
+  const pages = new Map();
+  const get = async (from, to) => {
+    const k = `${from}:${to}`;
+    if (!pages.has(k)) pages.set(k, ipot.parse(await fetchPage(ipot.url(symbol, from, to))));
+    return { page: pages.get(k), fetchedOn: today };
+  };
+  // The session first: until IPOT publishes the stock's lists for it, its
+  // ranges do not hold them either, so nothing more is read or stored.
+  const { page: day } = await get(session, session);
+  if (day.invalid) return { invalid: true, rows: [] };
+  if (ipot.unpublished(day)) return { pending: true, rows: [] };
   let candles = [];
   try {
     const res = await fetchChart(symbol, "6mo", "1d");
@@ -183,14 +198,6 @@ export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetc
     // budget is not a missing chart: the stock is read again next tick.
     if (isBudgetError(e)) throw e;
   }
-  // Each page once per stock: the 1d page is the scanned session the
-  // rebuilds start from.
-  const pages = new Map();
-  const get = async (from, to) => {
-    const k = `${from}:${to}`;
-    if (!pages.has(k)) pages.set(k, ipot.parse(await fetchPage(ipot.url(symbol, from, to))));
-    return { page: pages.get(k), fetchedOn: today };
-  };
   const rows = [];
   for (const period of bd.PERIODS) {
     const from = bd.periodStart(period, session);
@@ -230,7 +237,7 @@ async function probe(st, now, fetchPage) {
   st.probe_error = null;
   const verdict = probeVerdict(page, st.board_traded);
   if (verdict === "published") {
-    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retried: false, failed: [], stored: 0, checked: 0 });
+    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retried: false, failed: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
     // A week of these shows when IPOT publishes a session.
     console.log("bandar published", JSON.stringify({ session: st.session, published_at: at, last_unpublished_at: st.last_unpublished_at ?? null, probes: st.probes }));
   } else if (verdict === "closed") {
@@ -245,18 +252,33 @@ async function probe(st, now, fetchPage) {
   return verdict;
 }
 
+/** No stock is left to read in this pass or a retry pass; pending ones may wait. */
+const restDone = (st) => !st.queue.length && (!st.retry.length || st.retried);
+
+/** Refills an empty queue: the retry pass, else the pending stocks once they are due. */
+function refill(st, now) {
+  if (st.queue.length) return;
+  if (st.retry.length && !st.retried) {
+    // One more pass over the stocks that failed.
+    st.queue = st.retry;
+    st.retry = [];
+    st.retried = true;
+  } else if (st.pending?.length && now.getTime() >= Date.parse(st.pending_due)) {
+    st.queue = st.pending;
+    st.pending = [];
+    st.pending_due = null;
+  }
+}
+
 /** Up to PER_TICK stocks off the queue into `rows`, while the budget and the minute last; returns how many it read. */
 async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
-  const today = hol.wibDate(now);
+  const today = hol.wibDate(now), at = now.toISOString();
+  st.pending ??= [];
+  st.pending_since ??= {};
   let read = 0;
   while (read < PER_TICK) {
-    if (!st.queue.length) {
-      if (!st.retry.length || st.retried) break;
-      // One more pass over the stocks that failed.
-      st.queue = st.retry;
-      st.retry = [];
-      st.retried = true;
-    }
+    refill(st, now);
+    if (!st.queue.length) break;
     if (b.left() < STOCK_RESERVE || b.elapsedMs() >= TICK_MS) break;
     const symbol = st.queue[0];
     let r;
@@ -276,6 +298,14 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
       st.failed.push(symbol);
       continue;
     }
+    if (r.pending) {
+      // IPOT has not published this stock's session: read it again later, store nothing now.
+      st.pending.push(symbol);
+      st.pending_since[symbol] ??= at;
+      st.pending_due ??= after(now, PENDING_GAP_MIN);
+      continue;
+    }
+    delete st.pending_since[symbol];
     for (const row of r.rows) rows.push({ symbol, ...row });
     st.stored++;
     if (r.rows[0]?.v.summary.buyers.length) st.checked++;
@@ -322,9 +352,16 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   if (st.phase === "running" && stocks) {
     out.read = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
     changed ||= out.read > 0;
-    if (!st.queue.length && (!st.retry.length || st.retried)) {
-      Object.assign(st, { phase: "done", complete: session, done_at: now.toISOString() });
+  }
+  if (st.phase === "running" && restDone(st)) {
+    // Shown from now on, though stocks IPOT has not published may still come.
+    if (st.complete !== session) {
+      Object.assign(st, { complete: session, done_at: now.toISOString() });
       changed = prune = true;
+    }
+    if (!st.pending?.length) {
+      st.phase = "done";
+      changed = true;
     }
   }
   if (!changed) return { ...out, idle: true, phase: st.phase };
@@ -354,7 +391,9 @@ export function scanNotes(st, shown, rows) {
   const warnings = [];
   if (!st) return { warnings, failed: 0 };
   const of = st.symbols?.length ?? 0;
-  if (st.session === shown && st.phase === "running") warnings.push(`the scan of ${shown} is still running: ${rows} of ${of} stocks so far`);
+  const pending = st.session === shown ? (st.pending || []).length : 0;
+  if (st.session === shown && st.phase === "running" && !restDone(st)) warnings.push(`the scan of ${shown} is still running: ${rows} of ${of} stocks so far`);
+  else if (pending) warnings.push(`IPOT has not published ${shown} for ${pending} of the ${of} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
   else if (st.session > shown) {
     if (st.phase === "new") warnings.push(`the scan of ${st.session} has not started yet; showing ${shown}`);
     else if (st.phase === "waiting") {
@@ -376,6 +415,7 @@ export async function scanStatus(env) {
     failed: st.failed || [], started_at: st.started_at || null, done_at: st.done_at || null,
     phase: st.phase, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null,
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
+    pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,
     ranked_from: st.ranked_from ?? null,
   };
 }
