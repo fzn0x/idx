@@ -173,6 +173,8 @@ const FLAG_WHY = {
   "list board": say("Terminal web mendaftar kode dan nama bawaan, yang tidak memuat papan pencatatan.", "The web terminal lists the bundled codes and names, which carry no listing boards."),
   "broker top": say("Terminal web selalu menampilkan 10 pembeli dan penjual teratas yang diterbitkan sumbernya.", "The web terminal always shows the top 10 buyers and sellers the source publishes."),
   "dividends limit": say("Terminal web menampilkan 12 pembayaran terakhir; json dividends memuat semuanya.", "The web terminal lists the last 12 payments; json dividends carries all of them."),
+  "sentiment limit": say("Terminal web menampilkan 10 judul berita terkuat, sama dengan bawaan CLI.", "The web terminal shows the 10 strongest headlines, the CLI's default."),
+  "screen fundamentals": say("Terminal web mengambil data fundamental hanya bila filter atau urutannya memerlukannya; --fundamentals tetap mengambilnya untuk hasilnya.", "The web terminal fetches fundamentals only when a filter or the sort needs them; --fundamentals fetches them for the results anyway."),
   market: say("Panel market di terminal web memakai daftar tetap.", "The web terminal's market panel uses fixed lists."),
 };
 const flagWhy = (cmd, name) => own(FLAG_WHY, `${cmd} ${name}`) || own(FLAG_WHY, name) || own(FLAG_WHY, cmd) || null;

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { routeLine, tokenize, cliPath, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES } from "../public/route.js";
+import { routeLine, tokenize, cliPath, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES, SPEC, CLI_FORM } from "../public/route.js";
 import { TOOLS, byName, cliOnlyReason } from "../public/tools.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -439,6 +439,22 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     if (r.why) bilingual(r.why, `${line} why`);
   }
   for (const line of ["idx -o csv stocks quote BBCA", "idx --provider stockbit stocks quote BBCA", "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan", "idx ownership graph BBRI --dot"]) assert.ok(routeLine(line).why, line);
+});
+
+test("every CLI flag the page has no twin for says why, in both languages", () => {
+  let flags = 0;
+  for (const [cmd, spec] of Object.entries(SPEC)) {
+    const [path, slot] = CLI_FORM[cmd];
+    for (const flag of spec.cli || []) {
+      const line = `idx ${path}${slot?.startsWith("@") ? " BBCA" : ""} --${flag}${spec.switch?.includes(flag) ? "" : " x"}`;
+      const r = routeLine(line);
+      assert.equal(r.kind, "flag", line);
+      assert.ok(r.why, `${line} says why`);
+      bilingual(r.why, `${line} why`);
+      flags++;
+    }
+  }
+  assert.ok(flags >= 17, `${flags} flags`);
 });
 
 test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
