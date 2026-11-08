@@ -52,7 +52,9 @@ src/
                      quote + full depth ladder (model/orderbook.rs), charts/daily -> candles,
                      corpaction.rs: /corpaction/{type} -> corporate actions (model/corporate.rs), read by
                      field suffix; movement.rs: /insider/company/majorholder -> insider and 5 % holder
-                     movements (model/movements.rs); only allow-listed read paths carry the bearer; auth.rs is
+                     movements (model/movements.rs); broker_summary.rs: /marketdetectors/{SYM} (gross) ->
+                     every broker that bought and sold (model/broker.rs, idx.broker.v1), ordered by lots;
+                     only allow-listed read paths carry the bearer; auth.rs is
                      the rotating-token session store (file 0600 + env seed, POST /login/refresh; one
                      store per session file per process, refreshes under a lock file), signin.rs the one
                      accept step every sign-in ends in (store, check with one GET, restore when refused),
@@ -78,7 +80,8 @@ src/
                      IDX_HOLIDAYS override
     news/            Kontan + CNBC Indonesia RSS feeds through the Fetcher (rss crate)
   service.rs         provider call + analysis, shared by cli/ and mcp/ (fundamentals, technical, compare,
-                     screen, news ordering, returns, dividends, market_overview, brief, broker, bandar,
+                     screen, news ordering, returns, dividends, market_overview, brief, broker (IPOT or
+                     Stockbit, by source), bandar,
                      bandar_screen, bandar_broker, intraday); service/exchange.rs: holidays, instruments,
                      members, indices, calendar, corporate actions, foreign flow, market brokers;
                      service/lenses.rs: growth, valuation and risk lenses (fundamentals, statements,

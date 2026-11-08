@@ -407,17 +407,24 @@ and documented as such: `years[]` (`year`, `payments`, `total`, `change_pct`),
 
 ## `idx.broker.v1` (`broker`)
 
-Array, one summary per requested ticker, as Indo Premier (IPOT) publishes it:
-`symbol`, `name` (bundled universe), `from` and `to` (the range the source
-applied, WIB dates), `investor` (`all` | `foreign` | `domestic`), `board`
-(`all` | `regular` | `cash` | `negotiated`), `buyers[]` and `sellers[]` (top 10
-ranked by lots, most first: `rank`, `code`, `name` from the bundled IDX member
-list or `null`, `kind` = `local` | `foreign` | `state_owned` or `null`, `lots`
-(1 lot = 100 shares), `value` in IDR, `average_price`), and the range totals
-`total_value`, `total_lots`, `foreign_net_value` (foreign buy minus sell),
-`average_price` (`null` when nothing traded), `buy_value` and `sell_value`
-(what the selected investors bought and sold, IDR). What the source's
-totals mean depends on the filters:
+Array, one summary per requested ticker, from Indo Premier (IPOT) or, with a
+working Stockbit session, from Stockbit (`--source auto`, the default; see
+below): `symbol`, `name` (bundled universe), `from` and `to` (the range the
+source applied, WIB dates), `investor` (`all` | `foreign` | `domestic`), `board`
+(`all` | `regular` | `cash` | `negotiated`), `buyers[]` and `sellers[]` (each
+broker's gross buying or selling, ranked by lots, most first: `rank`, `code`,
+`name` from the bundled IDX member list or `null`, `kind` = `local` |
+`foreign` | `state_owned` or `null`, `lots` (1 lot = 100 shares), `value` in
+IDR, `average_price`), and the range totals `total_value`, `total_lots`,
+`foreign_net_value` (foreign buy minus sell), `average_price` (`null` when
+nothing traded), `buy_value` and `sell_value` (what the selected investors
+bought and sold, IDR). Added in place, after `rounded`: `buyer_count` and
+`seller_count` (brokers on each side as the source counts them, or `null`),
+`buyers_complete` and `sellers_complete` (`true` when the list holds every
+broker on its side) and `source` (`ipot` | `stockbit`, the source of this
+summary; `--source auto` can mix them in one call, and the envelope's
+`provider` is the first summary's). What IPOT's totals mean depends on the
+filters (Stockbit's follow the list):
 
 - All investors: `total_value`, `total_lots` and `average_price` are the
   range's; `buy_value` and `sell_value` both equal the value traded.
@@ -431,7 +438,7 @@ totals mean depends on the filters:
 - A board filter: the source's foreign net covers every board whatever the
   filter, so `foreign_net_value` is `null`, and so is a side's `sell_value`.
 
-The source abbreviates figures
+IPOT abbreviates figures
 of a million and more to one decimal (`1.6 M`); those arrive as plain numbers
 at that precision and the summary carries `rounded: true`. Nothing is netted
 per broker or estimated. A range without trades has empty lists and a warning.
@@ -446,8 +453,33 @@ are read back from the end, at most five, until two had trades), and more
 only when a part of the range cached while it was current has to be split
 again; most of them are cached. If those cannot be read it is `null` with a
 warning.
+
+IPOT publishes the top 10 buyers and the top 10 sellers and no count, so its
+`buyer_count` and `seller_count` are `null` and its lists incomplete, unless a
+side has fewer than ten rows: then the list is every broker on that side and
+the count is its length. A page with trades but no lists yet (a session still
+trading) is incomplete. Under `auto` without a working session a warning says
+so when a list reached ten rows.
+
+From Stockbit (`/marketdetectors/` in gross mode, see
+[stockbit.md](stockbit.md#broker-summary)) every broker that bought and every
+broker that sold is listed and counted; Stockbit ranks by value and idx orders
+each side by lots, so `rank` means the same as IPOT's (ties keep Stockbit's
+order). Figures are exact (`rounded: false`); odd lots count as fractions of a
+lot. `total_value`, `total_lots`, `buy_value` and `sell_value` are sums over the
+full lists, `null` when a list is cut, and `average_price` is `total_value`
+over the shares (`total_lots` × 100), computed by idx. For all investors
+`foreign_net_value` comes from a second read of foreign investors over the same
+range and board, their buying less their selling (with a board filter it is
+that board's); for one investor side it is that side's buying less its selling
+(foreign) or the opposite (domestic). Stockbit is not read for domestic
+investors or the cash and negotiated boards yet: `auto` takes IPOT there.
+Stockbit's classes (`Asing`, `Lokal`, `Pemerintah`) can differ from IPOT's.
+
 With `-o csv` the rows are one broker per side: `symbol, from, to, investor,
-board, side (buy|sell), rank, code, name, kind, lots, value, average_price`.
+board, side (buy|sell), rank, code, name, kind, lots, value, average_price,
+source, side_count, side_complete` (the last three: the summary's source, and
+that side's `buyer_count` or `seller_count` and completeness).
 
 ## `idx.bandar.v1` (`bandar detect`)
 

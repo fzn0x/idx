@@ -3,12 +3,14 @@
 `idx` reads IDX data from free, keyless public endpoints. **Stockbit is the one
 exception**: an opt-in provider that serves realtime quotes, history and a live
 order book from [Stockbit](https://stockbit.com)'s own backend, carrying **your
-own Stockbit account session**. It is never in the `auto` chain and is used only
-when you ask for it with `--provider stockbit`. The same session also reads what
-only Stockbit has in one place: every corporate action of a stock since its
-listing, the market's corporate-action calendar, and the insider and 5 % holder
-movements filed with IDX and KSEI (`idx stockbit actions`, `idx stockbit
-calendar`, `idx stockbit movements`).
+own Stockbit account session**. It is never in the provider `auto` chain:
+quotes and history use it only when you ask for it with `--provider stockbit`.
+The same session also reads what only Stockbit has in one place: every corporate
+action of a stock since its listing, the market's corporate-action calendar, and
+the insider and 5 % holder movements filed with IDX and KSEI (`idx stockbit
+actions`, `idx stockbit calendar`, `idx stockbit movements`). And `idx broker`
+lists every broker that bought and sold a stock from it, by itself once you are
+logged in (see **Broker summary**).
 
 > This uses an unofficial, undocumented API with your personal account. It may
 > conflict with Stockbit's Terms of Use, and automated access could get an
@@ -278,6 +280,63 @@ securities firms as holders, and rows appear days after the change. The
 monthly register of holders above 1 % (`idx ownership`, no login) is the other
 view.
 
+## Broker summary
+
+```sh
+idx broker BBCA                           # every broker, once logged in
+idx broker BBCA --source stockbit -n 0    # Stockbit or nothing, every row in the table
+idx broker BBRI --from 2026-11-02 --to 2026-11-06 --investor foreign
+idx broker BBCA --source ipot             # IPOT's top 10, no login
+```
+
+`idx broker` reads Stockbit's broker summary by itself once a working session is
+stored (what `idx stockbit status` calls logged in): `--source auto`, the
+default, takes Stockbit then and IPOT otherwise, and `--source stockbit` fails,
+naming `idx stockbit login`, when no session works. The schema stays IPOT's,
+`idx.broker.v1`:
+
+- idx asks for gross figures: each broker's own buying on the buy side and its
+  own selling on the sell side, as IPOT publishes them. Stockbit's net mode
+  lists each broker once, on the side where it was net; idx does not use it
+  and refuses a reply in those figures.
+- Every broker is listed. BBCA had 59 buyers and 67 sellers on 2026-11-06, and
+  92 a side over the year to that day. `buyer_count` and `seller_count` are
+  Stockbit's counts; `buyers_complete` and `sellers_complete` say whether each
+  list holds them all. A cut list keeps its totals `null`, and the table says
+  `Top buyers (5 of 59)`.
+- Stockbit ranks a side by value; idx orders it by lots, as IPOT ranks, so
+  `rank` means the same. Ordered so, Stockbit's first ten were IPOT's top 10
+  for 2026-11-06 and for 2026-11-02 to 2026-11-06: the same brokers in the same
+  order, with the same lots and values at IPOT's precision. Classes are
+  Stockbit's own labels (`Asing`, `Lokal`, `Pemerintah`), which can differ from
+  IPOT's: HD is foreign on Stockbit and local on IPOT.
+- Figures are exact (`rounded: false`), and odd lots count as fractions of a
+  lot (YU bought 108,898.5 lots that day). Totals are sums over the full lists:
+  both sides came to 1,035,652,066,452 IDR. Stockbit's own totals are the buy
+  side's at about eight significant digits and are not used.
+- The foreign net comes from a second read, of foreign investors over the same
+  range and board: their buying less their selling, 218,988,301,100 IDR for
+  BBCA on 2026-11-06 (IPOT's `F. NVal`: 219.0 B). With `--board regular` it is
+  the regular board's, which IPOT does not publish. A day without trades needs
+  no second read; when the second read fails the net is `null` with a warning.
+- A range is one read, aggregated by Stockbit, so no session is rebuilt one by
+  one as IPOT's foreign net over a range is.
+- Domestic investors and the cash and negotiated boards have not been recorded
+  yet, so idx does not ask Stockbit for them: `auto` takes IPOT, with a note,
+  and `--source stockbit` is a usage error.
+- Under `auto`, a ticker Stockbit fails for (its CDN refusing this network, a
+  session Stockbit ended) is read from IPOT with a warning; after a failure no
+  other read could get past, the rest of the call is read from IPOT too. Each
+  summary's `source` says which answered.
+- Reads are paced a second apart like the other Stockbit lists: one or two per
+  ticker, plus one per weekday without trades while looking for the latest
+  session. A range that ended before today is cached for a week, one that
+  reaches today for five minutes.
+
+Without a working session, or with `--source ipot`, the summary is IPOT's top 10
+as before; under `auto` a note then says a login lists every broker, when a list
+reached IPOT's ten rows.
+
 ## MCP
 
 The MCP server exposes five Stockbit tools alongside the rest:
@@ -302,6 +361,10 @@ The MCP server exposes five Stockbit tools alongside the rest:
   and agents should never ask the user for, a password, a cookie or a token in
   the chat. Prefer telling the user to run `idx stockbit login` in a terminal
   themselves.
+
+`idx_broker` reads the same session: its `source` (`auto`, `ipot`,
+`stockbit`) works as `--source` does on the CLI, so an agent gets every broker
+once the user is logged in.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
 provider: `idx --provider stockbit mcp`. For Stockbit candles with the free
@@ -359,6 +422,7 @@ and browser-shaped `origin`/`referer` headers:
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `GET /corpaction/{type}[?symbol={SYM}]` | corporate actions, one kind per request: `dividend`, `stock_dividend`, `bonus`, `rightissue`, `warrant`, `stocksplit`, `reversesplit`, `rups`, `pubex`, `ipo`, `tenderoffer` |
 | `GET /insider/company/majorholder?page=N[&symbol=][&date_start=][&date_end=][&insider=][&action_type=][&source_type=]` | insider and 5 % holder movements, 50 rows a page |
+| `GET /marketdetectors/{SYM}?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL\|_REGULER&investor_type=INVESTOR_TYPE_ALL\|_FOREIGN&from=..&to=..&limit=1000` | the broker summary: every broker that bought and sold over the range (`idx broker`) |
 | `GET /company-price-feed/market-time/session` | checks a session before `idx stockbit login` stores it (never from the cache) |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 
