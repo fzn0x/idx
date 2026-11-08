@@ -565,15 +565,17 @@ is twice the market's value.
 summary (any session), or `ipot`, IPOT's ranking of its latest session
 (`--source ipot`, MCP `source: "ipot"`; also `auto`, the default, when
 idx.co.id refuses (Cloudflare), cannot be reached, fails or, offline, has no
-copy, with a warning). IPOT takes no date: an earlier session is a usage
-error, a later one (or a day without a session) `not_found`, and under
-`auto` idx.co.id's error stands. It abbreviates figures of a million and
-more to two decimals (`2.79 T`, so `rounded: true`) and publishes
-`net_value` with its own two decimals, so it can differ from
-`buy_value - sell_value`. A ranking read on a trading day from 08:58 to
-19:00 WIB cannot be dated (when IPOT's two pages roll over to a new session
-has not been measured), so in those hours the source answers a `provider`
-error and, under `auto`, idx.co.id's error stands. Members without trades
+copy, with a warning). IPOT takes no date: a `--date` before its session,
+or after today, is a usage error; a later one up to today, or a day without
+a session, is `not_found`; and under `auto` idx.co.id's error stands. It
+abbreviates figures of a million and more to two decimals (`2.79 T`, so
+`rounded: true`) and publishes `net_value` with its own two decimals, so it
+can differ from `buy_value - sell_value`. A ranking read on a trading day
+from 08:58 to 19:00 WIB cannot be dated (when IPOT's two pages roll over to
+a new session has not been measured), so in those hours the source answers
+a `provider` error (a copy read then is `offline_miss` when served
+offline, and `network`, naming the failure, when served because IPOT could
+not be read) and, under `auto`, idx.co.id's error stands. Members without trades
 are left out, as idx.co.id leaves them out; a broker IPOT lists apart under
 another member's code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in
 that member, as idx.co.id counts it, with a warning.
