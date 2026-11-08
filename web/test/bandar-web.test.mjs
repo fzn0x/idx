@@ -325,6 +325,35 @@ test("in a year the calendar does not cover, a day without trades at IPOT or on 
   });
 });
 
+test("every closure after the shown session stays on record, however many there are", async () => {
+  const env = memoryDb();
+  // 2028 is not on the bundled list; 02-28 to 03-03 are closed (a week like Eid's).
+  const closed = ["2028-02-28", "2028-02-29", "2028-03-01", "2028-03-02", "2028-03-03"];
+  const board = (dated, at) => env.kv.set("board", JSON.stringify({ ts: unix(`${at}T16:45:00+07:00`), quotes: [quote("BBCA", 5175, 9e8, `${dated}T16:14:58+07:00`), quote("TLKM", 2690, 3e8, `${dated}T16:14:58+07:00`)] }));
+  const recorded = recordedFetch();
+  const fetchFn = async (u, init) => {
+    const d = String(u).match(/start=(\d\d)\/(\d\d)\/(\d{4})&end=(\d\d)\/(\d\d)\/(\d{4})/);
+    const day = d && d[1] + d[2] === d[4] + d[5] ? `${d[6]}-${d[4]}-${d[5]}` : null;
+    if (closed.includes(day)) return new Response(page("brokersummary_bbca_20261017_no_trades.html"));
+    if (day === "2028-03-06") return new Response(page("brokersummary_bbca_20261106_insession.html"));
+    return recorded(u, init);
+  };
+  await withFetch(fetchFn, async () => {
+    board("2028-02-25", "2028-02-25");
+    await scanAll(env, new Date("2028-02-25T17:00:00+07:00"));
+    for (const d of closed) {
+      board("2028-02-25", d);
+      assert.equal((await bandarScanStep(env, { now: new Date(`${d}T16:45:00+07:00`) })).probe, "closed");
+    }
+    board("2028-03-06", "2028-03-06");
+    assert.equal((await bandarScanStep(env, { now: new Date("2028-03-06T16:45:00+07:00") })).probe, "unpublished");
+  });
+  const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2028-03-06T16:50:00+07:00"));
+  assert.equal(out.data.to, "2028-02-25");
+  for (const d of closed) assert.ok(out.warnings.includes(`${d} had no trades at IPOT nor on the quote board, so it was not scanned`), `${d}: ${out.warnings.join("\n")}`);
+  assert.ok(!out.warnings.some((w) => w.includes("sessions behind")), out.warnings.join("\n"));
+});
+
 test("while the board cannot tell whether the session traded, each probe asks the board again", async () => {
   const env = memoryDb();
   // 2028 is not on the bundled list and 2028-01-26 is closed; Yahoo failed from 16:00 WIB, so at 16:45 the board is from 15:59.

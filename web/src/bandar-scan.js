@@ -91,7 +91,11 @@ const RETRY_GAPS_MIN = [10, 30, 60, 120, 240, 240, 240, 240];
 const CUTS_ALLOWED = 1;
 /** Failures the state keeps word for word, newest first. */
 const ERRORS_KEPT = 5;
-/** Records of finished sessions the state keeps (the API reads the shown one's and the newer ones'). */
+/**
+ * Records of finished sessions the state keeps (the API reads the shown
+ * one's and the newer ones'); the shown one and the closures after it are
+ * kept besides, since the sessions-behind count leaves those days out.
+ */
 const RUNS_KEPT = 4;
 const DAY_MS = 24 * 3600e3;
 const NAMES = new Map(UNIVERSE.map(([s, n]) => [s, n]));
@@ -227,7 +231,8 @@ function keep(st, run) {
   const shown = st.runs?.find((r) => r.session === st.complete);
   if (run.scanned && run.stored > 0 && st.complete !== run.session && (!st.complete || run.stored * 2 >= run.of || run.stored > (shown?.stored ?? 0))) st.complete = run.session;
   run.promoted = st.complete === run.session;
-  st.runs = [run, ...(st.runs || []).filter((r) => r.session !== run.session)].filter((r, i) => i < RUNS_KEPT || r.session === st.complete);
+  const needed = (r) => r.session === st.complete || (r.reason === "closed" && st.complete != null && r.session > st.complete);
+  st.runs = [run, ...(st.runs || []).filter((r) => r.session !== run.session)].filter((r, i) => i < RUNS_KEPT || needed(r));
   st.done_at = run.done_at;
 }
 
