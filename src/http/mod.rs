@@ -269,6 +269,10 @@ pub enum CacheMode {
     Bypass,
 }
 
+/// What a caller of [`Fetcher::get_unless`] makes of a live response: the
+/// error it amounts to (a refusal), or `None` for an answer.
+pub type Refused<'a> = dyn Fn(&RawResponse) -> Option<IdxError> + Sync + 'a;
+
 /// A response plus where it came from.
 #[derive(Debug, Clone)]
 pub struct Fetched {
@@ -356,7 +360,27 @@ impl Fetcher {
         ttl: Duration,
         cache_key: Option<&str>,
     ) -> Result<Fetched> {
-        self.fetch(url, headers, ttl, cache_key, None, None).await
+        self.fetch(url, headers, ttl, cache_key, None, None, None)
+            .await
+    }
+
+    /// Like [`get`](Self::get), for sources that refuse with an ordinary HTTP
+    /// response (Cloudflare's challenge and block pages): `refused` sees each
+    /// live response before it is cached, and one it returns an error for
+    /// counts as a failed fetch, as a network error does. It is never
+    /// cached; the cached copy is served in its place, marked stale
+    /// (`fetch_failed`) with the error as the warning's cause, or, with no
+    /// copy, the call returns the error.
+    pub async fn get_unless(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        ttl: Duration,
+        cache_key: Option<&str>,
+        refused: &Refused<'_>,
+    ) -> Result<Fetched> {
+        self.fetch(url, headers, ttl, cache_key, None, None, Some(refused))
+            .await
     }
 
     /// Cached POST for read-only query endpoints that take their parameters in
@@ -371,7 +395,7 @@ impl Fetcher {
         ttl: Duration,
         cache_key: &str,
     ) -> Result<Fetched> {
-        self.fetch(url, headers, ttl, Some(cache_key), None, Some(body))
+        self.fetch(url, headers, ttl, Some(cache_key), None, Some(body), None)
             .await
     }
 
@@ -388,12 +412,14 @@ impl Fetcher {
         cache_key: Option<&str>,
         retry_after: Duration,
     ) -> Result<Fetched> {
-        self.fetch(url, headers, ttl, cache_key, Some(retry_after), None)
+        self.fetch(url, headers, ttl, cache_key, Some(retry_after), None, None)
             .await
     }
 
     /// The shared path: cache, offline, backoff and stale fallback. `body`
-    /// makes the live request a POST.
+    /// makes the live request a POST; `refused` turns a live response into
+    /// a failure ([`get_unless`](Self::get_unless)).
+    #[allow(clippy::too_many_arguments)]
     async fn fetch(
         &self,
         url: &str,
@@ -402,6 +428,7 @@ impl Fetcher {
         cache_key: Option<&str>,
         retry_after: Option<Duration>,
         body: Option<&str>,
+        refused: Option<&Refused<'_>>,
     ) -> Result<Fetched> {
         let key = cache_key.unwrap_or(url);
         let hit = if self.mode == CacheMode::Bypass {
@@ -461,6 +488,14 @@ impl Fetcher {
                 None => self.backend.get(url, headers).await,
             }
         };
+        // A refusal is no answer: it takes the failure path below.
+        let live = match (live, refused) {
+            (Ok(resp), Some(refused)) => match refused(&resp) {
+                Some(e) => Err(e),
+                None => Ok(resp),
+            },
+            (live, _) => live,
+        };
         match live {
             Ok(resp) => {
                 if (200..300).contains(&resp.status) {
@@ -480,10 +515,11 @@ impl Fetcher {
                 })
             }
             Err(e) => {
-                // The bare message: it is wrapped again when replayed. Query
+                // The bare message: a network error's is wrapped again when
+                // replayed, a refusal's already names its source. Query
                 // strings are cut so a crumb or key never reaches a warning.
                 let why = redact_urls(&match &e {
-                    IdxError::Network(m) => m.clone(),
+                    IdxError::Network(m) | IdxError::Blocked { message: m, .. } => m.clone(),
                     other => other.to_string(),
                 });
                 if let Some((mark, _)) = &mark {
@@ -495,7 +531,7 @@ impl Fetcher {
                     Some(h) => {
                         // The caller reports the cause (a warning and
                         // `stale_reason`); `-v` shows it here as well.
-                        tracing::info!(error = %why, key, "network failed: serving stale cache");
+                        tracing::info!(error = %why, key, "live fetch failed: serving stale cache");
                         let mut f = from_hit(&h, Some(StaleReason::FetchFailed));
                         f.failure = Some(why);
                         Ok(f)
@@ -847,6 +883,65 @@ mod tests {
         assert_eq!(got.body, "old");
         assert!(got.failure.unwrap().contains("no route"));
         assert_eq!(be.calls_matching("POST https://q.test/screen"), 1);
+    }
+
+    /// A source that refuses with an ordinary page, as Cloudflare does.
+    fn moment(r: &RawResponse) -> Option<IdxError> {
+        r.body.contains("Just a moment").then(|| {
+            IdxError::blocked(
+                "t",
+                cloudflare::Refusal::Challenge,
+                "t.test answered a challenge",
+            )
+        })
+    }
+
+    #[tokio::test]
+    async fn a_refused_answer_is_a_failed_fetch_and_never_cached() {
+        let url = "https://t.test/day";
+        let ttl = Duration::from_secs(60);
+        let be = FixtureBackend::new()
+            .route_times(url, 1, 200, "<title>Just a moment...</title>", &[])
+            .route(url, 200, "{\"day\":1}");
+        let (f, _d) = fetcher(be, CacheMode::Normal);
+        let err = f
+            .get_unless(url, &[], ttl, None, &moment)
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        assert!(f.cache().get(url, ttl).is_none(), "a refusal is not cached");
+        let got = f.get_unless(url, &[], ttl, None, &moment).await.unwrap();
+        assert!(!got.cached && got.failure.is_none());
+        assert_eq!(f.cache().get(url, ttl).unwrap().stored.body, "{\"day\":1}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_serves_the_cached_copy_as_a_network_failure_does() {
+        let url = "https://t.test/day";
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let two_hours_ago = Utc::now() - chrono::Duration::seconds(7200);
+        cache.put_at(url, 200, "old", two_hours_ago).unwrap();
+        let be = Arc::new(FixtureBackend::new().route(url, 403, "<title>Just a moment...</title>"));
+        let ttl = Duration::from_secs(60);
+        let f = Fetcher::new(be.clone(), cache, CacheMode::Normal);
+        let got = f.get_unless(url, &[], ttl, None, &moment).await.unwrap();
+        assert!(got.cached && got.stale);
+        assert_eq!(got.stale_reason, Some(StaleReason::FetchFailed));
+        assert_eq!(got.body, "old");
+        // The bare message, without the error's `t:` prefix.
+        assert_eq!(got.failure.as_deref(), Some("t.test answered a challenge"));
+        assert_eq!(f.cache().get(url, ttl).unwrap().stored.body, "old");
+        assert_eq!(be.call_count(), 1);
+
+        // `--no-cache` looks at no copy, after a refusal as after a network
+        // failure.
+        let f = Fetcher::new(be, Cache::new(dir.path()), CacheMode::Bypass);
+        let err = f
+            .get_unless(url, &[], ttl, None, &moment)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
     }
 
     #[tokio::test]

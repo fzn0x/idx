@@ -123,8 +123,9 @@ pub fn wib_from_unix(secs: i64) -> Option<DateTime<FixedOffset>> {
 pub enum StaleReason {
     /// `--offline` (or `IDX_OFFLINE`): the network was not tried.
     Offline,
-    /// The live request failed, or failed moments ago and is not retried
-    /// yet; a warning names the failure.
+    /// The live request failed or the source refused it (a Cloudflare
+    /// challenge), or it failed moments ago and is not retried yet; a
+    /// warning names the failure.
     FetchFailed,
 }
 
