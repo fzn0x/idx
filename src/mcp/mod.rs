@@ -490,6 +490,9 @@ pub struct MarketBrokersArgs {
     /// Ranking figure: "value" (default), "volume" or "frequency".
     #[serde(default)]
     pub sort: Option<String>,
+    /// "auto" (default): idx.co.id, and IPOT's latest session when idx.co.id refuses or fails. "idx": idx.co.id only, any session. "ipot": Indo Premier, its latest session only, with each broker's value bought, sold and net and its class.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1147,7 +1150,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_market_brokers",
-        description = "Top brokers: every IDX exchange member's trading for one session from idx.co.id's daily broker summary (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
+        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses the connection or fails, from IPOT's ranking of its latest session, with a warning; the envelope's provider says which answered. source=ipot asks IPOT directly: its latest session only (another date is a usage error), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures abbreviated to two decimals (rounded=true); those fields are null from idx.co.id. For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
     )]
     async fn market_brokers(
         &self,
@@ -1157,12 +1160,13 @@ impl IdxServer {
             async {
                 ok(
                     SCHEMA_MARKET_BROKERS,
-                    service::market_brokers(
+                    service::market_brokers_from(
                         &self.fetcher,
+                        parse_opt(&a.source, crate::model::BrokerSource::Auto)?,
                         parse_date(&a.date)?,
                         a.top.unwrap_or(20) as usize,
                         parse_opt(&a.sort, crate::model::BrokerSort::Value)?,
-                        service::today_wib(),
+                        chrono::Utc::now(),
                     )
                     .await?,
                 )
@@ -3183,6 +3187,82 @@ mod tests {
             assert_eq!(r.is_error, Some(true));
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn market_brokers_tool_takes_a_source_and_stands_in_for_idx_co_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = crate::http::FixtureBackend::new()
+            .route_with_headers(
+                "GetBrokerSummary",
+                403,
+                include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html"),
+                &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+            )
+            .route(
+                "ma-topbroker.php",
+                200,
+                include_str!("../../tests/fixtures/ipot/topbroker_20261106.html"),
+            )
+            .route(
+                "statistic.php?code=BBCA",
+                200,
+                include_str!("../../tests/fixtures/ipot/statistic_bbca_20261106.html"),
+            );
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(backend),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let tool = s
+            .tools()
+            .into_iter()
+            .find(|t| t.name == "idx_market_brokers")
+            .unwrap();
+        let source = &tool.input_schema["properties"]["source"];
+        assert_eq!(source["type"], "string", "{source}");
+        let call = |source: Option<&str>, date: Option<&str>| MarketBrokersArgs {
+            date: date.map(Into::into),
+            top: Some(3),
+            sort: None,
+            source: source.map(Into::into),
+        };
+
+        // auto, the default: idx.co.id is challenged, IPOT answers.
+        let v = json_of(
+            &s.market_brokers(Parameters(call(None, None)))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.market.brokers.v1");
+        assert_eq!(v["provider"], "ipot", "{v}");
+        assert_eq!(v["data"]["date"], "2026-11-06");
+        assert_eq!(v["data"]["brokers"].as_array().unwrap().len(), 3);
+        assert_eq!(v["data"]["brokers"][0]["kind"], "local");
+        assert!(v["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("idx.co.id answered with a Cloudflare challenge"));
+
+        for (source, date, code) in [
+            (Some("idx"), None, "blocked"),
+            (Some("ipot"), Some("2026-10-16"), "usage"),
+            (Some("rti"), None, "usage"),
+        ] {
+            let r = s
+                .market_brokers(Parameters(call(source, date)))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true), "{source:?}");
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], code, "{v}");
         }
     }
 
