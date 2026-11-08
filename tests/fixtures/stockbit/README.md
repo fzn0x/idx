@@ -30,6 +30,50 @@ account, holding or token field.
 | market_session.json | `/company-price-feed/market-time/session` | `detail.regular.state_name`, e.g. `STATE_NAME_MARKET_CLOSED` |
 | unauthorized.json | any route with an invalid bearer | HTTP 401 `{"error_type":"UNAUTHORIZED","message":"Unauthorized"}` |
 
+## Broker summary, recorded by idx on 2026-11-08
+
+Recorded on Sunday 2026-11-08 between 14:39 and 14:43 WIB through the idx binary itself
+(its Stockbit provider and headers, a fresh cache directory; the bodies were copied out of
+that cache unchanged), one request at a time, a few seconds apart, twelve in all. The session
+belongs to a real account. The replies carry no user field at all: every key was listed and
+the bodies were searched for JWTs, `bearer`, `token`, `cookie`, `session`, `user`, `@`,
+`is_holding_exist` and `is_price_alert_exist`; there is none, so nothing was scrubbed.
+
+Every request is `GET /marketdetectors/{SYM}?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL&investor_type=INVESTOR_TYPE_ALL&from=YYYY-MM-DD&to=YYYY-MM-DD&limit=100`
+unless its row says otherwise. The reply is
+`{"message", "data":{"bandar_detector":{..}, "broker_summary":{"brokers_buy":[..], "brokers_sell":[..], "symbol"}, "from", "to"}}`.
+A buy row: `netbs_broker_code`, `netbs_stock_code`, `netbs_date` (`YYYYMMDD`, the range's first
+day), `type` (`Asing`, `Lokal`, `Pemerintah`), `freq`, `blot` (lots), `blotv` (shares), `bval`
+and `bvalv` (IDR), `netbs_buy_avg_price`; a sell row has `slot`, `slotv`, `sval`, `svalv`,
+`netbs_sell_avg_price` instead. Figures are strings (`"687161"`, `"3.524875059e+11"`,
+`"108898.5"`); in the empty reply they are JSON numbers (`0`). `bandar_detector` holds
+`total_buyer` and `total_seller` (brokers on each side, whatever `limit` cut), `value`,
+`volume` and `average` (the buy side's totals at about eight significant digits:
+1,035,652,040,000 where the rows sum to 1,035,652,066,452) and Stockbit's own readings
+(`top1` .. `top10`, `avg`, `avg5`, `broker_accdist`, `number_broker_buysell`).
+
+In gross mode every broker that bought is a buy row and every broker that sold a sell row,
+`blot` is `blotv / 100` and `bval` is `bvalv`, both sides sum to the value traded, and
+the rows are ranked by value (KZ's 857.7 B before ZP's 852.9 B over 11-02 .. 11-06,
+although ZP has more lots). Lots are fractional where odd lots traded (YU 108,898.5 on all
+boards, 108,898 on the regular board). Ordered by lots, the first ten rows of each side
+are IPOT's top 10 for the same day and for the same range, in the same order, with the
+same lots and values at IPOT's precision (and for the day the same averages); IPOT calls
+HD local where Stockbit says `Asing`.
+
+| file | request | notes |
+| --- | --- | --- |
+| marketdetectors_bbca_20261106.json | BBCA, 2026-11-06 | 59 buyers and 67 sellers, `total_buyer` 59, `total_seller` 67; both sides sum to 1,035,652,066,452 IDR and 2,027,579.8 lots. The same bytes came back with `limit=1000` and with no `limit` at all |
+| marketdetectors_bbca_20261106_net.json | same, `transaction_type=TRANSACTION_TYPE_NET` | net mode: each broker once, on the side where it was net (16 buyers, 55 sellers); `blot` / `bval` are the net (negative on the sell side), `blotv` / `bvalv` and the average stay that side's gross (KZ net 356,958 lots of 687,161 bought). Not what idx asks for |
+| marketdetectors_bbca_20261102_20261106.json | BBCA, 2026-11-02 to 2026-11-06 | one aggregate over the five sessions (81 buyers, 78 sellers, 5,999,367,547,273 IDR; IPOT: 6.0 T); `netbs_date` is 20261102 on every row |
+| marketdetectors_bbca_20251106_20261106.json | BBCA, 2025-11-06 to 2026-11-06, `limit=1000` | 92 buyers and 92 sellers, all listed: a large `limit` returns every broker |
+| marketdetectors_bbca_20261106_regular.json | BBCA, 2026-11-06, `market_board=MARKET_BOARD_REGULER` | regular board only: 817,283,116,500 IDR, whole lots |
+| marketdetectors_bbca_20261106_foreign.json | BBCA, 2026-11-06, `investor_type=INVESTOR_TYPE_FOREIGN` | foreign investors: 23 buyers for 786,531,414,962 IDR, 22 sellers for 567,543,113,862; their net, 218,988,301,100, is IPOT's `F. NVal` of 219.0 B |
+| marketdetectors_bbca_20261106_limit5.json | BBCA, 2026-11-06, `limit=5` | five rows a side while `total_buyer` stays 59 and `total_seller` 67: the counts show a cut |
+| marketdetectors_cbre_20261106.json | CBRE, 2026-11-06 | a thin day: 25 buyers, 4 sellers, 1,311,477,000 IDR |
+| marketdetectors_bbca_20261107_no_trades.json | BBCA, Saturday 2026-11-07 | HTTP 200 with empty lists and zeros (as JSON numbers) |
+| marketdetectors_zzzz.json | ZZZZ, 2026-11-06 | HTTP 404 `{"message":"Perusahaan tidak ditemukan","error_type":"NOT_FOUND"}`; the fetcher caches 2xx replies only, so this one was copied from the body idx printed |
+
 ## Recorded by 0xrsydn/idx-cli
 
 The files in this table were recorded by the reference CLI 0xrsydn/idx-cli (MIT
