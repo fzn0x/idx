@@ -1484,11 +1484,11 @@ export function dividendsKeyPoint(d) {
 }
 
 // The brief's "News" key point from its news section; the verb follows the
-// count, "1 current headline mentions", "2 current headlines mention"
-// (service::news_key_point in the CLI).
+// count, "1 current headline mentions", "2 current headlines mention", and the
+// sentiment is said in the CLI's words (service::news_key_point in the CLI).
 export function newsKeyPoint(s) {
   if (!s.company_matches) return "News: no current headline mentions the company";
-  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
+  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${an.SENTIMENT_WORDS[s.sentiment] ?? s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
 }
 
 // The brief's "Ownership" key point from its ownership section; noun and verb

@@ -16,13 +16,19 @@ const src = readFileSync(join(root, "web", "public", "terminal.js"), "utf8");
 // One of R's views, from `  name(arg) {` to its closing `  },`.
 const view = (name, arg) => src.match(new RegExp(`^ {2}${name}\\(${arg}\\) \\{[\\s\\S]*?^ {2}\\},$`, "m"))?.[0];
 const body = view("brief", "b");
+// A top-level `const NAME = ...;` of terminal.js (its word tables), evaluated.
+const constant = (name) => {
+  const line = src.match(new RegExp(`^const ${name} = .*;$`, "m"))?.[0];
+  assert.ok(line, `${name} found in terminal.js`);
+  return new Function(`${line}\nreturn ${name};`)();
+};
 
 test("the brief's headlines heading agrees with the count", () => {
   assert.ok(body, "R.brief found in terminal.js");
   const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children });
   const document = { createDocumentFragment: () => ({ children: [], append(...c) { this.children.push(...c); } }) };
   const fmt = { wib: (s) => `${s} WIB` };
-  const brief = new Function("document", "el", "fmt", "newsTable", `return ({ ${body} }).brief;`)(document, el, fmt, () => el("table"));
+  const brief = new Function("document", "el", "fmt", "newsTable", "SENTIMENT_WORDS", `return ({ ${body} }).brief;`)(document, el, fmt, () => el("table"), constant("SENTIMENT_WORDS"));
   const heading = (company_matches) => {
     const b = {
       symbol: "BBCA", name: null, generated_at: "2026-11-08T01:00:00Z", key_points: [], fundamentals: null, technical: null, returns: null, ownership: null,
@@ -41,10 +47,7 @@ test("the verdict line under the brief's key points agrees with the input count"
   const document = { createDocumentFragment: () => el("fragment") };
   const text = (v) => (v == null ? "n/a" : String(v));
   const fmt = { wib: (s) => `${s} WIB`, price: text, ratio: text, compact: text, pct: text };
-  const words = src.match(/^const VERDICT_WORDS = .*;$/m)?.[0];
-  assert.ok(words, "VERDICT_WORDS found in terminal.js");
-  const VERDICT_WORDS = new Function(`${words}\nreturn VERDICT_WORDS;`)();
-  const deps = { document, el, fmt, NA: "n/a", kv: () => el("dl"), pct: text, x: text, mixedCurrency: an.mixedCurrency, mixedRatio: (f, v) => text(v), inStatementCurrency: (f, v, s) => s, newsTable: () => el("table"), VERDICT_WORDS };
+  const deps = { document, el, fmt, NA: "n/a", kv: () => el("dl"), pct: text, x: text, mixedCurrency: an.mixedCurrency, mixedRatio: (f, v) => text(v), inStatementCurrency: (f, v, s) => s, newsTable: () => el("table"), VERDICT_WORDS: constant("VERDICT_WORDS"), SENTIMENT_WORDS: constant("SENTIMENT_WORDS") };
   const R = new Function(...Object.keys(deps), `const R = {\n${fundamentals}\n${body}\n};\nreturn R;`)(...Object.values(deps));
   // Only the trailing P/E, as in the Rust test too_little_data.
   const f = y.parseFundamentals(JSON.parse(readFileSync(join(root, "tests", "fixtures", "yahoo", "quote_summary_fundamentals_bbca.json"), "utf8")).quoteSummary.result[0], "BBCA");
