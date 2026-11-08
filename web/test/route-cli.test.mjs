@@ -340,6 +340,7 @@ const PAGE_LINES = [
     "bandar BBCA", "bandar BBCA,BBRI --period 1m --top 5", "bandar detect BBCA --daily", "bandar screen --preset accumulation --filter acc>=5 --sort net --asc",
     "bandar broker YP --period 1m --limit 5", "actions BBCA --since 2025-01-01", "market", "holidays", "holidays 2027", "holidays --upcoming 2027", "astro",
     "astro 2026-12-24 --backtest --period 2y", "astro --natal base --days 7", "list", "list --search bank", "list bank", "members", "members mandiri",
+    "brokers", "brokers --top 5 --sort frequency", "brokers --date 2026-11-06 --top 0",
     "own ticker BBCA", "ownership ticker BBCA --as-of 2026-07-31", "ownership entity \"Dwimuria Investama\"", "ownership entity Dwimuria Investama",
     "ownership search \"lo kheng hong\" --limit 5", "ownership cross-holders --type individual --origin foreign --min-issuers 5", "ownership cross-holders --min-tickers 3",
     "ownership concentration --asc BBCA", "ownership concentration BBCA BBRI --by top1", "ownership graph \"Anthoni Salim\" --holder --depth 3",
@@ -352,6 +353,8 @@ const PAGE_LINES = [
   "idx market overview --top 15 --min-mcap 5T", "idx bandar screen --preset accumulation --scan 50", "idx bandar broker YP --symbols BBCA,BBRI",
   "idx ownership graph BBRI --dot", "idx ownership entity --exact \"T PERMADI RACHMAT\"", "idx -o json stocks news TLKM -s kontan", "stocks history BBCA 5y 1wk -o csv",
   "idx stocks foreign BBCA", "stocks foreign BBCA -n 10", "own graph BBRI --dot", "idx own ticker BBCA -o csv", "bandar BBCA --provider stockbit",
+  "market brokers --source idx", "idx -o json market brokers --source=idx --date 2026-11-06", "idx market brokers -n 5 --sort volume --source idx",
+  "market brokers -d 2026-11-06 --source stockbit",
 ];
 
 /** Checks every CLI line the notices for `typed` print; returns how many there were. */
@@ -377,9 +380,8 @@ const MCP_LINES = [
   "calendar", "calendar BBCA", "calendar dividend", "calendar rups", "market calendar rups BBCA", "calendar 2026-10-19", "calendar 2026-10-19 --from 2026-10-01",
   "market calendar --type rups --days 30", "stockbit calendar dividend", "stockbit calendar --kind dividend --days 30", "stockbit actions BBCA dividend",
   "stockbit actions rups -k ipo", "movements", "movements BBCA --action sell",
-  "brokers", "brokers CC", "market foreign TLKM", "market foreign --date 2026-10-16 -n 20", "ownership sync --force", "ownership status", "stockbit",
-  "stockbit status", "stockbit login --page", "stockbit login --timeout 600", "idx --offline stockbit status", "market brokers --top 20 --sort frequency",
-  "market brokers --source ipot", "brokers --source ipot -n 5", "idx -o json market brokers --source=idx --date 2026-11-06",
+  "market foreign TLKM", "market foreign --date 2026-10-16 -n 20", "ownership sync --force", "ownership status", "stockbit",
+  "stockbit status", "stockbit login --page", "stockbit login --timeout 600", "idx --offline stockbit status",
   // Read again after stocks, or as a tool's web example.
   "idx stocks market foreign", "stocks ownership composition BBCA", "stocks orderbook BBCA", "stocks watch", "stocks q BBCA -o csv", "idx_quote -o csv",
   "tools idx_quote -o csv", "idx_quote --provider stockbit", "idx_ownership_changes -o csv", "json idx_bandar -o jsonl",

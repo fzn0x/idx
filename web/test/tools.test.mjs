@@ -28,18 +28,15 @@ test("the tool list matches docs/mcp.md", () => {
 });
 
 test("only the idx.co.id, KSEI composition, local-database, Stockbit and unchecked-source tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_brokers", "idx_market_foreign", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_foreign", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
   // A tool with its own reason gives it; the rest share CLI_ONLY_REASON, the Stockbit one or the unchecked-source one.
   for (const t of TOOLS.filter((x) => x.why)) assert.ok(!t.web && t.why.length > 40, t.tool);
   assert.match(byName("idx_ownership_snapshot").why, /own machine/);
   assert.equal(cliOnlyReason(byName("idx_ownership_snapshot")), byName("idx_ownership_snapshot").why);
   // Each CLI-only tool says why, by its source.
   assert.equal(cliOnlyReason(byName("idx_calendar")), CLI_ONLY_REASON);
-  // Top brokers also come from IPOT, which never asks idx.co.id: not the idx.co.id reason alone.
-  const brokers = byName("idx_market_brokers");
-  assert.notEqual(cliOnlyReason(brokers), CLI_ONLY_REASON);
-  assert.match(cliOnlyReason(brokers, "en"), /idx\.co\.id refuses .* and IPOT's market-wide ranking \(--source ipot\).* is not on this page yet/);
-  assert.match(cliOnlyReason(brokers, "id"), /peringkat broker seluruh pasar dari IPOT \(--source ipot\).* belum ada di halaman ini/);
+  // Top brokers run here from IPOT's ranking, which this host can read.
+  assert.equal(byName("idx_market_brokers").web, "brokers");
   assert.match(cliOnlyReason(byName("idx_orderbook")), /^The Stockbit tools carry your own account session/);
   assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^The Stockbit tools/);
   assert.match(cliOnlyReason(byName("idx_stockbit_movements")), /^The Stockbit tools/);

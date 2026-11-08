@@ -38,6 +38,7 @@ const COMMANDS = [
   { name: "sentiment", usage: "sentiment <SYMBOL>", help: "lexicon sentiment over matching headlines" },
   { name: "insights", usage: "insights <SYMBOL> [--all]", help: "MSN Money's rated statements on valuation, earnings, growth, performance and health, against peers, the industry and the company's own history; --all adds the ones MSN could not rate" },
   { name: "broker", usage: "broker <SYMBOLS> [--date D | --from D --to D] [--investor foreign|domestic] [--board regular|cash|negotiated]", help: "which brokers bought and sold it: top 10 per side ranked by lots (IPOT), latest session by default" },
+  { name: "brokers", usage: "brokers [--top N] [--sort value|volume|frequency] [--date YYYY-MM-DD]", help: "exchange members ranked by the session's value, volume or frequency, with each one's class and net: IPOT's ranking of its latest session, which cannot be dated on a trading day from 08:58 to 19:00 WIB (it is refused then); 20 rows by default, --top 0 for all" },
   { name: "foreign", usage: "foreign <SYMBOL> [--days N | --from D --to D]", help: "foreign buying and selling per session in rupiah across all boards (IPOT): value, foreign share, totals and the net-buy/net-sell streak; 10 sessions by default, at most 20" },
   { name: "bandar", usage: "bandar <SYMBOLS> [--period 1d|1w|1m|3m] [--top 1|3|5|10] [--daily] [--date D | --from D --to D] | bandar screen [--preset P] [--filter F] [--period P] [--sort KEY] [--limit N] | bandar broker <CODE> [--period P] [--limit N]", help: "bandarmology: are the top brokers accumulating or distributing? screen presets: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: where one broker (YP, CC, ...) is a top-10 buyer or seller of the session's 100 most traded stocks" },
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
@@ -75,6 +76,7 @@ const HELP_ID = {
   sentiment: "sentimen kamus kata atas judul berita yang cocok",
   insights: "pernyataan bernilai dari MSN Money tentang valuasi, laba, pertumbuhan, kinerja dan kesehatan, dibanding emiten sejenis, industrinya dan riwayat perusahaan sendiri; --all menambah yang tidak bisa dinilai MSN",
   broker: "broker mana yang membeli dan menjual: 10 teratas tiap sisi menurut lot (IPOT), sesi terakhir bila tanpa tanggal",
+  brokers: "anggota bursa diurutkan menurut nilai, volume atau frekuensi sesi itu, dengan kelas dan bersih masing-masing: peringkat IPOT untuk sesi terakhirnya, yang tidak bisa diberi tanggal pada hari perdagangan pukul 08.58 sampai 19.00 WIB (saat itu ditolak); 20 baris bila tanpa pilihan, --top 0 untuk semua",
   foreign: "beli dan jual asing per sesi dalam rupiah di semua papan (IPOT): nilai, porsi asing, total dan rentetan beli bersih atau jual bersih; 10 sesi bila tanpa pilihan, paling banyak 20",
   bandar: "bandarmologi: apakah broker teratas sedang akumulasi atau distribusi? preset screen: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: di saham mana satu broker (YP, CC, ...) masuk 10 pembeli atau penjual teratas dari 100 saham teramai sesi itu",
   actions: "aksi korporasi (dividen, pemecahan saham, bonus, rights dengan rasio dan tanggal cum/ex/pembayaran), RUPS, waran dan rights; termasuk yang akan datang (IPOT)",
@@ -620,6 +622,28 @@ const R = {
     frag.append(el("p", { class: "warn", text: `Source: IPOT broker summary, top 10 buyers and sellers ranked by lots. One lot = 100 shares.${list.some((s) => s.rounded) ? " The source rounds figures of a million and more to one decimal." : ""}${list.some((s) => s.board !== "all") ? " The source's foreign net covers every board, so a board filter leaves it out." : ""}` }));
     return frag;
   },
+  // The member ranking as the CLI prints IPOT's (src/output/table_exchange.rs): class and net beside each member's value.
+  marketBrokers(r) {
+    const frag = document.createDocumentFragment();
+    const KIND = { local: "local", foreign: "foreign", state_owned: "BUMN" };
+    const sides = r.brokers.some((b) => b.net_value != null || b.kind != null);
+    frag.append(el("p", { class: "prose", html: `<b>Exchange members</b> · ${r.date} · ${r.members} active · by ${r.sort} · all members' value ${fmt.compact(r.total_value)} (both sides)` }));
+    frag.append(wrapScroll(table([
+      { h: "#", k: "rank" },
+      { h: "Code", k: "code", l: true, cls: "sym" },
+      { h: "Member", f: (b) => b.name || NA, l: true, cls: "name" },
+      ...(sides ? [{ h: "Class", f: (b) => KIND[b.kind] || NA, l: true }] : []),
+      { h: "Value", f: (b) => fmt.compact(b.value) },
+      { h: "Share", f: (b) => (b.value_share_pct == null ? NA : `${fmt.num(b.value_share_pct, 2)}%`) },
+      ...(sides ? [{ h: "Net", f: (b) => fmt.compact(b.net_value), cls: (b) => `num ${signClass(b.net_value)}` }] : []),
+      { h: "Volume", f: (b) => fmt.compact(b.volume) },
+      { h: "Frequency", f: (b) => fmt.compact(b.frequency) },
+    ], r.brokers)));
+    if (r.brokers.length < r.members) frag.append(el("p", { class: "warn", text: `Showing ${r.brokers.length} of ${r.members} members; --top 0 for all.` }));
+    const net = sides ? ", and its net (bought minus sold; json brokers adds the value bought and sold)" : "";
+    frag.append(el("p", { class: "warn", text: `Each member's buying and selling together, as IPOT (Indo Premier) publishes them${net}; shares sum to 100% of all members' value, which is twice the market's.${r.rounded ? " IPOT abbreviates figures of a million and more to two decimals, so they and the totals carry that precision." : ""} The web terminal reads IPOT's latest session; the CLI also reads idx.co.id's summary of any session (--source idx).` }));
+    return frag;
+  },
   foreignFlow(fl) {
     const frag = document.createDocumentFragment();
     const signed = (v) => (v > 0 ? `+${fmt.compact(v)}` : fmt.compact(v));
@@ -1058,6 +1082,18 @@ async function runWeb(line) {
       break;
     }
     case "broker": need(pos, 1, cmd.usage); env = await ask(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
+    case "brokers": {
+      // The ranking takes no ticker or broker code: one stock's brokers is broker, one broker's stocks bandar broker.
+      if (pos.length) {
+        const w = pos[0].toUpperCase();
+        const alt = /^[A-Z]{2}$/.test(w) ? `bandar broker ${w}` : /^[A-Z]{4}$/.test(w) ? `broker ${w}` : null;
+        if (alt) throw usageError(t(`brokers tidak menerima kode; ${alt} ${alt.startsWith("bandar") ? "menampilkan saham yang dibeli dan dijual satu broker" : "menampilkan broker yang membeli dan menjual satu saham"}`, `brokers takes no code; ${alt} shows ${alt.startsWith("bandar") ? "the stocks one broker bought and sold" : "the brokers that bought and sold one stock"}`));
+        throw usageLine(cmd.usage);
+      }
+      env = await ask(`market/brokers?${qs({ date: opt.date, top: opt.top, sort: opt.sort, source: opt.source })}`);
+      render = R.marketBrokers;
+      break;
+    }
     case "foreign": need(pos, 1, cmd.usage); env = await ask(`foreign?${qs({ symbol: sym(), days: opt.days, from: opt.from, to: opt.to })}`); render = R.foreignFlow; break;
     case "bandar": {
       if ((pos[0] || "").toLowerCase() === "screen") {
@@ -1173,6 +1209,7 @@ const WAITS_ID = {
   insights: { on: "insight MSN Money dan daftar emiten sejenisnya" },
   brief: { on: "harga, fundamental, riwayat, dividen, pemegang saham dan berita sekaligus", slow: `${FEEDS_SLOW_ID}; bagian lain ringkasan tetap tampil` },
   broker: { on: IPOT_ID, slow: IPOT_SLOW_ID },
+  brokers: { on: "peringkat broker IPOT dan statistik BBCA yang menanggalinya, dibaca bersamaan", slow: IPOT_SLOW_ID },
   foreign: { on: `${IPOT_ID}, dua per sesi`, slow: IPOT_SLOW_ID },
   bandar: { on: `${IPOT_ID}, satu per sesi`, slow: IPOT_SLOW_ID },
   "bandar screen": { on: "pindaian bandar sesi terakhir" },
@@ -1379,7 +1416,7 @@ const RAIL = {
   risk: "risk vs IHSG", technical: "indicators, signal", compare: "side by side", insights: "MSN insights",
   foreign: "foreign flow", astro: "IHSG astrology",
   screen: "filter the market", news: "headlines", dividends: "payments, yield", returns: "returns vs IHSG",
-  brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", bandar: "bandarmology",
+  brief: "one-page summary", sentiment: "headline mood", broker: "top brokers", brokers: "member ranking", bandar: "bandarmology",
   actions: "corporate actions", market: "IHSG and movers", holidays: "trading holidays", list: "listed stocks",
   members: "broker codes", tools: "MCP tools", ownership: "KSEI holders", json: "raw JSON envelope",
   help: "every command", clear: "clear the sheet",
@@ -1390,7 +1427,7 @@ const RAIL_ID = {
   risk: "risiko vs IHSG", technical: "indikator, sinyal", compare: "berdampingan", insights: "insight MSN",
   foreign: "aliran asing", astro: "astrologi IHSG",
   screen: "saring pasar", news: "berita", dividends: "dividen, imbal hasil", returns: "imbal hasil vs IHSG",
-  brief: "ringkasan saham", sentiment: "suasana berita", broker: "broker teratas", bandar: "bandarmologi",
+  brief: "ringkasan saham", sentiment: "suasana berita", broker: "broker teratas", brokers: "peringkat anggota", bandar: "bandarmologi",
   actions: "aksi korporasi", market: "IHSG dan penggerak", holidays: "libur bursa", list: "saham tercatat",
   members: "kode broker", tools: "alat MCP", ownership: "pemegang KSEI", json: "amplop JSON mentah",
   help: "semua perintah", clear: "bersihkan lembar",

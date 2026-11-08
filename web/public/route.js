@@ -3,10 +3,11 @@
 // The terminal's own lines pass through as typed. A line in the CLI's words is
 // rewritten into the page's: a leading idx goes, -o json becomes the json
 // prefix, the stocks group drops (stocks quote BBCA runs quote BBCA), market
-// overview, holidays, members and astro run as market, holidays, members and
-// astro, and the CLI's short flags and spellings become the page's (stocks
-// screen -f pe<10 runs screen pe<10). What the page cannot run becomes a
-// notice instead of an error, a usage line or another command's output:
+// overview, holidays, members, astro and brokers run as market, holidays,
+// members, astro and brokers, and the CLI's short flags and spellings become
+// the page's (stocks screen -f pe<10 runs screen pe<10). What the page cannot
+// run becomes a notice instead of an error, a usage line or another command's
+// output:
 //
 //   cli-mcp  a command behind an MCP tool with web: null in tools.js
 //   cli      a CLI command with no MCP tool (watch, mcp, schema, config, ...)
@@ -114,7 +115,7 @@ export const CLI_FORM = {
   growth: ["stocks growth", "@"], valuation: ["stocks valuation", "@"], risk: ["stocks risk", "@"], technical: ["stocks technical", "@", "--period"],
   screen: ["stocks screen", "--filter,"], news: ["stocks news", "@"], sentiment: ["stocks sentiment", "@"], insights: ["stocks insights", "@"],
   list: ["stocks list", "--search "], actions: ["stocks actions", "@"], foreign: ["stocks foreign", "@"], compare: ["stocks compare", "@*"],
-  market: ["market overview"], holidays: ["market holidays", "--year"], members: ["market members", "--search "], astro: ["market astro", "--date"],
+  market: ["market overview"], holidays: ["market holidays", "--year"], members: ["market members", "--search "], astro: ["market astro", "--date"], brokers: ["market brokers"],
   broker: ["broker", "@*"], bandar: ["bandar detect", "@*"], "bandar screen": ["bandar screen"], "bandar broker": ["bandar broker", "@"],
   "ownership ticker": ["ownership ticker", "@"], "ownership entity": ["ownership entity", "@ "], "ownership search": ["ownership search", "@*"],
   "ownership cross-holders": ["ownership cross-holders"], "ownership concentration": ["ownership concentration", "@*"], "ownership graph": ["ownership graph", "@*"],
@@ -154,6 +155,8 @@ export const SPEC = {
   market: { short: { n: "top" }, cli: ["top", "min-mcap", "index", "universe"] },
   members: { short: { s: "search" } },
   astro: { short: { d: "date" }, switch: ["backtest"] },
+  // --source auto reads IPOT here too (idx.co.id refuses this host), and ipot is the page's own source.
+  brokers: { short: { d: "date", n: "top" }, cli: ["source"], keep: { source: ["ipot", "auto"] } },
   broker: { short: { d: "date", n: "top" }, cli: ["top"] },
   bandar: { short: { p: "period", d: "date", n: "top" } },
   "bandar screen": { short: { f: "filter", p: "period", n: "top", l: "limit" }, cli: ["scan", "symbols"] },
@@ -173,6 +176,7 @@ const FLAG_WHY = {
   provider: say("Terminal web memilih sumber tiap perintah sendiri dan menyebutnya di kepala hasil.", "The web terminal picks each command's source itself and names it in the result's head."),
   stockbit: say("Stockbit memakai sesi akun Anda sendiri, jadi hanya berjalan di CLI dan server MCP.", "Stockbit runs on your own account session, so it works in the CLI and the MCP server only."),
   "foreign source": say("Terminal web membaca IPOT, dalam rupiah di semua papan; idx.co.id menolak permintaan dari server situs ini, jadi --source idx hanya ada di CLI dan MCP.", "The web terminal reads IPOT, in rupiah across all boards; idx.co.id refuses requests from this site's host, so --source idx runs in the CLI and MCP only."),
+  "brokers source": say("Terminal web membaca peringkat IPOT untuk sesi terakhirnya; idx.co.id menolak permintaan dari server situs ini, jadi --source idx (ringkasan idx.co.id untuk sesi mana pun) hanya ada di CLI dan MCP.", "The web terminal reads IPOT's ranking of its latest session; idx.co.id refuses requests from this site's host, so --source idx (idx.co.id's summary of any session) runs in the CLI and MCP only."),
   "foreign source default": say("Di CLI, stocks foreign membaca idx.co.id kecuali diberi --source ipot: jumlah lembar di papan reguler. idx.co.id menolak permintaan dari server situs ini, jadi terminal web membaca IPOT, dalam rupiah di semua papan.", "In the CLI, stocks foreign reads idx.co.id unless --source ipot is given: share counts on the regular board. idx.co.id refuses requests from this site's host, so the web terminal reads IPOT, in rupiah across all boards."),
   universe: say("--universe membaca berkas CSV di komputer Anda.", "--universe reads a CSV file on your machine."),
   "news source": say("Terminal web membaca umpan Kontan dan CNBC Indonesia sekaligus.", "The web terminal reads the Kontan and CNBC Indonesia feeds together."),
@@ -220,14 +224,14 @@ const SCHEMA_CMD = {
   fundamentals: "fundamental BBCA", growth: "growth BBCA", valuation: "valuation BBCA", risk: "risk BBCA", compare: "compare BBCA BBRI",
   financials: "financials BBCA", earnings: "earnings BBCA", dividends: "dividends BBCA", returns: "returns BBCA", market: "market", brief: "brief BBCA",
   broker: "broker BBCA", bandar: "bandar BBCA", "bandar-screen": "bandar screen", "bandar-broker": "bandar broker YP", holidays: "holidays",
-  astro: "astro", instruments: "list --search bank", members: "members", actions: "actions BBCA", "foreign-value": "foreign BBCA",
+  astro: "astro", instruments: "list --search bank", members: "members", actions: "actions BBCA", "foreign-value": "foreign BBCA", "market-brokers": "brokers",
   technical: "technical BBCA", screen: "screen --preset low-pe", news: "news BBCA", sentiment: "sentiment BBCA", insights: "insights BBCA",
   "ownership-holders": "ownership ticker BBCA", "ownership-entity": 'ownership entity "Dwimuria Investama"', "ownership-changes": "ownership changes 2026-08-31 2026-09-30",
   "ownership-releases": "ownership releases", "ownership-foreign": "ownership foreign BBCA", "ownership-foreign-flow": "ownership foreign",
   "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders", "ownership-concentration": "ownership concentration",
   "ownership-graph": "ownership graph BBCA",
   // idx.co.id's foreign flow in shares (the page's foreign prints foreign-value), the other CLI-and-MCP-only commands, the local database, the error envelope.
-  foreign: null, "market-foreign": null, "market-brokers": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
+  foreign: null, "market-foreign": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
   "stockbit-movements": null, "stockbit-status": null, watchlist: null, error: null, "ownership-import": null, "ownership-discover": null,
   "ownership-resolve-candidates": null, "ownership-resolution": null, "ownership-resolutions": null, "ownership-composition": null,
   "ownership-snapshot-sync": null, "ownership-status": null, "ownership-snapshot": null, "ownership-institutions": null,
@@ -268,7 +272,6 @@ export const STOCKBIT_KINDS = new Set(["dividend", "stock_dividend", "stock-divi
  */
 export const MCP_ONLY = {
   "market foreign": { tool: "idx_market_foreign", takes: "none", near: (a) => [N.foreign(a.sym), N.foreignScreen()] },
-  "market brokers": { tool: "idx_market_brokers", takes: "none", near: (a) => (a.code && !a.syms.length ? [N.bandarBroker(a.code), N.broker(a.sym)] : [N.broker(a.sym), N.bandarBroker(a.code || "YP")]).concat(N.members()) },
   "market indices": { tool: "idx_indices", takes: "many", near: () => [N.market(), N.ihsg()] },
   "market calendar": { tool: "idx_calendar", takes: "symbol", kinds: { flag: "type", short: "t", words: CALENDAR_TYPES }, near: (a) => [N.actions(a.sym), N.holidays()] },
   "ownership composition": { tool: "idx_ownership_composition", takes: "one", needs: true, near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
@@ -283,8 +286,8 @@ export const MCP_ONLY = {
   "stockbit movements": { tool: "idx_stockbit_movements", takes: "one", near: (a) => [N.holders(a.sym)] },
 };
 
-/** Words typed alone that can only mean one of those (brokers, one letter from broker, points at broker too). */
-export const BARE = { orderbook: "stockbit orderbook", indices: "market indices", calendar: "market calendar", composition: "ownership composition", institutions: "ownership institutions", movements: "stockbit movements", brokers: "market brokers" };
+/** Words typed alone that can only mean one of those. */
+export const BARE = { orderbook: "stockbit orderbook", indices: "market indices", calendar: "market calendar", composition: "ownership composition", institutions: "ownership institutions", movements: "stockbit movements" };
 
 /**
  * The words of a CLI-only line the CLI needs: with no subcommand typed, `alone`

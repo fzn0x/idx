@@ -25,6 +25,7 @@ export const WAITS = {
   insights: { on: "MSN Money insights and its peer list" },
   brief: { on: "quote, fundamentals, history, dividends, holders and news in parallel", slow: `${FEEDS_SLOW}; the rest of the brief still prints` },
   broker: { on: "IPOT broker summaries", slow: IPOT_SLOW },
+  brokers: { on: "IPOT's broker ranking and the BBCA statistics that date it, read together", slow: IPOT_SLOW },
   foreign: { on: "IPOT broker summaries, two per session", slow: IPOT_SLOW },
   bandar: { on: "IPOT broker summaries, one per session", slow: IPOT_SLOW },
   "bandar screen": { on: "the bandar scan of the last session" },
