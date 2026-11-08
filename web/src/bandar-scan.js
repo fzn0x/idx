@@ -185,14 +185,21 @@ function upgrade(st) {
 /** A new state for `session`: what the last one showed and its records carry over. */
 const fresh = (session, prev) => ({ v: 2, session, phase: "new", complete: prev?.complete ?? null, runs: prev?.runs ?? [] });
 
-/** The record of the scan of `st.session` as the API reads it; `at` is when it stopped reading. */
+/**
+ * The record of the scan of `st.session` as the API reads it; `at` is when
+ * it stopped reading. Each stock counts once: stored, failed (for good, or
+ * still to be tried again: `retrying` of them), unpublished (IPOT had not
+ * published it when last read) or left (the first pass had not got to it).
+ */
 function runOf(st, at) {
-  const pending = st.pending || [];
+  const pending = st.pending || [], retry = st.retry || [];
+  const failed = [...st.failed, ...retry], errors = { ...st.errors };
+  for (const s of retry) { const kind = st.kinds?.[s] || "other"; errors[kind] = (errors[kind] || 0) + 1; }
   return {
     session: st.session, scanned: true, of: st.symbols.length, stored: st.stored, checked: st.checked,
-    failed: [...st.failed], unpublished: [...pending], left: st.queue.length, errors: { ...st.errors },
+    failed, retrying: retry.length, unpublished: [...pending], left: st.queue.length, errors,
     started_at: st.started_at ?? null, published_at: st.published_at ?? null, done_at: at,
-    partial: st.failed.length + pending.length + st.queue.length > 0,
+    partial: failed.length + pending.length + st.queue.length > 0,
   };
 }
 
@@ -235,7 +242,7 @@ function cutoff(st, at) {
 }
 
 /** Stocks of the first pass the scan has got to. */
-const attempted = (st) => (st.symbols?.length ?? 0) - (st.pass ? 0 : (st.queue?.length ?? st.symbols?.length ?? 0));
+const attempted = (st) => (st.symbols?.length ?? 0) - (st.queue?.length ?? st.symbols?.length ?? 0);
 
 async function kvGet(env, k) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = ?1").bind(k).first();
@@ -370,7 +377,7 @@ async function probe(st, now, fetchPage) {
   st.failing_since = null;
   st.failures = 0;
   if (verdict === "published") {
-    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
+    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, retry_left: 0, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, pending_left: 0, stored: 0, checked: 0 });
     // A week of these shows when IPOT publishes a session.
     console.log("bandar published", JSON.stringify({ session: st.session, published_at: at, last_unpublished_at: st.last_unpublished_at ?? null, probes: st.probes }));
   } else if (verdict === "closed") {
@@ -386,7 +393,7 @@ async function probe(st, now, fetchPage) {
   return verdict;
 }
 
-/** No stock is left to read in this pass or a later retry pass; pending ones may wait. */
+/** No stock is left to read in the first pass or a later retry round; pending ones may wait. */
 const restDone = (st) => !st.queue.length && !st.retry.length;
 
 /** A failure's kind, for the counts the logs and the status keep. Pure, tested. */
@@ -399,28 +406,44 @@ export function errorKind(e) {
   return "other";
 }
 
-/** Marks the end of a pass that left failures: their next pass is due RETRY_GAPS_MIN later. */
-function passEnded(st, now) {
-  if (!st.queue.length && st.retry.length && st.pass < RETRY_GAPS_MIN.length) st.retry_due ??= after(now, RETRY_GAPS_MIN[st.pass]);
+/**
+ * When the stocks that wait are read again: a retry round RETRY_GAPS_MIN
+ * after the first pass or the round that failed them, and the stocks IPOT
+ * had not published PENDING_GAP_MIN after the first of them went back to
+ * waiting. Nothing is due while a round of the same list is under way.
+ */
+function schedule(st, now) {
+  if (!st.queue.length && st.retry.length && !st.retry_left) st.retry_due ??= after(now, RETRY_GAPS_MIN[st.pass]);
+  if (st.pending.length && !st.pending_left) st.pending_due ??= after(now, PENDING_GAP_MIN);
 }
 
-/** Refills an empty queue: the next retry pass once it is due, else the pending stocks once they are due. */
-function refill(st, now) {
-  if (st.queue.length) return;
-  passEnded(st, now);
-  if (st.retry.length && now.getTime() >= Date.parse(st.retry_due)) {
-    st.queue = st.retry;
-    st.retry = [];
-    st.retry_due = null;
-    st.pass++;
-  } else if (st.pending?.length && now.getTime() >= Date.parse(st.pending_due)) {
-    st.queue = st.pending;
-    st.pending = [];
-    st.pending_due = null;
+/**
+ * The list the next stock comes from: the first pass (`queue`), else a
+ * retry round or a round of re-reads of the stocks IPOT had not published,
+ * under way or due; null when none is. A round reads, from the front, the
+ * stocks its list held when it started (`retry_left`, `pending_left`); one
+ * that has to wait again goes to the back, for the next round. The stocks
+ * stay in their lists, so they count as failed or unpublished meanwhile.
+ */
+function nextList(st, now) {
+  if (st.queue.length) return "queue";
+  if (!st.retry_left && st.retry.length && st.retry_due && now.getTime() >= Date.parse(st.retry_due)) {
+    Object.assign(st, { retry_left: st.retry.length, retry_due: null, pass: st.pass + 1 });
   }
+  if (st.retry_left) return "retry";
+  if (!st.pending_left && st.pending.length && st.pending_due && now.getTime() >= Date.parse(st.pending_due)) {
+    Object.assign(st, { pending_left: st.pending.length, pending_due: null });
+  }
+  return st.pending_left ? "pending" : null;
 }
 
-/** A stock's failure: kept for the next pass while one is left, else final. */
+/** Takes the stock just read off the front of its list. */
+function take(st, list) {
+  st[list].shift();
+  if (list !== "queue") st[`${list}_left`]--;
+}
+
+/** A stock's failure: kept for the next retry round while one is left, else final. */
 function failure(st, symbol, kind, e, at, seen) {
   seen[kind] = (seen[kind] || 0) + 1;
   st.last_errors = [{ symbol, kind, error: short(e), at }, ...(st.last_errors || [])].slice(0, ERRORS_KEPT);
@@ -431,9 +454,9 @@ function failure(st, symbol, kind, e, at, seen) {
 }
 
 /**
- * Up to PER_TICK stocks off the queue into `rows`, while the budget and the
- * minute last. Returns how many it read, the kinds of the failures among
- * them, and whether the budget cut a stock short.
+ * Up to PER_TICK stocks into `rows`, from the lists nextList picks, while
+ * the budget and the minute last. Returns how many it read, the kinds of the
+ * failures among them, and whether the budget cut a stock short.
  */
 async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   const today = hol.wibDate(now), at = now.toISOString();
@@ -441,13 +464,16 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   st.pending_since ??= {};
   st.pass ??= 0;
   st.errors ??= {};
+  st.retry_left ??= 0;
+  st.pending_left ??= 0;
   const seen = {};
   let read = 0, cut = false, slowest = 0;
   while (read < PER_TICK) {
-    refill(st, now);
-    if (!st.queue.length) break;
+    schedule(st, now);
+    const list = nextList(st, now);
+    if (!list) break;
     if (b.left() < STOCK_RESERVE || b.elapsedMs() >= TICK_MS || b.elapsedMs() + slowest > DEADLINE_MS) break;
-    const symbol = st.queue[0];
+    const symbol = st[list][0];
     const started = b.elapsedMs();
     let r;
     try {
@@ -463,17 +489,17 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
         (st.cuts ??= {})[symbol] = (st.cuts[symbol] || 0) + 1;
         if (st.cuts[symbol] <= CUTS_ALLOWED) break;
         delete st.cuts[symbol];
-        st.queue.shift();
+        take(st, list);
         read++;
         failure(st, symbol, "budget", e, at, seen);
         continue;
       }
-      st.queue.shift();
+      take(st, list);
       read++;
       failure(st, symbol, errorKind(e), e, at, seen);
       continue;
     }
-    st.queue.shift();
+    take(st, list);
     read++;
     if (st.cuts) delete st.cuts[symbol];
     if (r.invalid) {
@@ -484,7 +510,6 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
       // IPOT has not published this stock's session: read it again later, store nothing now.
       st.pending.push(symbol);
       st.pending_since[symbol] ??= at;
-      st.pending_due ??= after(now, PENDING_GAP_MIN);
       continue;
     }
     delete st.pending_since[symbol];
@@ -492,7 +517,7 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     st.stored++;
     if (r.rows[0]?.v.summary.buyers.length) st.checked++;
   }
-  passEnded(st, now);
+  schedule(st, now);
   return { read, errors: seen, cut };
 }
 
@@ -602,7 +627,7 @@ export function scanProgress(st, shown = null) {
     const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${hhmm(st.first_probe_at)} WIB${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
     return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;
   }
-  if (st?.phase === "running") return `the scan of ${st.session} is running (${st.stored + st.failed.length} of ${st.symbols.length})${tail}`;
+  if (st?.phase === "running") return `the scan of ${st.session} is running (${attempted(st)} of ${st.symbols.length})${tail}`;
   return null;
 }
 
@@ -639,15 +664,18 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   for (const r of runs) if (r.session > shown && !(underWay(st) && r.session === st.session)) warnings.push(runNote(r, shown));
   const behind = sessionsAfter(shown, latest) - runs.filter((r) => r.reason === "closed" && r.session > shown && r.session <= latest).length;
   if (behind > 1) warnings.push(`${shown} is ${behind} sessions behind ${latest}`);
-  const failed = run ? run.failed.length : st?.session === shown ? (st.failed || []).length : 0;
-  const pending = live ? (st.pending || []).length : 0;
-  const unpublished = pending || (run?.unpublished.length ?? 0);
+  // While the shown session's scan reads, its numbers come from the state,
+  // not from a record filed before stocks went back to be read again.
+  const reading = live && st.phase === "running";
+  const rec = reading ? runOf(st, null) : run;
+  const failed = rec ? rec.failed.length : 0;
+  const unpublished = rec ? rec.unpublished.length : 0;
   const scanned = rows + failed + unpublished;
-  if (live && st.phase === "running" && !restDone(st)) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
-  else if (pending) warnings.push(`IPOT has not published ${shown} for ${pending} of the ${st.symbols.length} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
+  if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
+  if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
   if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary`);
-  if (unpublished && !pending) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
-  if (run?.left) warnings.push(`the scan of ${shown} ended before it read ${run.left} of its ${run.of} stocks`);
+  if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
+  if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
   const year = Number(latest.slice(0, 4));
   if (!hol.covers(year)) warnings.push(`the bundled holiday list does not cover ${year}; the scan tells that year's closures from IPOT and the quote board`);
   // A session kept from before these records: the earliest its scan could have read it.

@@ -470,6 +470,57 @@ test("a stock IPOT has not published is read again, not stored without its lists
   });
 });
 
+/**
+ * IPOT for made-up codes: every page is BBCA's (11-06 for a single day, else
+ * its 10-12..10-16 week), and a code in `late` shows 11-06 without its lists.
+ */
+function lateFetch(late) {
+  const day = page("brokersummary_bbca_20261106.html"), range = page("brokersummary_bbca_20261012_20261016.html"), unpub = page("brokersummary_bbca_20261106_insession.html");
+  return async (u) => {
+    const url = String(u);
+    if (url.includes("finance/chart")) return new Response(CHART);
+    const code = url.match(/code=([A-Z]+)/)[1];
+    if (url.includes("start=11/06/2026&end=11/06/2026")) return new Response(late.has(code) ? unpub : day);
+    return new Response(range);
+  };
+}
+const lateBoard = (codes) => JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: codes.map((s, i) => quote(s, 1000, 1e8 - i, "2026-11-06T16:14:58+07:00")) });
+
+test("stocks IPOT has not published are read again apart from the pass, and count as unpublished meanwhile", async () => {
+  const env = memoryDb();
+  env.kv.set("board", lateBoard(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE"]));
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  const screen = (hm) => bandarScreen(env, null, null, "1d", null, null, null, null, at(hm));
+  await withFetch(lateFetch(new Set(["BBBB", "CCCC", "DDDD", "EEEE"])), async () => {
+    for (const hm of ["17:00", "17:01"]) await bandarScanStep(env, { now: at(hm) });
+    // 17:10: the four are read again, three this minute; the fourth waits for the next.
+    assert.equal((await bandarScanStep(env, { now: at("17:10") })).read, 3);
+    const out = await screen("17:10");
+    assert.equal(out.data.scanned, 5);
+    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 4 of the 5 stocks yet; the scan reads them again every 10 minutes"]);
+    // Cut off now, the session counts all four as unpublished and none as left unread.
+    await bandarScanStep(env, { now: new Date("2026-11-09T16:45:00+07:00"), stocks: false });
+    const last = (await scanStatus(env)).last;
+    assert.deepEqual([last.session, last.stored, last.unpublished.length, last.left], ["2026-11-06", 1, 4, 0]);
+  });
+});
+
+test("while stocks are read again, the screen counts each of them once", async () => {
+  const env = memoryDb();
+  env.kv.set("board", lateBoard(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE", "FFFF", "GGGG", "HHHH"]));
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  const late = new Set(["BBBB", "CCCC", "DDDD", "EEEE", "FFFF"]);
+  await withFetch(lateFetch(late), async () => {
+    for (const hm of ["17:00", "17:01", "17:02"]) await bandarScanStep(env, { now: at(hm) });
+    // IPOT publishes them; at 17:10 three are read whole, two wait for the next minute.
+    late.clear();
+    assert.equal((await bandarScanStep(env, { now: at("17:10") })).read, 3);
+    const out = await bandarScreen(env, null, null, "1d", null, null, null, null, at("17:10"));
+    assert.deepEqual([out.data.scanned, out.data.checked], [8, 6]);
+    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 2 of the 8 stocks yet; the scan reads them again every 10 minutes"]);
+  });
+});
+
 test("a stock that fails is tried again 10, then 30 minutes after its pass, then counts as failed", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
