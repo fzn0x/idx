@@ -474,6 +474,9 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   const stored = await kvGet(env, STATE);
   let st = upgrade(stored);
   let changed = false, prune = false;
+  // A cron minute that runs late (its `now` is when it was scheduled) after
+  // a later one moved the scan on: the scan never goes back a session.
+  if (st && session < st.session) return { idle: true, session: st.session };
   if (st && st.session !== session) {
     // The next session's 16:45 WIB: what this one got is filed first.
     prune = cutoff(st, at);

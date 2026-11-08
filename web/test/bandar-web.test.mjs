@@ -531,6 +531,27 @@ test("a stock IPOT still had not published at the next session's 16:45 counts as
   });
 });
 
+test("a cron minute that runs late does not take the scan back to the session before", async () => {
+  const env = memoryDb();
+  const board = (d) => env.kv.set("board", JSON.stringify({ ts: unix(`${d}T16:45:00+07:00`), quotes: [quote("BBCA", 5100, 2e8, `${d}T16:14:58+07:00`), quote("TLKM", 2690, 1e8, `${d}T16:14:58+07:00`)] }));
+  const recorded = recordedFetch();
+  // At 16:45 WIB on 11-09 IPOT has not published that session.
+  const fetchFn = async (u, init) => (String(u).includes("start=11/09/2026&end=11/09/2026") ? new Response(page("brokersummary_bbca_20261106_insession.html")) : recorded(u, init));
+  const at = (iso) => new Date(`${iso}+07:00`);
+  await withFetch(fetchFn, async () => {
+    board("2026-11-06");
+    await scanAll(env, at("2026-11-07T10:00:00"));
+    board("2026-11-09");
+    assert.equal((await bandarScanStep(env, { now: at("2026-11-09T16:45:00"), stocks: false })).probe, "unpublished");
+    const written = env.kv.get("bandar_scan");
+    // The 16:44 minute, dispatched late, runs after it with its own scheduled time.
+    assert.deepEqual(await bandarScanStep(env, { now: at("2026-11-09T16:44:00") }), { idle: true, session: "2026-11-09" });
+    assert.equal(env.kv.get("bandar_scan"), written, "the state stays as the 16:45 minute wrote it");
+    const st = await scanStatus(env);
+    assert.deepEqual([st.session, st.phase, st.complete, st.last.session, st.last.stored], ["2026-11-09", "waiting", "2026-11-06", "2026-11-06", 2]);
+  });
+});
+
 test("a minute that overlapped another does not write its state over the other's", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
