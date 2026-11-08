@@ -487,10 +487,10 @@ pub const IPOT_SOURCE_ADVICE: crate::error::Advice = crate::error::Advice {
 };
 
 /// When idx.co.id refuses the market's foreign flow: the latest session's
-/// foreign net per stock from Indo Premier's broker summaries.
-pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
-    cli: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx bandar screen --period 1d --sort fnet",
-    mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
+/// foreign net in rupiah of the most traded stocks, from Indo Premier.
+pub const MARKET_FOREIGN_IPOT_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks",
+    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's foreign net in rupiah of the 100 most traded stocks",
 };
 
 /// When idx.co.id refuses the member ranking of a session IPOT could hold:
@@ -893,7 +893,7 @@ pub async fn market_foreign(
 ) -> Result<Sourced<MarketForeign>> {
     let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today))
         .await
-        .map_err(|e| with_alternative(e, BANDAR_FNET_ADVICE))?;
+        .map_err(|e| with_alternative(e, MARKET_FOREIGN_IPOT_ADVICE))?;
     let rows: Vec<ForeignRow> = std::mem::take(&mut s.data)
         .iter()
         .filter_map(foreign_row)
@@ -2026,14 +2026,14 @@ mod tests {
             ),
             "{err}"
         );
-        // The market's foreign flow: the bandar screen's foreign net.
+        // The market's foreign flow: IPOT's, in rupiah, for the most traded.
         let err = market_foreign(&f, None, 10, ForeignSort::Value, d(2026, 10, 16))
             .await
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert!(
             err.to_string()
-                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+                .ends_with("; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{err}"
         );
     }
@@ -2092,7 +2092,7 @@ mod tests {
         assert_eq!(err.code(), "blocked");
         assert!(
             err.to_string()
-                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+                .ends_with("; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{err}"
         );
     }

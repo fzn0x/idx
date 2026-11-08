@@ -744,7 +744,7 @@ fn parse_date(v: &Option<String>) -> Result<Option<chrono::NaiveDate>> {
 const MCP_ADVICE: &[crate::error::Advice] = &[
     crate::providers::idx::NO_CACHE,
     service::IPOT_SOURCE_ADVICE,
-    service::BANDAR_FNET_ADVICE,
+    service::MARKET_FOREIGN_IPOT_ADVICE,
     service::BROKERS_IPOT_ADVICE,
 ];
 
@@ -3162,7 +3162,7 @@ mod tests {
         assert_eq!(v["error"]["code"], "blocked", "{v}");
         let msg = v["error"]["message"].as_str().unwrap();
         assert!(
-            msg.ends_with("with idx_bandar_screen, period \"1d\" and sort \"fnet\""),
+            msg.ends_with("; or call the tool again with source \"ipot\" for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{msg}"
         );
         assert!(!msg.contains("--"), "{msg}");
