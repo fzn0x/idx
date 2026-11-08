@@ -398,7 +398,12 @@ flow from IPOT in rupiah, up to 20 sessions), `holidays --upcoming`, `astro`,
 `list --search bank`, `members`, `risk TLKM` (also `growth` and `valuation`), and `tools` (every MCP tool as a button). The idx.co.id
 commands (market-wide foreign flow, top brokers, the calendar, indices) are CLI and MCP
 only, because idx.co.id refuses requests from Cloudflare Workers; so, for now, is
-`ownership institutions`, until MSN is checked from the Worker. `quote` with one symbol also draws a price chart (1D, 5D,
+`ownership institutions`, until MSN is checked from the Worker. Typed into the terminal,
+any of these, and the CLI-only commands (`watch`, `mcp`, `ownership import`, ...), answer
+with a notice instead of an error: where the command runs and why, its CLI line with your
+own arguments, and the nearest command the page has. A line pasted from the CLI, such as
+`idx stocks quote BBCA` or `idx -o json market overview`, runs as the page's own command.
+`quote` with one symbol also draws a price chart (1D, 5D,
 1M, 6M, YTD, 1Y, 5Y) with volume, the previous close and a crosshair readout.
 The web `bandar screen` reads a scan the Worker runs after each close over the
 session's 100 most traded stocks; the CLI scans live.

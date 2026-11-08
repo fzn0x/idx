@@ -1,9 +1,10 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
 // The shell (help, states, loading lines, errors) speaks the page's language;
 // the results keep the CLI's English column names and words on both pages.
-import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse } from "/app.js";
+import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse, copyButton } from "/app.js";
 import { priceChart } from "/chart.js";
-import { TOOLS, cliOnlyReason, byName } from "/tools.js";
+import { TOOLS, byName, whatOf } from "/tools.js";
+import { routeLine, tokenize, shownLine, ALIASES, INSTALL, AGENT } from "/route.js";
 import { SHOW_MS, SLOW_MS, WAITS, FEED_TIMEOUT_S, IPOT_TRIES, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
@@ -51,7 +52,6 @@ const COMMANDS = [
   { name: "help", usage: "help [command]", help: "this list" },
   { name: "clear", usage: "clear", help: "clear the sheet" },
 ];
-const ALIASES = { q: "quote", h: "history", f: "fundamental", t: "technical", n: "news", s: "screen", c: "compare", d: "dividends", r: "returns", b: "brief", "?": "help", cls: "clear", own: "ownership" };
 
 // What each command does, in Bahasa Indonesia, for help, the rail and the gate; the usage lines stay as typed.
 const HELP_ID = {
@@ -95,14 +95,9 @@ const helpOf = (c) => (ID && HELP_ID[c.name]) || c.help;
 const usageError = (message) => Object.assign(new Error(message), { code: "usage" });
 const usageLine = (usage) => usageError(t(`cara pakai: ${usage}`, `usage: ${usage}`));
 const CLI_ONLY = t("hanya CLI dan MCP", "CLI and MCP only");
+/** The head of a notice (route.js says which kind): where the line runs instead of here. */
+const NOTICE_META = { "cli-mcp": CLI_ONLY, cli: t("hanya CLI", "CLI only"), flag: t("flag CLI", "CLI flag") };
 
-function tokenize(line) {
-  const toks = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m;
-  while ((m = re.exec(line))) toks.push(m[1] ?? m[2] ?? m[3]);
-  return toks;
-}
 // Switches never take the next word as their value: `screen --returns mcap>10T`
 // keeps mcap>10T as a filter clause instead of losing it to --returns.
 const BOOL_FLAGS = new Set(["all", "asc", "company-only", "daily", "desc", "returns", "upcoming"]);
@@ -696,11 +691,31 @@ const R = {
     frag.append(toolButtons());
     return frag;
   },
-  cliOnly(t) {
+  // A line this page cannot run (route.js): what it is, why it runs elsewhere, the
+  // CLI line in the user's words, how to get the CLI, and what runs here instead.
+  notice(p) {
     const frag = document.createDocumentFragment();
-    frag.append(el("p", { class: "prose", html: `<b>${t.tool}</b> · ${t.what}` }));
-    frag.append(el("pre", { text: `${t.cli}\n${t.cli.replace(/^idx /, "idx -o json ")}` }));
-    frag.append(el("p", { class: "warn", text: `${cliOnlyReason(t)} Install: npm install -g ihsg-cli, or the binaries on GitHub (fzn0x/idx).` }));
+    const words = (x) => (x ? t(x.id, x.en) : "");
+    if (p.kind === "flag") {
+      frag.append(el("p", { class: "prose" }, [t("Terminal web tidak punya ", "The web terminal has no "), ...codeList(p.flags, t(" atau ", " or ")), p.command ? t(` untuk ${p.command}.`, ` for ${p.command}.`) : "."]));
+    } else {
+      frag.append(el("p", { class: "prose" }, [el("b", { text: p.path }), ...(p.tool ? [t(" · alat MCP ", " · MCP tool "), el("code", { text: p.tool })] : []), ` · ${words(p.what)}`]));
+    }
+    if (p.why) frag.append(el("p", { class: "prose" }, inlineCode(words(p.why))));
+    const instead = p.near.length ? [el("h3", { class: "stmt-title", text: p.kind === "flag" ? t("Ketik di sini", "Type here") : t("Di halaman ini", "On this page") }), nearTable(p.near)] : [];
+    if (p.kind === "flag") frag.append(...instead);
+    if (p.cli.length) {
+      const labels = [t("Di CLI", "In the CLI"), t("Untuk skrip dan agen, dalam JSON", "For scripts and agents, as JSON")];
+      frag.append(el("div", { class: "cmdline" }, p.cli.flatMap((line, i) => [el("p", { class: "lbl" }, [labels[i], copyButton(line)]), el("pre", { text: line })])));
+    }
+    const agent = p.kind === "cli-mcp" || p.agent;
+    frag.append(el("p", { class: "warn install" }, [
+      t("Pasang CLI: ", "Install the CLI: "), el("code", { text: INSTALL }),
+      ...(agent ? [t("; untuk agen, tanpa memasang: ", "; for an agent, without installing: "), el("code", { text: AGENT })] : []),
+      t("; cara lain di ", "; other ways in "), el("a", { href: "/docs/#install", hreflang: "en", text: t("panduan (bahasa Inggris)", "the guide") }), ".",
+    ]));
+    if (p.tools) frag.append(toolButtons(TOOLS.filter((x) => p.tools.includes(x.tool))));
+    if (p.kind !== "flag") frag.append(...instead);
     return frag;
   },
   holidays(h) {
@@ -884,6 +899,32 @@ const R = {
   },
 };
 
+/** Words as code, joined the way the page's language lists them: a, b and c. */
+function codeList(words, last = t(" dan ", " and ")) {
+  return words.flatMap((w, i) => [...(i ? [i === words.length - 1 ? last : ", "] : []), el("code", { text: w })]);
+}
+
+/** A sentence with its `backticked` words set as code. */
+const inlineCode = (s) => String(s).split("`").map((part, i) => (i % 2 ? el("code", { text: part }) : part));
+
+/** The commands a notice offers instead, each a link that runs here, beside what it gives (help's table). */
+function nearTable(list) {
+  const tbl = table([
+    { h: t("Perintah", "Command"), f: (n) => el("a", { href: `${here("/terminal")}?cmd=${encodeURIComponent(n.line)}`, text: n.line }), l: true, cls: "use" },
+    { h: t("Kegunaan", "What it does"), f: (n) => t(n.id, n.en), l: true, cls: "help" },
+  ], list);
+  tbl.classList.add("tbl-help");
+  return wrapScroll(tbl);
+}
+
+/** What a rewritten line ran as, and the CLI's own flags it left to the CLI. */
+function noteLine(n) {
+  const p = el("p", { class: "warn" }, [t("Dijalankan di sini sebagai ", "Run here as "), el("code", { text: n.line })]);
+  if (n.ignored.length) p.append("; ", ...codeList(n.ignored), t(" hanya berlaku di CLI", n.ignored.length === 1 ? " applies to the CLI only" : " apply to the CLI only"));
+  p.append(".");
+  return p;
+}
+
 // ---- command execution -----------------------------------------------------
 
 // `--statement income,balance,cash` (aliases cashflow, cash-flow; all = every
@@ -902,7 +943,20 @@ function statements(v) {
 
 function need(pos, n, usage) { if (pos.length < n) throw usageLine(usage); }
 
+/**
+ * Runs a typed line. route.js reads it first: a line in the CLI's words runs in
+ * the page's (the result carries a note saying so), and one this page cannot
+ * run answers with a notice instead of an error or another command's output.
+ */
 async function run(line) {
+  const plan = routeLine(line);
+  if (plan.kind !== "web") return { local: NOTICE_META[plan.kind], node: R.notice(plan) };
+  const r = await runWeb(plan.line);
+  if (r && plan.note) r.note = plan.note;
+  return r;
+}
+
+async function runWeb(line) {
   const toks = tokenize(line);
   if (!toks.length) return null;
   let name = toks[0].toLowerCase();
@@ -992,7 +1046,7 @@ async function run(line) {
       const tool = byName(pos[0]);
       if (!tool) throw usageError(t(`tidak ada alat "${pos[0]}"; ketik tools untuk daftarnya`, `no tool "${pos[0]}"; type tools for the list`));
       if (tool.web) return run(rawJson ? `json ${tool.web}` : tool.web);
-      return { local: CLI_ONLY, node: R.cliOnly(tool) };
+      return { local: CLI_ONLY, node: R.notice(routeLine(tool.tool)) };
     }
     case "actions": need(pos, 1, cmd.usage); env = await api(`actions?${qs({ symbol: sym(), since: opt.since })}`); render = R.actions; break;
     case "holidays": {
@@ -1028,7 +1082,6 @@ async function run(line) {
         env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
         render = R.graph;
       }
-      else if (sub === "institutions") return { local: CLI_ONLY, node: R.cliOnly(byName("idx_ownership_institutions")) };
       else throw usageLine(cmd.usage);
       break;
     }
@@ -1047,7 +1100,7 @@ function entry(cmdLine) {
   const n = ++seq;
   const sec = el("section", { class: "panel result", id: `r${n}`, tabindex: "-1", "aria-labelledby": `r${n}-h` });
   const meta = el("p", { class: "meta", text: t("berjalan", "running") });
-  const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), `idx ${cmdLine}`]), meta]);
+  const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), shownLine(cmdLine)]), meta]);
   const body = el("div", { class: "body" });
   const mline = el("p", { class: "mline" });
   sec.append(cap, body, mline);
@@ -1140,12 +1193,12 @@ function pending(e, line) {
 /** Runs a line as if typed: kept in the history. */
 function runLine(s) { execute(s); }
 
-/** One button per MCP tool: a web tool runs its example, an idx.co.id tool shows its CLI command. */
-function toolButtons() {
+/** One button per MCP tool: a web tool runs its example, a CLI-and-MCP-only tool shows its notice. */
+function toolButtons(list = TOOLS) {
   const box = el("div", { class: "hints tools" });
-  box.append(...TOOLS.map((tool) => el("button", {
+  box.append(...list.map((tool) => el("button", {
     type: "button", text: tool.tool, class: tool.web ? "" : "cli-only",
-    title: `${tool.what} · ${tool.web ? t(`menjalankan: ${tool.web}`, `runs: ${tool.web}`) : CLI_ONLY}`,
+    title: `${whatOf(tool)} · ${tool.web ? t(`menjalankan: ${tool.web}`, `runs: ${tool.web}`) : CLI_ONLY}`,
     onclick: () => runLine(tool.web || `tools ${tool.tool}`),
   })));
   return box;
@@ -1161,6 +1214,9 @@ function renderHelp(which) {
   frag.append(el("p", { class: "warn", text: t(
     "Alias: q h f t n s c d r b own. Awali perintah apa pun dengan json untuk melihat amplop JSON mentahnya. Kode saham boleh BBCA atau BBCA.JK; beberapa kode dipisah koma atau spasi. Kode saham saja menjalankan quote. Nama kolom hasil memakai istilah bahasa Inggris CLI.",
     "Aliases: q h f t n s c d r b own. Prefix any command with json for the raw envelope. Symbols accept BBCA or BBCA.JK; several symbols are comma or space separated. A bare ticker runs quote.") }));
+  frag.append(el("p", { class: "warn", text: t(
+    "Baris dari CLI juga berjalan di sini (idx stocks quote BBCA, idx -o json market overview); perintah yang hanya ada di CLI atau MCP menunjukkan baris CLI-nya dan perintah terdekat di halaman ini.",
+    "Lines pasted from the CLI run here too (idx stocks quote BBCA, idx -o json market overview); a command that runs only in the CLI or MCP shows its CLI line and the nearest command on this page.") }));
   if (!which) {
     frag.append(el("h3", { class: "stmt-title", text: t(`Alat MCP · ${TOOLS.length} · klik untuk menjalankan (garis putus-putus: hanya CLI dan MCP)`, `MCP tools · ${TOOLS.length} · click to run (dashed: CLI and MCP only)`) }));
     frag.append(toolButtons());
@@ -1184,13 +1240,16 @@ async function execute(line, { push = "push" } = {}) {
   if (push === "push") history.pushState({ n: e.n }, "", url);
   else if (push === "replace") history.replaceState({ n: e.n }, "", url);
   syncLang();
-  const stop = pending(e, line);
+  // The loading line names what the line waits on in the page's words (a CLI line's web form).
+  const plan = routeLine(line);
+  const stop = pending(e, plan.kind === "web" ? plan.line : "");
   const took = (ms) => (ms < 1000 ? "" : t(` · butuh ${fmt.num(ms / 1000, 1)} detik`, ` · took ${(ms / 1000).toFixed(1)}s`));
   try {
     const r = await run(line);
     const ms = stop();
     if (!r) { e.sec.remove(); return; }
     if (r.clear) { out.replaceChildren(); return; }
+    if (r.note) e.body.append(noteLine(r.note));
     if ("help" in r) { e.meta.textContent = t("lokal · tanpa permintaan", "local · no request"); e.body.append(renderHelp(r.help)); local(e, "help"); }
     else if (r.local) { e.meta.textContent = r.local; e.body.append(r.node); local(e, r.local); }
     else {

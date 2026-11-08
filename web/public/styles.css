@@ -479,6 +479,10 @@ pre.json { max-height: 30rem; overflow: auto; padding: 12px 16px; border-top: 1p
 /* help: the usage line as typed beside what it does, both wrapping, so the table fits its sheet. */
 .result .tbl td.use { min-width: 14ch; white-space: normal; font-family: var(--mono); font-size: 0.85rem; font-weight: 700; color: var(--ink); }
 .result .tbl td.help { min-width: 20ch; white-space: normal; color: var(--ink-2); }
+/* A notice's CLI lines wrap at their spaces; a word breaks only when it alone is wider than the panel. */
+.result .cmdline pre { word-break: normal; overflow-wrap: anywhere; }
+/* The install commands are short: each stays on one line instead of breaking at a hyphen (ihsg- / mcp). */
+.result .install code { white-space: nowrap; }
 /* On a phone each command stacks over its description instead of scrolling sideways. */
 @media (max-width: 48rem) {
   .nf .links .btn { flex: 1 1 100%; }

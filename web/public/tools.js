@@ -8,7 +8,10 @@
 // names that source). `why`, when set, is the tool's own reason;
 // cliOnlyReason() says which.
 // The landing page table and test/tools.test.mjs keep to this list, and the
-// test checks it against docs/mcp.md.
+// test checks it against docs/mcp.md. The CLI-and-MCP-only tools' `what` and
+// `why` also have their Bahasa Indonesia words (WHAT_ID, WHY_ID below), for the
+// notice the terminal shows when one of them is typed (route.js).
+import { LANG } from "./i18n.js";
 
 export const TOOLS = [
   { tool: "idx_brief", cli: "idx stocks brief BBCA", web: "brief BBCA", what: "one page: quote, verdict, signal, returns, dividends, holders, headlines" },
@@ -61,15 +64,45 @@ export const TOOLS = [
 ];
 
 export const CLI_ONLY_REASON = "idx.co.id refuses requests from this site's host (a Cloudflare Worker), so this tool runs in the CLI and the MCP server only.";
+const CLI_ONLY_REASON_ID = "idx.co.id menolak permintaan dari server situs ini (sebuah Cloudflare Worker), jadi alat ini hanya berjalan di CLI dan server MCP.";
 
 const STOCKBIT_REASON = "The Stockbit tools carry your own account session (captured once by `idx stockbit login`), so they run in the CLI and the MCP server only, never this public page.";
+const STOCKBIT_REASON_ID = "Alat Stockbit membawa sesi akun Anda sendiri (diambil sekali dengan `idx stockbit login`), jadi hanya berjalan di CLI dan server MCP, tidak pernah di halaman publik ini.";
 
-/** Why a tool with `web: null` runs in the CLI and MCP only. */
-export function cliOnlyReason(t) {
-  if (t.why) return t.why;
-  if (t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit")) return STOCKBIT_REASON;
-  if (t.unchecked) return `${t.unchecked} has not been checked from this site's host (a Cloudflare Worker) yet, so this tool runs in the CLI and the MCP server only for now.`;
-  return CLI_ONLY_REASON;
+/** What each CLI-and-MCP-only tool gives, as the Indonesian landing page says it. */
+const WHAT_ID = {
+  idx_market_foreign: "beli dan jual bersih asing terbesar",
+  idx_market_brokers: "anggota bursa menurut nilai transaksi hari itu",
+  idx_indices: "semua indeks bursa untuk satu sesi",
+  idx_calendar: "tanggal dividen dan rights, RUPS, paparan publik",
+  idx_ownership_composition: "saham lokal dan asing menurut jenis investor (arsip bulanan KSEI)",
+  idx_ownership_snapshot: "pasang atau periksa basis data kepemilikan siap pakai (aksi sync atau status)",
+  idx_ownership_institutions: "institusi dan reksa dana pemegangnya: membeli, menjual, baru, keluar (MSN)",
+  idx_orderbook: "antrean beli dan jual waktu nyata dan aliran asing (sesi Stockbit Anda)",
+  idx_stockbit_status: "apakah sesi Stockbit tersimpan, dan kapan tokennya berakhir",
+  idx_stockbit_login: "masuk ke Stockbit sekali, lewat peramban atau halaman lokal",
+  idx_stockbit_actions: "aksi korporasi suatu saham sejak tercatat, atau kalender pasar, menurut jenis (sesi Stockbit Anda)",
+  idx_stockbit_movements: "transaksi orang dalam dan pemegang 5 %: siapa membeli atau menjual, berapa lembar, di harga berapa (sesi Stockbit Anda)",
+};
+
+/** The tools' own reasons (`why`) in Bahasa Indonesia. */
+const WHY_ID = {
+  idx_ownership_composition: "Arsip komposisi KSEI diunduh dari ksei.co.id ke basis data kepemilikan lokal milik CLI, jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.",
+  idx_ownership_snapshot: "Alat ini memasang dan memeriksa berkas basis data kepemilikan di komputer Anda sendiri; terminal web menyimpan salinan daftarnya sendiri yang mengikuti mirror GitHub yang sama, jadi tidak ada yang perlu disinkronkan di sini.",
+};
+
+/** What a tool gives, in the page's language (or `lang`): Indonesian where WHAT_ID has it. */
+export const whatOf = (t, lang = LANG) => (lang === "id" && WHAT_ID[t.tool]) || t.what;
+
+/** Why a tool with `web: null` runs in the CLI and MCP only, in the page's language (or `lang`). */
+export function cliOnlyReason(t, lang = LANG) {
+  const id = lang === "id";
+  if (t.why) return (id && WHY_ID[t.tool]) || t.why;
+  if (t.tool === "idx_orderbook" || t.tool.startsWith("idx_stockbit")) return id ? STOCKBIT_REASON_ID : STOCKBIT_REASON;
+  if (t.unchecked) return id
+    ? `${t.unchecked} belum diperiksa dari server situs ini (sebuah Cloudflare Worker), jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.`
+    : `${t.unchecked} has not been checked from this site's host (a Cloudflare Worker) yet, so this tool runs in the CLI and the MCP server only for now.`;
+  return id ? CLI_ONLY_REASON_ID : CLI_ONLY_REASON;
 }
 
 export const byName = (name) => TOOLS.find((t) => t.tool === String(name || "").trim().toLowerCase());

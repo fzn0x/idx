@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { TOOLS, byName, cliOnlyReason, CLI_ONLY_REASON } from "../public/tools.js";
+import { TOOLS, byName, cliOnlyReason, whatOf, CLI_ONLY_REASON } from "../public/tools.js";
 import { instruments, members } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -44,6 +44,27 @@ test("only the idx.co.id, KSEI composition, local-database, Stockbit and uncheck
   const names = new Set([...terminal.matchAll(/\{ name: "([a-z]+)", usage:/g)].map((m) => m[1]));
   for (const t of TOOLS.filter((x) => x.web)) assert.ok(names.has(t.web.split(" ")[0]), `${t.tool}: ${t.web}`);
   assert.ok(names.has("tools") && names.has("list") && names.has("members"));
+});
+
+test("a CLI-and-MCP-only tool says what it gives and why in the page's language", () => {
+  // The words are each landing page's, row for row: the Indonesian page's and the English one's.
+  const unescape = (s) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const cellsOf = (...page) => new Map([...read("web", "public", ...page).matchAll(/<tr><td>(idx_[a-z_]+)<\/td><td><code>[^<]+<\/code><\/td><td>.*?<\/td><td class="muted">(.*?)<\/td><\/tr>/g)].map((m) => [m[1], unescape(m[2])]));
+  const cells = cellsOf("index.html"), cellsEn = cellsOf("en", "index.html");
+  for (const t of TOOLS.filter((x) => !x.web)) {
+    assert.equal(whatOf(t, "en"), t.what, t.tool);
+    assert.equal(whatOf(t, "id"), cells.get(t.tool), t.tool);
+    assert.equal(whatOf(t, "en"), cellsEn.get(t.tool), `${t.tool} on the English page`);
+    const en = cliOnlyReason(t, "en"), id = cliOnlyReason(t, "id");
+    // Outside a browser the page's language is English.
+    assert.equal(cliOnlyReason(t), en, t.tool);
+    assert.notEqual(id, en, t.tool);
+    if (t.tool === "idx_ownership_snapshot") assert.match(id, /komputer Anda sendiri/);
+    else assert.match(id, /hanya berjalan di CLI dan server MCP/, t.tool);
+    assert.doesNotMatch(`${id} ${en}`, new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`), t.tool);
+  }
+  // A tool that runs here keeps its English words on both pages.
+  assert.equal(whatOf(byName("idx_quote"), "id"), byName("idx_quote").what);
 });
 
 test("the landing page lists every tool with its commands", () => {
