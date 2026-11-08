@@ -19,6 +19,16 @@ export const covers = (year) => years().includes(year);
 /** A weekday that is not a listed holiday (for an uncovered year only weekends close). */
 export const isTradingDay = (iso) => dow(iso) !== 0 && dow(iso) !== 6 && !BY_DATE.has(iso);
 
+/** The listed holiday on `iso`, { name, name_en }, or null (holidays::holiday). */
+export const holiday = (iso) => BY_DATE.get(iso) ?? null;
+
+/** Why `iso` has no session, like closed_reason in src/service/exchange.rs. */
+export function closedReason(iso) {
+  const h = holiday(iso);
+  if (h) return `${iso} is a trading holiday (${h.name})`;
+  return dow(iso) === 0 || dow(iso) === 6 ? `${iso} is a ${weekday(iso)}` : `nothing was published for ${iso}`;
+}
+
 export function nextTradingDay(iso) {
   let d = addDays(iso, 1);
   while (!isTradingDay(d)) d = addDays(d, 1);

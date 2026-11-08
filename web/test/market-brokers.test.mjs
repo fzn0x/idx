@@ -1,8 +1,9 @@
-// node --test web/test/*.mjs (no network). IPOT's broker ranking with its
-// date, as /api/market/brokers will read it: the ranking and the page that
-// dates it are read as one pair and kept in D1 with the CLI's lifetimes; the
-// dating rules are ipot::top_brokers', tested with the Rust tests' cases on
-// the same recorded pages (src/providers/ipot/mod.rs).
+// node --test web/test/*.mjs (no network). /api/market/brokers: the web twin
+// of `idx -o json market brokers --source ipot`. IPOT's ranking and the page
+// that dates it are read as one pair and kept in D1 with the CLI's lifetimes;
+// the dating rules are ipot::top_brokers' and the ranking service's, tested
+// with the Rust tests' cases on the same recorded pages
+// (src/providers/ipot/mod.rs and src/service/exchange.rs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import * as ipot from "../src/ipot.js";
-import { topBrokers } from "../src/api.js";
+import { topBrokers, marketBrokers, route } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", "ipot", p), "utf8");
@@ -304,4 +305,127 @@ test("a ranking without its date, or an HTTP error, is a provider error", async 
   err = await withFetch(f.fn, () => failure(topBrokers(env, SUNDAY)));
   assert.match(err.message, /unexpected broker ranking layout/);
   assert.equal(f.calls.length, 0, "from D1, as the CLI's cache keeps the page");
+});
+
+// ---- the endpoint (service::market_brokers_ipot) ----------------------------
+
+test("/api/market/brokers counts members as idx.co.id does", async () => {
+  const env = memoryDb();
+  const f = ipotFetch();
+  await withFetch(f.fn, async () => {
+    const out = await marketBrokers(env, null, "0", null, null, SUNDAY);
+    assert.equal(out.schema, "idx.market.brokers.v1");
+    assert.equal(out.provider, "ipot");
+    const r = out.data;
+    assert.deepEqual(Object.keys(r), ["date", "members", "total_volume", "total_value", "total_frequency", "sort", "rounded", "brokers"]);
+    assert.equal(r.date, "2026-11-06");
+    // idx.co.id's GetBrokerSummary of the session, read the same morning: 88 members, 2,205,570 trades, IDR 20,648,010,571,340.
+    assert.deepEqual([r.members, r.brokers.length], [88, 88]);
+    assert.equal(r.total_frequency, 2_205_570);
+    assert.ok(Math.abs(r.total_value / 20_648_010_571_340 - 1) < 1e-4, r.total_value);
+    assert.equal(r.rounded, true);
+    assert.equal(r.sort, "value");
+    const cp = r.brokers[0];
+    assert.deepEqual(Object.keys(cp), ["rank", "code", "name", "volume", "value", "frequency", "value_share_pct", "buy_value", "sell_value", "net_value", "kind"]);
+    assert.deepEqual([cp.rank, cp.code, cp.kind], [1, "CP", "local"]);
+    assert.deepEqual([cp.buy_value, cp.sell_value, cp.net_value], [1.4e12, 1.39e12, 4.77e9]);
+    assert.equal(r.brokers.find((b) => b.code === "CC").frequency, 211_212, "JB is counted in CC");
+    assert.ok(r.brokers.every((b) => !["JB", "PS", "ZZ"].includes(b.code)));
+    const share = r.brokers.reduce((t, b) => t + b.value_share_pct, 0);
+    assert.ok(Math.abs(share - 100) < 1e-6);
+    assert.deepEqual(out.warnings, ["JB ([CC] BJB Sekuritas Jawa Barat) is counted in CC, as idx.co.id counts it; IPOT lists it apart"]);
+    assert.equal(f.calls.length, 2);
+
+    // By trades, which the source gives exact; the CLI's default of 20 rows.
+    const by = await marketBrokers(env, "2026-11-06", "5", "frequency", "ipot", SUNDAY);
+    assert.deepEqual([by.data.members, by.data.brokers.length], [88, 5]);
+    assert.ok(by.data.brokers.every((b, i, l) => i === 0 || l[i - 1].frequency >= b.frequency));
+    assert.equal(by.data.brokers[0].code, "XL");
+    assert.deepEqual(by.data.brokers.map((b) => b.rank), [1, 2, 3, 4, 5]);
+    assert.equal(by.cached, true);
+    assert.equal((await marketBrokers(env, null, null, null, null, SUNDAY)).data.brokers.length, 20);
+    assert.equal(f.calls.length, 2, "from D1");
+
+    // IPOT holds one session; a date in the future costs no request.
+    for (const [date, says] of [["2026-10-16", "IPOT holds only its latest session, 2026-11-06, not 2026-10-16; source idx (idx.co.id) has the others"], ["2026-11-09", "2026-11-09 is in the future"]]) {
+      const err = await failure(marketBrokers(env, date, null, null, null, SUNDAY));
+      assert.deepEqual([err.code, err.exit], ["usage", 2], date);
+      assert.equal(err.message, says);
+    }
+    assert.equal(f.calls.length, 2);
+  });
+});
+
+test("a session IPOT cannot hold yet is not found", async () => {
+  const env = memoryDb();
+  const f = ipotFetch();
+  await withFetch(f.fn, async () => {
+    // A weekend, a holiday, and a session that has not ended: no request.
+    for (const [date, now, says] of [
+      ["2026-11-07", SUNDAY, "no trading data: 2026-11-07 is a Saturday"],
+      ["2026-11-08", SUNDAY, "no trading data: 2026-11-08 is a Sunday"],
+      ["2026-08-17", SUNDAY, "no trading data: 2026-08-17 is a trading holiday (Proklamasi Kemerdekaan)"],
+      ["2026-11-09", at("2026-11-09T08:00:00"), "the session of 2026-11-09 has not ended (it ends at 16:15 WIB), and IPOT's ranking of it cannot be dated before 19:00 WIB"],
+    ]) {
+      const err = await failure(marketBrokers(env, date, null, null, null, now));
+      assert.deepEqual([err.code, err.exit, err.status], ["not_found", 4, 404], date);
+      assert.equal(err.message, says);
+    }
+    assert.equal(f.calls.length, 0);
+  });
+  // Monday night both of IPOT's pages still show Friday: a date page naming an older session dates nothing on its own.
+  const mondayNight = at("2026-11-09T19:30:00");
+  let err = await withFetch(ipotFetch().fn, () => failure(marketBrokers(env, "2026-11-09", null, null, null, mondayNight)));
+  assert.deepEqual([err.code, err.exit], ["provider", 3]);
+  assert.match(err.message, /so it cannot be dated/);
+  // Once Friday's ranking has been accepted, on Sunday, the same pair is Friday's: Monday is not there yet.
+  const fresh = memoryDb();
+  await withFetch(ipotFetch().fn, () => marketBrokers(fresh, null, null, null, null, SUNDAY));
+  fresh.cache.delete(PAIR_KEY);
+  err = await withFetch(ipotFetch().fn, () => failure(marketBrokers(fresh, "2026-11-09", null, null, null, mondayNight)));
+  assert.deepEqual([err.code, err.exit], ["not_found", 4]);
+  assert.equal(err.message, "IPOT has not published 2026-11-09 yet: its latest session is 2026-11-06; source idx (idx.co.id) publishes each session after its close");
+  // A session before IPOT's stays a usage error: it never holds one.
+  err = await withFetch(ipotFetch().fn, () => failure(marketBrokers(fresh, "2026-11-05", null, null, null, SUNDAY)));
+  assert.equal(err.exit, 2);
+});
+
+test("a ranking without trades is not found, and a code off the member list is named", async () => {
+  const empty = TOP.slice(0, TOP.indexOf("<tbody>") + 7) + TOP.slice(TOP.indexOf("</tbody>"));
+  const err = await withFetch(ipotFetch({ top: empty }).fn, () => failure(marketBrokers(memoryDb(), null, null, null, null, at("2026-11-06T08:00:00"))));
+  assert.deepEqual([err.code, err.exit], ["not_found", 4]);
+  assert.equal(err.message, "IPOT's broker ranking for 2026-11-06 has no trades yet");
+  // IPOT lists a code with trades that is not an IDX member: it stays, named.
+  const odd = TOP.replace(/<span class="text-local">CP<\/span>/, '<span class="text-local">QQ</span>');
+  const out = await withFetch(ipotFetch({ top: odd }).fn, () => marketBrokers(memoryDb(), null, null, null, null, SUNDAY));
+  assert.equal(out.data.brokers[0].code, "QQ");
+  assert.equal(out.warnings[1], "IPOT lists trades for codes that are not on the IDX member list: QQ (KB Valbury Sekuritas)");
+});
+
+test("the source, sort and top are the CLI's, and idx.co.id is named as out of reach", async () => {
+  const env = memoryDb();
+  const f = ipotFetch();
+  await withFetch(f.fn, async () => {
+    let err = await failure(marketBrokers(env, null, null, null, "idx", SUNDAY));
+    assert.deepEqual([err.code, err.exit], ["usage", 2]);
+    assert.match(err.message, /^idx\.co\.id refuses requests from this site's host/);
+    assert.match(err.message, /source ipot/);
+    err = await failure(marketBrokers(env, null, null, null, "stockbit", SUNDAY));
+    assert.equal(err.message, 'invalid source "stockbit"; the web terminal reads ipot');
+    err = await failure(marketBrokers(env, null, null, "lots", null, SUNDAY));
+    assert.equal(err.message, 'invalid sort "lots"; use value, volume or frequency');
+    for (const top of ["-1", "2.5", "x"]) assert.equal((await failure(marketBrokers(env, null, top, null, null, SUNDAY))).code, "usage", top);
+    assert.equal((await failure(marketBrokers(env, "2026-02-30", null, null, null, SUNDAY))).message, 'invalid date "2026-02-30"; use YYYY-MM-DD');
+    assert.equal(f.calls.length, 0);
+    // auto reads IPOT here too, and says why.
+    const auto = await marketBrokers(env, null, "3", "VOLUME", "AUTO", SUNDAY);
+    assert.equal(auto.data.sort, "volume");
+    assert.equal(auto.warnings[0], "idx.co.id refuses requests from this site's host, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06");
+    // The route hands each parameter over (checked before the clock is read).
+    const ask = (qs) => failure(route(env, new URL(`https://ihsg.midoriresearch.com/api/market/brokers?${qs}`)));
+    assert.equal((await ask("sort=lots")).message, 'invalid sort "lots"; use value, volume or frequency');
+    assert.equal((await ask("source=stockbit")).message, 'invalid source "stockbit"; the web terminal reads ipot');
+    assert.equal((await ask("top=-1")).code, "usage");
+    assert.equal((await ask("date=2026-02-30")).message, 'invalid date "2026-02-30"; use YYYY-MM-DD');
+  });
 });
