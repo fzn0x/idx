@@ -209,7 +209,7 @@ function runOf(st, at) {
   return {
     session: st.session, scanned: true, of: st.symbols.length, stored: st.stored, checked: st.checked,
     failed, retrying: retry.length, unpublished: [...pending], left: st.queue.length, errors, ranked_from: st.ranked_from ?? null,
-    started_at: st.started_at ?? null, published_at: st.published_at ?? null, done_at: at,
+    started_at: st.started_at ?? null, published_at: st.published_at ?? null, stored_at: st.stored_at ?? null, done_at: at,
     partial: failed.length + pending.length + st.queue.length > 0,
   };
 }
@@ -541,6 +541,7 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     delete st.pending_since[symbol];
     for (const row of r.rows) rows.push({ symbol, ...row });
     st.stored++;
+    st.stored_at = at;
     if (r.rows[0]?.v.summary.buyers.length) st.checked++;
   }
   schedule(st, now);
@@ -724,8 +725,10 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   if (rec?.ranked_from && rec.ranked_from !== shown) warnings.push(`the scan of ${shown} picked its ${rec.of} stocks from the quote board of ${rec.ranked_from}, not from that session's close`);
   const year = Number(latest.slice(0, 4));
   if (!hol.covers(year)) warnings.push(`the bundled holiday list does not cover ${year}; the scan tells that year's closures from IPOT and the quote board`);
-  // A session kept from before these records: the earliest its scan could have read it.
-  const fetched_at = run?.done_at || (st?.session === shown ? st.started_at : null) || new Date(Date.parse(`${shown}T00:00:00+07:00`) + READY_MIN * 60e3).toISOString();
+  // When the shown session's scan last stored a stock; before it stored one,
+  // when it started; for a session kept from before these records, the
+  // earliest its scan could have read it.
+  const fetched_at = rec?.stored_at || run?.done_at || (st?.session === shown ? st.started_at : null) || new Date(Date.parse(`${shown}T00:00:00+07:00`) + READY_MIN * 60e3).toISOString();
   return { warnings, failed, unpublished, scanned, fetched_at };
 }
 

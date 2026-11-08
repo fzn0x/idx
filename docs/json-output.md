@@ -488,10 +488,15 @@ close it waits for IPOT to publish the session's broker lists, then reads the
 100 most traded stocks. The shapes are the same. When the newest trading
 session is not the one shown, `warnings` say which one is shown and why (the
 newer scan is waiting for IPOT, running, ended without IPOT publishing the
-session, read too few stocks, or starts at 16:45 WIB) and how many sessions
-behind it is; they also count the shown session's stocks without a broker
-summary or not published by IPOT. `fetched_at` is when the shown session's
-scan ended.
+session or answering, read too few stocks, or starts at 16:45 WIB) and how
+many sessions behind it is. They also count the shown session's stocks
+without a broker summary or not published by IPOT and say when the scan reads
+those again, and they say when its stocks were picked from the quote board of
+another session (a scan that started after the next open). Each stock counts
+once in `scanned`. `fetched_at` is when the shown session's scan last stored a
+stock; before it stored one, when that scan started; for a session the Worker
+scanned before it kept that time, 16:45 WIB of the session, the earliest its
+scan could have read it.
 
 ## `idx.actions.v1` (`stocks actions`)
 

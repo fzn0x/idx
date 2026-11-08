@@ -782,6 +782,7 @@ test("a stock IPOT still had not published at the next session's 16:45 counts as
     const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date("2026-11-09T09:50:00Z"));
     assert.deepEqual(out.warnings, ["the scan of 2026-11-09 is running (0 of 2); showing 2026-11-06", "IPOT had not published 2026-11-06 for 1 of the 2 scanned stocks when its scan ended"]);
     assert.equal(out.data.scanned, 2);
+    assert.equal(out.fetched_at, "2026-11-06T10:00:00Z", "when the scan stored its last stock, not when it was cut off");
   });
 });
 
