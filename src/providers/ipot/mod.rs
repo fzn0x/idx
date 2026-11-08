@@ -52,7 +52,13 @@
 //!   whether the ranking moves during a session, has not been measured: a
 //!   ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated
 //!   and is refused, and so is one whose date the other page contradicts
-//!   (see [`top_brokers`]).
+//!   (see [`latest_session`]).
+//!
+//! The market's summary of the session, recorded 2026-11-08, same module:
+//! `.../ma-marketstatistic.php` takes no parameters and sums up IPOT's
+//! latest session by board and by foreign investors' side (see
+//! `marketstat.rs`). It carries no date either: [`market_summary`] dates it
+//! as the ranking is dated, with its own copy of BBCA's statistics page.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -82,6 +88,8 @@ const TOP_BROKERS_ENDPOINT: &str =
 /// The page that dates the ranking.
 const SESSION_ENDPOINT: &str =
     "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA";
+const MARKET_STATISTIC_ENDPOINT: &str =
+    "https://www.indopremier.com/module/saham/include/ma-marketstatistic.php";
 /// Seconds after midnight WIB, on a trading day, from before the
 /// pre-opening (08:45) until well after the close (16:15) when the ranking
 /// may change between two reads.
@@ -132,6 +140,18 @@ const RANKING: Undated = Undated {
     noun: "broker ranking",
     short: "ranking",
     accepted_key: ACCEPTED_KEY,
+};
+
+/// The market's summary of the session ([`market_summary`]), with its own
+/// copy of the date page, so neither pair is broken by the other's read.
+const SUMMARY: Undated = Undated {
+    url: MARKET_STATISTIC_ENDPOINT,
+    dated_key: Some(
+        "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA#ma-marketstatistic",
+    ),
+    noun: "market summary",
+    short: "summary",
+    accepted_key: "ipot:ma-marketstatistic:accepted",
 };
 
 /// A range that ended before today no longer changes.
@@ -656,6 +676,25 @@ pub async fn top_brokers(
         ));
     }
     Ok(s)
+}
+
+/// The market's trading in IPOT's latest session (`ma-marketstatistic.php`:
+/// the value traded and foreign investors' buying, selling and net), dated
+/// by BBCA's statistics page as [`latest_session`] dates an undated page.
+/// `now` decides the cache lifetime ([`top_brokers_ttl`]).
+pub async fn market_summary(
+    fetcher: &Arc<Fetcher>,
+    now: DateTime<Utc>,
+) -> Result<Sourced<marketstat::MarketSummary>> {
+    latest_session(
+        fetcher,
+        now,
+        &SUMMARY,
+        marketstat::summary,
+        marketstat::MarketSummary::traded,
+        marketstat::digest,
+    )
+    .await
 }
 
 /// The page `p` of IPOT's latest session, read by `read` for the session
@@ -2040,5 +2079,94 @@ mod tests {
             err.to_string(),
             "ipot: broker ranking for the market: HTTP 503"
         );
+    }
+
+    const SUMMARY_PAGE: &str =
+        include_str!("../../../tests/fixtures/ipot/marketstatistic_20261106.html");
+
+    fn summary_pages() -> FixtureBackend {
+        FixtureBackend::new()
+            .route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE)
+            .route(SESSION_ENDPOINT, 200, STATISTIC)
+    }
+
+    #[tokio::test]
+    async fn the_market_summary_is_dated_as_the_ranking_is() {
+        let (f, be, _d) = fetcher(summary_pages());
+        let sunday = at("2026-11-08T10:00:00");
+        let s = market_summary(&f, sunday).await.unwrap();
+        assert_eq!(s.provider, "ipot");
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        assert_eq!(s.data.foreign_net_value, Some(329_330_000_000.0));
+        assert!(s.data.rounded && s.warnings.is_empty());
+        assert_eq!(be.call_count(), 2);
+        assert!(market_summary(&f, sunday).await.unwrap().cached);
+        assert_eq!(be.call_count(), 2, "both pages from the cache");
+
+        // In a trading day's hours, with nothing read outside them cached,
+        // IPOT is not asked, and the message names the page.
+        let (f, be, _d) = fetcher(summary_pages());
+        let err = market_summary(&f, at("2026-11-09T10:00:00"))
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: a market summary read at 10:00 WIB on 2026-11-09, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+        );
+        assert_eq!(be.call_count(), 0);
+
+        // The same figures dated a later session have not rolled over.
+        let dir = tempfile::tempdir().unwrap();
+        let live = |statistic: &str| {
+            Arc::new(Fetcher::new(
+                Arc::new(
+                    FixtureBackend::new()
+                        .route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE)
+                        .route(SESSION_ENDPOINT, 200, statistic),
+                ),
+                Cache::new(dir.path()),
+                CacheMode::Bypass,
+            ))
+        };
+        market_summary(&live(STATISTIC), sunday).await.unwrap();
+        let err = market_summary(&live(&named("2026-11-09")), at("2026-11-09T19:30:00"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ipot: the market summary is the one IPOT showed for 2026-11-06, yet the page that dates it now names 2026-11-09: the summary has not rolled over to that session"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_summary_and_the_ranking_keep_their_pairs_apart() {
+        let (f, be, dir) =
+            fetcher(ranking_pages().route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE));
+        let sunday = at("2026-11-08T10:00:00");
+        top_brokers(&f, sunday).await.unwrap();
+        market_summary(&f, sunday).await.unwrap();
+        // The summary reads its own copy of the date page.
+        assert_eq!(be.calls_matching("statistic.php?code=BBCA"), 2);
+        let cache = Cache::new(dir.path());
+        let ranking: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        let summary: Accepted = cache.get_json(SUMMARY.accepted_key, TTL_ACCEPTED).unwrap();
+        assert_ne!(ranking.digest, summary.digest);
+        // A ranking's date page read in trading hours leaves the summary's
+        // pair as it was: on Monday morning the summary's Sunday pair still
+        // answers, and the ranking has none.
+        cache
+            .put_fetched_at(SESSION_ENDPOINT, 200, STATISTIC, at("2026-11-06T10:00:00"))
+            .unwrap();
+        let failing = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path()),
+            CacheMode::Normal,
+        ));
+        let monday = at("2026-11-09T10:00:00");
+        let s = market_summary(&failing, monday).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        let err = top_brokers(&failing, monday).await.unwrap_err();
+        assert!(err.to_string().ends_with("so IPOT was not asked"), "{err}");
     }
 }
