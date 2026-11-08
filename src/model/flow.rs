@@ -12,12 +12,16 @@
 //! ([`ForeignValueFlow`], its own schema). The two sources answer different
 //! questions (shares on the regular board against rupiah on every board) and
 //! share no field names.
+//!
+//! `idx market brokers` reads idx.co.id's broker summary or IPOT's ranking
+//! of its latest session ([`BrokerSource`]), both in [`BrokerRanking`]; only
+//! IPOT publishes each member's buying, selling and net.
 
 use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::Symbol;
+use super::{BrokerKind, Symbol};
 
 /// One stock on one trading day.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -248,6 +252,23 @@ pub struct BrokerDayRow {
     /// sums to 100, and all members' value is twice the market's (each trade
     /// has a buying and a selling member).
     pub value_share_pct: Option<f64>,
+    /// Value bought, IDR, from IPOT; `null` from idx.co.id, which publishes
+    /// both sides together only.
+    #[serde(default)]
+    pub buy_value: Option<f64>,
+    /// Value sold, IDR, from IPOT; `null` from idx.co.id.
+    #[serde(default)]
+    pub sell_value: Option<f64>,
+    /// Value bought minus value sold, IDR: IPOT's figure, summed with that of
+    /// any row folded into the member (`JB` into `CC`). IPOT abbreviates it
+    /// and `buy_value` and `sell_value` each to two decimals, so it can
+    /// differ from `buy_value - sell_value` by the rounding of both, billions
+    /// for a member trading trillions. `null` from idx.co.id.
+    #[serde(default)]
+    pub net_value: Option<f64>,
+    /// The source's class of the member (IPOT); `null` from idx.co.id.
+    #[serde(default)]
+    pub kind: Option<BrokerKind>,
 }
 
 /// Which figure ranks the members.
@@ -282,6 +303,31 @@ impl std::str::FromStr for BrokerSort {
     }
 }
 
+/// Where the member ranking comes from.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerSource {
+    /// idx.co.id, and IPOT when idx.co.id refuses, cannot be reached, fails or has not published
+    /// the session, if IPOT holds it.
+    Auto,
+    /// idx.co.id's daily broker summary: any session.
+    Idx,
+    /// IPOT's ranking: its latest session only, with each member's class and net (and in json,
+    /// csv and jsonl its value bought and sold).
+    Ipot,
+}
+
+impl std::str::FromStr for BrokerSource {
+    type Err = crate::error::IdxError;
+    fn from_str(s: &str) -> crate::error::Result<Self> {
+        <BrokerSource as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            crate::error::IdxError::Usage(format!("invalid source {s:?}; use auto, idx or ipot"))
+        })
+    }
+}
+
 /// Every exchange member's trading on one day.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BrokerRanking {
@@ -293,6 +339,11 @@ pub struct BrokerRanking {
     pub total_value: f64,
     pub total_frequency: f64,
     pub sort: BrokerSort,
+    /// `true` when the source abbreviated figures (IPOT, to two decimals:
+    /// `2.79 T`), so they and the totals carry only that precision; `false`
+    /// from idx.co.id, which publishes them exact.
+    #[serde(default)]
+    pub rounded: bool,
     pub brokers: Vec<BrokerDayRow>,
 }
 

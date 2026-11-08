@@ -12,8 +12,9 @@ use crate::model::{ForeignFlow, ForeignRow, ForeignSort, ForeignValueFlow, Marke
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
 
-/// Exchange members ranked for one session.
-pub fn market_brokers(r: &BrokerRanking, _color: bool) -> String {
+/// Exchange members ranked for one session, as `provider` (`idx` or `ipot`)
+/// published them. Rows with a class or a net (IPOT's) get those columns.
+pub fn market_brokers(r: &BrokerRanking, provider: &str, color: bool) -> String {
     let by = match r.sort {
         BrokerSort::Value => "value",
         BrokerSort::Volume => "volume",
@@ -25,34 +26,79 @@ pub fn market_brokers(r: &BrokerRanking, _color: bool) -> String {
         r.members,
         f::compact(Some(r.total_value)),
     );
-    let mut t = base_table(false);
-    t.set_header(header(&[
-        "#",
-        "Code",
-        "Member",
-        "Value",
-        "Share",
-        "Volume",
-        "Frequency",
-    ]));
+    let sides = r
+        .brokers
+        .iter()
+        .any(|b| b.net_value.is_some() || b.kind.is_some());
+    let columns: &[&str] = if sides {
+        &[
+            "#",
+            "Code",
+            "Member",
+            "Class",
+            "Value",
+            "Share",
+            "Net",
+            "Volume",
+            "Frequency",
+        ]
+    } else {
+        &[
+            "#",
+            "Code",
+            "Member",
+            "Value",
+            "Share",
+            "Volume",
+            "Frequency",
+        ]
+    };
+    let mut t = base_table(color && sides);
+    t.set_header(header(columns));
     for b in &r.brokers {
-        t.add_row(vec![
+        let share = b
+            .value_share_pct
+            .map(|p| format!("{}%", f::num(p, 2)))
+            .unwrap_or_else(|| f::DASH.to_string());
+        let mut row = vec![
             right(b.rank.to_string()),
             Cell::new(&b.code).add_attribute(Attribute::Bold),
-            Cell::new(f::clip(b.name.as_deref().unwrap_or(f::DASH), 34)),
-            right(f::compact(b.value)),
-            right(
-                b.value_share_pct
-                    .map(|p| format!("{}%", f::num(p, 2)))
-                    .unwrap_or_else(|| f::DASH.to_string()),
-            ),
-            right(f::compact(b.volume)),
-            right(f::compact(b.frequency)),
-        ]);
+            Cell::new(f::clip(
+                b.name.as_deref().unwrap_or(f::DASH),
+                if sides { 28 } else { 34 },
+            )),
+        ];
+        if sides {
+            row.extend([
+                Cell::new(crate::output::table_broker::kind_label(b.kind)),
+                right(f::compact(b.value)),
+                right(share),
+                signed(f::compact(b.net_value), b.net_value, color),
+            ]);
+        } else {
+            row.extend([right(f::compact(b.value)), right(share)]);
+        }
+        row.extend([right(f::compact(b.volume)), right(f::compact(b.frequency))]);
+        t.add_row(row);
     }
     out.push_str(&t.to_string());
     out.push('\n');
-    out.push_str("Each member's buying and selling together, as idx.co.id publishes them; shares sum to 100% of all members' value, which is twice the market's.\n");
+    let source = match provider {
+        "idx" => "idx.co.id",
+        "ipot" => "IPOT (Indo Premier)",
+        other => other,
+    };
+    let net = if sides {
+        ", and its net (bought minus sold; -o json, csv and jsonl add the value bought and sold)"
+    } else {
+        ""
+    };
+    out.push_str(&format!("Each member's buying and selling together, as {source} publishes them{net}; shares sum to 100% of all members' value, which is twice the market's.\n"));
+    if r.rounded {
+        out.push_str(&format!(
+            "{source} abbreviates figures of a million and more to two decimals (2.79T), so they and the totals carry that precision.\n"
+        ));
+    }
     out
 }
 

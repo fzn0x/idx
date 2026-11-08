@@ -494,6 +494,9 @@ pub struct MarketBrokersArgs {
     /// Ranking figure: "value" (default), "volume" or "frequency".
     #[serde(default)]
     pub sort: Option<String>,
+    /// "auto" (default): idx.co.id, and IPOT when idx.co.id refuses, cannot be reached, fails or has not published the session, if IPOT holds it. "idx": idx.co.id only, any session. "ipot": Indo Premier, its latest session only, with each broker's value bought, sold and net and its class.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1171,7 +1174,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_market_brokers",
-        description = "Top brokers: every IDX exchange member's trading for one session from idx.co.id's daily broker summary (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
+        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses (Cloudflare), cannot be reached, fails or has not published the session yet, from IPOT's ranking if IPOT holds that session (the date, or with none the latest session that has ended), with a warning; the envelope's provider says which answered. A session idx.co.id has not published yet is named: with no date the session before comes with a warning, and that date is not_found. source=ipot asks IPOT directly: its latest session only (a date before that session, or after today, is a usage error; a later one up to today, or a day without a session, is not_found), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures of a million and more abbreviated to two decimals (rounded=true). From idx.co.id buy_value, sell_value, net_value and kind are null and rounded is false. IPOT's ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated and is refused (a provider error, or offline_miss or network for a copy read then and served offline or after a failed read; under auto, idx.co.id's error then stands). For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
     )]
     async fn market_brokers(
         &self,
@@ -1181,12 +1184,13 @@ impl IdxServer {
             async {
                 ok(
                     SCHEMA_MARKET_BROKERS,
-                    service::market_brokers(
+                    service::market_brokers_from(
                         &self.fetcher,
+                        parse_opt(&a.source, crate::model::BrokerSource::Auto)?,
                         parse_date(&a.date)?,
                         a.top.unwrap_or(20) as usize,
                         parse_opt(&a.sort, crate::model::BrokerSort::Value)?,
-                        service::today_wib(),
+                        chrono::Utc::now(),
                     )
                     .await?,
                 )
@@ -3270,6 +3274,92 @@ mod tests {
             assert_eq!(r.is_error, Some(true));
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], "usage", "{v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn market_brokers_tool_takes_a_source_and_stands_in_for_idx_co_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = crate::http::FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html"),
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        );
+        // IPOT's pages as read on Saturday, served because IPOT has no route
+        // here: a ranking read now could fall in trading hours, which IPOT's
+        // ranking cannot be dated in.
+        let cache = crate::cache::Cache::new(dir.path().join("cache"));
+        let saturday = chrono::DateTime::parse_from_rfc3339("2026-11-07T10:00:00+07:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for (url, page) in [
+            (
+                "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+                include_str!("../../tests/fixtures/ipot/topbroker_20261106.html"),
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+                include_str!("../../tests/fixtures/ipot/statistic_bbca_20261106.html"),
+            ),
+        ] {
+            cache.put_fetched_at(url, 200, page, saturday).unwrap();
+        }
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(backend),
+            cache,
+            crate::http::CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        let tool = s
+            .tools()
+            .into_iter()
+            .find(|t| t.name == "idx_market_brokers")
+            .unwrap();
+        let source = &tool.input_schema["properties"]["source"];
+        assert_eq!(source["type"], "string", "{source}");
+        let call = |source: Option<&str>, date: Option<&str>| MarketBrokersArgs {
+            date: date.map(Into::into),
+            top: Some(3),
+            sort: None,
+            source: source.map(Into::into),
+        };
+
+        // auto, the default: idx.co.id is challenged, IPOT answers for the
+        // session its copy holds. The date keeps the test off the clock:
+        // with none, auto asks for the latest session that has ended.
+        let v = json_of(
+            &s.market_brokers(Parameters(call(None, Some("2026-11-06"))))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(v["schema"], "idx.market.brokers.v1");
+        assert_eq!(v["provider"], "ipot", "{v}");
+        assert_eq!(v["data"]["date"], "2026-11-06");
+        assert_eq!(v["data"]["brokers"].as_array().unwrap().len(), 3);
+        assert_eq!(v["data"]["brokers"][0]["kind"], "local");
+        assert!(v["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("idx.co.id answered with a Cloudflare challenge"));
+
+        for (source, date, code) in [
+            (Some("idx"), None, "blocked"),
+            (Some("ipot"), Some("2026-10-16"), "usage"),
+            (Some("rti"), None, "usage"),
+        ] {
+            let r = s
+                .market_brokers(Parameters(call(source, date)))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true), "{source:?}");
+            let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
+            assert_eq!(v["error"]["code"], code, "{v}");
         }
     }
 

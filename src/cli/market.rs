@@ -4,7 +4,9 @@ use chrono::Datelike;
 use clap::Subcommand;
 
 use crate::error::Result;
-use crate::model::{AstroPeriod, BrokerSort, CalendarCategory, ForeignSort, NatalChoice, Symbol};
+use crate::model::{
+    AstroPeriod, BrokerSort, BrokerSource, CalendarCategory, ForeignSort, NatalChoice, Symbol,
+};
 use crate::output::json::{
     SCHEMA_ASTRO, SCHEMA_CALENDAR, SCHEMA_HOLIDAYS, SCHEMA_INDICES, SCHEMA_MARKET,
     SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
@@ -65,7 +67,7 @@ pub enum MarketCmd {
     },
     /// Exchange members ranked by the day's value, volume or frequency (top brokers).
     #[command(
-        after_help = "Examples:\n  idx market brokers\n  idx market brokers --top 20 --sort frequency\n  idx market brokers --date 2026-10-16 --top 0\n  idx -o json market brokers | jq '.data.brokers[:3]'\n\nFrom idx.co.id's daily broker summary, latest session by default. Each member's buying and\nselling count together, so all members' value is twice the market's. Which stocks a broker\ntraded: `idx bandar broker CODE`; one stock's brokers: `idx broker SYMBOL`."
+        after_help = "Examples:\n  idx market brokers\n  idx market brokers --top 20 --sort frequency\n  idx market brokers --date 2026-10-16 --top 0\n  idx market brokers --source ipot     # with each broker's class and net\n  idx -o json market brokers | jq '.data.brokers[:3]'\n\n--source auto (default): idx.co.id's daily broker summary, latest session by default. When idx.co.id refuses (Cloudflare), cannot be reached or fails, has no copy under --offline, or has not published the session yet, IPOT's ranking answers instead, with a warning, if IPOT holds that session (the --date, or the latest that has ended); otherwise idx.co.id's answer stands, saying why IPOT could not.\n\n--source idx: idx.co.id only, any session. A session it has not published yet (its summary is empty on the day) is named: with no --date the session before is shown with a warning, and a --date of it is not found.\n\n--source ipot: Indo Premier's ranking of its latest session only, with each broker's class and net in the table and its value bought and sold in -o json, csv and jsonl. A --date before IPOT's session, or after today, is a usage error; a later one up to today, or a day without a session, is not found. IPOT abbreviates figures of a million and more to two decimals (rounded: true). IPOT's ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated (when its pages roll over to a new session is not measured yet), so in those hours it is refused with a provider error.\n\nEach member's buying and selling count together, so all members' value is twice the market's. Which stocks a broker traded: `idx bandar broker CODE`; one stock's brokers: `idx broker SYMBOL`."
     )]
     Brokers {
         /// Trading day, YYYY-MM-DD. Default: the latest session.
@@ -77,6 +79,9 @@ pub enum MarketCmd {
         /// Ranking figure.
         #[arg(long, value_enum, default_value_t = BrokerSort::Value)]
         sort: BrokerSort,
+        /// Where the ranking comes from.
+        #[arg(long, value_enum, default_value_t = BrokerSource::Auto)]
+        source: BrokerSource,
     },
     /// Exchange members (Anggota Bursa): broker codes, names and licences.
     #[command(
@@ -200,12 +205,24 @@ pub async fn run(ctx: &Context, cmd: MarketCmd) -> Result<()> {
                 tx::market_foreign(d, ctx.color)
             })
         }
-        MarketCmd::Brokers { date, top, sort } => {
-            let result =
-                service::market_brokers(&ctx.fetcher, date, top, sort, service::today_wib())
-                    .await?;
+        MarketCmd::Brokers {
+            date,
+            top,
+            sort,
+            source,
+        } => {
+            let result = service::market_brokers_from(
+                &ctx.fetcher,
+                source,
+                date,
+                top,
+                sort,
+                chrono::Utc::now(),
+            )
+            .await?;
+            let provider = result.provider;
             emit(ctx, SCHEMA_MARKET_BROKERS, result, |d| {
-                tx::market_brokers(d, ctx.color)
+                tx::market_brokers(d, provider, ctx.color)
             })
         }
         MarketCmd::Members { search } => {

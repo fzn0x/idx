@@ -35,6 +35,11 @@ test("only the idx.co.id, KSEI composition, local-database, Stockbit and uncheck
   assert.equal(cliOnlyReason(byName("idx_ownership_snapshot")), byName("idx_ownership_snapshot").why);
   // Each CLI-only tool says why, by its source.
   assert.equal(cliOnlyReason(byName("idx_calendar")), CLI_ONLY_REASON);
+  // Top brokers also come from IPOT, which never asks idx.co.id: not the idx.co.id reason alone.
+  const brokers = byName("idx_market_brokers");
+  assert.notEqual(cliOnlyReason(brokers), CLI_ONLY_REASON);
+  assert.match(cliOnlyReason(brokers, "en"), /idx\.co\.id refuses .* and IPOT's market-wide ranking \(--source ipot\).* is not on this page yet/);
+  assert.match(cliOnlyReason(brokers, "id"), /peringkat broker seluruh pasar dari IPOT \(--source ipot\).* belum ada di halaman ini/);
   assert.match(cliOnlyReason(byName("idx_orderbook")), /^The Stockbit tools carry your own account session/);
   assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^The Stockbit tools/);
   assert.match(cliOnlyReason(byName("idx_stockbit_movements")), /^The Stockbit tools/);

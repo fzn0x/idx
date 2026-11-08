@@ -108,12 +108,12 @@ pub fn number(text: &str) -> Option<(f64, bool)> {
 }
 
 #[derive(Debug)]
-struct Cell {
-    class: Option<String>,
-    text: String,
+pub(super) struct Cell {
+    pub(super) class: Option<String>,
+    pub(super) text: String,
 }
 
-fn strip_tags(s: &str) -> String {
+pub(super) fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {
@@ -127,7 +127,7 @@ fn strip_tags(s: &str) -> String {
     out.replace("&nbsp;", " ").trim().to_string()
 }
 
-fn cells(row: &str) -> Vec<Cell> {
+pub(super) fn cells(row: &str) -> Vec<Cell> {
     let mut out = Vec::new();
     let mut rest = row;
     while let Some(start) = rest.find("<td") {
@@ -153,7 +153,7 @@ fn cells(row: &str) -> Vec<Cell> {
     out
 }
 
-fn kind(class: Option<&str>) -> Option<BrokerKind> {
+pub(super) fn kind(class: Option<&str>) -> Option<BrokerKind> {
     match class?.strip_prefix("text-")? {
         "local" => Some(BrokerKind::Local),
         "foreign" => Some(BrokerKind::Foreign),

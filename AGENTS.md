@@ -40,7 +40,9 @@ src/
                      insights, peers via Quotes), screener.rs (whole-market return windows, one cached POST)
     ipot/            Indo Premier broker summary (HTML fragment, parse.rs; spurious 404s retried; a range's
                      foreign net rebuilt from single sessions, broker_summary_range; one session's
-                     foreign flow in rupiah from the fd=all and fd=F pages, foreign_day) and
+                     foreign flow in rupiah from the fd=all and fd=F pages, foreign_day), the latest
+                     session's market-wide broker ranking, dated by BBCA's statistics page and read
+                     with it (topbroker.rs, top_brokers; a [CC]-named row counted in CC), and
                      corporate actions, RUPS, warrants/rights (actions.rs; nested announcement tables)
     idx/             idx.co.id JSON endpoints: stock/broker/index daily summaries, per-stock history,
                      exchange calendar (parse.rs classifies entries), securities, members; Cloudflare

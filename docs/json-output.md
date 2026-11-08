@@ -572,10 +572,50 @@ An object for one session: `date`, `stocks`, the market sums `foreign_buy`,
 ## `idx.market.brokers.v1` (`market brokers`)
 
 An object for one session: `date`, `members` (with trades), `total_volume`,
-`total_value`, `total_frequency`, `sort` (`value` | `volume` | `frequency`)
-and `brokers[]`: `rank`, `code`, `name` (as idx.co.id publishes it),
-`volume`, `value`, `frequency`, `value_share_pct`. A member's buying and
-selling count together, so `total_value` is twice the market's value.
+`total_value`, `total_frequency`, `sort` (`value` | `volume` | `frequency`),
+`rounded` and `brokers[]`: `rank`, `code`, `name` (as the source publishes
+it), `volume`, `value`, `frequency`, `value_share_pct`, then `buy_value`,
+`sell_value`, `net_value` (bought minus sold) and `kind` (`local` |
+`foreign` | `state_owned`), which only IPOT publishes: `null` from
+idx.co.id. A member's buying and selling count together, so `total_value`
+is twice the market's value.
+
+`provider` says which source answered: `idx`, idx.co.id's daily broker
+summary (any session), or `ipot`, IPOT's ranking of its latest session
+(`--source ipot`, MCP `source: "ipot"`). `auto`, the default, asks
+idx.co.id first; when idx.co.id refuses (Cloudflare), cannot be reached,
+fails, offline has no copy, or has not published the session yet, IPOT
+answers with a warning saying why, but only if it holds the session asked
+for: the `--date`, or with none the latest session that has ended.
+Otherwise idx.co.id's answer stands, with what IPOT holds or why it could
+not be read. A session idx.co.id has not published yet (its summary read
+on its own day has no rows) is named whatever the source: with no `--date`
+the session before comes with a warning, and a `--date` of it is
+`not_found`. IPOT takes no date: a `--date` before its session,
+or after today, is a usage error; a later one up to today, or a day without
+a session, is `not_found`; and under `auto` idx.co.id's error stands. It
+abbreviates figures of a million and more to two decimals (`2.79 T`, so
+`rounded: true`) and publishes `net_value` with its own two decimals, so it
+can differ from `buy_value - sell_value`. Members without trades are left
+out, as idx.co.id leaves them out; a broker IPOT lists apart under another
+member's code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in that
+member, as idx.co.id counts it, with a warning.
+
+IPOT's ranking page carries no date: the session comes from a second page,
+the `Today` row of BBCA's statistics, read with the ranking (within a
+minute). When the two pages roll over to a new session has not been
+measured, so a ranking read on a trading day from 08:58 to 19:00 WIB cannot
+be dated: in those hours the source answers a `provider` error (a copy read
+then is `offline_miss` when served offline, and `network`, naming the
+failure, when served because IPOT could not be read), under `auto`
+idx.co.id's error stands, and IPOT is not asked at all unless a copy read
+outside those hours is cached. Until the rollover is measured, both pages
+are assumed to have rolled over by 19:00 WIB. A date page that names an
+older session than the latest that had ended when the pages were read is
+then refused, unless the pair is the very one accepted for that session
+before. A ranking that has not rolled over by 19:00 while its date page has
+is caught only when this cache remembers the previous session's ranking,
+from an earlier IPOT read: the same figures under a new date are refused.
 
 ## `idx.indices.v1` (`market indices`)
 

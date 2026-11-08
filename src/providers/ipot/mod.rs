@@ -34,11 +34,30 @@
 //! `.../corporateaction.php?code=BBCA&start=MM/DD/YYYY` answers the
 //! "Corporate Action & RUPS" fragment with events from `start` on (upcoming
 //! ones included); see `actions.rs`.
+//!
+//! The market-wide broker ranking, verified 2026-11-08, same module (plain
+//! nginx, no Cloudflare, no cookie needed) and the same spurious 404s, seen
+//! on both pages that day and retried:
+//! - `.../ma-topbroker.php` takes no parameters (`start` and `end` are
+//!   ignored) and ranks every broker of IPOT's latest session by value, with
+//!   value bought and sold, net, shares and trades; brokers without trades
+//!   are listed with zeros. Past sessions cannot be asked for. See
+//!   `topbroker.rs`.
+//! - The page carries no date. `.../statistic.php?code=BBCA` dates it: its
+//!   `Today` row carries the day of the stock's high and low, BBCA being
+//!   one of the most traded stocks. [`top_brokers`] reads both pages.
+//! - On Sunday 2026-11-08 the ranking matched idx.co.id's broker summary of
+//!   2026-11-06 once JB, listed apart as `[CC] BJB Sekuritas Jawa Barat`, is
+//!   counted in CC. When the two pages roll over to a new session, and
+//!   whether the ranking moves during a session, has not been measured: a
+//!   ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated
+//!   and is refused, and so is one whose date the other page contradicts
+//!   (see [`top_brokers`]).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 
 use crate::error::{IdxError, Result};
 use crate::holidays;
@@ -49,6 +68,7 @@ use super::Sourced;
 
 pub mod actions;
 pub mod parse;
+pub mod topbroker;
 
 pub const NAME: &str = "ipot";
 const ENDPOINT: &str = "https://www.indopremier.com/module/saham/include/data-brokersummary.php";
@@ -56,6 +76,39 @@ const ACTIONS_ENDPOINT: &str =
     "https://www.indopremier.com/module/saham/include/corporateaction.php";
 /// Announcements are added and confirmed through the day.
 const TTL_ACTIONS: Duration = Duration::from_secs(6 * 3600);
+const TOP_BROKERS_ENDPOINT: &str =
+    "https://www.indopremier.com/module/saham/include/ma-topbroker.php";
+/// The page that dates the ranking.
+const SESSION_ENDPOINT: &str =
+    "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA";
+/// Seconds after midnight WIB, on a trading day, from before the
+/// pre-opening (08:45) until well after the close (16:15) when the ranking
+/// may change between two reads.
+const TOP_BROKERS_BUSY: (u32, u32) = (8 * 3600 + 30 * 60, 19 * 3600);
+const TTL_TOP_BROKERS_BUSY: Duration = Duration::from_secs(5 * 60);
+/// The longest a copy is kept outside the busy hours.
+const TTL_TOP_BROKERS_QUIET: Duration = Duration::from_secs(6 * 3600);
+/// The ranking and its date count as one read when fetched this close.
+const READ_TOGETHER: Duration = Duration::from_secs(60);
+/// A session's first trades: the pre-opening match starts at 08:58:00 WIB
+/// (IDX trading hours, Kep-00158/BEI/10-2026).
+const FIRST_TRADES_SECS: u32 = 8 * 3600 + 58 * 60;
+/// Seconds after midnight WIB, on a trading day, when a ranking cannot be
+/// dated: from the session's first trades until the busy hours end. When
+/// the two pages roll over to a new session has not been measured, so then
+/// either may show the new session while the other still shows the last.
+const UNDATED: (u32, u32) = (FIRST_TRADES_SECS, TOP_BROKERS_BUSY.1);
+/// Where [`top_brokers`] remembers the ranking it last accepted.
+const ACCEPTED_KEY: &str = "ipot:ma-topbroker:accepted";
+/// Long past the next session: an older record has nothing to compare.
+const TTL_ACCEPTED: Duration = Duration::from_secs(30 * 24 * 3600);
+
+/// The ranking [`top_brokers`] last accepted, by its figures, and its date.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Accepted {
+    date: NaiveDate,
+    digest: String,
+}
 
 /// A range that ended before today no longer changes.
 const TTL_CLOSED: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -368,15 +421,15 @@ pub async fn foreign_day(
 }
 
 /// One HTML fragment, retrying the spurious 404 stretches; any other
-/// failure is a provider error naming `what`. `key` is the cache key when
-/// not the URL.
+/// failure is a provider error naming `what` for `subject` (a stock code,
+/// or the market for the ranking). `key` is the cache key when not the URL.
 async fn page(
     fetcher: &Arc<Fetcher>,
     url: &str,
     ttl: Duration,
     key: Option<&str>,
     what: &str,
-    symbol: &Symbol,
+    subject: &(dyn std::fmt::Display + Sync),
 ) -> Result<Fetched> {
     let headers = [("Accept".to_string(), "text/html".to_string())];
     let mut f = fetcher.get(url, &headers, ttl, key).await?;
@@ -384,7 +437,7 @@ async fn page(
         if f.status != 404 {
             break;
         }
-        tracing::debug!(%symbol, attempt, "ipot answered 404, retrying");
+        tracing::debug!(%subject, attempt, "ipot answered 404, retrying");
         {
             let _pause = crate::progress::retrying(url, attempt);
             tokio::time::sleep(RETRY_PAUSE * (1 << (attempt - 1))).await;
@@ -394,7 +447,7 @@ async fn page(
     if !f.is_success() {
         return Err(IdxError::provider(
             NAME,
-            format!("{what} for {symbol}: HTTP {}", f.status),
+            format!("{what} for {subject}: HTTP {}", f.status),
         ));
     }
     Ok(f)
@@ -444,6 +497,277 @@ pub async fn corporate_actions(
         NAME,
         &f,
     ))
+}
+
+/// How long a copy of the ranking (and of the page that dates it) is good
+/// for at `now`: five minutes on a trading day inside [`TOP_BROKERS_BUSY`];
+/// outside it six hours at most, and never a copy read before those hours
+/// last ended, so the settled figures are read once after them.
+pub fn top_brokers_ttl(now: DateTime<Utc>) -> Duration {
+    let local = now.with_timezone(&crate::model::wib());
+    let (today, secs) = (local.date_naive(), local.time().num_seconds_from_midnight());
+    let (opens, closes) = TOP_BROKERS_BUSY;
+    let trading = holidays::is_trading_day(today);
+    if trading && (opens..closes).contains(&secs) {
+        return TTL_TOP_BROKERS_BUSY;
+    }
+    let last = if trading && secs >= closes {
+        today
+    } else {
+        holidays::last_trading_day(today.pred_opt().expect("date in range"))
+    };
+    let ended = last
+        .and_time(chrono::NaiveTime::from_num_seconds_from_midnight_opt(closes, 0).expect("time"))
+        .and_local_timezone(crate::model::wib())
+        .single()
+        .expect("a fixed offset");
+    (now - ended.with_timezone(&Utc))
+        .to_std()
+        .unwrap_or_default()
+        .min(TTL_TOP_BROKERS_QUIET)
+}
+
+fn read_together(a: &Fetched, b: &Fetched) -> bool {
+    (a.fetched_at - b.fetched_at)
+        .abs()
+        .to_std()
+        .is_ok_and(|d| d <= READ_TOGETHER)
+}
+
+/// When `f` was read: a copy keeps the time it was fetched; a page this
+/// call fetched counts as read at `now` moved on by the wall time from
+/// `started` (the wall clock when the call took `now`) to its fetch, so a
+/// page that came late is judged by when it came, and a clock a test sets
+/// still holds.
+fn read_at(f: &Fetched, now: DateTime<Utc>, started: DateTime<Utc>) -> DateTime<Utc> {
+    if f.cached {
+        f.fetched_at.min(now)
+    } else {
+        now + (f.fetched_at - started)
+    }
+}
+
+/// The error a pair that cannot be dated is, `why` saying why. A copy the
+/// fetcher served in place of a failed fetch makes that failure the cause,
+/// named first (`network`: a later try can work). One served because the
+/// call is offline only stood in for a read the call could not make, so
+/// nothing usable is cached (`offline_miss`, as for any other source).
+/// Otherwise IPOT's pages themselves cannot be dated (`provider`).
+fn unusable(ranked: &Fetched, dated: &Fetched, why: String) -> IdxError {
+    if let Some(cause) = ranked.failure.as_deref().or(dated.failure.as_deref()) {
+        return IdxError::Network(format!(
+            "IPOT could not be read ({cause}), and its cached copy cannot be used: {why}"
+        ));
+    }
+    let offline = [ranked, dated]
+        .iter()
+        .any(|f| f.stale_reason == Some(crate::model::StaleReason::Offline));
+    if offline {
+        return IdxError::OfflineMiss(format!("IPOT's cached copy cannot be used: {why}"));
+    }
+    IdxError::provider(NAME, why)
+}
+
+/// `true` when copies of both pages read together outside [`UNDATED`] are
+/// cached, whatever their age, for the fetcher to serve: fresh, or in
+/// place of a read that fails. `--no-cache` reads no copy.
+fn cached_outside_hours(fetcher: &Fetcher) -> bool {
+    if fetcher.mode() != crate::http::CacheMode::Normal {
+        return false;
+    }
+    let read = |url: &str| {
+        fetcher
+            .cache()
+            .get(url, Duration::ZERO)
+            .map(|h| h.stored.fetched_at)
+    };
+    match (read(TOP_BROKERS_ENDPOINT), read(SESSION_ENDPOINT)) {
+        (Some(a), Some(b)) => {
+            !undated_at(a)
+                && !undated_at(b)
+                && (a - b).abs().to_std().is_ok_and(|d| d <= READ_TOGETHER)
+        }
+        _ => false,
+    }
+}
+
+/// `t` falls in [`UNDATED`] on a trading day.
+fn undated_at(t: DateTime<Utc>) -> bool {
+    let local = t.with_timezone(&crate::model::wib());
+    holidays::is_trading_day(local.date_naive())
+        && (UNDATED.0..UNDATED.1).contains(&local.time().num_seconds_from_midnight())
+}
+
+/// Every broker's trading in IPOT's latest session, ranked by value, dated
+/// by BBCA's statistics page, with the brokers IPOT lists apart folded into
+/// the member they trade under (a warning names each). `now` decides the
+/// cache lifetime ([`top_brokers_ttl`]).
+///
+/// The two pages count only as one read: when one comes from the network
+/// and the other from the cache, or two copies were read apart, both are
+/// read again. When they still differ (a fetch failed and an older copy
+/// stood in), the ranking cannot be dated and the call fails. The pair is
+/// judged by when it was read, not by when it is served (a copy can be
+/// served offline or after a failed fetch, days later); a page this call
+/// fetches counts as read when it came, `now` moved on by the wall time the
+/// call has taken since.
+///
+/// A pair either page of which was read on a trading day between 08:58 and
+/// 19:00 WIB ([`UNDATED`]) cannot be dated and fails. So does a ranking with
+/// trades dated a session that had not opened then (before 08:58), or one
+/// without trades dated a session that had ended, both of which mean the
+/// pages rolled over at different times, and a date that is not a trading
+/// day. Outside those hours both pages are taken to have rolled over to the
+/// latest session that had ended when they were read (how long they take
+/// has not been measured), so a ranking with trades dated an older session
+/// fails too: its date page may lag a ranking that has rolled over. Only
+/// the very pair accepted before for that session passes. A ranking with
+/// trades that is accepted is remembered with its date
+/// ([`topbroker::digest`]), and the same ranking dated another session
+/// later fails as well: the date page has rolled over and the ranking has
+/// not. A ranking refused is never remembered. A refusal of a copy served
+/// in place of a failed fetch is that failure (`network`), and of one
+/// served offline an `offline_miss` ([`unusable`]).
+///
+/// When `now` is in those hours IPOT is not asked at all unless a pair read
+/// outside them is cached, which can answer (fresh, or in place of a read
+/// that fails).
+pub async fn top_brokers(
+    fetcher: &Arc<Fetcher>,
+    now: DateTime<Utc>,
+) -> Result<Sourced<topbroker::Ranking>> {
+    let started = Utc::now();
+    // A page read now, in those hours, cannot be dated: IPOT is asked only
+    // when a pair read outside them is cached, which can answer, fresh or
+    // in place of a read that fails. Offline nothing is asked anyway.
+    if !fetcher.is_offline() && undated_at(now) && !cached_outside_hours(fetcher) {
+        let local = now.with_timezone(&crate::model::wib());
+        let (day, clock) = (local.date_naive(), local.format("%H:%M"));
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "a broker ranking read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+            ),
+        ));
+    }
+    let ttl = top_brokers_ttl(now);
+    let ranking = |ttl| {
+        page(
+            fetcher,
+            TOP_BROKERS_ENDPOINT,
+            ttl,
+            None,
+            "broker ranking",
+            &"the market",
+        )
+    };
+    let dating = |ttl| {
+        page(
+            fetcher,
+            SESSION_ENDPOINT,
+            ttl,
+            None,
+            "session date",
+            &"BBCA",
+        )
+    };
+    let mut ranked = ranking(ttl).await?;
+    let mut dated = dating(if ranked.cached { ttl } else { Duration::ZERO }).await?;
+    if !read_together(&ranked, &dated) {
+        ranked = ranking(Duration::ZERO).await?;
+        dated = dating(Duration::ZERO).await?;
+    }
+    if !read_together(&ranked, &dated) {
+        return Err(unusable(
+            &ranked,
+            &dated,
+            "the broker ranking and the page that dates it were read at different times, so the ranking has no date".into(),
+        ));
+    }
+    let refuse = |why: String| unusable(&ranked, &dated, why);
+    let (ranked_at, dated_at) = (
+        read_at(&ranked, now, started),
+        read_at(&dated, now, started),
+    );
+    let wib = |t: DateTime<Utc>| t.with_timezone(&crate::model::wib());
+    if undated_at(ranked_at) {
+        let (day, clock) = (wib(ranked_at).date_naive(), wib(ranked_at).format("%H:%M"));
+        return Err(refuse(format!(
+            "the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
+        )));
+    }
+    if undated_at(dated_at) {
+        let (day, clock) = (wib(dated_at).date_naive(), wib(dated_at).format("%H:%M"));
+        return Err(refuse(format!(
+            "the page that dates the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated"
+        )));
+    }
+    // Both reads are outside those hours and a minute apart at most, so
+    // either gives the same session below.
+    let read = ranked_at.min(dated_at);
+    let local = wib(read);
+    let (day, clock) = (local.date_naive(), local.format("%H:%M"));
+    let secs = local.time().num_seconds_from_midnight();
+    let date = topbroker::session_date(&dated.body).ok_or_else(|| {
+        refuse("BBCA's statistics page has no Today row to date the broker ranking".into())
+    })?;
+    if !holidays::is_trading_day(date) {
+        return Err(refuse(format!(
+            "the page that dates the broker ranking names {date}, which is not a trading day"
+        )));
+    }
+    let mut data = topbroker::ranking(&ranked.body, date)?;
+    let traded = data.brokers.iter().any(topbroker::TopBroker::traded);
+    // A date whose session had not opened when the pages were read cannot
+    // have trades, and one whose session had ended cannot be without them.
+    let opened = date < day || date == day && secs >= FIRST_TRADES_SECS;
+    if !opened && traded {
+        return Err(refuse(format!(
+            "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+        )));
+    }
+    if !traded && date <= holidays::latest_session(read) {
+        return Err(refuse(format!(
+            "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
+        )));
+    }
+    if traded {
+        let digest = topbroker::digest(&data);
+        let cache = fetcher.cache();
+        let seen = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED);
+        if let Some(seen) = &seen {
+            if seen.digest == digest && seen.date != date {
+                return Err(refuse(format!(
+                    "the broker ranking is the one IPOT showed for {}, yet the page that dates it now names {date}: the ranking has not rolled over to that session",
+                    seen.date
+                )));
+            }
+        }
+        // Outside the refused hours both pages are taken to have rolled over
+        // to the latest session that had ended. A date page naming an older
+        // one may lag a ranking that has: only the very pair accepted before
+        // is that older session's.
+        let latest = holidays::latest_session(read);
+        let accepted = seen.is_some_and(|s| s.digest == digest && s.date == date);
+        if date < latest && !accepted {
+            return Err(refuse(format!(
+                "the broker ranking read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+            )));
+        }
+        if let Err(e) = cache.put_json(ACCEPTED_KEY, &Accepted { date, digest }) {
+            tracing::warn!(error = %e, "could not write cache");
+        }
+    }
+    let folded = topbroker::fold_listed_apart(&mut data);
+    let mut s = Sourced::from_fetched(data, NAME, &ranked);
+    s.absorb(&Sourced::from_fetched((), NAME, &dated));
+    for f in folded {
+        s.warnings.push(format!(
+            "{} ({}) is counted in {}, as idx.co.id counts it; IPOT lists it apart",
+            f.code, f.name, f.into
+        ));
+    }
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -1107,5 +1431,564 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.exit_code(), 4);
         assert_eq!(be.call_count(), 2);
+    }
+
+    const TOP: &str = include_str!("../../../tests/fixtures/ipot/topbroker_20261106.html");
+    const STATISTIC: &str =
+        include_str!("../../../tests/fixtures/ipot/statistic_bbca_20261106.html");
+
+    /// A WIB wall-clock time.
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(&format!("{s}+07:00"))
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn ranking_pages() -> FixtureBackend {
+        FixtureBackend::new()
+            .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+            .route(SESSION_ENDPOINT, 200, STATISTIC)
+    }
+
+    #[test]
+    fn the_ranking_is_kept_minutes_in_trading_hours_and_hours_outside() {
+        let min = |n: u64| Duration::from_secs(n * 60);
+        for (now, want, why) in [
+            ("2026-11-06T08:29:00", min(360), "Friday before 08:30"),
+            ("2026-11-06T08:30:00", min(5), "from 08:30"),
+            ("2026-11-06T15:00:00", min(5), "during the session"),
+            ("2026-11-06T18:59:59", min(5), "until 19:00"),
+            (
+                "2026-11-06T19:00:30",
+                Duration::from_secs(30),
+                "only copies read after 19:00",
+            ),
+            ("2026-11-06T23:00:00", min(240), "Friday night"),
+            ("2026-11-07T12:00:00", min(360), "Saturday"),
+            ("2026-11-09T07:00:00", min(360), "Monday before 08:30"),
+            ("2026-08-17T10:00:00", min(360), "Independence Day"),
+        ] {
+            assert_eq!(top_brokers_ttl(at(now)), want, "{now}: {why}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_ranking_comes_with_the_session_it_is_for() {
+        let (f, be, _d) = fetcher(ranking_pages());
+        let sunday = at("2026-11-08T10:00:00");
+        let s = top_brokers(&f, sunday).await.unwrap();
+        assert_eq!(s.provider, "ipot");
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        assert_eq!(s.data.brokers.len(), 90, "JB is counted in CC");
+        assert!(s.data.rounded);
+        assert_eq!(
+            s.warnings,
+            ["JB ([CC] BJB Sekuritas Jawa Barat) is counted in CC, as idx.co.id counts it; IPOT lists it apart"]
+        );
+        assert_eq!(be.call_count(), 2);
+        let again = top_brokers(&f, sunday).await.unwrap();
+        assert!(again.cached);
+        assert_eq!(be.call_count(), 2, "both pages from the cache");
+
+        // Read in a trading day's hours, the two pages can be on different
+        // sessions: the ranking cannot be dated. With a pair read the night
+        // before cached, IPOT is asked (without one, it is not: see
+        // ipot_is_not_asked_when_a_page_read_now_cannot_be_dated).
+        let asked_at = |during: &'static str| async move {
+            let (f, be, dir) = fetcher(ranking_pages());
+            for (url, page) in [(TOP_BROKERS_ENDPOINT, TOP), (SESSION_ENDPOINT, STATISTIC)] {
+                Cache::new(dir.path())
+                    .put_fetched_at(url, 200, page, at("2026-11-05T19:30:00"))
+                    .unwrap();
+            }
+            let err = top_brokers(&f, at(during)).await.unwrap_err();
+            assert_eq!(be.call_count(), 2, "{during}");
+            err
+        };
+        for during in [
+            "2026-11-06T08:58:00",
+            "2026-11-06T10:00:00",
+            "2026-11-06T16:15:00",
+            "2026-11-06T18:59:59",
+        ] {
+            let err = asked_at(during).await;
+            assert_eq!(err.code(), "provider");
+            assert!(
+                err.to_string().contains("so it cannot be dated"),
+                "{during}: {err}"
+            );
+        }
+        let err = asked_at("2026-11-06T10:00:00").await;
+        assert_eq!(
+            err.to_string(),
+            "ipot: the broker ranking was read at 10:00 WIB on 2026-11-06, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
+        );
+        // After the busy hours, and on a weekday holiday (cuti bersama, the
+        // day after the session of 2026-12-23): dated.
+        let wednesday = STATISTIC.replacen("2026-11-06", "2026-12-23", 2);
+        for (after, statistic) in [
+            ("2026-11-06T19:00:00", STATISTIC),
+            ("2026-12-24T10:00:00", wednesday.as_str()),
+        ] {
+            let (f, _be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                    .route(SESSION_ENDPOINT, 200, statistic),
+            );
+            let s = top_brokers(&f, at(after)).await.unwrap();
+            assert_eq!(s.warnings.len(), 1, "{after}: only the fold");
+        }
+
+        // Dated a session that has not opened, the trades are another's.
+        for early in ["2026-11-06T08:57:59", "2026-11-05T20:00:00"] {
+            let (f, _be, _d) = fetcher(ranking_pages());
+            let err = top_brokers(&f, at(early)).await.unwrap_err();
+            assert_eq!(err.code(), "provider");
+            assert!(err.to_string().contains("disagree"), "{early}: {err}");
+        }
+    }
+
+    /// `inner`, answering a URL that contains `slow` only after `pause` of
+    /// wall time.
+    struct Slow {
+        inner: FixtureBackend,
+        slow: &'static str,
+        pause: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::http::Backend for Slow {
+        async fn get(
+            &self,
+            url: &str,
+            headers: &[(String, String)],
+        ) -> Result<crate::http::RawResponse> {
+            if url.contains(self.slow) {
+                tokio::time::sleep(self.pause).await;
+            }
+            self.inner.get(url, headers).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_the_call_fetches_is_judged_by_when_it_came() {
+        // Monday, half a second before the session's first trades at 08:58.
+        let call = at("2026-11-09T08:57:59") + chrono::Duration::milliseconds(500);
+        // Either page coming 600 ms later was read in a trading day's hours.
+        for (slow, says) in [
+            (TOP_BROKERS_ENDPOINT, "the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"),
+            (SESSION_ENDPOINT, "the page that dates the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let slow = Slow {
+                inner: ranking_pages(),
+                slow,
+                pause: Duration::from_millis(600),
+            };
+            let f = Arc::new(Fetcher::new(
+                Arc::new(slow),
+                Cache::new(dir.path()),
+                CacheMode::Normal,
+            ));
+            let err = top_brokers(&f, call).await.unwrap_err();
+            assert_eq!(err.code(), "provider");
+            assert!(err.to_string().contains(says), "{err}");
+            assert!(err.to_string().ends_with("cannot be dated"), "{err}");
+        }
+        // Coming at once, they were read before then: Friday's whole session.
+        let (f, _be, _d) = fetcher(ranking_pages());
+        let s = top_brokers(&f, call).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 6));
+    }
+
+    #[tokio::test]
+    async fn ipot_is_not_asked_when_a_page_read_now_cannot_be_dated() {
+        let monday = at("2026-11-09T10:00:00");
+        // Nothing cached: a page read in a trading day's hours cannot be
+        // dated, so none is asked for.
+        let (f, be, _d) = fetcher(ranking_pages());
+        let err = top_brokers(&f, monday).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: a broker ranking read at 10:00 WIB on 2026-11-09, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+        );
+        assert_eq!(be.call_count(), 0);
+        // Nor under --no-cache, which reads no copy.
+        let dir = tempfile::tempdir().unwrap();
+        let (bypass, be) = {
+            let be = Arc::new(ranking_pages());
+            let f = Fetcher::new(be.clone(), Cache::new(dir.path()), CacheMode::Bypass);
+            (Arc::new(f), be)
+        };
+        assert!(top_brokers(&bypass, monday).await.is_err());
+        assert_eq!(be.call_count(), 0);
+
+        // A pair read on Friday night can answer: IPOT is asked, and when it
+        // cannot be read, the copy stands in.
+        let (f, _d) = copies_read_at("2026-11-06T19:30:00", TOP, STATISTIC, false);
+        let s = top_brokers(&f, monday).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        assert!(s.stale, "the copy, after the failed read");
+        // When IPOT answers, the page read now cannot be dated.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        for (url, page) in [(TOP_BROKERS_ENDPOINT, TOP), (SESSION_ENDPOINT, STATISTIC)] {
+            cache
+                .put_fetched_at(url, 200, page, at("2026-11-06T19:30:00"))
+                .unwrap();
+        }
+        let be = Arc::new(ranking_pages());
+        let f = Arc::new(Fetcher::new(be.clone(), cache, CacheMode::Normal));
+        let err = top_brokers(&f, monday).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("the broker ranking was read at 10:00 WIB on 2026-11-09"),
+            "{err}"
+        );
+        assert_eq!(be.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_ranking_and_its_date_are_read_together() {
+        let ago = |mins: i64| chrono::Utc::now() - chrono::Duration::minutes(mins);
+        let seed = |cache: &Cache, top: i64, statistic: i64| {
+            cache
+                .put_fetched_at(TOP_BROKERS_ENDPOINT, 200, TOP, ago(top))
+                .unwrap();
+            cache
+                .put_fetched_at(SESSION_ENDPOINT, 200, STATISTIC, ago(statistic))
+                .unwrap();
+        };
+        let sunday = at("2026-11-08T10:00:00");
+
+        // Two copies, both within six hours but read an hour apart: both
+        // are read again.
+        let (f, be, dir) = fetcher(ranking_pages());
+        seed(&Cache::new(dir.path()), 5, 65);
+        let s = top_brokers(&f, sunday).await.unwrap();
+        assert!(!s.cached);
+        assert_eq!(be.call_count(), 2);
+
+        // Offline they cannot be: the ranking has no date, and nothing
+        // usable is cached.
+        let dir = tempfile::tempdir().unwrap();
+        seed(&Cache::new(dir.path()), 5, 65);
+        let offline = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path()),
+            CacheMode::Offline,
+        ));
+        let err = top_brokers(&offline, sunday).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+        assert_eq!(
+            err.to_string(),
+            "offline: IPOT's cached copy cannot be used: the broker ranking and the page that dates it were read at different times, so the ranking has no date"
+        );
+
+        // Copies older than six hours, and the date page cannot be read: its
+        // old copy does not date the new ranking, and the failure says why.
+        let (f, _be, dir) = fetcher(FixtureBackend::new().route(TOP_BROKERS_ENDPOINT, 200, TOP));
+        seed(&Cache::new(dir.path()), 7 * 60, 7 * 60);
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert_eq!(err.code(), "network");
+        assert_eq!(
+            err.to_string(),
+            "network: IPOT could not be read (fixture backend has no route for https://www.indopremier.com/module/saham/include/statistic.php), and its cached copy cannot be used: the broker ranking and the page that dates it were read at different times, so the ranking has no date"
+        );
+    }
+
+    /// A fetcher serving `top` and `statistic` as copies read at `read` (a
+    /// WIB time): from the cache alone when `offline`, otherwise because
+    /// both live fetches fail.
+    fn copies_read_at(
+        read: &str,
+        top: &str,
+        statistic: &str,
+        offline: bool,
+    ) -> (Arc<Fetcher>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache
+            .put_fetched_at(TOP_BROKERS_ENDPOINT, 200, top, at(read))
+            .unwrap();
+        cache
+            .put_fetched_at(SESSION_ENDPOINT, 200, statistic, at(read))
+            .unwrap();
+        let mode = if offline {
+            CacheMode::Offline
+        } else {
+            CacheMode::Normal
+        };
+        let f = Fetcher::new(Arc::new(FixtureBackend::new()), cache, mode);
+        (Arc::new(f), dir)
+    }
+
+    #[tokio::test]
+    async fn a_copy_is_judged_by_when_its_pages_were_read() {
+        // Read on Friday at 10:00, served on Sunday from the cache, offline
+        // or because IPOT is down: still read in trading hours.
+        for offline in [true, false] {
+            let (f, _d) = copies_read_at("2026-11-06T10:00:00", TOP, STATISTIC, offline);
+            let err = top_brokers(&f, at("2026-11-08T10:00:00"))
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("read at 10:00 WIB on 2026-11-06, in a trading day's hours"),
+                "offline {offline}: {err}"
+            );
+            // Offline, the copy only stood in for a read not made: nothing
+            // usable is cached. Online, it stood in for a failed read, which
+            // comes first.
+            if offline {
+                assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+                assert!(
+                    err.to_string()
+                        .starts_with("offline: IPOT's cached copy cannot be used: "),
+                    "{err}"
+                );
+            } else {
+                assert_eq!((err.code(), err.exit_code()), ("network", 3));
+                let says = err.to_string();
+                assert!(
+                    says.starts_with("network: IPOT could not be read (fixture backend has no route for https://www.indopremier.com/module/saham/include/"),
+                    "{says}"
+                );
+                assert!(
+                    says.contains("), and its cached copy cannot be used: the broker ranking was read at 10:00 WIB on 2026-11-06"),
+                    "{says}"
+                );
+            }
+        }
+        // Read that evening, the same copies are the whole session.
+        let (f, _d) = copies_read_at("2026-11-06T19:30:00", TOP, STATISTIC, true);
+        let s = top_brokers(&f, at("2026-11-08T10:00:00")).await.unwrap();
+        assert!(s.stale && s.cached);
+        assert_eq!(s.data.date, d(2026, 11, 6));
+
+        // Read at 08:57, dated that day and showing trades: refused, and
+        // still refused when the same copies are served after the open.
+        for served in ["2026-11-06T09:00:00", "2026-11-08T10:00:00"] {
+            let (f, _d) = copies_read_at("2026-11-06T08:57:00", TOP, STATISTIC, true);
+            let err = top_brokers(&f, at(served)).await.unwrap_err();
+            assert!(
+                err.to_string().contains(
+                    "read at 08:57 WIB on 2026-11-06 is dated 2026-11-06, a session that had not opened then"
+                ),
+                "{served}: {err}"
+            );
+        }
+
+        // Read at 08:57 and dated the session before: the whole of it.
+        let thursday = STATISTIC.replacen("2026-11-06", "2026-11-05", 2);
+        let (f, _d) = copies_read_at("2026-11-06T08:57:00", TOP, &thursday, true);
+        let s = top_brokers(&f, at("2026-11-06T09:00:00")).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 5));
+        assert_eq!(s.warnings.len(), 1, "only the fold: {:?}", s.warnings);
+    }
+
+    #[tokio::test]
+    async fn a_date_that_cannot_be_the_rankings_session_is_refused() {
+        let sunday = at("2026-11-08T10:00:00");
+        let empty = {
+            let start = TOP.find("<tbody>").unwrap() + 7;
+            format!("{}{}", &TOP[..start], &TOP[TOP.find("</tbody>").unwrap()..])
+        };
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, &empty)
+                .route(SESSION_ENDPOINT, 200, STATISTIC),
+        );
+        // Reset for a new session while the date page names the last one,
+        // which had trades: the pages are on different sessions.
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert_eq!(err.code(), "provider");
+        assert!(
+            err.to_string().contains(
+                "shows no trades, yet the page that dates it names 2026-11-06, a session that had ended then"
+            ),
+            "{err}"
+        );
+        // Before the open, a ranking without trades dated that day is right.
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, &empty)
+                .route(SESSION_ENDPOINT, 200, STATISTIC),
+        );
+        let s = top_brokers(&f, at("2026-11-06T08:00:00")).await.unwrap();
+        assert!(s.data.brokers.is_empty());
+
+        // A Saturday is no session.
+        let saturday = STATISTIC.replacen("2026-11-06", "2026-11-07", 2);
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                .route(SESSION_ENDPOINT, 200, &saturday),
+        );
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("names 2026-11-07, which is not a trading day"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ranking_accepted_for_one_session_is_not_dated_another() {
+        let monday_night = at("2026-11-09T19:30:00");
+        let monday = STATISTIC.replacen("2026-11-06", "2026-11-09", 2);
+        // Friday's ranking, read on Sunday, is remembered with its date.
+        let (f, _be, dir) = fetcher(ranking_pages());
+        top_brokers(&f, at("2026-11-08T10:00:00")).await.unwrap();
+        let cache = Cache::new(dir.path());
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 6));
+
+        // Monday night the date page names Monday, the ranking is Friday's:
+        // it has not rolled over.
+        let lagging = Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                    .route(SESSION_ENDPOINT, 200, &monday),
+            ),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        );
+        let err = top_brokers(&Arc::new(lagging), monday_night)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "provider");
+        assert!(
+            err.to_string().contains(
+                "the broker ranking is the one IPOT showed for 2026-11-06, yet the page that dates it now names 2026-11-09"
+            ),
+            "{err}"
+        );
+
+        // A ranking that moved on is Monday's, and remembered so.
+        let moved = TOP.replacen(">2.79 T<", ">2.80 T<", 1);
+        let rolled = Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, &moved)
+                    .route(SESSION_ENDPOINT, 200, &monday),
+            ),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        );
+        let s = top_brokers(&Arc::new(rolled), monday_night).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 9));
+    }
+
+    /// Both pages read live on every call, on the cache in `dir`, which
+    /// keeps the ranking accepted last between calls.
+    fn live(dir: &std::path::Path, top: &str, statistic: &str) -> Arc<Fetcher> {
+        Arc::new(Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, top)
+                    .route(SESSION_ENDPOINT, 200, statistic),
+            ),
+            Cache::new(dir),
+            CacheMode::Bypass,
+        ))
+    }
+
+    /// BBCA's statistics page with its Today row on `day`.
+    fn named(day: &str) -> String {
+        STATISTIC.replacen("2026-11-06", day, 2)
+    }
+
+    #[tokio::test]
+    async fn a_date_page_behind_the_latest_session_does_not_date_new_figures() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let monday = TOP.replacen(">2.79 T<", ">2.80 T<", 1);
+        let tuesday = TOP.replacen(">2.79 T<", ">2.81 T<", 1);
+        let tuesday_night = at("2026-11-10T19:30:00");
+        // Monday night both pages are on Monday: accepted and remembered.
+        let s = top_brokers(
+            &live(dir.path(), &monday, &named("2026-11-09")),
+            at("2026-11-09T19:30:00"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+
+        // Tuesday night the ranking has new figures while the date page
+        // still names Monday, a session older than Tuesday's, which had
+        // ended: the figures may be Tuesday's, so they get no date, and
+        // nothing is remembered.
+        let err = top_brokers(
+            &live(dir.path(), &tuesday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: the broker ranking read at 19:30 WIB on 2026-11-10 is dated 2026-11-09, yet the session of 2026-11-10 had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+        );
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 9), "not written for a refused pair");
+
+        // Both pages still on Monday: the very pair accepted for Monday.
+        let s = top_brokers(
+            &live(dir.path(), &monday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+
+        // Once the date page names Tuesday, the right pair is accepted, that
+        // night and the next morning.
+        for when in ["2026-11-10T20:30:00", "2026-11-11T07:00:00"] {
+            let s = top_brokers(&live(dir.path(), &tuesday, &named("2026-11-10")), at(when))
+                .await
+                .unwrap();
+            assert_eq!(s.data.date, d(2026, 11, 10), "{when}");
+        }
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 10));
+
+        // On a cache that remembers nothing, an older session's date is not
+        // believed either.
+        let fresh = tempfile::tempdir().unwrap();
+        let err = top_brokers(
+            &live(fresh.path(), &monday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("so it cannot be dated"), "{err}");
+        assert!(Cache::new(fresh.path())
+            .get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_ranking_without_its_date_or_an_http_error_is_a_provider_error() {
+        let sunday = at("2026-11-08T10:00:00");
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                .route(SESSION_ENDPOINT, 200, "Invalid stock code!"),
+        );
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert!(err.to_string().contains("no Today row"), "{err}");
+
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route(TOP_BROKERS_ENDPOINT, 503, "busy"));
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ipot: broker ranking for the market: HTTP 503"
+        );
     }
 }

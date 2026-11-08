@@ -1685,6 +1685,209 @@ fn foreign_commands_read_the_exchange_summaries() {
 }
 
 #[test]
+fn market_brokers_from_ipot_or_idx_co_id() {
+    let sb = sandbox();
+    // IPOT's pages as read on Saturday: a ranking read now could fall in
+    // trading hours, which IPOT's ranking cannot be dated in.
+    let saturday = chrono::DateTime::parse_from_rfc3339("2026-11-07T10:00:00+07:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for (url, fixture) in [
+        (
+            "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+            "ipot/topbroker_20261106.html",
+        ),
+        (
+            "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+            "ipot/statistic_bbca_20261106.html",
+        ),
+    ] {
+        let body = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(fixture),
+        )
+        .unwrap();
+        idx::cache::Cache::new(&sb.cache)
+            .put_at(url, 200, &body, saturday)
+            .unwrap();
+    }
+    seed(
+        &sb.cache,
+        "https://www.idx.co.id/primary/TradingSummary/GetBrokerSummary?date=20261016&start=0&length=9999",
+        "idx/brokersummary_20261016.json",
+    );
+    idx(&sb.cache, &sb.config)
+        .args(["market", "brokers", "--source", "ipot", "--top", "3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "2026-11-06 · 88 active · by value",
+        ))
+        .stdout(predicate::str::contains("Class"))
+        .stdout(predicate::str::contains(
+            "as IPOT (Indo Premier) publishes them",
+        ))
+        .stdout(predicate::str::contains(
+            "-o json, csv and jsonl add the value bought and sold",
+        ))
+        .stdout(predicate::str::contains(
+            "abbreviates figures of a million and more to two decimals",
+        ))
+        .stderr(predicate::str::contains(
+            "JB ([CC] BJB Sekuritas Jawa Barat) is counted in CC",
+        ));
+    let json = |args: &[&str]| {
+        let out = idx(&sb.cache, &sb.config).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let v = json(&[
+        "-o", "json", "market", "brokers", "--source", "ipot", "--top", "0",
+    ]);
+    assert_eq!(v["schema"], "idx.market.brokers.v1");
+    assert_eq!(v["provider"], "ipot");
+    assert_eq!(v["data"]["date"], "2026-11-06");
+    assert_eq!(v["data"]["rounded"], true);
+    assert_eq!(v["data"]["brokers"].as_array().unwrap().len(), 88);
+    let cp = &v["data"]["brokers"][0];
+    assert_eq!(
+        (cp["code"].as_str(), cp["kind"].as_str()),
+        (Some("CP"), Some("local"))
+    );
+    assert_eq!(cp["net_value"], 4.77e9);
+    assert!(v["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("is counted in CC"));
+    // The new columns come after the ones idx.co.id fills.
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "csv", "market", "brokers", "--source", "ipot", "-n", "2",
+        ])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        csv.starts_with("rank,code,name,volume,value,frequency,value_share_pct,buy_value,sell_value,net_value,kind\n1,CP,"),
+        "{csv}"
+    );
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "jsonl", "market", "brokers", "--source", "ipot", "-n", "2",
+        ])
+        .output()
+        .unwrap();
+    let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].contains("\"net_value\":"), "{}", lines[1]);
+
+    // auto, the default, keeps idx.co.id when it answers: no IPOT columns.
+    let v = json(&["-o", "json", "market", "brokers", "--date", "2026-10-16"]);
+    assert_eq!(v["provider"], "idx");
+    assert_eq!(v["data"]["rounded"], false);
+    assert!(v["data"]["brokers"][0]["net_value"].is_null());
+    idx(&sb.cache, &sb.config)
+        .args([
+            "market",
+            "brokers",
+            "--date",
+            "2026-10-16",
+            "--source",
+            "idx",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "as idx.co.id publishes them; shares",
+        ))
+        .stdout(predicate::str::contains("Class").not());
+
+    // IPOT holds one session; an unknown source is a usage error.
+    idx(&sb.cache, &sb.config)
+        .args([
+            "market",
+            "brokers",
+            "--source",
+            "ipot",
+            "--date",
+            "2026-10-16",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "IPOT holds only its latest session, 2026-11-06, not 2026-10-16",
+        ));
+    idx(&sb.cache, &sb.config)
+        .args(["market", "brokers", "--source", "rti"])
+        .assert()
+        .code(2);
+    // At 80 columns the examples fit and clap wraps the prose.
+    let out = idx(&sb.cache, &sb.config)
+        .env("COLUMNS", "80")
+        .args(["market", "brokers", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8(out.stdout).unwrap();
+    let after = &help[help.find("Examples:").unwrap()..];
+    assert!(
+        after.contains(
+            "\n  idx market brokers --source ipot     # with each broker's class and net\n"
+        ),
+        "{after}"
+    );
+    assert!(after.lines().all(|l| l.chars().count() <= 80), "{after}");
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "market-brokers"])
+        .output()
+        .unwrap();
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(schema.contains("net_value") && schema.contains("rounded"));
+}
+
+#[test]
+fn market_brokers_offline_with_an_ipot_copy_that_cannot_be_dated_exits_5() {
+    let sb = sandbox();
+    // Read on Friday 2026-11-06 at 10:00 WIB, in the session's hours.
+    let friday = chrono::DateTime::parse_from_rfc3339("2026-11-06T10:00:00+07:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for (url, fixture) in [
+        (
+            "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+            "ipot/topbroker_20261106.html",
+        ),
+        (
+            "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+            "ipot/statistic_bbca_20261106.html",
+        ),
+    ] {
+        let body = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(fixture),
+        )
+        .unwrap();
+        idx::cache::Cache::new(&sb.cache)
+            .put_at(url, 200, &body, friday)
+            .unwrap();
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["--offline", "market", "brokers", "--source", "ipot"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains(
+            "offline: IPOT's cached copy cannot be used: the broker ranking was read at 10:00 WIB on 2026-11-06",
+        ))
+        .stderr(predicate::str::contains("run once without --offline"));
+}
+
+#[test]
 fn market_brokers_rank_the_members() {
     let sb = sandbox();
     seed(
@@ -1723,10 +1926,18 @@ fn market_brokers_rank_the_members() {
         .args(["market", "brokers", "--sort", "lots"])
         .assert()
         .code(2);
+    // A session that is not cached is an offline miss; a Sunday has none.
+    idx(&sb.cache, &sb.config)
+        .args(["market", "brokers", "--date", "2026-10-15"])
+        .assert()
+        .code(5);
     idx(&sb.cache, &sb.config)
         .args(["market", "brokers", "--date", "2026-10-18"])
         .assert()
-        .code(5);
+        .code(4)
+        .stderr(predicate::str::contains(
+            "no trading data: 2026-10-18 is a Sunday",
+        ));
 }
 
 #[test]

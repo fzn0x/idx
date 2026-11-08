@@ -30,6 +30,18 @@ source's latest session and contains it counts that session twice; the
 | brokersummary_zzzz_invalid.html | `code=ZZZZ` | 2026-10-17 | `Invalid stock code!`, HTTP 200 |
 | corporateaction_*.html | `corporateaction.php?code=CODE&start=MM/DD/YYYY` | 2026-10-18 | corporate actions, RUPS, warrants and rights (see `actions.rs`) |
 
+Market-wide broker ranking (`market brokers --source ipot`):
+`ma-topbroker.php` takes no parameters (`start` and `end` are ignored) and
+ranks every broker in IPOT's latest session by value; the page has no date,
+which the `Today` row of `statistic.php?code=BBCA` gives. Both were recorded
+on Sunday 2026-11-08 with the provider's headers and are byte-identical to
+the copies read at 07:02 and 07:06 that morning.
+
+| file | request | recorded | notes |
+| --- | --- | --- | --- |
+| topbroker_20261106.html | `ma-topbroker.php` | 2026-11-08 07:51 | 91 brokers for the session of 2026-11-06: CP first (`T.Val` 2.79 T), CC net -264.04 B, PS and ZZ without trades last. JB is listed as `[CC] BJB Sekuritas Jawa Barat` and idx.co.id counts it in CC (trades 210,936 + 276 = its 211,212); folded so, the 88 brokers with trades are idx.co.id's members in `GetBrokerSummary` for 2026-11-06, each with the same trades, and values and volumes agree within about one unit of IPOT's second decimal, not half a unit (IT's value 1,485,442,500 shows as 1.48 B; 9 of the 176 figures are off by 0.0053 to 0.0060 of the unit shown, B or T, where rounding would allow 0.005). A commented-out "Lorem Ipsum" template follows the rows |
+| statistic_bbca_20261106.html | `statistic.php?code=BBCA` | 2026-11-08 07:51 | `Today` row: high 5,200 and low 4,990, both on 2026-11-06; a commented-out copy of the table from 2015 follows |
+
 One investor side (`fd=F` foreign, `fd=D` domestic) and one board: the
 footer's `T. Val`, `T.Lot` and `Avg` are that side's buying, and `F. NVal`
 is the all-board foreign net on every page.

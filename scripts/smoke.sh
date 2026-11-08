@@ -201,6 +201,17 @@ expect "$TMP/bk.txt" "Foreign investors bought" "one investor side says what it 
 expect "$TMP/sfi.json" '"schema": "idx.foreign.value.v1"' "ipot foreign flow schema"
 expect "$TMP/sfi.json" '"foreign_sell_value":' "ipot foreign flow has foreign selling in rupiah"
 set +e
+"$IDX" -o json market brokers --source ipot --top 3 >"$TMP/mbi.json" 2>"$TMP/mbi.err"; code=$?
+set -e
+if [ "$code" = 0 ]; then
+  expect "$TMP/mbi.json" '"provider": "ipot"' "market brokers came from ipot"
+  expect "$TMP/mbi.json" '"net_value":' "ipot market brokers carry each broker's net"
+elif grep -qF "cannot be dated" "$TMP/mbi.err"; then
+  echo "  skip ipot market brokers: read in a trading day's hours, when the ranking cannot be dated"
+else
+  fail "market brokers --source ipot (exit $code): $(head -c 160 "$TMP/mbi.err")"
+fi
+set +e
 "$IDX" broker ZZZZ --date 2026-10-16 >/dev/null 2>"$TMP/bke.txt"; code=$?
 set -e
 [ "$code" = 4 ] && pass "unknown broker ticker exits 4" || fail "unknown broker ticker exit $code"
@@ -256,7 +267,8 @@ if [ "$code" = 0 ]; then
   expect "$TMP/sf.json" '"foreign_net_value_at_close":' "stocks foreign has net x close"
   "$IDX" market foreign --top 3 >"$TMP/mf.txt" || fail "market foreign"
   expect "$TMP/mf.txt" "Foreign net selling" "market foreign has both lists"
-  "$IDX" -o json market brokers --top 3 >"$TMP/mb.json" || fail "market brokers"
+  "$IDX" -o json market brokers --source idx --top 3 >"$TMP/mb.json" || fail "market brokers"
+  expect "$TMP/mb.json" '"provider": "idx"' "market brokers came from idx.co.id"
   expect "$TMP/mb.json" '"value_share_pct":' "market brokers has shares"
   "$IDX" -o json market calendar --days 30 >"$TMP/mc.json" || fail "market calendar"
   expect "$TMP/mc.json" '"schema": "idx.calendar.v1"' "calendar json schema"
