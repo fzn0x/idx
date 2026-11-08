@@ -1,6 +1,8 @@
 // The 47 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
-// idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
+// idx.co.id ones (idx.co.id refuses requests from this site's host; top
+// brokers, which can also come from IPOT, until IPOT's ranking is on the
+// page), the KSEI
 // composition one (its archive is imported into the CLI's local database), the
 // ownership snapshot tool (it acts on the machine's own SQLite file), the
 // Stockbit ones (they carry a personal account session) and the ones
@@ -35,7 +37,7 @@ export const TOOLS = [
   { tool: "idx_foreign", cli: "idx stocks foreign BBCA", web: "foreign BBCA", what: "foreign buying and selling per session (the web reads IPOT, in rupiah)" },
   { tool: "idx_instruments", cli: "idx stocks list --search bank", web: "list --search bank", what: "listed stocks (the web lists codes and names)" },
   { tool: "idx_market_foreign", cli: "idx market foreign", web: null, what: "top foreign net buying and selling" },
-  { tool: "idx_market_brokers", cli: "idx market brokers", web: null, what: "exchange members ranked by the day's value" },
+  { tool: "idx_market_brokers", cli: "idx market brokers", web: null, what: "exchange members ranked by the day's value", why: "idx.co.id refuses requests from this site's host (a Cloudflare Worker), and IPOT's market-wide ranking (--source ipot), which this host can read, is not on this page yet, so this tool runs in the CLI and the MCP server only for now." },
   { tool: "idx_indices", cli: "idx market indices", web: null, what: "every IDX index for one session" },
   { tool: "idx_calendar", cli: "idx market calendar", web: null, what: "dividend and rights dates, RUPS, public exposes" },
   { tool: "idx_holidays", cli: "idx market holidays --upcoming", web: "holidays --upcoming", what: "trading holidays and the next trading day" },
@@ -87,6 +89,7 @@ const WHAT_ID = {
 
 /** The tools' own reasons (`why`) in Bahasa Indonesia. */
 const WHY_ID = {
+  idx_market_brokers: "idx.co.id menolak permintaan dari server situs ini (sebuah Cloudflare Worker), dan peringkat broker seluruh pasar dari IPOT (--source ipot), yang bisa dibaca dari server ini, belum ada di halaman ini, jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.",
   idx_ownership_composition: "Arsip komposisi KSEI diunduh dari ksei.co.id ke basis data kepemilikan lokal milik CLI, jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.",
   idx_ownership_snapshot: "Alat ini memasang dan memeriksa berkas basis data kepemilikan di komputer Anda sendiri; terminal web menyimpan salinan daftarnya sendiri yang mengikuti mirror GitHub yang sama, jadi tidak ada yang perlu disinkronkan di sini.",
 };

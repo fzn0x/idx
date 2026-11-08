@@ -397,9 +397,10 @@ browser, no install: `brief BBCA`, `quote BBCA,BBRI`, `intraday BBCA`, `returns 
 big-accumulation`, `bandar broker YP`, `actions BBCA`, `foreign BBCA` (foreign
 flow from IPOT in rupiah, up to 20 sessions), `holidays --upcoming`, `astro`,
 `list --search bank`, `members`, `risk TLKM` (also `growth` and `valuation`), and `tools` (every MCP tool as a button). The idx.co.id
-commands (market-wide foreign flow, top brokers, the calendar, indices) are CLI and MCP
-only, because idx.co.id refuses requests from Cloudflare Workers; so, for now, is
-`ownership institutions`, until MSN is checked from the Worker. Typed into the terminal,
+commands (market-wide foreign flow, the calendar, indices) are CLI and MCP only, because
+idx.co.id refuses requests from Cloudflare Workers; so, for now, are `market brokers`,
+whose IPOT ranking (`--source ipot`) is not on the page yet, and `ownership
+institutions`, until MSN is checked from the Worker. Typed into the terminal,
 any of these, and the CLI-only commands (`watch`, `mcp`, `ownership import`, ...), answer
 with a notice instead of an error: where the command runs and why, its CLI line with your
 own arguments, and the nearest command the page has. A line pasted from the CLI, such as
