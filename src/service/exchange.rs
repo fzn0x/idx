@@ -967,14 +967,24 @@ fn member_ranking(
 /// Every exchange member's trading for one session (default: the latest
 /// published), ranked by value, volume or frequency; the `top` first (0 =
 /// all). Each member's figures count both its buying and its selling.
+///
+/// idx.co.id publishes a session's summary after its close, so with no
+/// `date` the walk back starts at the latest session that had ended by
+/// `now` (16:15 WIB): before then the day's own summary is not asked for,
+/// and a refusal of that request cannot hide the session before it.
 pub async fn market_brokers(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
     top: usize,
     sort: BrokerSort,
-    today: NaiveDate,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
-    let (day, mut s) = session(date, today, |d| idx::broker_summary(fetcher, d, today)).await?;
+    let today = now.with_timezone(&crate::model::wib()).date_naive();
+    let from = match date {
+        Some(_) => today,
+        None => holidays::latest_session(now),
+    };
+    let (day, mut s) = session(date, from, |d| idx::broker_summary(fetcher, d, today)).await?;
     let mut rows: Vec<BrokerDayRow> = std::mem::take(&mut s.data)
         .into_iter()
         .map(|r| BrokerDayRow {
@@ -1112,12 +1122,11 @@ pub async fn market_brokers_from(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
     use crate::model::BrokerSource;
-    let today = now.with_timezone(&crate::model::wib()).date_naive();
     match source {
-        BrokerSource::Idx => market_brokers(fetcher, date, top, sort, today).await,
+        BrokerSource::Idx => market_brokers(fetcher, date, top, sort, now).await,
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
-            let refused = match market_brokers(fetcher, date, top, sort, today).await {
+            let refused = match market_brokers(fetcher, date, top, sort, now).await {
                 Err(
                     e @ (IdxError::Blocked { .. }
                     | IdxError::Provider { .. }
@@ -1936,6 +1945,13 @@ mod tests {
             .with_timezone(&chrono::Utc)
     }
 
+    /// A WIB wall-clock time.
+    fn wib_at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(&format!("{s}+07:00"))
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
     /// IPOT's ranking `page` dated by BBCA's statistics of 2026-11-06.
     fn ipot_ranking(be: FixtureBackend, page: &str) -> FixtureBackend {
         be.route("ma-topbroker.php", 200, page).route(
@@ -2185,6 +2201,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn market_brokers_start_at_the_latest_session_that_ended() {
+        use crate::model::BrokerSource;
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetBrokerSummary?date=20261105", 200, BROKERS)
+                .route_with_headers(
+                    "GetBrokerSummary?date=20261106",
+                    403,
+                    CHALLENGE,
+                    &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+                ),
+        );
+        // Friday 08:40: idx.co.id publishes the day's session after its
+        // close, so it is not asked for, and Thursday's answers.
+        for source in [BrokerSource::Idx, BrokerSource::Auto] {
+            let s = market_brokers_from(
+                &f,
+                source,
+                None,
+                5,
+                BrokerSort::Value,
+                wib_at("2026-11-06T08:40:00"),
+            )
+            .await
+            .unwrap();
+            assert_eq!((s.provider, s.data.date), ("idx", d(2026, 11, 5)));
+        }
+        assert_eq!(be.calls_matching("date=20261106"), 0);
+        assert_eq!(be.calls_matching("indopremier"), 0);
+        // Once it has ended, the day's session is asked for first.
+        let err = market_brokers_from(
+            &f,
+            BrokerSource::Idx,
+            None,
+            5,
+            BrokerSort::Value,
+            wib_at("2026-11-06T16:20:00"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+    }
+
+    #[tokio::test]
     async fn an_ipot_ranking_without_trades_is_not_found_and_other_codes_are_named() {
         use crate::model::BrokerSource;
         let page = |rows: &[(&str, &str, &str)]| {
@@ -2255,7 +2315,7 @@ mod tests {
             Some(d(2026, 10, 16)),
             5,
             BrokerSort::Value,
-            d(2026, 10, 18),
+            wib_at("2026-10-18T10:00:00"),
         )
         .await
         .unwrap();
@@ -2274,7 +2334,7 @@ mod tests {
             Some(d(2026, 10, 16)),
             0,
             BrokerSort::Frequency,
-            d(2026, 10, 18),
+            wib_at("2026-10-18T10:00:00"),
         )
         .await
         .unwrap();
