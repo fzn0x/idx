@@ -452,8 +452,8 @@ test("a stock IPOT has not published is read again, not stored without its lists
     assert.deepEqual(calls.filter((u) => u.includes("TLKM")), [calls.find((u) => u.includes("code=TLKM"))], "one request: its session's page");
     let st = await scanStatus(env);
     assert.deepEqual([st.phase, st.complete, st.failed, st.pending.map((p) => p.symbol)], ["running", "2026-11-06", [], ["TLKM"]]);
-    const shown = await bandarScreen(env, null, null, "1d");
-    assert.ok(shown.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again every 10 minutes"), shown.warnings);
+    const shown = await bandarScreen(env, null, null, "1d", null, null, null, null, at("17:05"));
+    assert.ok(shown.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again at 17:10 WIB"), shown.warnings);
     // Not before ten minutes; then once more, still without lists.
     calls.length = 0;
     assert.equal((await bandarScanStep(env, { now: at("17:05") })).idle, true);
@@ -497,7 +497,7 @@ test("stocks IPOT has not published are read again apart from the pass, and coun
     assert.equal((await bandarScanStep(env, { now: at("17:10") })).read, 3);
     const out = await screen("17:10");
     assert.equal(out.data.scanned, 5);
-    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 4 of the 5 stocks yet; the scan reads them again every 10 minutes"]);
+    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 4 of the 5 stocks yet; the scan is reading them again"]);
     // Cut off now, the session counts all four as unpublished and none as left unread.
     await bandarScanStep(env, { now: new Date("2026-11-09T16:45:00+07:00"), stocks: false });
     const last = (await scanStatus(env)).last;
@@ -517,8 +517,33 @@ test("while stocks are read again, the screen counts each of them once", async (
     assert.equal((await bandarScanStep(env, { now: at("17:10") })).read, 3);
     const out = await bandarScreen(env, null, null, "1d", null, null, null, null, at("17:10"));
     assert.deepEqual([out.data.scanned, out.data.checked], [8, 6]);
-    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 2 of the 8 stocks yet; the scan reads them again every 10 minutes"]);
+    assert.deepEqual(out.warnings, ["IPOT has not published 2026-11-06 for 2 of the 8 stocks yet; the scan is reading them again"]);
   });
+});
+
+test("a stock IPOT has not published is read again less often as the wait grows, and files nothing new until it comes", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
+  const recorded = recordedFetch();
+  const reads = [];
+  const wib = (ms) => new Date(ms + 7 * 3600e3).toISOString().slice(5, 16).replace("T", " ");
+  let clock = 0;
+  const fetchFn = async (u, init) => {
+    if (String(u).includes("code=TLKM&start=11/06/2026&end=11/06/2026")) { reads.push(wib(clock)); return new Response(page("brokersummary_bbca_20261106_insession.html")); }
+    return recorded(u, init);
+  };
+  await withFetch(fetchFn, async () => {
+    for (clock = Date.parse("2026-11-06T17:00:00+07:00"); clock <= Date.parse("2026-11-07T20:00:00+07:00"); clock += 60e3) await bandarScanStep(env, { now: new Date(clock) });
+  });
+  // Every 10 minutes until 21:00 WIB of the session's day, every 30 after, every hour once a day has passed.
+  assert.deepEqual(reads.slice(0, 3), ["11-06 17:00", "11-06 17:10", "11-06 17:20"]);
+  assert.deepEqual(reads.filter((r) => r >= "11-06 20:40" && r <= "11-06 22:00"), ["11-06 20:40", "11-06 20:50", "11-06 21:00", "11-06 21:30", "11-06 22:00"]);
+  assert.deepEqual(reads.filter((r) => r >= "11-07 16:00"), ["11-07 16:00", "11-07 16:30", "11-07 17:00", "11-07 18:00", "11-07 19:00", "11-07 20:00"]);
+  assert.equal((await scanStatus(env)).last.done_at, "2026-11-06T10:00:00.000Z", "a read that finds the stock still unpublished files nothing");
+  const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date(clock));
+  assert.equal(out.fetched_at, "2026-11-06T10:00:00Z");
+  assert.ok(out.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again at 21:00 WIB"), out.warnings.join("\n"));
 });
 
 test("a stock that fails is tried again 10, then 30 minutes after its pass, then counts as failed", async () => {

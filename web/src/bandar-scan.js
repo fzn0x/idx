@@ -22,11 +22,11 @@
 // rests), inside the invocation's budget (src/budget.js) and its first 45
 // seconds, so a minute ends before the next one reads the state.
 //
-// A stock whose session IPOT has not published yet is read again every 10
-// minutes; one that failed gets two more passes, 10 and 30 minutes after its
-// pass. When the next session's 16:45 comes, whatever the session got is
-// filed in a record (`runs`): what it stored, failed and did not get, or
-// that IPOT never published it or never answered the probe. A session is
+// A stock whose session IPOT has not published yet is read again on the
+// probe's schedule; one that failed gets two more passes, 10 and 30 minutes
+// after its pass. When the next session's 16:45 comes, whatever the session
+// got is filed in a record (`runs`): what it stored, failed and did not get,
+// or that IPOT never published it or never answered the probe. A session is
 // shown once it holds half its stocks or more than the one shown before; the
 // API's warnings come from these records (scanNotes).
 
@@ -61,7 +61,9 @@ const READY_MIN = 16 * 60 + 45;
 /**
  * Minutes between probes while IPOT has not published the session: until
  * 21:00 WIB of the session's day, after that, and once a day of probes has
- * passed (each of those logs an error: IPOT may have changed its page).
+ * passed (each of those logs an error: IPOT may have changed its page). The
+ * stocks IPOT has not published once the scan reads are read again on the
+ * same schedule, the day counted from when it started reading.
  */
 const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
@@ -74,8 +76,6 @@ const PROBE_RETRY_MIN = 5;
 const PROBE_ALARM_MS = 3600e3;
 /** The most traded stocks the probe turns among. */
 const PROBE_STOCKS = 3;
-/** Minutes before stocks whose session IPOT had not published are read again, until the next session's 16:45 WIB. */
-const PENDING_GAP_MIN = 10;
 /**
  * Minutes after a pass ends before the stocks that failed in it are tried
  * again: two more passes, then a failure counts. A source that fails a
@@ -203,6 +203,9 @@ function runOf(st, at) {
   };
 }
 
+/** What a scanned record says of its stocks, whatever their order and the time it was filed. */
+const says = (r) => JSON.stringify([r.stored, r.checked, [...r.failed].sort(), [...r.unpublished].sort(), r.left]);
+
 /**
  * Files `run` as the newest record and makes its session the one shown when
  * it holds enough: some stocks, and half of them or more than the shown
@@ -325,11 +328,12 @@ export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetc
   return { rows };
 }
 
-/** Minutes to the next probe of a session IPOT has not published. */
-function probeGap(st, now) {
-  if (now.getTime() - Date.parse(st.first_probe_at) >= DAY_MS) return PROBE_GAP_MIN.stale;
-  return hol.wibDate(now) === st.session && wibMinutes(now) < LATE_MIN ? PROBE_GAP_MIN.early : PROBE_GAP_MIN.late;
+/** Minutes to the next look at `session`, which IPOT had not published, waited for since `since`. */
+function waitGap(session, since, now) {
+  if (now.getTime() - Date.parse(since) >= DAY_MS) return PROBE_GAP_MIN.stale;
+  return hol.wibDate(now) === session && wibMinutes(now) < LATE_MIN ? PROBE_GAP_MIN.early : PROBE_GAP_MIN.late;
 }
+const probeGap = (st, now) => waitGap(st.session, st.first_probe_at, now);
 
 /**
  * Reads a probe stock's one-day page and moves the state on; returns the
@@ -409,12 +413,13 @@ export function errorKind(e) {
 /**
  * When the stocks that wait are read again: a retry round RETRY_GAPS_MIN
  * after the first pass or the round that failed them, and the stocks IPOT
- * had not published PENDING_GAP_MIN after the first of them went back to
- * waiting. Nothing is due while a round of the same list is under way.
+ * had not published on the probe's schedule (waitGap) after the first of
+ * them went back to waiting. Nothing is due while a round of the same list
+ * is under way.
  */
 function schedule(st, now) {
   if (!st.queue.length && st.retry.length && !st.retry_left) st.retry_due ??= after(now, RETRY_GAPS_MIN[st.pass]);
-  if (st.pending.length && !st.pending_left) st.pending_due ??= after(now, PENDING_GAP_MIN);
+  if (st.pending.length && !st.pending_left) st.pending_due ??= after(now, waitGap(st.session, st.published_at ?? now.toISOString(), now));
 }
 
 /**
@@ -580,11 +585,17 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
     changed ||= read > 0 || cut;
   }
   // Every stock read or failed: the session's record, shown from now on when
-  // it holds enough, though stocks IPOT has not published may still come.
-  if (st.phase === "running" && restDone(st) && (out.read > 0 || !st.pending?.length || !(st.runs || []).some((r) => r.session === session))) {
-    if (!st.pending?.length) st.phase = "done";
-    keep(st, runOf(st, at));
-    changed = prune = true;
+  // it holds enough, though stocks IPOT has not published may still come. It
+  // is filed again only when it says something new, so a read that finds
+  // the stocks still unpublished neither moves its time nor prunes.
+  if (st.phase === "running" && restDone(st)) {
+    if (!st.pending.length) st.phase = "done";
+    const run = runOf(st, at), filed = (st.runs || []).find((r) => r.session === session && r.scanned);
+    if (!filed || says(filed) !== says(run)) {
+      keep(st, run);
+      changed = prune = true;
+    }
+    changed ||= st.phase === "done";
   }
   if (!changed) return { ...out, idle: true, phase: st.phase };
   if (!(await save(env, st, rows, prune, stored?.rev))) {
@@ -606,6 +617,8 @@ export async function scanRows(env, period) {
 
 const hhmm = (iso) => new Date(Date.parse(iso) + WIB_MS).toISOString().slice(11, 16);
 const stamp = (iso) => `${new Date(Date.parse(iso) + WIB_MS).toISOString().slice(0, 16).replace("T", " ")} WIB`;
+/** A time in WIB, with its date when it is not `now`'s day. */
+const clock = (iso, now) => (hol.wibDate(iso) === hol.wibDate(now) ? `${hhmm(iso)} WIB` : stamp(iso));
 const underWay = (st) => ["new", "waiting", "running"].includes(st?.phase);
 
 /** Trading days after `from` up to `to`. */
@@ -672,7 +685,7 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   const unpublished = rec ? rec.unpublished.length : 0;
   const scanned = rows + failed + unpublished;
   if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
-  if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan reads them again every ${PENDING_GAP_MIN} minutes`);
+  if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads them again at ${clock(st.pending_due, now)}` : "is reading them again"}`);
   if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary`);
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
