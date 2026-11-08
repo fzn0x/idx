@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { routeLine, tokenize, cliPath, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES, SPEC, CLI_FORM } from "../public/route.js";
+import { routeLine, tokenize, cliPath, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES, SPEC, CLI_FORM, MCP_ONLY, CLI_ONLY } from "../public/route.js";
 import { TOOLS, byName, cliOnlyReason } from "../public/tools.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -493,6 +493,31 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
   for (const sub of variants("stockbit.rs", "StockbitCmd")) assert.ok(["cli-mcp", "cli"].includes(routeLine(`stockbit ${sub}`).kind), sub);
   for (const sub of variants("bandar.rs", "BandarCmd")) assert.equal(routeLine(`bandar ${sub} BBCA`).kind, "web", sub);
   for (const cmd of ["watch", "config", "cache", "mcp", "schema", "completions", "version"]) assert.equal(routeLine(cmd).kind, "cli", cmd);
+});
+
+test("the terminal runs every line through the router, and heads every kind of notice", async () => {
+  // run() and NOTICE_META lifted out of terminal.js, with the router itself and stand-ins for the rest.
+  const meta = terminal.match(/^const NOTICE_META = .*;$/m)?.[0];
+  const body = terminal.match(/^async function run\(line\) \{[\s\S]*?^\}$/m)?.[0];
+  assert.ok(meta && body, "NOTICE_META and run() found in terminal.js");
+  const ran = [];
+  const runWeb = async (line) => { ran.push(line); return { env: {} }; };
+  const R = { notice: (plan) => ({ notice: plan }) };
+  const { run, NOTICE_META } = new Function("routeLine", "runWeb", "R", "t", "CLI_ONLY", `${meta}\n${body}\nreturn { run, NOTICE_META };`)(routeLine, runWeb, R, (id, en) => en, "CLI and MCP only");
+  // A head for every kind of notice the router gives.
+  const lines = [...COMMANDS, ...SAMPLE, ...TOOLS.flatMap((t) => [t.cli, t.tool]), ...Object.keys(BARE), ...Object.keys(CLI_ONLY), ...Object.keys(MCP_ONLY), "stockbit", "quote BBCA -o csv", "idx stocks news TLKM -s kontan"];
+  const kinds = new Set(lines.map((l) => routeLine(l).kind).filter((k) => k !== "web"));
+  assert.deepEqual(Object.keys(NOTICE_META).sort(), [...kinds].sort());
+  // A notice answers without running anything.
+  for (const line of ["market foreign", "idx -o json market foreign", "watch BBCA", "idx -o csv stocks quote BBCA", "tools idx_orderbook"]) {
+    const plan = routeLine(line);
+    assert.deepEqual(await run(line), { local: NOTICE_META[plan.kind], node: { notice: plan } }, line);
+  }
+  assert.deepEqual(ran, []);
+  // A line the page runs reaches runWeb as the router wrote it, with the note that says so.
+  assert.deepEqual(await run("idx stocks quote BBCA"), { env: {}, note: { line: "quote BBCA", ignored: [] } });
+  assert.deepEqual(await run("quote BBCA"), { env: {} });
+  assert.deepEqual(ran, ["quote BBCA", "quote BBCA"]);
 });
 
 test("the router and the terminal share one tokenizer, one alias list and the same switches", () => {
