@@ -779,7 +779,9 @@ async function withValueTraded(env, sum, investor, board, today) {
     const all = await ipotPage(env, d.symbol, d.from, d.to, "all", board, today);
     d.total_value = all.value.total_value;
     d.total_lots = all.value.total_lots;
+    // Its provenance with its warning, each once, as the CLI's side.absorb(&all).
     sum.cached &&= all.cached; sum.stale ||= all.stale; sum.fetched_at = Math.min(sum.fetched_at, all.fetched_at);
+    if (all.warning && !sum.warnings.includes(all.warning)) sum.warnings.push(all.warning);
   } catch (e) {
     sum.warnings.push(`${d.symbol}: no value traded from ${d.from} to ${d.to}, so no percentages (${e.message})`);
   }
@@ -1041,7 +1043,8 @@ async function bandarOne(env, s, q) {
     else {
       sum = await brokerRange(env, s, bd.periodStart(period, latest.data.to), latest.data.to, investor, mboard, today);
       sum.warnings.push(...latest.warnings);
-      sum.cached &&= latest.cached;
+      // The latest session's page is part of the answer (r.absorb(&latest) in service::bandar_one).
+      sum.cached &&= latest.cached; sum.stale ||= latest.stale; sum.fetched_at = Math.min(sum.fetched_at, latest.fetched_at);
     }
   }
   await withValueTraded(env, sum, investor, mboard, today);
@@ -1067,6 +1070,9 @@ async function bandarOne(env, s, q) {
     try {
       const r = await bandarSessions(env, s, d.from, d.to, investor, mboard, today);
       rep.daily = bd.daily(r.value, top);
+      // So are its sessions, as the CLI absorbs each one.
+      sum.cached &&= r.cached; sum.stale ||= r.stale; sum.fetched_at = Math.min(sum.fetched_at, r.fetched_at);
+      if (r.warning && !warnings.includes(r.warning)) warnings.push(r.warning);
     } catch (e) {
       warnings.push(`${s}: the daily series failed (${e.message})`);
     }
@@ -1439,11 +1445,13 @@ export async function brief(env, symbolRaw) {
   const names = Object.keys(sections);
   const settled = await Promise.allSettled(names.map((n) => sections[n]()));
   const warnings = [], failed = [];
-  let cachedAll = true, stale = false, notFoundCount = 0;
+  // Cached only if every section was, stale if any was, and as old as the
+  // oldest section (Sections::take in the CLI).
+  let cachedAll = true, stale = false, fetched = Math.floor(Date.now() / 1000), notFoundCount = 0;
   const got = {};
   settled.forEach((r, i) => {
     const n = names[i];
-    if (r.status === "fulfilled") { got[n] = r.value; cachedAll &&= !!r.value.cached; stale ||= !!r.value.stale; for (const w of r.value.warnings || []) warnings.push(`${n}: ${w}`); }
+    if (r.status === "fulfilled") { got[n] = r.value; cachedAll &&= !!r.value.cached; stale ||= !!r.value.stale; fetched = Math.min(fetched, Date.parse(r.value.fetched_at) / 1000); for (const w of r.value.warnings || []) warnings.push(`${n}: ${w}`); }
     else { if (r.reason?.code === "not_found") notFoundCount++; warnings.push(`${n}: ${r.reason?.message || r.reason}`); failed.push(n); }
   });
   if (!got.quote && !got.fundamentals && !got.technical && notFoundCount >= 3) throw notFound(`${symbol}: unknown to the quote, fundamentals and history sources`);
@@ -1472,7 +1480,7 @@ export async function brief(env, symbolRaw) {
     news: n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null,
     sections_failed: failed,
   };
-  return envelope("idx.brief.v1", data, { cached: cachedAll, stale, warnings });
+  return envelope("idx.brief.v1", data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
 // ---- GitHub repository (the Star button) -------------------------------

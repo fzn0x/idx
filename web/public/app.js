@@ -9,16 +9,33 @@ export const API = "/api";
 // reports the request instead of leaving it pending.
 const API_TIMEOUT_MS = 60_000;
 
-export async function api(path) {
+// When each answer was asked, on the clock its fetched_at is on: the server's
+// Date less the time the request took (this machine's clock when an answer
+// has no Date). Kept beside the envelope, which stays the CLI's, and only for
+// a fresh request: within the max-age the Worker sends (20 to 60 s) the
+// browser may answer any other from its own copy, at once and under the Date
+// that copy was sent with, which says nothing of when it was asked.
+const ASKED = new WeakMap();
+
+/**
+ * GET /api/<path>: the envelope, or an error carrying the CLI's code and exit
+ * code. `fresh` asks the Worker past the browser's HTTP cache (the Worker
+ * sends no validators, so it answers in full), for a result whose head says
+ * how it was served.
+ */
+export async function api(path, { fresh = false } = {}) {
   let r;
+  const t0 = performance.now();
   try {
-    r = await fetch(`${API}/${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout?.(API_TIMEOUT_MS) });
+    r = await fetch(`${API}/${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout?.(API_TIMEOUT_MS), ...(fresh ? { cache: "no-cache" } : {}) });
   } catch (err) {
     const e = new Error(err?.name === "TimeoutError" ? `no answer within ${API_TIMEOUT_MS / 1000}s; try again` : `network error: ${err?.message || err}`);
     e.code = "network";
     e.exit = 3;
     throw e;
   }
+  const answered = Date.parse(r.headers.get("date") ?? "");
+  const asked = (Number.isFinite(answered) ? answered : Date.now()) - (performance.now() - t0);
   const body = await r.json().catch(() => ({ error: { code: "provider", message: `HTTP ${r.status}` }, exit_code: 3 }));
   if (!r.ok || body.error) {
     const e = new Error(body.error?.message || `HTTP ${r.status}`);
@@ -26,8 +43,37 @@ export async function api(path) {
     e.exit = body.exit_code ?? 3;
     throw e;
   }
+  if (fresh && body && typeof body === "object") ASKED.set(body, asked);
   return body;
 }
+
+/** When the request behind an envelope api() returned fresh was asked (ms, server clock); undefined for anything else. */
+export const askedAt = (env) => ASKED.get(env);
+
+/** Leeway for the whole seconds fetched_at and the Date header are given in. */
+const ASKED_SLACK_MS = 2000;
+
+/**
+ * How an answer was served, for the terminal's head and machine line:
+ * "cached" when every response it was built from came from the cache, "live"
+ * when they were fetched for this request, "partly" when some were and the
+ * others came from the cache. An envelope built from several responses is
+ * cached only when all were and carries the oldest one's fetched_at
+ * (Sourced::absorb in the CLI), so an uncached one whose fetched_at is older
+ * than its request holds both. Without the time it was asked, it reads live.
+ */
+export function cacheState(env, asked = askedAt(env)) {
+  if (env.cached) return "cached";
+  const at = Date.parse(env.fetched_at);
+  return Number.isFinite(at) && Number.isFinite(asked) && at < asked - ASKED_SLACK_MS ? "partly" : "live";
+}
+
+/** The head's words for each cacheState() and for when it was fetched; the machine line keeps the English. */
+export const CACHE_STATES = {
+  cached: { id: "dari cache", en: "cached", fetched: { id: "diambil", en: "fetched" } },
+  partly: { id: "sebagian dari cache", en: "partly cached", fetched: { id: "bagian tertua diambil", en: "oldest part fetched" } },
+  live: { id: "langsung", en: "live", fetched: { id: "diambil", en: "fetched" } },
+};
 
 /** What a table or a line shows where the source has no value (the JSON says null). */
 export const NA = ID ? "t/a" : "n/a";
