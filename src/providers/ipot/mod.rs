@@ -51,8 +51,8 @@
 //!   counted in CC. When the two pages roll over to a new session, and
 //!   whether the ranking moves during a session, has not been measured: a
 //!   ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated
-//!   and is refused, and so is one with trades dated a session that had not
-//!   opened when it was read.
+//!   and is refused, and so is one whose date the other page contradicts
+//!   (see [`top_brokers`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -98,6 +98,17 @@ const FIRST_TRADES_SECS: u32 = 8 * 3600 + 58 * 60;
 /// the two pages roll over to a new session has not been measured, so then
 /// either may show the new session while the other still shows the last.
 const UNDATED: (u32, u32) = (FIRST_TRADES_SECS, TOP_BROKERS_BUSY.1);
+/// Where [`top_brokers`] remembers the ranking it last accepted.
+const ACCEPTED_KEY: &str = "ipot:ma-topbroker:accepted";
+/// Long past the next session: an older record has nothing to compare.
+const TTL_ACCEPTED: Duration = Duration::from_secs(30 * 24 * 3600);
+
+/// The ranking [`top_brokers`] last accepted, by its figures, and its date.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Accepted {
+    date: NaiveDate,
+    digest: String,
+}
 
 /// A range that ended before today no longer changes.
 const TTL_CLOSED: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -545,9 +556,13 @@ fn read_at(f: &Fetched, now: DateTime<Utc>) -> DateTime<Utc> {
 /// judged by when it was read, not by when it is served (a copy can be
 /// served offline or after a failed fetch, days later). A pair read on a
 /// trading day between 08:58 and 19:00 WIB ([`UNDATED`]) cannot be dated
-/// and fails, and so does a ranking with trades dated a session that had
-/// not opened then (before 08:58), which means the pages rolled over at
-/// different times.
+/// and fails. So does a ranking with trades dated a session that had not
+/// opened then (before 08:58), or one without trades dated a session that
+/// had ended, both of which mean the pages rolled over at different times,
+/// and a date that is not a trading day. A ranking with trades that is
+/// accepted is remembered with its date ([`topbroker::digest`]), and the
+/// same ranking dated another session later fails as well: the date page
+/// has rolled over and the ranking has not.
 pub async fn top_brokers(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,
@@ -635,6 +650,24 @@ pub async fn top_brokers(
                 "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
             ),
         ));
+    }
+    if traded {
+        let digest = topbroker::digest(&data);
+        let cache = fetcher.cache();
+        if let Some(seen) = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED) {
+            if seen.digest == digest && seen.date != date {
+                return Err(IdxError::provider(
+                    NAME,
+                    format!(
+                        "the broker ranking is the one IPOT showed for {}, yet the page that dates it now names {date}: the ranking has not rolled over to that session",
+                        seen.date
+                    ),
+                ));
+            }
+        }
+        if let Err(e) = cache.put_json(ACCEPTED_KEY, &Accepted { date, digest }) {
+            tracing::warn!(error = %e, "could not write cache");
+        }
     }
     let folded = topbroker::fold_listed_apart(&mut data);
     let mut s = Sourced::from_fetched(data, NAME, &ranked);
@@ -1562,6 +1595,56 @@ mod tests {
                 .contains("names 2026-11-07, which is not a trading day"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_ranking_accepted_for_one_session_is_not_dated_another() {
+        let monday_night = at("2026-11-09T19:30:00");
+        let monday = STATISTIC.replacen("2026-11-06", "2026-11-09", 2);
+        // Friday's ranking, read on Sunday, is remembered with its date.
+        let (f, _be, dir) = fetcher(ranking_pages());
+        top_brokers(&f, at("2026-11-08T10:00:00")).await.unwrap();
+        let cache = Cache::new(dir.path());
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 6));
+
+        // Monday night the date page names Monday, the ranking is Friday's:
+        // it has not rolled over.
+        let lagging = Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                    .route(SESSION_ENDPOINT, 200, &monday),
+            ),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        );
+        let err = top_brokers(&Arc::new(lagging), monday_night)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "provider");
+        assert!(
+            err.to_string().contains(
+                "the broker ranking is the one IPOT showed for 2026-11-06, yet the page that dates it now names 2026-11-09"
+            ),
+            "{err}"
+        );
+
+        // A ranking that moved on is Monday's, and remembered so.
+        let moved = TOP.replacen(">2.79 T<", ">2.80 T<", 1);
+        let rolled = Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, &moved)
+                    .route(SESSION_ENDPOINT, 200, &monday),
+            ),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        );
+        let s = top_brokers(&Arc::new(rolled), monday_night).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 9));
     }
 
     #[tokio::test]

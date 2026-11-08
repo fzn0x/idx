@@ -229,6 +229,21 @@ pub fn session_date(html: &str) -> Option<NaiveDate> {
     (high == low).then_some(high)
 }
 
+/// A fingerprint of the ranking's rows, codes and figures as published (not
+/// names), to tell the same ranking read again from another session's.
+pub fn digest(r: &Ranking) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for b in &r.brokers {
+        h.update(format!(
+            "{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}
+",
+            b.code, b.value, b.net_value, b.buy_value, b.sell_value, b.volume, b.frequency
+        ));
+    }
+    hex::encode(h.finalize())
+}
+
 /// `CC` from `[CC] BJB Sekuritas Jawa Barat`.
 fn member_in_brackets(name: &str) -> Option<String> {
     let rest = name.trim_start().strip_prefix('[')?;
