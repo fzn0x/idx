@@ -509,6 +509,7 @@ async fn login_cmd(
             let server = page::bind(page::PageOptions {
                 port: flags.port,
                 timeout,
+                return_to: page::ReturnTo::Terminal,
             })
             .await?;
             output::print_stderr(&format!(
