@@ -2384,14 +2384,12 @@ mod tests {
         let err = market_brokers_from(&f, BrokerSource::Idx, None, 5, BrokerSort::Value, night)
             .await
             .unwrap_err();
-        assert_eq!(err.code(), "provider");
+        // The failure and the copy's time, whichever layer words them.
+        assert_eq!(err.exit_code(), 3);
+        let says = err.to_string();
         assert!(
-            err.to_string().contains(
-                "the broker summary for 2026-11-06 could not be read again (fixture backend has no route for"
-            ) && err.to_string().ends_with(
-                "; the copy read at 11:00 WIB that day has no rows, which it has until idx.co.id publishes the session"
-            ),
-            "{err}"
+            says.contains("no route for") && says.contains("11:00 WIB"),
+            "{says}"
         );
         assert_eq!(
             be.calls_matching("date=20261105"),
@@ -2407,9 +2405,11 @@ mod tests {
             .unwrap();
         assert_eq!((s.provider, s.data.date), ("ipot", d(2026, 11, 6)));
         assert!(
-            s.warnings[0].starts_with(
-                "idx.co.id failed (idx: the broker summary for 2026-11-06 could not be read again ("
-            ),
+            s.warnings[0].starts_with("idx.co.id ")
+                && s.warnings[0].contains("11:00 WIB")
+                && s.warnings[0].ends_with(
+                    ", so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+                ),
             "{:?}",
             s.warnings
         );
@@ -2527,10 +2527,12 @@ mod tests {
         let err = market_brokers_from(&f, BrokerSource::Idx, None, 5, BrokerSort::Value, friday)
             .await
             .unwrap_err();
+        // Thursday's failure and its copy's time, not Wednesday's.
+        assert_eq!(err.exit_code(), 3);
+        let says = err.to_string();
         assert!(
-            err.to_string()
-                .contains("the broker summary for 2026-11-05 could not be read again"),
-            "{err}"
+            says.contains("2026-11-05") && says.contains("11:00 WIB"),
+            "{says}"
         );
     }
 
