@@ -964,6 +964,43 @@ fn member_ranking(
     }
 }
 
+/// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
+/// Before idx.co.id publishes a session its summary is an empty list, so a
+/// copy read on `day` itself without rows does not show that `day` had no
+/// session. Once that session has ended (`ended`), such a copy served
+/// because it could not be read again (the live fetch failed, or offline)
+/// is an error rather than a day without trading: the walk does not skip a
+/// session it could not read.
+async fn broker_day(
+    fetcher: &Arc<Fetcher>,
+    day: NaiveDate,
+    today: NaiveDate,
+    ended: NaiveDate,
+) -> Result<Sourced<Vec<idx::BrokerDay>>> {
+    let s = idx::broker_summary(fetcher, day, today).await?;
+    let read = s.fetched_at.with_timezone(&crate::model::wib());
+    if !s.data.is_empty() || !s.stale || day > ended || read.date_naive() > day {
+        return Ok(s);
+    }
+    let clock = read.format("%H:%M");
+    if s.stale_reason == Some(crate::model::StaleReason::Offline) {
+        return Err(IdxError::OfflineMiss(format!(
+            "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, as before idx.co.id publishes a session"
+        )));
+    }
+    let why = s
+        .warnings
+        .iter()
+        .find_map(|w| crate::providers::fetch_failed_cause(w))
+        .unwrap_or("the live fetch failed");
+    Err(IdxError::provider(
+        idx::NAME,
+        format!(
+            "the broker summary for {day} could not be read again ({why}), and the copy read at {clock} WIB that day has no rows, as before idx.co.id publishes a session"
+        ),
+    ))
+}
+
 /// Every exchange member's trading for one session (default: the latest
 /// published), ranked by value, volume or frequency; the `top` first (0 =
 /// all). Each member's figures count both its buying and its selling.
@@ -971,7 +1008,9 @@ fn member_ranking(
 /// idx.co.id publishes a session's summary after its close, so with no
 /// `date` the walk back starts at the latest session that had ended by
 /// `now` (16:15 WIB): before then the day's own summary is not asked for,
-/// and a refusal of that request cannot hide the session before it.
+/// and a refusal of that request cannot hide the session before it. A
+/// session that could not be read is not skipped either (see
+/// [`broker_day`]).
 pub async fn market_brokers(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -980,11 +1019,12 @@ pub async fn market_brokers(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
     let today = now.with_timezone(&crate::model::wib()).date_naive();
+    let ended = holidays::latest_session(now);
     let from = match date {
         Some(_) => today,
-        None => holidays::latest_session(now),
+        None => ended,
     };
-    let (day, mut s) = session(date, from, |d| idx::broker_summary(fetcher, d, today)).await?;
+    let (day, mut s) = session(date, from, |d| broker_day(fetcher, d, today, ended)).await?;
     let mut rows: Vec<BrokerDayRow> = std::mem::take(&mut s.data)
         .into_iter()
         .map(|r| BrokerDayRow {
@@ -2242,6 +2282,88 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), "blocked");
+    }
+
+    const FRIDAY_BROKERS: &str = "https://www.idx.co.id/primary/TradingSummary/GetBrokerSummary?date=20261106&start=0&length=9999";
+
+    #[tokio::test]
+    async fn a_session_whose_summary_could_not_be_read_is_not_skipped() {
+        use crate::model::BrokerSource;
+        // Read at 11:00, before idx.co.id published the session, Friday's
+        // summary was empty; at 19:30 idx.co.id cannot be reached.
+        let night = wib_at("2026-11-06T19:30:00");
+        let early = |dir: &std::path::Path| {
+            Cache::new(dir)
+                .put_fetched_at(
+                    FRIDAY_BROKERS,
+                    200,
+                    NO_TRADING,
+                    wib_at("2026-11-06T11:00:00"),
+                )
+                .unwrap();
+        };
+        let thursday =
+            || FixtureBackend::new().route("GetBrokerSummary?date=20261105", 200, BROKERS);
+        let (f, be, dir) = fetcher(thursday());
+        early(dir.path());
+        let err = market_brokers_from(&f, BrokerSource::Idx, None, 5, BrokerSort::Value, night)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "provider");
+        assert!(
+            err.to_string().contains(
+                "the broker summary for 2026-11-06 could not be read again (fixture backend has no route for"
+            ) && err.to_string().ends_with(
+                "and the copy read at 11:00 WIB that day has no rows, as before idx.co.id publishes a session"
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            be.calls_matching("date=20261105"),
+            0,
+            "not Thursday instead"
+        );
+
+        // auto: IPOT stands in for the session idx.co.id could not read.
+        let (f, _be, dir) = fetcher(ipot_ranking(thursday(), TOP_BROKERS));
+        early(dir.path());
+        let s = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, night)
+            .await
+            .unwrap();
+        assert_eq!((s.provider, s.data.date), ("ipot", d(2026, 11, 6)));
+        assert!(
+            s.warnings[0].starts_with(
+                "idx.co.id failed (idx: the broker summary for 2026-11-06 could not be read again ("
+            ),
+            "{:?}",
+            s.warnings
+        );
+
+        // Offline, that copy is not the session either.
+        let dir = tempfile::tempdir().unwrap();
+        early(dir.path());
+        let offline = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path()),
+            CacheMode::Offline,
+        ));
+        let err = market_brokers_from(
+            &offline,
+            BrokerSource::Idx,
+            None,
+            5,
+            BrokerSort::Value,
+            night,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
+        assert!(
+            err.to_string().contains(
+                "the broker summary for 2026-11-06 is cached only as read at 11:00 WIB that day"
+            ),
+            "{err}"
+        );
     }
 
     #[tokio::test]
