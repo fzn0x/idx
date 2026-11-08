@@ -93,12 +93,28 @@ function scan(words, switches = new Set()) {
 
 // ---- the commands the page runs, in the CLI's spellings (src/cli/*.rs) ----------
 
-/** The stocks subcommands: every one runs here under its own name. */
-const STOCKS = new Set(["quote", "history", "intraday", "profile", "financials", "earnings", "dividends", "returns", "brief", "fundamental", "growth", "valuation", "risk", "technical", "screen", "news", "sentiment", "insights", "list", "actions", "foreign", "compare"]);
-/** The market subcommands the page runs, by the command they run as. */
-const MARKET = { overview: "market", holidays: "holidays", members: "members", astro: "astro" };
-/** The ownership subcommands the page runs under the same words. */
-const OWNERSHIP = new Set(["ticker", "entity", "search", "cross-holders", "concentration", "graph", "changes", "foreign", "releases"]);
+/**
+ * Each command the page runs, in the CLI's words: its CLI path, then where each
+ * positional typed here goes on the CLI's line, in order. "@" stays a positional,
+ * "@*" takes every one left; "--name" becomes that flag's value; a trailing ","
+ * or " " joins every one left into one word (screen's filter clauses, a holder's
+ * name). The CLI path also reads a CLI line: stocks quote runs here as quote.
+ */
+export const CLI_FORM = {
+  quote: ["stocks quote", "@*"], history: ["stocks history", "@", "--period", "--interval"], intraday: ["stocks intraday", "@", "--interval"],
+  profile: ["stocks profile", "@"], financials: ["stocks financials", "@", "--period"], earnings: ["stocks earnings", "@"],
+  dividends: ["stocks dividends", "@"], returns: ["stocks returns", "@*"], brief: ["stocks brief", "@"], fundamental: ["stocks fundamental", "@"],
+  growth: ["stocks growth", "@"], valuation: ["stocks valuation", "@"], risk: ["stocks risk", "@"], technical: ["stocks technical", "@", "--period"],
+  screen: ["stocks screen", "--filter,"], news: ["stocks news", "@"], sentiment: ["stocks sentiment", "@"], insights: ["stocks insights", "@"],
+  list: ["stocks list", "--search "], actions: ["stocks actions", "@"], foreign: ["stocks foreign", "@"], compare: ["stocks compare", "@*"],
+  market: ["market overview"], holidays: ["market holidays", "--year"], members: ["market members", "--search "], astro: ["market astro", "--date"],
+  broker: ["broker", "@*"], bandar: ["bandar detect", "@*"], "bandar screen": ["bandar screen"], "bandar broker": ["bandar broker", "@"],
+  "ownership ticker": ["ownership ticker", "@"], "ownership entity": ["ownership entity", "@ "], "ownership search": ["ownership search", "@*"],
+  "ownership cross-holders": ["ownership cross-holders"], "ownership concentration": ["ownership concentration", "@*"], "ownership graph": ["ownership graph", "@*"],
+  "ownership changes": ["ownership changes", "--from", "--to", "--symbol"], "ownership foreign": ["ownership foreign", "@"], "ownership releases": ["ownership releases"],
+};
+/** The page's command for each CLI path in CLI_FORM: stocks quote is quote, market overview is market. */
+const PAGE_CMD = Object.fromEntries(Object.entries(CLI_FORM).map(([cmd, [path]]) => [path, cmd]));
 /** The page's switches (BOOL_FLAGS in terminal.js): they never take the next word. */
 export const WEB_SWITCHES = ["all", "asc", "company-only", "daily", "desc", "returns", "upcoming"];
 
@@ -109,9 +125,10 @@ export const WEB_SWITCHES = ["all", "asc", "company-only", "daily", "desc", "ret
  * values that are the page's own anyway, as foreign --source ipot); `rename` a
  * flag the page writes otherwise; `pos` the flags whose value is a positional
  * word here, in that order; `join` the flags given twice that the page takes
- * comma-separated. Every other flag is the page's too, under the same name.
+ * comma-separated; `cliName` a flag of the page's that the CLI spells otherwise.
+ * Every other flag is the page's too, under the same name.
  */
-const SPEC = {
+export const SPEC = {
   history: { short: { p: "period", i: "interval", n: "limit" } },
   intraday: { short: { i: "interval", n: "limit" } },
   financials: { short: { p: "period", s: "statement" }, join: ["statement"] },
@@ -134,7 +151,7 @@ const SPEC = {
   "ownership entity": { switch: ["exact"], cli: ["exact"] },
   "ownership search": { short: { n: "limit" } },
   "ownership cross-holders": { short: { n: "limit" } },
-  "ownership concentration": { short: { n: "limit" }, switch: ["ascending"] },
+  "ownership concentration": { short: { n: "limit" }, switch: ["ascending"], cliName: { asc: "ascending" } },
   "ownership graph": { switch: ["holder", "dot"], cli: ["dot"] },
   "ownership changes": { short: { s: "symbol", n: "limit" }, pos: ["from", "to", "symbol"] },
   "ownership foreign": { short: { n: "limit" } },
@@ -347,20 +364,21 @@ function dispatch(ctx, words) {
   const head = words[0].toLowerCase();
   const name = own(ALIASES, head) || head;
   const sub = (words[1] || "").toLowerCase();
-  // `cli`: the words as the CLI takes them, for a flag notice's CLI line.
   if (name === "stocks") {
     if (!sub) return web(ctx, ["help"]);
-    if (!STOCKS.has(sub)) return web(ctx, words.slice(1));
-    return webCommand(ctx, sub, [sub], words.slice(2), { group: true, cli: words });
+    const runs = own(PAGE_CMD, `stocks ${sub}`);
+    if (!runs) return web(ctx, words.slice(1));
+    return webCommand(ctx, runs, [runs], words.slice(2), { group: true });
   }
   if (name === "market") {
-    const runs = own(MARKET, sub);
-    if (runs) return webCommand(ctx, runs, [runs], words.slice(2), { group: true, cli: words });
+    const runs = own(PAGE_CMD, `market ${sub}`);
+    if (runs) return webCommand(ctx, runs, [runs], words.slice(2), { group: true });
     if (own(MCP_ONLY, `market ${sub}`)) return mcpNotice(ctx, `market ${sub}`, words.slice(2));
     return webCommand(ctx, "market", [words[0]], words.slice(1));
   }
   if (name === "ownership") {
-    if (OWNERSHIP.has(sub)) return webCommand(ctx, `ownership ${sub}`, words.slice(0, 2), words.slice(2), { cli: words });
+    const runs = own(PAGE_CMD, `ownership ${sub}`);
+    if (runs) return webCommand(ctx, runs, words.slice(0, 2), words.slice(2));
     if (own(MCP_ONLY, `ownership ${sub}`)) return mcpNotice(ctx, `ownership ${sub}`, words.slice(2));
     if (own(CLI_ONLY, `ownership ${sub}`)) return cliNotice(ctx, `ownership ${sub}`, words.slice(2));
     return webCommand(ctx, "ownership", words.slice(0, 1), words.slice(1));
@@ -371,14 +389,15 @@ function dispatch(ctx, words) {
     return stockbitNotice(ctx);
   }
   if (name === "bandar") {
-    const n = ["detect", "screen", "broker"].includes(sub) ? 2 : 1;
-    return webCommand(ctx, sub === "screen" || sub === "broker" ? `bandar ${sub}` : "bandar", words.slice(0, n), words.slice(n), { cli: words });
+    // bandar BBCA is the page's bandar detect BBCA.
+    const runs = own(PAGE_CMD, `bandar ${sub}`);
+    return runs ? webCommand(ctx, runs, words.slice(0, 2), words.slice(2)) : webCommand(ctx, "bandar", words.slice(0, 1), words.slice(1));
   }
   if (own(CLI_ONLY, name)) return cliNotice(ctx, name, words.slice(1));
   if (own(BARE, name)) return mcpNotice(ctx, BARE[name], words.slice(1));
   if (/^idx_[a-z_]+$/.test(name)) return toolLine(ctx, name, words.slice(1), false);
   if (name === "tools" && /^idx_[a-z_]+$/.test(sub)) return toolLine(ctx, sub, words.slice(2), true);
-  return webCommand(ctx, name, [words[0]], words.slice(1), { cli: name === "broker" ? words : null });
+  return webCommand(ctx, name, [words[0]], words.slice(1));
 }
 
 /** An MCP tool's name, typed alone or after tools: its web example, its notice, or its CLI command with the words after it. */
@@ -394,13 +413,14 @@ function toolLine(ctx, name, args, typedTools) {
 }
 
 /** A command the page runs: the CLI's flags in the page's words, or a notice for the ones it has no twin for. */
-function webCommand(ctx, cmd, prefix, args, { group = false, cli = null } = {}) {
+function webCommand(ctx, cmd, prefix, args, { group = false } = {}) {
   const spec = own(SPEC, cmd) || {};
   const items = scan(args, new Set([...(spec.switch || []), ...WEB_SWITCHES]));
   const shortUsed = items.some((x) => x.short && own(spec.short, x.name));
   const renamed = items.some((x) => !x.short && (own(spec.rename, x.name) || spec.pos?.includes(x.name)));
   const cliShaped = ctx.fromCli || group || ctx.found.length > 0 || shortUsed || renamed;
-  const pos = [], flags = [], unsupported = [], asPos = {};
+  // `cliOnly`: the typed words of the flags the page lacks, for the CLI line.
+  const pos = [], flags = [], unsupported = [], cliOnly = [], asPos = {};
   let changed = false;
   for (const x of items) {
     if (x.pos != null) { pos.push(x.pos); continue; }
@@ -414,6 +434,7 @@ function webCommand(ctx, cmd, prefix, args, { group = false, cli = null } = {}) 
       const keep = own(spec.keep, name);
       if (keep?.includes(String(x.value).toLowerCase())) { changed = true; continue; }
       unsupported.push(keep ? `--${name} ${x.value}` : `--${name}`);
+      cliOnly.push(...x.raw);
       continue;
     }
     const twice = spec.join?.includes(name) && flags.find((f) => f.name === name);
@@ -423,6 +444,7 @@ function webCommand(ctx, cmd, prefix, args, { group = false, cli = null } = {}) 
   for (const k of spec.pos || []) if (typeof asPos[k] === "string") pos.push(asPos[k]);
   const words = [...prefix, ...pos, ...flags.flatMap((f) => (f.value === true ? [`--${f.name}`] : [`--${f.name}`, String(f.value)]))];
   if (ctx.help) return web(ctx, ["help", cmd.split(" ")[0]]);
+  const cli = cliForm(cmd, spec, pos, flags, cliOnly);
   if (ctx.badOutput) {
     const plain = webJoin(words), jsonLine = webJoin(["json", ...words]);
     return flagNotice(ctx, null, [ctx.badOutput.raw.join(" ")], FLAG_WHY.output, cli,
@@ -438,6 +460,36 @@ function webCommand(ctx, cmd, prefix, args, { group = false, cli = null } = {}) 
   }
   if (!cliShaped && !changed && !ctx.rewrite) return { kind: "web", line: ctx.typed, note: null };
   return web(ctx, words);
+}
+
+/**
+ * What the page runs, in the CLI's words (CLI_FORM): its CLI path, the page's
+ * positionals where the CLI takes them, its flags, then `extra` (the typed words
+ * of the flags the page lacks). Null when a word has no place on the CLI's line,
+ * or a positional and a flag give the same setting twice.
+ */
+function cliForm(cmd, spec, pos, flags, extra) {
+  const form = own(CLI_FORM, cmd);
+  if (!form || pos.some(isFlag)) return null;
+  const [path, ...slots] = form;
+  const out = path.split(" "), set = [];
+  let k = 0;
+  for (const slot of slots) {
+    if (k >= pos.length) break;
+    const flag = slot.match(/^--([a-z-]+)/)?.[1];
+    const join = slot.slice(flag ? flag.length + 2 : 1);
+    const taken = join ? pos.slice(k) : [pos[k]];
+    k += taken.length;
+    if (!flag) out.push(...(join === "*" ? taken : [taken.join(join)]));
+    else { set.push(flag); out.push(`--${flag}`, taken.join(join)); }
+  }
+  if (k < pos.length) return null;
+  for (const f of flags) {
+    const name = own(spec.cliName, f.name) || f.name;
+    if (set.includes(name)) return null;
+    out.push(`--${name}`, ...(f.value === true ? [] : [String(f.value)]));
+  }
+  return [...out, ...extra];
 }
 
 /** The near command for a flag notice: the same line, without what the page lacks. */
@@ -514,6 +566,7 @@ function cliNotice(ctx, path, args) {
   };
 }
 
+/** `cliWords`: the command in the CLI's words (cliForm), or null when it has none. */
 function flagNotice(ctx, command, flags, why, cliWords, nearBy) {
   return { kind: "flag", command, flags, why, cli: cliWords ? cliLines(ctx, cliWords) : [], near: nearBy };
 }
