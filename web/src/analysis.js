@@ -633,9 +633,18 @@ export function sortField(name) { return KEYS[String(name || "mcap").toLowerCase
 const NAME_BY_FIELD = Object.fromEntries(KEY_NAMES.split(", ").map((k) => [KEYS[k], k]));
 /** Canonical key name, as the CLI reports it (`ytd` -> `retytd`, `pbv` -> `pb`). */
 export function keyName(name) { const k = String(name).toLowerCase(); return NAME_BY_FIELD[KEYS[k]] || k; }
+/**
+ * The value a filter or the sort reads (analysis::screen::numeric). A P/B or
+ * P/S over statements in another currency than the price is not a ratio, so
+ * it reads as missing: no pb or ps clause matches it, and a pb or ps sort
+ * puts it last. The row keeps it as reported.
+ */
+export function screenValue(row, field) {
+  return (field === "price_to_book" || field === "price_to_sales") && mixedCurrency(row) ? null : row[field];
+}
 export function matches(row, filters) {
   return filters.every((f) => {
-    const v = row[f.field];
+    const v = screenValue(row, f.field);
     if (v == null) return false;
     if (f.text != null) {
       const hit = String(v).toLowerCase().includes(f.text.toLowerCase());
@@ -650,7 +659,7 @@ export function matches(row, filters) {
 }
 export function sortRows(rows, field, descending = true) {
   rows.sort((a, b) => {
-    const x = a[field], y = b[field];
+    const x = screenValue(a, field), y = screenValue(b, field);
     if (x == null && y == null) return a.symbol.localeCompare(b.symbol);
     if (x == null) return 1; if (y == null) return -1;
     return descending ? y - x : x - y;

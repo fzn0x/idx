@@ -562,6 +562,28 @@ test("fundamentals fill a screen row's currencies from one set of statements", (
   assert.deepEqual([r.price_to_sales, r.financial_currency], [0.84, null]);
 });
 
+test("pb and ps pass over multiples that mix currencies, as analysis::screen::numeric", () => {
+  const bssr = { ...reportingIn("BSSR", "USD", 48921.57), price_to_sales: 9876.5, pe_trailing: 7.95 };
+  const bbca = { ...reportingIn("BBCA", "IDR", 2.25), price_to_sales: 5.82 };
+  const unnamed = reportingIn("TLKM", null, 2.1);
+  assert.deepEqual([an.screenValue(bssr, "price_to_book"), an.screenValue(bssr, "price_to_sales")], [null, null]);
+  assert.equal(an.screenValue(bbca, "price_to_book"), 2.25);
+  assert.equal(an.screenValue(bbca, "price_to_sales"), 5.82);
+  assert.equal(an.screenValue(unnamed, "price_to_book"), 2.1, "no currency named");
+  // Not a ratio: it matches no pb or ps clause, low or high, like a missing value.
+  for (const spec of ["pb>0", "pb<1", "pb>1000", "pb!=1", "ps>0", "ps<1"]) assert.ok(!an.matches(bssr, an.parseFilters(spec)), spec);
+  assert.ok(an.matches(bbca, an.parseFilters("pb>1,ps<10")));
+  // P/E is in the price's terms and still filters.
+  assert.ok(an.matches(bssr, an.parseFilters("pe<10")));
+  // Sorted last either way; the row keeps its value as reported.
+  const rows = [bssr, bbca, unnamed];
+  an.sortRows(rows, "price_to_book", true);
+  assert.deepEqual(rows.map((r) => r.symbol), ["BBCA", "TLKM", "BSSR"]);
+  an.sortRows(rows, "price_to_book", false);
+  assert.deepEqual(rows.map((r) => r.symbol), ["TLKM", "BBCA", "BSSR"]);
+  assert.equal(rows[2].price_to_book, 48921.57);
+});
+
 test("sentiment lexicon", () => {
   assert.ok(an.scoreText("Saham BBCA melonjak, laba naik 12%").score > 0);
   assert.ok(an.scoreText("IHSG anjlok, investor asing jual bersih").score < 0);
