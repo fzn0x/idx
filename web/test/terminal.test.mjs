@@ -1,6 +1,7 @@
 // node --test web/test/*.mjs. The terminal's flag parser: public/terminal.js is
 // a browser module (it imports /app.js and reads the DOM), so the test lifts
-// BOOL_FLAGS and flags(), toolButtons(), commandWords() and nearTable() out of its source and runs them as they are.
+// BOOL_FLAGS and flags(), toolButtons(), commandWords(), nearTable() and the screen
+// renderer out of its source and runs them as they are.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -96,4 +97,35 @@ test("a word over 40 characters stays plain text, so it breaks at its hyphens in
   const a = nearTable([{ line, id: "", en: "" }]).cells[0][0];
   assert.equal(a.attrs.href, `/terminal?cmd=${encodeURIComponent(line)}`);
   assert.equal(text(a), line);
+});
+
+test("the screen marks a P/B over another currency's statements and names the companies as the CLI does", () => {
+  const lift = (re, what) => { const m = src.match(re)?.[0]; assert.ok(m, `${what} found in terminal.js`); return m; };
+  const mixed = lift(/^const mixedCurrency = .*;$/m, "mixedCurrency");
+  const ratio = lift(/^const mixedRatio = .*;$/m, "mixedRatio");
+  const note = lift(/^function screenCurrencyNote\(rows\) \{[\s\S]*?^\}$/m, "screenCurrencyNote()");
+  const screen = lift(/^  screen\(s\) \{[\s\S]*?^  \},$/m, "R.screen()");
+  // Stand-ins for app.js on the English page: fmt with two decimals and n/a for a
+  // missing value, and an el(), a fragment and a table() that keep what they are given.
+  const fmt = { ratio: (v) => (v == null ? "n/a" : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })), price: String, pct: String, compact: String, num: String };
+  const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [...children], append(...c) { this.children.push(...c); } });
+  const document = { createDocumentFragment: () => el("fragment") };
+  const table = (cols, rows) => ({ tag: "table", cols, rows });
+  const make = new Function("fmt", "el", "document", "table", "wrapScroll", "signClass", "pct", "x", `${mixed}\n${ratio}\n${note}\nconst R = { ${screen} };\nreturn (s) => R.screen(s);`);
+  const render = make(fmt, el, document, table, (t) => t, () => "", String, String);
+  const shown = (rows) => {
+    const page = render({ preset: null, filters: ["pe<10"], quoted: rows.length, universe: rows.length, matched_quote_level: rows.length, fundamentals_checked: 0, total_matches: rows.length, sort: "div", descending: true, rows, returns_source: null });
+    const t = page.children.find((c) => c.tag === "table");
+    const pb = t.cols.find((c) => c.h === "P/B");
+    return { pb: t.rows.map((r) => pb.f(r)), notes: page.children.filter((c) => c.tag === "p" && c.attrs.class === "warn").map((c) => c.attrs.text) };
+  };
+
+  // 2026-11-06: BSSR and GEMS report in USD, BBCA in IDR; PTRO has no P/B (the cases of src/output/table_news.rs).
+  const row = (symbol, statements, pb) => ({ symbol, name: symbol, currency: "IDR", financial_currency: statements, price_to_book: pb });
+  assert.deepEqual(shown([row("BSSR", "USD", 48921.57), row("BBCA", "IDR", 2.253823), row("GEMS", "USD", 47202.797), row("PTRO", "USD", null)]), {
+    pb: ["48,921.57*", "2.25", "47,202.80*", "n/a"],
+    notes: ["* P/B divides the price by statement figures in another currency, so it is not comparable: BSSR, GEMS (statements in USD, price in IDR). Filters and sorts on pb and ps read such P/B and P/S as missing."],
+  });
+  // Same currency, or one not named: no mark and no note.
+  assert.deepEqual(shown([row("BBCA", "IDR", 2.25), row("TLKM", null, 2.1)]), { pb: ["2.25", "2.10"], notes: [] });
 });
