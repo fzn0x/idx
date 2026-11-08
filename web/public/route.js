@@ -230,26 +230,27 @@ function picks(items) {
 // ---- what runs only in the CLI and the MCP server, or only in the CLI -----------------
 
 /**
- * CLI commands behind an MCP tool with web: null, by their CLI path. `takes`:
- * "none" when the command has no positional argument (a ticker typed after it only
- * shapes the near commands), "symbol" when it takes one as --symbol.
- * `switch`: its flags that take no value.
+ * CLI commands behind an MCP tool with web: null, by their CLI path. `takes`, how
+ * the command takes the words typed after it: "none" (a ticker typed only shapes
+ * the near commands), "one" positional, "many", or "symbol" (one, as --symbol).
+ * `needs`: the CLI requires that positional, so a line without one takes the near
+ * commands' ticker. `switch`: its flags that take no value.
  */
-const MCP_ONLY = {
+export const MCP_ONLY = {
   "market foreign": { tool: "idx_market_foreign", takes: "none", near: (a) => [N.foreign(a.sym), N.foreignScreen()] },
   "market brokers": { tool: "idx_market_brokers", takes: "none", near: (a) => (a.code && !a.syms.length ? [N.bandarBroker(a.code), N.broker(a.sym)] : [N.broker(a.sym), N.bandarBroker(a.code || "YP")]).concat(N.members()) },
-  "market indices": { tool: "idx_indices", near: () => [N.market(), N.ihsg()] },
+  "market indices": { tool: "idx_indices", takes: "many", near: () => [N.market(), N.ihsg()] },
   "market calendar": { tool: "idx_calendar", takes: "symbol", near: (a) => [N.actions(a.sym), N.holidays()] },
-  "ownership composition": { tool: "idx_ownership_composition", near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
-  "ownership institutions": { tool: "idx_ownership_institutions", near: (a) => [N.holders(a.sym)] },
+  "ownership composition": { tool: "idx_ownership_composition", takes: "one", needs: true, near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
+  "ownership institutions": { tool: "idx_ownership_institutions", takes: "one", needs: true, near: (a) => [N.holders(a.sym)] },
   "ownership sync": { tool: "idx_ownership_snapshot", takes: "none", switch: ["force"], near: () => [N.releases()] },
   "ownership status": { tool: "idx_ownership_snapshot", takes: "none", near: () => [N.releases()] },
-  "stockbit orderbook": { tool: "idx_orderbook", near: (a) => [N.quote(a.sym), N.intraday(a.sym)] },
+  "stockbit orderbook": { tool: "idx_orderbook", takes: "one", needs: true, near: (a) => [N.quote(a.sym), N.intraday(a.sym)] },
   "stockbit status": { tool: "idx_stockbit_status", takes: "none" },
   "stockbit login": { tool: "idx_stockbit_login", takes: "none", switch: ["manual", "page", "no-browser", "force"] },
-  "stockbit actions": { tool: "idx_stockbit_actions", near: (a) => [N.actions(a.sym)] },
+  "stockbit actions": { tool: "idx_stockbit_actions", takes: "one", needs: true, near: (a) => [N.actions(a.sym)] },
   "stockbit calendar": { tool: "idx_stockbit_actions", takes: "none", near: (a) => [N.actions(a.sym), N.holidays()] },
-  "stockbit movements": { tool: "idx_stockbit_movements", near: (a) => [N.holders(a.sym)] },
+  "stockbit movements": { tool: "idx_stockbit_movements", takes: "one", near: (a) => [N.holders(a.sym)] },
 };
 
 /** Words typed alone that can only mean one of those (brokers, one letter from broker, points at broker too). */
@@ -516,27 +517,34 @@ function cliLines(ctx, words) {
   ];
 }
 
-/** A command's words for the CLI line: positionals as the command takes them, flags as typed. */
-function cliArgs(items, takes) {
+/**
+ * A command's words for the CLI line (MCP_ONLY's `takes` and `needs`): flags as
+ * typed, positionals as the command takes them; `sym` stands in for a required
+ * positional the line lacks.
+ */
+function cliArgs(items, { takes, needs }, sym) {
   const hasSymbol = items.some((x) => x.name === "symbol" || x.name === "s");
-  let first = true;
-  return items.flatMap((x) => {
+  let given = 0;
+  const out = items.flatMap((x) => {
     if (x.pos == null) return x.raw;
-    if (takes === "none") return [];
-    if (takes === "symbol") { if (hasSymbol || !first) return []; first = false; return ["--symbol", x.pos]; }
+    if (takes === "none" || (takes !== "many" && given)) return [];
+    given++;
+    if (takes === "symbol") return hasSymbol ? [] : ["--symbol", x.pos];
     return x.raw;
   });
+  return needs && !given ? [sym, ...out] : out;
 }
 
 function mcpNotice(ctx, path, args, tool = byName(MCP_ONLY[path].tool)) {
   const entry = MCP_ONLY[path] || {};
   const items = scan(args, new Set(entry.switch || []));
+  const a = picks(items);
   return {
     kind: "cli-mcp", path, tool: tool.tool,
     what: say(whatOf(tool, "id"), whatOf(tool, "en")),
     why: say(cliOnlyReason(tool, "id"), cliOnlyReason(tool, "en")),
-    cli: cliLines(ctx, [...path.split(" "), ...cliArgs(items, entry.takes)]),
-    near: entry.near ? entry.near(picks(items)) : [],
+    cli: cliLines(ctx, [...path.split(" "), ...cliArgs(items, entry, a.sym)]),
+    near: entry.near ? entry.near(a) : [],
   };
 }
 

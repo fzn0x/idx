@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { routeLine } from "../public/route.js";
+import { TOOLS } from "../public/tools.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
@@ -366,4 +367,18 @@ function parseAll(typed) {
 
 test("a flag notice gives the command the page runs in the CLI's words", () => {
   assert.ok(parseAll(PAGE_LINES) > 300);
+});
+
+/** What runs only in the CLI and MCP, as typed, alone and with words, and by tool name. */
+const MCP_LINES = [
+  ...TOOLS.filter((t) => !t.web).flatMap((t) => [t.cli, t.tool, `tools ${t.tool}`, `json ${t.cli.replace(/^idx /, "")}`, `${t.cli.split(" ").filter((w) => /^[a-z]+$/.test(w)).join(" ")} -o json`]),
+  "orderbook", "orderbook BBCA", "orderbook TLKM BBRI", "stockbit orderbook", "stockbit orderbook -d 20", "stockbit actions", "stockbit actions BBCA --kind dividend",
+  "composition", "ownership composition", "ownership composition --as-of 2026-09-30", "institutions", "ownership institutions", "indices", "indices LQ45 IDX30",
+  "calendar BBCA", "market calendar --type rups --days 30", "stockbit calendar --kind dividend --days 30", "movements", "movements BBCA --action sell",
+  "brokers", "brokers CC", "market foreign TLKM", "market foreign --date 2026-10-16 -n 20", "ownership sync --force", "ownership status", "stockbit",
+  "stockbit status", "stockbit login --page", "stockbit login --timeout 600", "idx --offline stockbit status", "market brokers --top 20 --sort frequency",
+];
+
+test("a notice for what runs only in the CLI and MCP gives a CLI line the CLI takes", () => {
+  assert.ok(parseAll(MCP_LINES) > 100);
 });
