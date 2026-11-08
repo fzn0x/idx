@@ -745,6 +745,7 @@ const MCP_ADVICE: &[crate::error::Advice] = &[
     crate::providers::idx::NO_CACHE,
     service::IPOT_SOURCE_ADVICE,
     service::BANDAR_FNET_ADVICE,
+    service::BROKERS_IPOT_ADVICE,
 ];
 
 /// `text` with its CLI advice in MCP wording.
@@ -1174,7 +1175,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_market_brokers",
-        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses (Cloudflare), cannot be reached, fails or has not published the session yet, from IPOT's ranking if IPOT holds that session (the date, or with none the latest session that has ended), with a warning; the envelope's provider says which answered. A session idx.co.id has not published yet is named: with no date the session before comes with a warning, and that date is not_found. source=ipot asks IPOT directly: its latest session only (a date before that session, or after today, is a usage error; a later one up to today, or a day without a session, is not_found), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures of a million and more abbreviated to two decimals (rounded=true). From idx.co.id buy_value, sell_value, net_value and kind are null and rounded is false. IPOT's ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated and is refused (a provider error, or offline_miss or network for a copy read then and served offline or after a failed read; under auto, idx.co.id's error then stands). For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
+        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses (Cloudflare), cannot be reached, fails or has not published the session yet, from IPOT's ranking if IPOT holds that session (the date, or with none the latest session that has ended), with a warning; the envelope's provider says which answered. source=idx asks idx.co.id only, any session; when it refuses, the error names source=ipot if IPOT could answer (no date or the latest session that has ended, outside a trading day's 08:58 to 19:00 WIB). A session idx.co.id has not published yet is named: with no date the session before comes with a warning, and that date is not_found. source=ipot asks IPOT directly: its latest session only (a date before that session, or after today, is a usage error; a later one up to today, or a day without a session, is not_found), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures of a million and more abbreviated to two decimals (rounded=true). From idx.co.id buy_value, sell_value, net_value and kind are null and rounded is false. IPOT's ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated and is refused (a provider error, or offline_miss or network for a copy read then and served offline or after a failed read; under auto, idx.co.id's error then stands). For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
     )]
     async fn market_brokers(
         &self,
@@ -3361,6 +3362,46 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
             assert_eq!(v["error"]["code"], code, "{v}");
         }
+    }
+
+    #[tokio::test]
+    async fn market_brokers_advice_names_the_source_argument() {
+        // The tool reads the real clock, and in a trading day's hours IPOT
+        // could not answer, so the service is called with Sunday's.
+        let dir = tempfile::tempdir().unwrap();
+        let backend = crate::http::FixtureBackend::new().route(
+            "GetBrokerSummary",
+            403,
+            include_str!("../../tests/fixtures/idx/cloudflare_blocked.html"),
+        );
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(backend),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let sunday = chrono::DateTime::parse_from_rfc3339("2026-11-08T10:00:00+07:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let err = service::market_brokers_from(
+            &fetcher,
+            crate::model::BrokerSource::Idx,
+            None,
+            5,
+            crate::model::BrokerSort::Value,
+            sunday,
+        )
+        .await
+        .unwrap_err();
+        let v = json_of(&fail(err));
+        assert_eq!(v["error"]["code"], "blocked", "{v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.ends_with(
+                "; or call the tool again with source \"ipot\" (or \"auto\", the default) for IPOT's (Indo Premier) ranking of its latest session"
+            ),
+            "{msg}"
+        );
+        assert!(!msg.contains("--"), "{msg}");
     }
 
     #[tokio::test]

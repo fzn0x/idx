@@ -492,6 +492,14 @@ pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
     mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
 };
 
+/// When idx.co.id refuses the member ranking of a session IPOT could hold:
+/// IPOT's ranking, which answers from anywhere, but only of its latest
+/// session.
+pub const BROKERS_IPOT_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or use --source ipot (or the default, --source auto) for IPOT's (Indo Premier) ranking of its latest session",
+    mcp: "; or call the tool again with source \"ipot\" (or \"auto\", the default) for IPOT's (Indo Premier) ranking of its latest session",
+};
+
 /// idx.co.id refused the request and nothing was cached: add what else
 /// answers the question. A Cloudflare refusal keeps its JSON code `blocked`.
 fn with_alternative(e: IdxError, advice: crate::error::Advice) -> IdxError {
@@ -1287,6 +1295,17 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
     }
 }
 
+/// `true` when IPOT could answer for `date` at `at`: it holds only its
+/// latest session, so `date` must be none or the latest session that has
+/// ended (`ended`), and its ranking cannot be dated in a trading day's hours.
+fn ipot_could_answer(
+    date: Option<NaiveDate>,
+    ended: NaiveDate,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    date.is_none_or(|d| d == ended) && ipot::top_brokers_datable(at)
+}
+
 /// The member ranking from `source`. `auto` asks idx.co.id and, when it
 /// refuses (code `blocked`), cannot be reached (`network`), fails
 /// (`provider`), offline has no copy (`offline_miss`), or has not
@@ -1294,7 +1313,8 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
 /// if IPOT holds the session asked for: `date`, or with none the latest
 /// session that has ended. When IPOT cannot stand in (another session, such
 /// as an old copy served offline or after a failed fetch, or a failure),
-/// idx.co.id's answer stands with IPOT's reason after it.
+/// idx.co.id's answer stands with IPOT's reason after it. `idx` asks
+/// idx.co.id only, and a refusal names IPOT where it could answer.
 pub async fn market_brokers_from(
     fetcher: &Arc<Fetcher>,
     source: crate::model::BrokerSource,
@@ -1308,7 +1328,15 @@ pub async fn market_brokers_from(
     let today = now.with_timezone(&crate::model::wib()).date_naive();
     let ended = holidays::latest_session(now);
     match source {
-        BrokerSource::Idx => members_until(fetcher, date, top, sort, today, ended).await,
+        BrokerSource::Idx => {
+            let walked = members_until(fetcher, date, top, sort, today, ended).await;
+            // Judged by the clock after idx.co.id's requests (and retries).
+            let at = now + (chrono::Utc::now() - entered);
+            if !ipot_could_answer(date, ended, at) {
+                return walked;
+            }
+            walked.map_err(|e| with_alternative(e, BROKERS_IPOT_ADVICE))
+        }
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
             let (walked, unpublished) = idx_walk(fetcher, date, top, sort, today, ended).await;
@@ -2518,6 +2546,55 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert_eq!(be.calls_matching("indopremier"), asked);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_idx_co_id_names_ipot_where_it_could_answer() {
+        use crate::model::BrokerSource;
+        // idx.co.id answers every summary with a block page; nothing is cached.
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route(
+            "GetBrokerSummary",
+            403,
+            include_str!("../../tests/fixtures/idx/cloudflare_blocked.html"),
+        ));
+        let idx =
+            |date, now| market_brokers_from(&f, BrokerSource::Idx, date, 5, BrokerSort::Value, now);
+        // On Sunday IPOT's latest session is the latest that has ended,
+        // 2026-11-06: source idx names it, with no date or with that one.
+        for date in [None, Some(d(2026, 11, 6))] {
+            let err = idx(date, sunday()).await.unwrap_err();
+            assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+            assert!(
+                err.to_string().ends_with(
+                    "; or use --source ipot (or the default, --source auto) for IPOT's (Indo Premier) ranking of its latest session"
+                ),
+                "{err}"
+            );
+        }
+        // Not for a session before it, which IPOT never holds, nor in a
+        // trading day's hours, when IPOT's ranking cannot be dated.
+        for (date, now) in [
+            (Some(d(2026, 10, 16)), sunday()),
+            (None, wib_at("2026-11-09T10:00:00")),
+        ] {
+            let err = idx(date, now).await.unwrap_err();
+            assert_eq!(err.code(), "blocked", "{err}");
+            assert!(!err.to_string().contains("--source"), "{err}");
+        }
+        // An agent passes a tool argument, not a flag.
+        assert!(
+            BROKERS_IPOT_ADVICE.mcp.contains("source \"ipot\""),
+            "{BROKERS_IPOT_ADVICE:?}"
+        );
+        assert!(!BROKERS_IPOT_ADVICE.mcp.contains("--"));
+        // auto has asked IPOT already: its own note stands, without advice.
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let says = err.to_string();
+        assert!(says.contains("; IPOT could not stand in: "), "{says}");
+        assert!(!says.contains("--source"), "{says}");
     }
 
     /// `inner`, answering a URL that contains `slow` only after `pause` of

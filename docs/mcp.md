@@ -459,8 +459,9 @@ keeps refusing, the server's network is likely refused (data centres, VPNs
 and CI runners are refused more often), which only the user can change. Or
 take the alternative the message names. Over MCP that advice is a tool
 argument, not a CLI flag (`idx_foreign` with `source: "ipot"`,
-`idx_bandar_screen` with `period: "1d"` and `sort: "fnet"`). For the
-ownership register, let the GitHub mirror serve it.
+`idx_bandar_screen` with `period: "1d"` and `sort: "fnet"`,
+`idx_market_brokers` with `source: "ipot"` for IPOT's latest session). For
+the ownership register, let the GitHub mirror serve it.
 
 ## Behaviour notes
 

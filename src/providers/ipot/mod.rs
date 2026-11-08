@@ -591,6 +591,13 @@ fn cached_outside_hours(fetcher: &Fetcher) -> bool {
     }
 }
 
+/// `true` when a ranking read at `now` can be dated: outside a trading
+/// day's hours from 08:58 to 19:00 WIB ([`UNDATED`]). In them
+/// [`top_brokers`] answers only from a copy read outside them.
+pub fn top_brokers_datable(now: DateTime<Utc>) -> bool {
+    !undated_at(now)
+}
+
 /// `t` falls in [`UNDATED`] on a trading day.
 fn undated_at(t: DateTime<Utc>) -> bool {
     let local = t.with_timezone(&crate::model::wib());
