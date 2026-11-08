@@ -238,7 +238,6 @@ function keep(st, run) {
   run.promoted = st.complete === run.session;
   const needed = (r) => r.session === st.complete || (r.reason === "closed" && st.complete != null && r.session > st.complete);
   st.runs = [run, ...(st.runs || []).filter((r) => r.session !== run.session)].filter((r, i) => i < RUNS_KEPT || needed(r));
-  st.done_at = run.done_at;
   return true;
 }
 
@@ -624,7 +623,7 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   // its time nor prunes; nor does a minute of a forced rescan that keep()
   // does not file yet.
   if (st.phase === "running" && !st.queue.length) {
-    if (settled(st)) st.phase = "done";
+    if (settled(st)) Object.assign(st, { phase: "done", done_at: at });
     const run = runOf(st, at), filed = (st.runs || []).find((r) => r.session === session && r.scanned);
     if ((!filed || says(filed) !== says(run)) && keep(st, run)) changed = prune = true;
     changed ||= st.phase === "done";
@@ -741,13 +740,20 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   return { warnings, failed, unpublished, scanned, fetched_at };
 }
 
+/**
+ * /api/bandar/status: where the scan stands. `done_at` is set once its
+ * session is done, as before the phases; `filed_at` is when the session's
+ * record was last filed, which the first pass's end does while retry rounds
+ * and re-reads go on.
+ */
 export async function scanStatus(env) {
   const st = upgrade(await kvGet(env, STATE));
   if (!st) return { session: null, complete: null, running: false };
   return {
     session: st.session, complete: st.complete, running: ["new", "waiting", "running"].includes(st.phase), holiday: st.phase === "closed",
     scanned: attempted(st), of: (st.symbols || []).length, with_trades: st.checked || 0,
-    failed: st.failed || [], started_at: st.started_at || null, done_at: st.done_at || null,
+    failed: st.failed || [], started_at: st.started_at || null, done_at: (st.phase === "done" && st.done_at) || null,
+    filed_at: st.runs?.find((r) => r.session === st.session)?.done_at ?? null,
     phase: st.phase, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null, probe_failing_since: st.failing_since ?? null,
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
     pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,

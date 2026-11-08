@@ -656,6 +656,25 @@ test("a stock that fails is tried again 10, 30, 60 and 120 minutes after its pas
   assert.deepEqual([st.last_errors[0].symbol, st.last_errors[0].kind, st.last_errors[0].error], ["TLKM", "http_503", "HTTP 503"]);
 });
 
+test("/api/bandar/status gives done_at only once the scan is done, and when its record was filed meanwhile", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
+  let busy = true;
+  const fetchFn = async (u, init) => (busy && String(u).includes("code=TLKM") ? new Response("busy", { status: 503 }) : recorded(u, init));
+  const at = (hm) => new Date(`2026-10-17T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    // The first pass is over and filed, TLKM waits for its retry round.
+    await bandarScanStep(env, { now: at("10:00") });
+    let st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.running, st.done_at, st.filed_at], ["running", true, null, at("10:00").toISOString()]);
+    busy = false;
+    await bandarScanStep(env, { now: at("10:10") });
+    st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.running, st.done_at, st.filed_at], ["done", false, at("10:10").toISOString(), at("10:10").toISOString()]);
+  });
+});
+
 test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again and scanned", async () => {
   const env = memoryDb();
   // Written at 16:45:39 WIB on 2026-11-06, when IPOT had not published that session's lists.
