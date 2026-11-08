@@ -206,6 +206,10 @@ test("every CLI-only command gets the CLI-only notice, with its own reason", () 
     }
     assert.deepEqual(routeLine(line).cli, [cli], line);
   }
+  // One ticker on the watchlist gets the one-stock quote's words, several the list's.
+  assert.deepEqual(routeLine("watch BBCA").near[0], { line: "quote BBCA", id: "harga tertunda dengan rentang hari itu dan grafik", en: "the delayed quote with the day's range and a chart" });
+  assert.deepEqual(routeLine("watch add BBCA").near[0], routeLine("watch BBCA").near[0]);
+  assert.equal(routeLine("watch BBCA BBRI").near[0].en, "quotes for several stocks at once");
   // Only idx mcp, which an agent starts, adds the agent's line.
   assert.equal(routeLine("mcp").agent, true);
   assert.equal(routeLine("watch").agent, false);

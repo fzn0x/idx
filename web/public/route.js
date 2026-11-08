@@ -293,7 +293,7 @@ export const CLI_ONLY = {
     why: say("Daftar pantauan adalah berkas teks di samping konfigurasi CLI di komputer Anda, jadi watch hanya berjalan di CLI.", "Your watchlist is a plain-text file next to the CLI's config on your machine, so watch runs in the CLI only."),
     // idx watch takes only its subcommands: tickers typed after it are for watch add.
     cli: (items, args) => { const first = items.find((x) => x.pos != null); return first && own(WATCH_SUBS, first.pos.toLowerCase()) == null ? ["add", ...args] : whole(items, args, WATCH_SUBS); },
-    near: (a) => { const l = a.syms.length ? a.syms : ["BBCA", "BBRI", "TLKM"]; return [N.quotes(l), N.returns(l)]; },
+    near: (a) => { const l = a.syms.length ? a.syms : ["BBCA", "BBRI", "TLKM"]; return [l.length === 1 ? N.quote(l[0]) : N.quotes(l), N.returns(l)]; },
   },
   mcp: {
     what: say("server MCP lewat stdio atau HTTP; mcp setup mencetak cara mendaftarkannya ke agen", "the MCP server over stdio or HTTP; mcp setup prints how to register it with an agent"),
