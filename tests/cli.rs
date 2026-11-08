@@ -784,6 +784,170 @@ fn screen_news_sentiment_surface() {
         .stderr(predicate::str::contains("not cached"));
 }
 
+/// Stockbit's broker summary of BBCA on 2026-11-06 as idx asks for it.
+fn marketdetectors_url(investor: &str) -> String {
+    format!(
+        "https://exodus.stockbit.com/marketdetectors/BBCA?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL&investor_type=INVESTOR_TYPE_{investor}&from=2026-11-06&to=2026-11-06&limit=1000"
+    )
+}
+
+#[test]
+fn broker_lists_every_broker_from_stockbit_once_logged_in() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        &marketdetectors_url("ALL"),
+        "stockbit/marketdetectors_bbca_20261106.json",
+    );
+    seed(
+        &sb.cache,
+        &marketdetectors_url("FOREIGN"),
+        "stockbit/marketdetectors_bbca_20261106_foreign.json",
+    );
+    seed(
+        &sb.cache,
+        "https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=11/06/2026&end=11/06/2026&fd=all&board=all",
+        "ipot/brokersummary_bbca_20261106.html",
+    );
+    let json = |extra: &[&str]| -> serde_json::Value {
+        let mut args = vec!["-o", "json", "broker", "BBCA", "--date", "2026-11-06"];
+        args.extend_from_slice(extra);
+        let out = idx(&sb.cache, &sb.config).args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let warnings = |v: &serde_json::Value| -> Vec<String> {
+        v["warnings"]
+            .as_array()
+            .map(|w| w.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    };
+
+    // No session: IPOT, with a note on what a login adds.
+    let v = json(&[]);
+    assert_eq!(v["provider"], "ipot");
+    assert_eq!(v["data"][0]["source"], "ipot");
+    assert_eq!(v["data"][0]["buyers_complete"], false);
+    assert!(v["data"][0]["buyer_count"].is_null());
+    assert!(
+        warnings(&v)
+            .iter()
+            .any(|w| w.contains("top 10") && w.contains("idx stockbit login")),
+        "{v}"
+    );
+    idx(&sb.cache, &sb.config)
+        .args(["broker", "BBCA", "--date", "2026-11-06"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: IPOT lists only the top 10 buyers and sellers",
+        ));
+    idx(&sb.cache, &sb.config)
+        .args([
+            "broker",
+            "BBCA",
+            "--date",
+            "2026-11-06",
+            "--source",
+            "stockbit",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("idx stockbit login"));
+
+    // A dummy access token fresh until 2100; the harness is offline.
+    std::fs::write(
+        sb.config.parent().unwrap().join("stockbit-session.json"),
+        r#"{"access":"eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig","refresh":"d.e.f"}"#,
+    )
+    .unwrap();
+    let v = json(&[]);
+    assert_eq!(v["schema"], "idx.broker.v1");
+    assert_eq!(v["provider"], "stockbit");
+    assert!(warnings(&v).is_empty(), "{v}");
+    let s = &v["data"][0];
+    assert_eq!(s["source"], "stockbit");
+    assert_eq!(
+        (s["buyer_count"].as_u64(), s["seller_count"].as_u64()),
+        (Some(59), Some(67))
+    );
+    assert_eq!(
+        (
+            s["buyers_complete"].as_bool(),
+            s["sellers_complete"].as_bool()
+        ),
+        (Some(true), Some(true))
+    );
+    assert_eq!(s["buyers"].as_array().unwrap().len(), 59);
+    assert_eq!(s["buyers"][0]["code"], "KZ");
+    assert_eq!(s["foreign_net_value"], 218_988_301_100.0);
+    assert_eq!(s["total_value"], 1_035_652_066_452.0);
+    assert_eq!(s["rounded"], false);
+    // Asked for by name, IPOT answers without the note.
+    let v = json(&["--source", "ipot"]);
+    assert_eq!(v["provider"], "ipot");
+    assert!(warnings(&v).is_empty(), "{v}");
+
+    idx(&sb.cache, &sb.config)
+        .args(["broker", "BBCA", "--date", "2026-11-06"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Top buyers (10 of 59)"))
+        .stdout(predicate::str::contains("Top sellers (10 of 67)"))
+        .stdout(predicate::str::contains("Source: Stockbit broker summary"))
+        .stdout(predicate::str::contains(
+            "avg 5,107.82 · foreign net 219.0B",
+        ));
+    idx(&sb.cache, &sb.config)
+        .args(["broker", "BBCA", "--date", "2026-11-06", "-n", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(" of 59)").not());
+
+    // csv: one row per broker per side, the new columns last.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "csv", "broker", "BBCA", "--date", "2026-11-06"])
+        .output()
+        .unwrap();
+    let csv = String::from_utf8(out.stdout).unwrap();
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next(),
+        Some("symbol,from,to,investor,board,side,rank,code,name,kind,lots,value,average_price,source,side_count,side_complete")
+    );
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 59 + 67);
+    assert!(rows[0].ends_with(",stockbit,59,true"), "{}", rows[0]);
+    assert!(rows[59].contains(",sell,1,CC,"), "{}", rows[59]);
+    // jsonl: one line per summary, with the counts.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "jsonl", "broker", "BBCA", "--date", "2026-11-06"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    assert!(text.contains(r#""buyer_count":59"#), "{text}");
+    // Domestic investors are not read from Stockbit yet.
+    idx(&sb.cache, &sb.config)
+        .args([
+            "broker",
+            "BBCA",
+            "--date",
+            "2026-11-06",
+            "--investor",
+            "domestic",
+            "--source",
+            "stockbit",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("use source ipot"));
+}
+
 #[test]
 fn broker_command_surface() {
     let sb = sandbox();
@@ -794,7 +958,11 @@ fn broker_command_surface() {
         .stdout(predicate::str::contains(
             "idx broker BBCA --date 2026-10-16",
         ))
-        .stdout(predicate::str::contains("IPOT"));
+        .stdout(predicate::str::contains("IPOT"))
+        .stdout(predicate::str::contains("--source <SOURCE>"))
+        .stdout(predicate::str::contains(
+            "idx broker BBCA --source stockbit",
+        ));
     idx(&sb.cache, &sb.config)
         .args(["--help"])
         .assert()
@@ -828,6 +996,7 @@ fn broker_command_surface() {
             "2026-10-01",
         ],
         vec!["broker", "BBCA", "--investor", "retail"],
+        vec!["broker", "BBCA", "--source", "idx"],
         vec!["broker", "BBCA", "--date", "16-10-2026"],
         vec![
             "broker",
