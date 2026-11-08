@@ -219,7 +219,7 @@ const TICKER = /^[A-Za-z]{4}(\.JK)?$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Subcommand words of the CLI-only commands (watch list, config init, resolve undo), never tickers. */
-const SUBWORDS = new Set(["add", "remove", "rm", "list", "clear", "returns", "init", "set", "get", "path", "stats", "setup", "candidates", "merge", "map", "undo"]);
+const SUBWORDS = new Set(["add", "remove", "rm", "list", "ls", "clear", "returns", "init", "set", "get", "path", "stats", "setup", "candidates", "unresolved", "merge", "map", "undo"]);
 
 /** The words a notice's near commands take from the line: the tickers, a typed broker code, a holder's name. */
 function picks(items) {
@@ -267,16 +267,38 @@ export const MCP_ONLY = {
 /** Words typed alone that can only mean one of those (brokers, one letter from broker, points at broker too). */
 export const BARE = { orderbook: "stockbit orderbook", indices: "market indices", calendar: "market calendar", composition: "ownership composition", institutions: "ownership institutions", movements: "stockbit movements", brokers: "market brokers" };
 
-/** CLI commands with no MCP tool: what each does and why it stays in the CLI. */
-const CLI_ONLY = {
+/**
+ * The words of a CLI-only line the CLI needs: with no subcommand typed, `alone`
+ * (a read-only one) where the CLI requires one; for an unknown one, --help; and a
+ * subcommand short of the words `subs` says it needs gets `short` (--help, so the
+ * CLI says what is missing). `items`: the scanned `args`.
+ */
+function whole(items, args, subs, alone = null, short = "--help") {
+  const pos = items.filter((x) => x.pos != null);
+  if (!pos.length) return alone ? [...alone, ...args] : args;
+  const need = own(subs, pos[0].pos.toLowerCase());
+  if (need == null) return ["--help"];
+  return pos.length - 1 >= need || args.includes(short) ? args : [...args, short];
+}
+const WATCH_SUBS = { add: 1, remove: 1, rm: 1, list: 0, ls: 0, clear: 0, returns: 0 };
+
+/**
+ * CLI commands with no MCP tool: what each does and why it stays in the CLI.
+ * `cli(items, args)`: the words the CLI needs after the command (whole); `switch`:
+ * its flags that take no value.
+ */
+export const CLI_ONLY = {
   watch: {
     what: say("harga daftar pantauan Anda, atau mengelolanya", "quote your watchlist, or manage it"),
     why: say("Daftar pantauan adalah berkas teks di samping konfigurasi CLI di komputer Anda, jadi watch hanya berjalan di CLI.", "Your watchlist is a plain-text file next to the CLI's config on your machine, so watch runs in the CLI only."),
+    // idx watch takes only its subcommands: tickers typed after it are for watch add.
+    cli: (items, args) => { const first = items.find((x) => x.pos != null); return first && own(WATCH_SUBS, first.pos.toLowerCase()) == null ? ["add", ...args] : whole(items, args, WATCH_SUBS); },
     near: (a) => { const l = a.syms.length ? a.syms : ["BBCA", "BBRI", "TLKM"]; return [N.quotes(l), N.returns(l)]; },
   },
   mcp: {
     what: say("server MCP lewat stdio atau HTTP; mcp setup mencetak cara mendaftarkannya ke agen", "the MCP server over stdio or HTTP; mcp setup prints how to register it with an agent"),
     why: say("idx mcp menjalankan server di komputer Anda, dan agen tersambung ke sana, jadi perintah ini hanya berjalan di CLI; halaman ini menjalankan alat yang sama sebagai perintah.", "idx mcp starts the server on your machine for an agent to connect to, so it runs in the CLI only; this page runs the same tools as commands."),
+    switch: ["list", "npx"], cli: (items, args) => whole(items, args, { setup: 1 }, null, "--list"),
     agent: true, near: () => [N.tools()],
   },
   schema: {
@@ -287,14 +309,17 @@ const CLI_ONLY = {
   config: {
     what: say("membaca atau menulis berkas konfigurasi", "read or write the config file"),
     why: say("Berkas konfigurasi ada di komputer Anda, jadi config hanya berjalan di CLI.", "The config file lives on your machine, so config runs in the CLI only."),
+    switch: ["force"], cli: (items, args) => whole(items, args, { init: 0, set: 2, get: 0, path: 0 }, ["get"]),
   },
   cache: {
     what: say("memeriksa atau mengosongkan cache jawaban lokal", "inspect or clear the local response cache"),
     why: say("Cache jawaban CLI ada di komputer Anda, jadi cache hanya berjalan di CLI; halaman ini punya cache sendiri, dan kepala tiap hasil menyebut apakah jawabannya dari cache.", "The CLI's response cache lives on your machine, so cache runs in the CLI only; this page keeps its own, and each result's head says whether it came from cache."),
+    cli: (items, args) => whole(items, args, { stats: 0, clear: 0, path: 0 }, ["stats"]),
   },
   completions: {
-    what: say("pelengkapan perintah untuk shell", "shell completions"),
+    what: say("pelengkapan perintah untuk shell: bash, zsh, fish, powershell atau elvish", "shell completions: bash, zsh, fish, powershell or elvish"),
     why: say("Pelengkapan perintah dipasang di shell komputer Anda, jadi completions hanya berjalan di CLI.", "Completions go into the shell on your machine, so completions runs in the CLI only."),
+    cli: (items, args) => (items.some((x) => x.pos != null) ? args : ["bash", ...args]),
   },
   version: {
     what: say("versi dan info build", "version and build information"),
@@ -307,11 +332,14 @@ const CLI_ONLY = {
   "ownership import": {
     what: say("memuat daftar bulanan atau arsip komposisi KSEI ke basis data lokal", "import a monthly register or a KSEI composition archive into the local database"),
     why: say("Perintah ini menulis basis data kepemilikan lokal milik CLI, jadi hanya berjalan di CLI; daftar di halaman ini disinkronkan dari mirror GitHub yang sama.", "It writes the CLI's local ownership database, so it runs in the CLI only; this page's register is synced from the same GitHub mirror."),
+    // The CLI needs one of --file, --url, --latest or --all.
+    switch: ["latest", "all", "force"], cli: (items, args) => (items.some((x) => ["file", "url", "latest", "all"].includes(x.name)) ? args : [...args, "--latest"]),
     near: () => [N.releases()],
   },
   "ownership resolve": {
     what: say("menyarankan, menggabungkan dan memisahkan ejaan pemegang", "suggest, merge and split holder spellings"),
     why: say("Aturannya disimpan di basis data kepemilikan lokal Anda, jadi resolve hanya berjalan di CLI; halaman ini memakai pengelompokan otomatis.", "Its rules live in your local ownership database, so resolve runs in the CLI only; this page keeps the automatic grouping."),
+    switch: ["fold", "dry-run", "new"], cli: (items, args) => whole(items, args, { candidates: 0, unresolved: 0, merge: 2, map: 2, list: 0, undo: 1 }, ["candidates"]),
     near: (a) => [N.search(a.name)],
   },
   "ownership discover": {
@@ -326,6 +354,7 @@ const CLI_ONLY = {
   "ownership build-snapshot": {
     what: say("alat pengelola: menulis snapshot basis data lokal", "maintainer tool: write the local database's snapshot"),
     why: say("Ini alat pengelola untuk snapshot yang diterbitkan CI, jadi hanya berjalan di CLI.", "It is a maintainer tool for the snapshot CI publishes, so it runs in the CLI only."),
+    cli: (items, args) => (items.some((x) => x.name === "out") ? args : [...args, "--help"]),
   },
 };
 
@@ -589,9 +618,10 @@ function stockbitNotice(ctx) {
 
 function cliNotice(ctx, path, args) {
   const entry = CLI_ONLY[path];
-  const items = scan(args);
-  // One line: the command as typed, in its -o json form when that was asked for.
-  const [plain, asJson] = cliLines(ctx, [...path.split(" "), ...args]);
+  const items = scan(args, new Set(entry.switch || []));
+  // One line: the command as typed and made whole, in its -o json form when that was asked for.
+  const words = entry.cli && !ctx.help ? entry.cli(items, args) : args;
+  const [plain, asJson] = cliLines(ctx, [...path.split(" "), ...words]);
   return {
     kind: "cli", path, what: entry.what, why: entry.why,
     cli: [ctx.json ? asJson : plain],

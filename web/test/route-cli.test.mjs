@@ -399,3 +399,20 @@ test("the calendar words a notice reads are the CLI's types and kinds", () => {
   assert.deepEqual([...CALENDAR_TYPES].sort(), [...names("calendar.rs", "CalendarCategory"), "all", "default"].sort());
   assert.deepEqual([...STOCKBIT_KINDS].sort(), [...names("corporate.rs", "CorporateEventKind"), "all"].sort());
 });
+
+/** What runs only in the CLI, alone, with its subcommands and with the words they take. */
+const CLI_LINES = [
+  "watch", "watch BBCA", "watch BBCA BBRI", "json watch BBCA", "watch add", "watch add BBCA BBRI", "watch rm TLKM", "watch remove", "watch list", "watch ls",
+  "watch returns", "watch clear", "mcp", "mcp setup", "mcp setup claude-code", "mcp setup --list", "mcp setup --npx cursor", "mcp --http 127.0.0.1:8765 --token T",
+  "mcp nope", "schema", "schema history", "schema market-foreign", "config", "config get", "config get provider", "config set", "config set exchange SI",
+  "config init --force", "config path", "config nope", "cache", "cache clear", "cache stats", "cache path", "completions", "completions zsh", "version",
+  "idx --version", "idx -V", "stockbit logout", "ownership import", "ownership import --latest --family composition", "ownership import --family composition",
+  "ownership import --file register.xlsx", "ownership resolve", "ownership resolve candidates", "ownership resolve unresolved",
+  "ownership resolve merge \"DRS SURONO SUBEKTI\" \"SURONO SUBEKTI\"", "ownership resolve merge X", "ownership resolve map A B --dry-run", "ownership resolve undo",
+  "ownership resolve undo 3", "ownership resolve list", "ownership discover --family all", "ownership path", "ownership build-snapshot",
+  "ownership build-snapshot --out build/snap", "config --help", "watch --help", "idx -o json watch",
+];
+
+test("a notice for what runs only in the CLI gives a CLI line the CLI takes", () => {
+  assert.ok(parseAll(CLI_LINES) > 50);
+});
