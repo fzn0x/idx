@@ -358,6 +358,37 @@ test("a probe stock without trades that session does not hold the scan up: the n
   });
 });
 
+test("a probe stock IPOT does not know says nothing of the session: the next one is asked in the same minute", async () => {
+  const traded = "2026-11-06T16:14:58+07:00";
+  const board = (quotes) => JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes });
+  const calls = [];
+  const recorded = recordedFetch(calls);
+  // ZZZZ (a new listing IPOT does not know yet) tops the board; BBCA's 11-06 lists are not out.
+  const fetchFn = async (u, init) => {
+    if (String(u).includes("code=BBCA&start=11/06/2026&end=11/06/2026")) { calls.push(String(u)); return new Response(page("brokersummary_bbca_20261106_insession.html")); }
+    return recorded(u, init);
+  };
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    const env = memoryDb();
+    env.kv.set("board", board([quote("ZZZZ", 9000, 9e8, traded), quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)]));
+    const r = await bandarScanStep(env, { now: at("16:45"), stocks: false });
+    assert.deepEqual([r.probe, r.phase], ["unpublished", "waiting"]);
+    assert.deepEqual(calls.map((u) => u.match(/code=([A-Z]+)/)[1]), ["ZZZZ", "BBCA"]);
+    const st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.probes, st.probe_symbol], ["waiting", 1, "BBCA"]);
+    // The next probe does not ask ZZZZ again.
+    calls.length = 0;
+    await bandarScanStep(env, { now: at("16:55"), stocks: false });
+    assert.equal(calls.length, 1);
+    assert.ok(!calls[0].includes("ZZZZ"), calls[0]);
+    // When IPOT knows none of them, the stocks speak for themselves.
+    const unknown = memoryDb();
+    unknown.kv.set("board", board([quote("ZZZZ", 9000, 9e8, traded)]));
+    assert.equal((await bandarScanStep(unknown, { now: at("16:45"), stocks: false })).probe, "published");
+  });
+});
+
 test("a stock IPOT has not published is read again, not stored without its lists", async () => {
   const env = memoryDb();
   const traded = "2026-11-06T16:14:58+07:00";

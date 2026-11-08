@@ -141,13 +141,14 @@ export function boardTraded(board, session) {
 
 /**
  * What the probe's one-day page says of its session: "published" (broker
- * lists, or a code IPOT does not know, so the stocks speak for themselves),
- * "unpublished" (totals without lists, or a page without trades while the
- * board shows trades that day or cannot tell) or "closed" (no trades at IPOT
- * nor on a board refreshed after that session). Pure, tested.
+ * lists), "invalid" (a code IPOT does not know, which says nothing of the
+ * session), "unpublished" (totals without lists, or a page without trades
+ * while the board shows trades that day or cannot tell) or "closed" (no
+ * trades at IPOT nor on a board refreshed after that session). Pure, tested.
  */
 export function probeVerdict(page, boardTradedOnSession) {
-  if (page.invalid || page.buyers.length || page.sellers.length) return "published";
+  if (page.invalid) return "invalid";
+  if (page.buyers.length || page.sellers.length) return "published";
   if (ipot.unpublished(page) || boardTradedOnSession !== false) return "unpublished";
   return "closed";
 }
@@ -320,28 +321,40 @@ function probeGap(st, now) {
  * Reads a probe stock's one-day page and moves the state on; returns the
  * verdict, "error" or "budget". The probe turns among the PROBE_STOCKS most
  * traded: one that did not trade that session shows no trades however long
- * ago IPOT published it.
+ * ago IPOT published it. A code IPOT does not know (a new listing) is not
+ * asked again and the next stock is asked in the same minute; when IPOT knows
+ * none of them, the session counts as published and the stocks speak for
+ * themselves.
  */
 async function probe(st, now, fetchPage) {
   const at = now.toISOString();
-  const symbol = st.symbols[((st.probes || 0) + (st.probe_errors || 0)) % Math.min(PROBE_STOCKS, st.symbols.length)];
-  st.probe_symbol = symbol;
-  let page;
-  try {
-    page = ipot.parse(await fetchPage(ipot.url(symbol, st.session, st.session)));
-  } catch (e) {
-    if (isBudgetError(e)) return "budget"; // the next minute probes
-    st.first_probe_at ??= at;
-    st.probe_errors = (st.probe_errors || 0) + 1;
-    st.probe_error = short(e);
-    st.next_probe_at = after(now, PROBE_RETRY_MIN);
-    return "error";
+  st.probe_invalid ??= [];
+  let verdict = "published";
+  for (;;) {
+    const known = st.symbols.slice(0, PROBE_STOCKS).filter((s) => !st.probe_invalid.includes(s));
+    if (!known.length) break;
+    const symbol = known[((st.probes || 0) + (st.probe_errors || 0)) % known.length];
+    st.probe_symbol = symbol;
+    let page;
+    try {
+      page = ipot.parse(await fetchPage(ipot.url(symbol, st.session, st.session)));
+    } catch (e) {
+      if (isBudgetError(e)) return "budget"; // the next minute probes
+      st.first_probe_at ??= at;
+      st.probe_errors = (st.probe_errors || 0) + 1;
+      st.probe_error = short(e);
+      st.next_probe_at = after(now, PROBE_RETRY_MIN);
+      return "error";
+    }
+    verdict = probeVerdict(page, st.board_traded);
+    if (verdict !== "invalid") break;
+    st.probe_invalid.push(symbol);
+    verdict = "published";
   }
   st.first_probe_at ??= at;
   st.probes = (st.probes || 0) + 1;
   st.last_probe_at = at;
   st.probe_error = null;
-  const verdict = probeVerdict(page, st.board_traded);
   if (verdict === "published") {
     Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
     // A week of these shows when IPOT publishes a session.
