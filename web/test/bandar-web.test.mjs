@@ -1084,6 +1084,27 @@ test("a stock the budget cuts short twice counts as failed instead of starting e
   assert.deepEqual([st.retry, st.last_errors[0].kind, st.scanned], [["BBCA"], "budget", 1], "cut twice: off to the retry pass like any failure");
 });
 
+test("a stock that fails some other way after a budget cut gets its one cut back", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const now = new Date("2026-10-17T03:00:00Z");
+  await withFetch(recordedFetch(), async () => { await bandarScanStep(env, { now, stocks: false }); });
+  // A minute with 20 subrequests left cuts BBCA short in a 404 storm: it stays first in line.
+  await withFetch(stormFetch([]), async () => { await bandarScanStep(env, { now, budget: budget(20), pauseMs: 0 }); });
+  // The next minute IPOT answers 503 for it: off to the retry round.
+  const recorded = recordedFetch();
+  await withFetch(async (u, init) => (String(u).includes("code=BBCA") ? new Response("busy", { status: 503 }) : recorded(u, init)), async () => { await bandarScanStep(env, { now }); });
+  let st = await scanStatus(env);
+  assert.deepEqual([st.retry, st.last_errors[0].kind], [["BBCA"], "http_503"]);
+  // In that round the storm cuts it short again: a first cut, so it stays first in line instead of failing.
+  await withFetch(stormFetch([]), async () => {
+    const r = await bandarScanStep(env, { now: new Date(st.retry_due), budget: budget(20), pauseMs: 0 });
+    assert.deepEqual([r.read, r.errors], [0, undefined], JSON.stringify(r));
+  });
+  st = await scanStatus(env);
+  assert.deepEqual([st.retry, st.pass, st.last_errors[0].kind], [["BBCA"], 1, "http_503"]);
+});
+
 /** Yahoo's session and quotes, the KSEI mirror's empty index, then IPOT and the charts as recorded. */
 function cronFetch(urls) {
   const recorded = recordedFetch();

@@ -88,7 +88,7 @@ const PROBE_STOCKS = 3;
  * retry fails the same way.
  */
 const RETRY_GAPS_MIN = [10, 30, 60, 120, 240, 240, 240, 240];
-/** Times the budget may cut a stock short before that counts as a failure of kind "budget". */
+/** Times in a row the budget may cut a stock short before that counts as a failure of kind "budget". */
 const CUTS_ALLOWED = 1;
 /** Failures the state keeps word for word, newest first. */
 const ERRORS_KEPT = 5;
@@ -523,6 +523,8 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
         failure(st, symbol, "budget", e, at, seen);
         continue;
       }
+      // A failure of another kind: the cut it may have had no longer counts.
+      if (st.cuts) delete st.cuts[symbol];
       take(st, list);
       read++;
       failure(st, symbol, errorKind(e), e, at, seen);
