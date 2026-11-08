@@ -181,11 +181,8 @@ pub async fn screen(
     }
     out.warnings.retain(|w| !w.starts_with("no data for"));
     if quoted < symbols.len() {
-        out.warnings.push(format!(
-            "{} of {} tickers returned no quote and were skipped",
-            symbols.len() - quoted,
-            symbols.len()
-        ));
+        out.warnings
+            .push(no_quote_warning(symbols.len() - quoted, symbols.len()));
     }
 
     // Return windows: one market-wide request. When a filter or the sort needs
@@ -341,13 +338,22 @@ pub async fn quotes_all(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<
     }
     out.warnings.retain(|w| !w.starts_with("no data for"));
     if out.data.len() < symbols.len() {
-        out.warnings.push(format!(
-            "{} of {} tickers returned no quote and were skipped",
+        out.warnings.push(no_quote_warning(
             symbols.len() - out.data.len(),
-            symbols.len()
+            symbols.len(),
         ));
     }
     Ok(out)
+}
+
+/// The warning for `missing` of `total` tickers without a quote, shared by
+/// the screen and the whole-universe quotes: "1 of 5 tickers ... was
+/// skipped", "2 of 6 tickers ... were skipped".
+fn no_quote_warning(missing: usize, total: usize) -> String {
+    format!(
+        "{missing} of {total} tickers returned no quote and {} skipped",
+        if missing == 1 { "was" } else { "were" }
+    )
 }
 
 /// The board: index quote, breadth and ranked lists from one pass over the
@@ -2296,6 +2302,23 @@ mod tests {
             Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T17:30:00Z").unwrap());
         mark_behind(&mut rows, NaiveDate::from_ymd_opt(2026, 11, 6).unwrap());
         assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
+    }
+
+    #[tokio::test]
+    async fn skipped_tickers_agree_with_their_count() {
+        // Stamped answers four quotes whatever is asked.
+        let five = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII"]);
+        let got = quotes_all(&Stamped, &five).await.unwrap();
+        assert_eq!(
+            got.warnings,
+            ["1 of 5 tickers returned no quote and was skipped"]
+        );
+        let six = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII", "UNVR"]);
+        let got = quotes_all(&Stamped, &six).await.unwrap();
+        assert_eq!(
+            got.warnings,
+            ["2 of 6 tickers returned no quote and were skipped"]
+        );
     }
 
     #[tokio::test]
