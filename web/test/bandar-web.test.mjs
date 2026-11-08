@@ -2,10 +2,11 @@
 // /api/bandar, the scan after each close (src/bandar-scan.js) inside the
 // minute cron's budget (src/cron.js), /api/bandar/screen and
 // /api/bandar/broker, over an in-memory D1 and the recorded IPOT and Yahoo
-// responses.
+// responses. The scan's writes also run on SQLite with web/migrations, so the
+// statements production runs are tested as written.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -105,6 +106,50 @@ async function withFetch(fn, body) {
   } finally {
     globalThis.fetch = realFetch;
   }
+}
+
+const sqlite = await import("node:sqlite").catch(() => null);
+const noSqlite = sqlite ? false : "node:sqlite is not available in this Node";
+
+/**
+ * D1 over an in-memory SQLite with the Worker's migrations, as in
+ * ownership-sync.test.mjs, and the reads these tests check it with.
+ */
+function sqliteDb() {
+  const db = new sqlite.DatabaseSync(":memory:");
+  const dir = join(root, "web", "migrations");
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) db.exec(readFileSync(join(dir, f), "utf8"));
+  // node:sqlite binds ?NNN only by name; rewrite them to $pNNN.
+  const named = (sql) => sql.replace(/\?(\d+)/g, "$$p$1");
+  const stmt = (sql, args) => {
+    const params = Object.fromEntries(args.map((v, i) => [`p${i + 1}`, v === undefined ? null : v]));
+    const s = () => db.prepare(named(sql));
+    return {
+      bind: (...a) => stmt(sql, a),
+      first: async () => s().get(params) ?? null,
+      all: async () => ({ results: s().all(params) }),
+      run: async () => ({ meta: { changes: Number(s().run(params).changes) } }),
+    };
+  };
+  const batch = async (list) => {
+    db.exec("BEGIN");
+    try {
+      const out = [];
+      for (const st of list) out.push(await st.run());
+      db.exec("COMMIT");
+      return out;
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  };
+  return {
+    DB: { prepare: (sql) => stmt(sql, []), batch },
+    put: (k, v) => db.prepare("INSERT OR REPLACE INTO kv (k, v, updated_at) VALUES (?, ?, 0)").run(k, typeof v === "string" ? v : JSON.stringify(v)),
+    get: (k) => db.prepare("SELECT v FROM kv WHERE k = ?").get(k)?.v ?? null,
+    row: (session, symbol) => { for (const p of ["1d", "1w", "1m", "3m"]) db.prepare("INSERT INTO bandar_scan (session, period, symbol, v) VALUES (?, ?, ?, '{}')").run(session, p, symbol); },
+    sessions: () => db.prepare("SELECT DISTINCT session FROM bandar_scan ORDER BY session").all().map((r) => r.session),
+  };
 }
 
 /** Scan steps at `now`, one per cron minute, until the session is done; the last step's result. */
@@ -514,6 +559,58 @@ test("a minute that overlapped another does not write its state over the other's
   // The next minute goes on from it.
   await withFetch(recorded, async () => { assert.equal((await bandarScanStep(env, { now })).done, true); });
   assert.equal(JSON.parse(env.kv.get("bandar_scan")).rev, 3);
+});
+
+test("on SQLite the heal writes over the production row, a stale revision writes nothing and old sessions are pruned", { skip: noSqlite }, async () => {
+  const s = sqliteDb();
+  const env = { DB: s.DB };
+  s.put("bandar_scan", '{"session":"2026-11-06","holiday":true,"done":true,"complete":"2026-10-30","symbols":[],"next":0,"retry":[],"failed":[],"checked":0}');
+  const traded = "2026-11-06T16:14:58+07:00";
+  s.put("board", { ts: unix("2026-11-08T07:00:37+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded), quote("BRPT", 1210, 1e8, traded), quote("ZZZZ", 50, 1e6, traded)] });
+  // The sessions production holds rows of.
+  for (const d of ["2026-10-23", "2026-10-30"]) s.row(d, "BBRI");
+  const now = new Date("2026-11-08T00:05:00Z");
+  const recorded = recordedFetch();
+  await withFetch(recorded, async () => { assert.equal((await bandarScanStep(env, { now })).read, 3); });
+  const read = JSON.parse(s.get("bandar_scan"));
+  assert.deepEqual([read.rev, read.phase, read.complete], [1, "running", "2026-10-30"], "the row without a revision is written over");
+  // While this minute reads ZZZZ, a slower one that read the same revision writes first.
+  const theirs = JSON.stringify({ ...read, rev: 2, written_by: "the other minute" });
+  let wrote = false;
+  const overlap = async (u, init) => { if (!wrote) { s.put("bandar_scan", theirs); wrote = true; } return recorded(u, init); };
+  const { warn } = console;
+  console.warn = () => {};
+  try {
+    await withFetch(overlap, async () => { assert.equal((await bandarScanStep(env, { now })).conflict, true); });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(s.get("bandar_scan"), theirs, "the stale revision changed nothing");
+  await withFetch(recorded, async () => { assert.equal((await bandarScanStep(env, { now })).done, true); });
+  const done = JSON.parse(s.get("bandar_scan"));
+  assert.deepEqual([done.rev, done.phase, done.complete], [3, "done", "2026-11-06"]);
+  assert.deepEqual(s.sessions(), ["2026-10-30", "2026-11-06"], "the newest two sessions stay");
+});
+
+test("on SQLite the prune keeps the session shown however many came after it", { skip: noSqlite }, async () => {
+  const s = sqliteDb();
+  const env = { DB: s.DB };
+  const board = (d) => s.put("board", { ts: 0, quotes: [["BBCA", 5175, 9e8], ["TLKM", 2690, 3e8], ["BRPT", 1210, 2e8], ["ZZZZ", 50, 1e6]].map(([sym, p, v]) => quote(sym, p, v, `${d}T16:14:58+07:00`)) });
+  const recorded = recordedFetch();
+  let busy = false;
+  const fetchFn = async (u, init) => (busy && /code=(TLKM|BRPT)/.test(String(u)) ? new Response("busy", { status: 503 }) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    board("2026-10-16");
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    // From Monday IPOT fails TLKM and BRPT: each session stores BBCA alone and is not shown.
+    busy = true;
+    for (const d of ["2026-10-19", "2026-10-20", "2026-10-21"]) {
+      board(d);
+      for (const hm of ["16:46", "16:47", "16:57", "17:27"]) await bandarScanStep(env, { now: new Date(`${d}T${hm}:00+07:00`) });
+    }
+  });
+  assert.equal(JSON.parse(s.get("bandar_scan")).complete, "2026-10-16");
+  assert.deepEqual(s.sessions(), ["2026-10-16", "2026-10-20", "2026-10-21"]);
 });
 
 /** IPOT answering four 404s before every page (five requests a page); the rest as recorded. */
