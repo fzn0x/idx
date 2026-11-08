@@ -479,10 +479,10 @@ fn stock_only(symbol: &Symbol) -> Result<()> {
 }
 
 /// When idx.co.id refuses: the same question from Indo Premier, which
-/// answers from anywhere.
+/// answers from anywhere, for at most [`FOREIGN_IPOT_MAX_SESSIONS`].
 pub const IPOT_SOURCE_ADVICE: crate::error::Advice = crate::error::Advice {
-    cli: "; or add --source ipot for Indo Premier's figures in rupiah",
-    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah",
+    cli: "; or add --source ipot for Indo Premier's figures in rupiah (at most 60 sessions)",
+    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah (at most 60 sessions)",
 };
 
 /// When idx.co.id refuses the market's foreign flow: the latest session's
@@ -1346,8 +1346,9 @@ mod tests {
         assert_eq!(err.code(), "blocked");
         assert!(err.to_string().contains("Cloudflare"), "{err}");
         assert!(
-            err.to_string()
-                .ends_with("; or add --source ipot for Indo Premier's figures in rupiah"),
+            err.to_string().ends_with(
+                "; or add --source ipot for Indo Premier's figures in rupiah (at most 60 sessions)"
+            ),
             "{err}"
         );
         // The market's foreign flow: the bandar screen's foreign net.
@@ -1360,6 +1361,20 @@ mod tests {
                 .ends_with("with idx bandar screen --period 1d --sort fnet"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn the_ipot_advice_names_the_sessions_it_covers() {
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let sym = Symbol::parse("BBCA").unwrap();
+        // More sessions than source ipot takes: the advice says how many it does.
+        let err = foreign_flow(&f, &[], &sym, ForeignRange::Latest(120), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let limit = format!("at most {FOREIGN_IPOT_MAX_SESSIONS} sessions");
+        assert!(err.to_string().contains(&limit), "{err}");
+        assert!(IPOT_SOURCE_ADVICE.mcp.contains(&limit));
     }
 
     #[test]

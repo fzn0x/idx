@@ -3118,7 +3118,7 @@ mod tests {
         // Advice an agent can act on: a tool argument, not the CLI's flag.
         assert!(
             msg.ends_with(
-                "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah"
+                "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah (at most 60 sessions)"
             ),
             "{msg}"
         );
