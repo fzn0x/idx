@@ -2170,10 +2170,7 @@ impl IdxServer {
                     )]))
                 };
                 // A session that works and that idx can renew is reported, not replaced.
-                if !a.force.unwrap_or(false)
-                    && sb.store().status(now).renewable
-                    && sb.verify().await.is_ok()
-                {
+                if !a.force.unwrap_or(false) && sb.already_signed_in().await {
                     let mut status = sb.store().status(now);
                     status.sign_in = Some(SignInProgress {
                         state: "already_signed_in".into(),

@@ -133,6 +133,17 @@ impl Stockbit {
         }
     }
 
+    /// `true` when a new sign-in would only replace a session that works and
+    /// that idx can renew: status says it is renewable (nothing is sent
+    /// otherwise), then [`verify`](Self::verify) checks it with Stockbit.
+    /// `idx stockbit login` and `idx_stockbit_login` stop when it holds.
+    pub async fn already_signed_in(&self) -> bool {
+        self.store()
+            .status(chrono::Utc::now().timestamp())
+            .renewable
+            && self.verify().await.is_ok()
+    }
+
     /// Checks a session the user sent (stockbit.com's `credentialStorage`
     /// cookie, URL-encoded or not, or a bare refresh token) and stores it.
     /// When Stockbit refuses it, or it cannot be checked, the previous
@@ -188,7 +199,7 @@ mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::http::{CacheMode, Fetcher, FixtureBackend};
-    use crate::providers::stockbit::SessionStore;
+    use crate::providers::stockbit::{Session, SessionStore};
     use crate::providers::Ttls;
     use std::sync::Arc;
 
@@ -312,6 +323,41 @@ mod tests {
         let e = sb.accept_session(COOKIE).await.unwrap_err();
         assert_eq!(IdxError::from(e).exit_code(), 5);
         assert!(!dir.path().join("session.json").exists());
+    }
+
+    /// A synthetic JWT, signed by nobody, whose `exp` is `exp`.
+    fn expiring(exp: i64) -> String {
+        use base64::Engine;
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        let claims = format!(r#"{{"exp":{exp}}}"#);
+        format!("{}.{}.sig", b64(r#"{"alg":"none"}"#), b64(&claims))
+    }
+
+    #[tokio::test]
+    async fn already_signed_in_needs_a_session_idx_can_renew() {
+        let (sb, be, _d) = provider(
+            FixtureBackend::new().route("market-time/session", 200, SESSION),
+            CacheMode::Normal,
+        );
+        let (now, day) = (chrono::Utc::now().timestamp(), 86_400);
+        let store = |access: String, refresh: String| {
+            sb.store().save(&Session { access, refresh }).unwrap();
+        };
+        // The access token works for a day, but idx cannot renew the session:
+        // its refresh token has expired, or none is stored (as when
+        // IDX_STOCKBIT_ACCESS_TOKEN seeds it). Status says to sign in again,
+        // so login goes on, and Stockbit is not asked.
+        for refresh in [expiring(now - 3600), String::new()] {
+            store(expiring(now + day), refresh);
+            assert!(sb.store().status(now).logged_in);
+            assert!(!sb.already_signed_in().await);
+        }
+        assert_eq!(be.call_count(), 0);
+        // A pair idx can renew: one check with Stockbit, and login stops.
+        store(expiring(now + day), expiring(now + 6 * day));
+        assert!(sb.already_signed_in().await);
+        assert_eq!(be.calls_matching("market-time/session"), 1);
+        assert_eq!(be.call_count(), 1);
     }
 
     #[tokio::test]

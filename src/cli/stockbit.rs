@@ -452,10 +452,7 @@ fn report(ctx: &Context, acc: &Accepted) -> Result<()> {
 /// `true` (after saying so) when the stored session still works and idx can
 /// renew it, so a sign-in would only replace a good session.
 async fn already_signed_in(ctx: &Context, sb: &Stockbit) -> Result<bool> {
-    if !sb.store().status(chrono::Utc::now().timestamp()).renewable {
-        return Ok(false);
-    }
-    if sb.verify().await.is_err() {
+    if !sb.already_signed_in().await {
         return Ok(false);
     }
     output::print_notice(
