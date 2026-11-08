@@ -753,17 +753,7 @@ pub async fn brief(
         }
     }
     if let Some(o) = &ownership {
-        key_points.push(format!(
-            "Ownership ({}): {} holders above 1% hold {:.1}%, foreign {:.1}%{}",
-            o.as_of,
-            o.holders_listed,
-            o.listed_pct,
-            o.foreign_pct,
-            o.top_holders
-                .first()
-                .map(|h| format!("; largest {} {:.1}%", h.holder, h.pct))
-                .unwrap_or_default()
-        ));
+        key_points.push(ownership_key_point(o));
     }
     if let Some(n) = &news {
         key_points.push(news_key_point(n));
@@ -803,6 +793,27 @@ fn news_key_point(n: &NewsSummary) -> String {
             n.score
         ),
     }
+}
+
+/// The brief's "Ownership" key point from the local KSEI register. Noun and
+/// verb follow the count: "1 holder above 1% holds", "2 holders ... hold".
+fn ownership_key_point(o: &OwnershipSummary) -> String {
+    let (holders, hold) = if o.holders_listed == 1 {
+        ("holder", "holds")
+    } else {
+        ("holders", "hold")
+    };
+    format!(
+        "Ownership ({}): {} {holders} above 1% {hold} {:.1}%, foreign {:.1}%{}",
+        o.as_of,
+        o.holders_listed,
+        o.listed_pct,
+        o.foreign_pct,
+        o.top_holders
+            .first()
+            .map(|h| format!("; largest {} {:.1}%", h.holder, h.pct))
+            .unwrap_or_default()
+    )
 }
 
 /// Dividend and split history with totals, trailing yield and streak.
@@ -2087,6 +2098,45 @@ mod tests {
         assert_eq!(
             news_key_point(&summary(2, SentimentLabel::Negative, -0.25)),
             "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)"
+        );
+    }
+
+    #[test]
+    fn ownership_key_point_agrees_with_the_holder_count() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        let largest = crate::model::Holding {
+            as_of,
+            symbol: "BBCA".into(),
+            issuer_name: Some("BANK CENTRAL ASIA Tbk".into()),
+            holder: "PT DWIMURIA INVESTAMA ANDALAN".into(),
+            holder_raw: "PT DWIMURIA INVESTAMA ANDALAN".into(),
+            entity_key: "DWIMURIA INVESTAMA ANDALAN".into(),
+            investor_type: Some("CORPORATE".into()),
+            local_foreign: Some("L".into()),
+            nationality: None,
+            domicile: Some("INDONESIA".into()),
+            shares_scripless: Some(0),
+            shares_scrip: Some(67_729_950_000),
+            shares_total: 67_729_950_000,
+            pct: 54.94,
+            accounts: Some(1),
+            controller_or_affiliate: Some("CONTROLLER".into()),
+        };
+        let mut o = OwnershipSummary {
+            as_of,
+            listed_pct: 54.94,
+            foreign_pct: 0.0,
+            holders_listed: 1,
+            top_holders: vec![largest],
+        };
+        assert_eq!(
+            ownership_key_point(&o),
+            "Ownership (2026-10-30): 1 holder above 1% holds 54.9%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%"
+        );
+        (o.holders_listed, o.listed_pct) = (2, 56.7);
+        assert_eq!(
+            ownership_key_point(&o),
+            "Ownership (2026-10-30): 2 holders above 1% hold 56.7%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%"
         );
     }
     use async_trait::async_trait;
