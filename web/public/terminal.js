@@ -1,7 +1,7 @@
 // The web terminal: parses CLI-shaped commands, calls /api, prints statements.
 // The shell (help, states, loading lines, errors) speaks the page's language;
 // the results keep the CLI's English column names and words on both pages.
-import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse, copyButton } from "/app.js";
+import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse, copyButton, cacheState, CACHE_STATES } from "/app.js";
 import { priceChart } from "/chart.js";
 import { TOOLS, byName, whatOf } from "/tools.js";
 import { routeLine, tokenize, shownLine, ALIASES, INSTALL, AGENT } from "/route.js";
@@ -1226,6 +1226,24 @@ function renderHelp(which) {
 
 const local = (e, what) => machineLine(e.mline, ["local", what], t("Dijawab di peramban, tanpa permintaan.", "Answered in the browser, no request."));
 
+/**
+ * A result's head, machine-line fields and screen-reader sentence: the
+ * provider, how the answer was served (cacheState: cached, partly cached or
+ * live), stale, and when it was fetched, which for a partly cached answer is
+ * its oldest part. The machine line keeps the English word on both pages.
+ */
+function provenance(env) {
+  const s = CACHE_STATES[cacheState(env)];
+  const how = t(s.id, s.en), fetched = t(s.fetched.id, s.fetched.en);
+  return {
+    meta: `${env.provider} · ${how}${env.stale ? t(" · kedaluwarsa", " · stale") : ""} · ${fetched} ${fmt.when(env.fetched_at)}`,
+    fields: [env.schema, env.provider, s.en, env.stale ? "stale" : null, env.fetched_at],
+    sentence: t(
+      `Skema ${env.schema}, penyedia ${env.provider}, ${how}${env.stale ? ", kedaluwarsa" : ""}, ${fetched} ${env.fetched_at}.`,
+      `Schema ${env.schema}, provider ${env.provider}, ${how}${env.stale ? ", stale" : ""}, ${fetched} ${env.fetched_at}.`),
+  };
+}
+
 /** The language switch follows the newest command, so the other language opens on the same line. */
 function syncLang() {
   const a = document.querySelector(".lang a[hreflang]");
@@ -1253,16 +1271,12 @@ async function execute(line, { push = "push" } = {}) {
     if ("help" in r) { e.meta.textContent = t("lokal · tanpa permintaan", "local · no request"); e.body.append(renderHelp(r.help)); local(e, "help"); }
     else if (r.local) { e.meta.textContent = r.local; e.body.append(r.node); local(e, r.local); }
     else {
-      const env = r.env;
-      const how = env.cached ? t("dari cache", "cached") : t("langsung", "live");
-      const fetched = fmt.when(env.fetched_at);
-      e.meta.textContent = `${env.provider} · ${how}${env.stale ? t(" · kedaluwarsa", " · stale") : ""} · ${t("diambil", "fetched")} ${fetched}${took(ms)}`;
+      const env = r.env, p = provenance(env);
+      e.meta.textContent = `${p.meta}${took(ms)}`;
       e.meta.classList.toggle("stale", !!env.stale);
       for (const w of env.warnings || []) e.body.append(el("p", { class: "warn", text: w }));
       e.body.append(r.render(env.data, env));
-      machineLine(e.mline, [env.schema, env.provider, env.cached ? "cached" : "live", env.stale ? "stale" : null, env.fetched_at], t(
-        `Skema ${env.schema}, penyedia ${env.provider}, ${how}${env.stale ? ", kedaluwarsa" : ""}, diambil ${env.fetched_at}.`,
-        `Schema ${env.schema}, provider ${env.provider}, ${how}${env.stale ? ", stale" : ""}, fetched ${env.fetched_at}.`));
+      machineLine(e.mline, p.fields, p.sentence);
     }
   } catch (err) {
     const ms = stop();
