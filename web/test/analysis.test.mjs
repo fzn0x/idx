@@ -457,6 +457,21 @@ test("v7 quote parse", () => {
   assert.ok(q.market_time.endsWith("+07:00"));
 });
 
+test("v7 quotes name the statements' currency, as parse_v7_quotes does", () => {
+  // 2026-11-08: five issuers report in USD, BBCA in IDR; every price is IDR.
+  const qs = JSON.parse(fixture("yahoo/quote_v7_usd_reporters_bbca.json")).quoteResponse.result.map(y.parseV7Quote);
+  assert.deepEqual(qs.map((q) => [q.symbol, q.currency, q.financial_currency]), [
+    ["BSSR", "IDR", "USD"], ["GEMS", "IDR", "USD"], ["ESSA", "IDR", "USD"], ["UNIC", "IDR", "USD"], ["ITMG", "IDR", "USD"], ["BBCA", "IDR", "IDR"],
+  ]);
+  // The IDR price over a USD book value, kept as reported; P/E and EPS are in IDR terms.
+  assert.equal(qs[0].price_to_book, 48921.57);
+  assert.equal(qs[0].eps_ttm, 627.5);
+  assert.ok(Math.abs(qs[0].pe_trailing - 7.9521914) < 1e-6);
+  // The CLI's field order: financial_currency follows currency.
+  const keys = Object.keys(qs[0]);
+  assert.equal(keys[keys.indexOf("currency") + 1], "financial_currency");
+});
+
 test("screener DSL", () => {
   const f = an.parseFilters("pe<15, roe>=15,sector=Bank, mcap>10T, div>3%");
   assert.equal(f.length, 5);
