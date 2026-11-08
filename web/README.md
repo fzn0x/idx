@@ -15,9 +15,12 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   stocks quote BBCA`, `idx -o json market overview`, the CLI's short flags) runs
   as the page's own, with a note saying so; and what the page cannot run (an MCP
   tool with `web: null`, a CLI-only command such as `watch`, a CLI flag without a
-  twin here) answers with a notice: the CLI line in the user's words, the reason
-  in the page's language, the install lines and the page's nearest commands.
-  `test/route.test.mjs` checks it against the CLI's command tree in `src/cli/`.
+  twin here) answers with a notice: the CLI line with the user's arguments in
+  the CLI's own words (`CLI_FORM`: bandar BBCA is `idx bandar detect BBCA`), the
+  reason in the page's language, the install lines and the page's nearest
+  commands. `test/route.test.mjs` checks it against the CLI's command tree in
+  `src/cli/`, and `test/route-cli.test.mjs` reads the clap definitions there
+  into a model and parses every CLI line a notice prints, as clap would.
 - Docs: `scripts/docs.mjs` builds `/docs/` (README.md), `/docs/<page>` (one
   per `docs/*.md`), the same pages as Markdown at `/docs/<page>.md` with
   absolute links, `/llms.txt` (llmstxt.org index) and `/llms-full.txt` (every

@@ -216,7 +216,14 @@ calendar, movements; opt-in, your own session), `watch`, `mcp`, `schema`, `confi
    types to strings, numbers, booleans and string arrays; `mcp/schema.rs`
    strips nullability and formats, and the tests fail on anything else.
 6. Mirror it in the web terminal when it fits (`web/src/api.js` endpoint,
-   `web/public/terminal.js` command) so the three faces stay in step.
+   `web/public/terminal.js` command) so the three faces stay in step. Either
+   way, route it in `web/public/route.js`: a command the page runs goes in
+   `CLI_FORM` (its CLI path and where each positional goes) with its short
+   flags and the flags the page lacks in `SPEC`; one it cannot run goes in
+   `MCP_ONLY` (it has an MCP tool, `web: null` in `web/public/tools.js`) or
+   `CLI_ONLY`. `web/test/route.test.mjs` fails until the command is routed,
+   and `web/test/route-cli.test.mjs` parses every CLI line a notice prints
+   with a model of the clap definitions.
 
 ## Development loop
 
