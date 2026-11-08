@@ -346,6 +346,7 @@ pub fn parse_v7_quotes(body: &str) -> Result<Vec<Quote>> {
         let mut q = Quote::empty(Symbol::from_yahoo(&sym), "yahoo:quote");
         q.name = j.str("longName").or_else(|| j.str("shortName"));
         q.currency = j.str("currency");
+        q.financial_currency = j.str("financialCurrency");
         q.price = j.f64("regularMarketPrice");
         q.change = j.f64("regularMarketChange");
         q.change_pct = j.f64("regularMarketChangePercent");
@@ -704,6 +705,45 @@ mod tests {
         );
         assert_eq!(qs[1].symbol.as_str(), "BBRI");
         assert_eq!(qs[2].symbol.as_str(), "TLKM");
+    }
+
+    #[test]
+    fn v7_names_the_statements_currency() {
+        // 2026-11-08: five issuers report in USD, BBCA in IDR; every price is IDR.
+        let qs = parse_v7_quotes(include_str!(
+            "../../../tests/fixtures/yahoo/quote_v7_usd_reporters_bbca.json"
+        ))
+        .unwrap();
+        let got: Vec<(&str, Option<&str>, Option<&str>)> = qs
+            .iter()
+            .map(|q| {
+                (
+                    q.symbol.as_str(),
+                    q.currency.as_deref(),
+                    q.financial_currency.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("BSSR", Some("IDR"), Some("USD")),
+                ("GEMS", Some("IDR"), Some("USD")),
+                ("ESSA", Some("IDR"), Some("USD")),
+                ("UNIC", Some("IDR"), Some("USD")),
+                ("ITMG", Some("IDR"), Some("USD")),
+                ("BBCA", Some("IDR"), Some("IDR")),
+            ]
+        );
+        // The IDR price over a USD book value, kept as reported; P/E and EPS
+        // are in IDR terms.
+        let bssr = &qs[0];
+        assert_eq!(bssr.price_to_book, Some(48921.57));
+        assert_eq!(bssr.eps_ttm, Some(627.5));
+        assert!((bssr.pe_trailing.unwrap() - 7.9521914).abs() < 1e-6);
+        // The chart fallback names no statement currency.
+        let chart = parse_chart_quote(CHART_1MO).unwrap();
+        assert_eq!(chart.financial_currency, None);
     }
 
     #[test]

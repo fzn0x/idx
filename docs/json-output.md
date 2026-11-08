@@ -139,6 +139,7 @@ with exit code 4.
 | `symbol` | string | IDX ticker without suffix, e.g. `BBCA`; a ticker from another Yahoo Finance market keeps its suffix, e.g. `D05.SI` (see below) |
 | `name` | string? | Company name |
 | `currency` | string? | `IDR` |
+| `financial_currency` | string? | Currency of the financial statements when the source names it (Yahoo's `financialCurrency`; `null` from MSN, Stockbit and the chart fallback). Issuers such as BSSR, GEMS and ITMG report in `USD`: their `price_to_book` then divides the IDR price by a USD book value (BSSR 48,921.57 on 2026-11-06), published as reported, never converted. P/E, EPS and the dividend yield are in the price's terms |
 | `price` | number? | Last trade |
 | `change`, `change_pct` | number? | Versus previous close; `change_pct` is in percent (`-14.81`) |
 | `previous_close`, `open`, `day_high`, `day_low` | number? | |

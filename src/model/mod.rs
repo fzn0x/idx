@@ -325,6 +325,13 @@ pub struct Quote {
     pub symbol: Symbol,
     pub name: Option<String>,
     pub currency: Option<String>,
+    /// Currency of the financial statements when the source names it (Yahoo's
+    /// `financialCurrency`; MSN, Stockbit and the chart fallback do not). When
+    /// it differs from `currency`, `price_to_book` divides the price by a book
+    /// value in this currency; P/E, EPS and the dividend yield are in the
+    /// price's terms.
+    #[serde(default)]
+    pub financial_currency: Option<String>,
     /// Last traded price.
     pub price: Option<f64>,
     /// Absolute change versus the previous close.
@@ -382,6 +389,7 @@ impl Quote {
             symbol,
             name: None,
             currency: None,
+            financial_currency: None,
             price: None,
             change: None,
             change_pct: None,
