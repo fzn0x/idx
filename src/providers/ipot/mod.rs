@@ -548,11 +548,17 @@ fn read_at(f: &Fetched, now: DateTime<Utc>, started: DateTime<Utc>) -> DateTime<
 }
 
 /// The error a pair that cannot be dated is, `why` saying why. A copy the
-/// fetcher served because the call is offline only stood in for a read the
-/// call could not make, so nothing usable is cached (`offline_miss`, as for
-/// any other source); otherwise IPOT's pages themselves cannot be dated
-/// (`provider`).
+/// fetcher served in place of a failed fetch makes that failure the cause,
+/// named first (`network`: a later try can work). One served because the
+/// call is offline only stood in for a read the call could not make, so
+/// nothing usable is cached (`offline_miss`, as for any other source).
+/// Otherwise IPOT's pages themselves cannot be dated (`provider`).
 fn unusable(ranked: &Fetched, dated: &Fetched, why: String) -> IdxError {
+    if let Some(cause) = ranked.failure.as_deref().or(dated.failure.as_deref()) {
+        return IdxError::Network(format!(
+            "IPOT could not be read ({cause}), and its cached copy cannot be used: {why}"
+        ));
+    }
     let offline = [ranked, dated]
         .iter()
         .any(|f| f.stale_reason == Some(crate::model::StaleReason::Offline));
@@ -628,14 +634,10 @@ pub async fn top_brokers(
         dated = dating(Duration::ZERO).await?;
     }
     if !read_together(&ranked, &dated) {
-        let failed = ranked.failure.as_deref().or(dated.failure.as_deref());
         return Err(unusable(
             &ranked,
             &dated,
-            format!(
-                "the broker ranking and the page that dates it were read at different times, so the ranking has no date{}",
-                failed.map(|w| format!(" ({w})")).unwrap_or_default()
-            ),
+            "the broker ranking and the page that dates it were read at different times, so the ranking has no date".into(),
         ));
     }
     let refuse = |why: String| unusable(&ranked, &dated, why);
@@ -1584,12 +1586,15 @@ mod tests {
         );
 
         // Copies older than six hours, and the date page cannot be read: its
-        // old copy does not date the new ranking.
+        // old copy does not date the new ranking, and the failure says why.
         let (f, _be, dir) = fetcher(FixtureBackend::new().route(TOP_BROKERS_ENDPOINT, 200, TOP));
         seed(&Cache::new(dir.path()), 7 * 60, 7 * 60);
         let err = top_brokers(&f, sunday).await.unwrap_err();
-        assert_eq!(err.code(), "provider");
-        assert!(err.to_string().contains("no route for"), "{err}");
+        assert_eq!(err.code(), "network");
+        assert_eq!(
+            err.to_string(),
+            "network: IPOT could not be read (fixture backend has no route for https://www.indopremier.com/module/saham/include/statistic.php), and its cached copy cannot be used: the broker ranking and the page that dates it were read at different times, so the ranking has no date"
+        );
     }
 
     /// A fetcher serving `top` and `statistic` as copies read at `read` (a
@@ -1633,13 +1638,25 @@ mod tests {
                 "offline {offline}: {err}"
             );
             // Offline, the copy only stood in for a read not made: nothing
-            // usable is cached.
+            // usable is cached. Online, it stood in for a failed read, which
+            // comes first.
             if offline {
                 assert_eq!((err.code(), err.exit_code()), ("offline_miss", 5));
                 assert!(
                     err.to_string()
                         .starts_with("offline: IPOT's cached copy cannot be used: "),
                     "{err}"
+                );
+            } else {
+                assert_eq!((err.code(), err.exit_code()), ("network", 3));
+                let says = err.to_string();
+                assert!(
+                    says.starts_with("network: IPOT could not be read (fixture backend has no route for https://www.indopremier.com/module/saham/include/"),
+                    "{says}"
+                );
+                assert!(
+                    says.contains("), and its cached copy cannot be used: the broker ranking was read at 10:00 WIB on 2026-11-06"),
+                    "{says}"
                 );
             }
         }

@@ -2296,6 +2296,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auto_names_why_ipot_could_not_be_read_when_its_copy_cannot_stand_in() {
+        use crate::model::BrokerSource;
+        // idx.co.id is challenged; IPOT cannot be reached and its copy was
+        // read on Friday at 10:00, in the session's hours.
+        let (f, _be, dir) = fetcher(FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            CHALLENGE,
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        ));
+        for (url, page) in [
+            (
+                "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+                TOP_BROKERS,
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+                BBCA_STATISTIC,
+            ),
+        ] {
+            Cache::new(dir.path())
+                .put_fetched_at(url, 200, page, wib_at("2026-11-06T10:00:00"))
+                .unwrap();
+        }
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string().contains(
+                "; IPOT could not stand in: network: IPOT could not be read (fixture backend has no route for "
+            ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
     async fn auto_keeps_what_idx_co_id_answers_and_its_error_when_ipot_fails_too() {
         use crate::model::BrokerSource;
         let (f, be, _d) = fetcher(
