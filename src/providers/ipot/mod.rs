@@ -516,18 +516,30 @@ fn read_together(a: &Fetched, b: &Fetched) -> bool {
         .is_ok_and(|d| d <= READ_TOGETHER)
 }
 
+/// When `f` was read: a copy keeps the time it was fetched, a page fetched
+/// by this call counts as read at `now`.
+fn read_at(f: &Fetched, now: DateTime<Utc>) -> DateTime<Utc> {
+    if f.cached {
+        f.fetched_at.min(now)
+    } else {
+        now
+    }
+}
+
 /// Every broker's trading in IPOT's latest session, ranked by value, dated
 /// by BBCA's statistics page, with the brokers IPOT lists apart folded into
 /// the member they trade under (a warning names each). `now` decides the
-/// cache lifetime ([`top_brokers_ttl`]) and whether the session is still
-/// trading, which a warning then says.
+/// cache lifetime ([`top_brokers_ttl`]).
 ///
 /// The two pages count only as one read: when one comes from the network
 /// and the other from the cache, or two copies were read apart, both are
 /// read again. When they still differ (a fetch failed and an older copy
-/// stood in), the ranking cannot be dated and the call fails; so does a
-/// ranking with trades dated a session that has not opened (before 08:58
-/// WIB), which means the pages rolled over at different times.
+/// stood in), the ranking cannot be dated and the call fails. The pair is
+/// judged by when it was read, not by when it is served (a copy can be
+/// served offline or after a failed fetch, days later): a ranking with
+/// trades dated a session that had not opened then (before 08:58 WIB) means
+/// the pages rolled over at different times and fails too, and one read
+/// before its session ended says it holds that session up to then.
 pub async fn top_brokers(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,
@@ -576,17 +588,18 @@ pub async fn top_brokers(
         )
     })?;
     let mut data = topbroker::ranking(&ranked.body, date)?;
+    let read = read_at(&ranked, now).min(read_at(&dated, now));
+    let local = read.with_timezone(&crate::model::wib());
+    let (day, clock) = (local.date_naive(), local.format("%H:%M"));
     // When the two pages roll over to a new session is not measured: a date
-    // whose session has not opened cannot have trades yet.
-    let local = now.with_timezone(&crate::model::wib());
-    let opened = date < local.date_naive()
-        || date == local.date_naive()
-            && local.time().num_seconds_from_midnight() >= FIRST_TRADES_SECS;
+    // whose session had not opened when they were read cannot have trades.
+    let opened =
+        date < day || date == day && local.time().num_seconds_from_midnight() >= FIRST_TRADES_SECS;
     if !opened && data.brokers.iter().any(topbroker::TopBroker::traded) {
         return Err(IdxError::provider(
             NAME,
             format!(
-                "the broker ranking is dated {date}, a session that had not opened (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+                "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
             ),
         ));
     }
@@ -599,9 +612,9 @@ pub async fn top_brokers(
             f.code, f.name, f.into
         ));
     }
-    if holidays::latest_session(now) < date {
+    if holidays::latest_session(read) < date {
         s.warnings.push(format!(
-            "the session of {date} is still trading: IPOT's figures are the session so far (it ends at 16:15 WIB)"
+            "the session of {date} had not ended when IPOT's pages were read at {clock} WIB: the figures are that session up to then (it ends at 16:15 WIB)"
         ));
     }
     Ok(s)
@@ -1327,12 +1340,12 @@ mod tests {
         assert!(again.cached);
         assert_eq!(be.call_count(), 2, "both pages from the cache");
 
-        // Read on the Friday itself: the session so far, until 16:15 WIB.
+        // Read on the Friday itself: the session up to then, until 16:15 WIB.
         let (f, _be, _d) = fetcher(ranking_pages());
         let s = top_brokers(&f, at("2026-11-06T10:00:00")).await.unwrap();
         assert_eq!(
             s.warnings.last().unwrap(),
-            "the session of 2026-11-06 is still trading: IPOT's figures are the session so far (it ends at 16:15 WIB)"
+            "the session of 2026-11-06 had not ended when IPOT's pages were read at 10:00 WIB: the figures are that session up to then (it ends at 16:15 WIB)"
         );
         let (f, _be, _d) = fetcher(ranking_pages());
         let s = top_brokers(&f, at("2026-11-06T16:15:00")).await.unwrap();
@@ -1389,6 +1402,68 @@ mod tests {
         let err = top_brokers(&f, sunday).await.unwrap_err();
         assert_eq!(err.code(), "provider");
         assert!(err.to_string().contains("no route for"), "{err}");
+    }
+
+    /// A fetcher serving `top` and `statistic` as copies read at `read` (a
+    /// WIB time): from the cache alone when `offline`, otherwise because
+    /// both live fetches fail.
+    fn copies_read_at(
+        read: &str,
+        top: &str,
+        statistic: &str,
+        offline: bool,
+    ) -> (Arc<Fetcher>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        cache
+            .put_fetched_at(TOP_BROKERS_ENDPOINT, 200, top, at(read))
+            .unwrap();
+        cache
+            .put_fetched_at(SESSION_ENDPOINT, 200, statistic, at(read))
+            .unwrap();
+        let mode = if offline {
+            CacheMode::Offline
+        } else {
+            CacheMode::Normal
+        };
+        let f = Fetcher::new(Arc::new(FixtureBackend::new()), cache, mode);
+        (Arc::new(f), dir)
+    }
+
+    #[tokio::test]
+    async fn a_copy_is_judged_by_when_its_pages_were_read() {
+        // Read on Friday at 10:00, served on Sunday from the cache: still the
+        // session up to 10:00, whether offline or because IPOT is down.
+        for offline in [true, false] {
+            let (f, _d) = copies_read_at("2026-11-06T10:00:00", TOP, STATISTIC, offline);
+            let s = top_brokers(&f, at("2026-11-08T10:00:00")).await.unwrap();
+            assert!(s.stale && s.cached);
+            assert!(
+                s.warnings.contains(&"the session of 2026-11-06 had not ended when IPOT's pages were read at 10:00 WIB: the figures are that session up to then (it ends at 16:15 WIB)".to_string()),
+                "offline {offline}: {:?}",
+                s.warnings
+            );
+        }
+
+        // Read at 08:57, dated that day and showing trades: refused, and
+        // still refused when the same copies are served after the open.
+        for served in ["2026-11-06T09:00:00", "2026-11-08T10:00:00"] {
+            let (f, _d) = copies_read_at("2026-11-06T08:57:00", TOP, STATISTIC, true);
+            let err = top_brokers(&f, at(served)).await.unwrap_err();
+            assert!(
+                err.to_string().contains(
+                    "read at 08:57 WIB on 2026-11-06 is dated 2026-11-06, a session that had not opened then"
+                ),
+                "{served}: {err}"
+            );
+        }
+
+        // Read at 08:57 and dated the session before: the whole of it.
+        let thursday = STATISTIC.replacen("2026-11-06", "2026-11-05", 2);
+        let (f, _d) = copies_read_at("2026-11-06T08:57:00", TOP, &thursday, true);
+        let s = top_brokers(&f, at("2026-11-06T09:00:00")).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 5));
+        assert_eq!(s.warnings.len(), 1, "only the fold: {:?}", s.warnings);
     }
 
     #[tokio::test]
