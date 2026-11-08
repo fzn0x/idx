@@ -271,7 +271,8 @@ fn stockbit_surface_and_session_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("logged in"))
-        .stdout(predicate::str::contains("no"));
+        .stdout(predicate::str::contains("no"))
+        .stdout(predicate::str::contains("no Stockbit session is stored"));
     idx(&sb.cache, &sb.config)
         .args(["-o", "json", "stockbit", "status"])
         .assert()
@@ -326,6 +327,15 @@ fn stockbit_surface_and_session_commands() {
         .stdout(predicate::str::contains(
             "run `idx stockbit login` to renew it",
         ));
+    idx(&sb.cache, &sb.config)
+        .args(["stockbit", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("logged in    : no"))
+        .stdout(predicate::str::contains(
+            "note         : the Stockbit session has expired; run `idx stockbit login` to renew it",
+        ))
+        .stdout(predicate::str::contains("refresh token: present (expired "));
 }
 
 /// A session file holding a dummy access token fresh until 2100
