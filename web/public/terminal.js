@@ -907,10 +907,13 @@ function codeList(words, last = t(" dan ", " and ")) {
 /** A sentence with its `backticked` words set as code. */
 const inlineCode = (s) => String(s).split("`").map((part, i) => (i % 2 ? el("code", { text: part }) : part));
 
+/** A command line as its words, each kept whole (styles.css): it wraps at its spaces, never inside a word (foreign-accumulation, 2026-08-31). */
+const commandWords = (line) => line.split(" ").flatMap((w, i) => [...(i ? [" "] : []), el("span", { class: "word", text: w })]);
+
 /** The commands a notice offers instead, each a link that runs here, beside what it gives (help's table). */
 function nearTable(list) {
   const tbl = table([
-    { h: t("Perintah", "Command"), f: (n) => el("a", { href: `${here("/terminal")}?cmd=${encodeURIComponent(n.line)}`, text: n.line }), l: true, cls: "use" },
+    { h: t("Perintah", "Command"), f: (n) => el("a", { href: `${here("/terminal")}?cmd=${encodeURIComponent(n.line)}` }, commandWords(n.line)), l: true, cls: "use" },
     { h: t("Kegunaan", "What it does"), f: (n) => t(n.id, n.en), l: true, cls: "help" },
   ], list);
   tbl.classList.add("tbl-help");
