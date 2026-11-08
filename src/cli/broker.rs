@@ -4,14 +4,14 @@ use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use crate::error::Result;
-use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, Symbol};
+use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, BrokerSummaryChoice, Symbol};
 use crate::output::json::SCHEMA_BROKER;
 use crate::output::table_broker as tb;
 use crate::output::{self, OutputFormat};
 use crate::service::{self, BrokerQuery};
 use crate::universe;
 
-use super::{emit, input, notices, Context};
+use super::{emit, input, notices, stockbit, Context};
 
 #[derive(Debug, clap::Args)]
 pub struct BrokerArgs {
@@ -33,16 +33,24 @@ pub struct BrokerArgs {
     /// Market board to count.
     #[arg(long, value_enum, default_value_t = BrokerBoard::All)]
     pub board: BrokerBoard,
-    /// Rows per side in table mode (JSON, JSONL and CSV carry all the source published).
+    /// Rows per side in table mode, 0 for all (JSON, JSONL and CSV carry every row the source published).
     #[arg(long, short = 'n', default_value_t = 10)]
     pub top: usize,
+    /// Where the summary comes from: auto (Stockbit when a working Stockbit session is stored, else IPOT), ipot or stockbit.
+    #[arg(long, value_enum, default_value_t = BrokerSummaryChoice::Auto)]
+    pub source: BrokerSummaryChoice,
 }
 
-/// One CSV row per broker per side, so a spreadsheet gets a flat table.
+/// One CSV row per broker per side, so a spreadsheet gets a flat table;
+/// each row ends with its summary's source and its side's broker count and
+/// completeness.
 fn csv_rows(list: &[BrokerSummary]) -> Value {
     let mut rows = Vec::new();
     for s in list {
-        for (side, flows) in [("buy", &s.buyers), ("sell", &s.sellers)] {
+        for (side, flows, count, complete) in [
+            ("buy", &s.buyers, s.buyer_count, s.buyers_complete),
+            ("sell", &s.sellers, s.seller_count, s.sellers_complete),
+        ] {
             for f in flows {
                 rows.push(json!({
                     "symbol": s.symbol,
@@ -58,6 +66,9 @@ fn csv_rows(list: &[BrokerSummary]) -> Value {
                     "lots": f.lots,
                     "value": f.value,
                     "average_price": f.average_price,
+                    "source": s.source,
+                    "side_count": count,
+                    "side_complete": complete,
                 }));
             }
         }
@@ -78,8 +89,17 @@ pub async fn run(ctx: &Context, a: BrokerArgs) -> Result<()> {
         board: a.board,
     };
     let list = universe::load(None).unwrap_or_default();
-    let result =
-        service::broker(&ctx.fetcher, &list, &symbols, query, service::today_wib()).await?;
+    let sb = stockbit::provider(ctx, stockbit::store(ctx));
+    let result = service::broker_from(
+        &ctx.fetcher,
+        Some(&sb),
+        &list,
+        &symbols,
+        query,
+        a.source,
+        service::today_wib(),
+    )
+    .await?;
     if ctx.settings.output == OutputFormat::Csv {
         notices(ctx, &result);
         return output::print_stdout(&output::csv::render(&csv_rows(&result.data)));

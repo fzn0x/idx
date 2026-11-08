@@ -49,7 +49,10 @@ pub use bandar::{
     BandarSignal, BandarTier,
 };
 pub use brief::{Brief, DividendSummary, NewsSummary, OwnershipSummary};
-pub use broker::{BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary};
+pub use broker::{
+    BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, BrokerSummaryChoice,
+    BrokerSummarySource,
+};
 pub use calendar::{Calendar, CalendarCategory, CalendarEvent, Holiday, Holidays};
 pub use composition::{CompositionPoint, CompositionReport, CompositionType};
 pub use corporate::{CorporateEvent, CorporateEventKind, CorporateEvents};

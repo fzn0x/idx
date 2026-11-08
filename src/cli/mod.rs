@@ -146,26 +146,40 @@ pub enum Command {
     #[command(subcommand)]
     Market(market::MarketCmd),
 
-    /// Broker summary: which brokers bought and sold a ticker (top 10 per side, IPOT).
+    /// Broker summary: which brokers bought and sold a ticker (IPOT's top 10 per side, or every broker from your Stockbit session).
     #[command(after_help = "Examples:
   idx broker BBCA                       # latest session with trades
   idx broker BBCA --date 2026-10-16
   idx broker BBRI --from 2026-10-12 --to 2026-10-16
   idx broker TLKM,ASII --investor foreign
   idx broker BBCA --board regular -n 5
+  idx broker BBCA --source stockbit -n 0      # every broker, from your Stockbit session
   idx -o json broker BBCA | jq '.data[0].buyers[0]'
   idx -o csv broker BBCA BBRI > brokers.csv   # one row per broker per side
   echo BBCA BBRI | idx broker -               # tickers from stdin
 
-Source: Indo Premier (IPOT) broker summary, the top 10 buyers and sellers ranked by lots, with
-lots, value, average price and each broker's class (local, foreign, BUMN). Broker names come from
-the IDX member list bundled with idx. The source rounds figures of a million and more to one
-decimal (1.6 M); JSON marks those summaries with rounded=true.
+--source auto (default): Stockbit when a working Stockbit session is stored (what `idx stockbit
+status` calls logged in), otherwise IPOT, with a note when IPOT's top 10 may leave brokers out.
+--source ipot: IPOT only, no login. --source stockbit: Stockbit only; without a working session
+it fails and names `idx stockbit login`. Stockbit is not read for --investor domestic or the
+cash and negotiated boards yet (no reply recorded), so auto takes IPOT there. Under auto a ticker
+Stockbit fails for is read from IPOT, with a warning.
 
-With --investor foreign or domestic the source's totals are that side's buying, so idx prints what
-the side bought and sold (buy_value, sell_value) instead of the value traded. The source's foreign
-net covers every board, so a --board filter leaves it out. Over a range that reaches the latest
-sessions the foreign net is rebuilt from single sessions (the source counts the latest one twice).")]
+IPOT (Indo Premier) publishes the top 10 buyers and sellers ranked by lots, with lots, value,
+average price and each broker's class (local, foreign, BUMN), and rounds figures of a million
+and more to one decimal (rounded=true in JSON). Its foreign net covers every board, so a --board
+filter leaves it out; over a range that reaches the latest sessions it is rebuilt from single
+sessions (IPOT counts the latest one twice).
+
+Stockbit lists every broker that bought and every one that sold, exact, ordered here by lots as
+IPOT ranks them (its first ten are IPOT's top 10); odd lots count as fractions of a lot. Totals
+are sums over the full lists, and the foreign net, for the board asked for, comes from a second
+read of foreign investors. JSON says how many brokers each side had and whether its list is
+complete (buyer_count, buyers_complete, seller_count, sellers_complete) and which source answered.
+
+With --investor foreign or domestic the totals are that side's buying, so idx prints what the side
+bought and sold (buy_value, sell_value) instead of the value traded. Broker names come from the
+IDX member list bundled with idx.")]
     Broker(broker::BrokerArgs),
 
     /// Bandarmology: are the top brokers accumulating or distributing? `detect` per ticker, `screen` across the most traded, `broker` for one broker.

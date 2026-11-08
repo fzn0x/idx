@@ -167,6 +167,72 @@ pub struct BrokerSummary {
     /// `true` when the source abbreviated at least one figure (`1.6 M`), so
     /// those numbers carry only its one-decimal precision.
     pub rounded: bool,
+    /// Brokers that bought over the range, as the source counts them; `null`
+    /// when it does not say. IPOT publishes no count, so from IPOT it is the
+    /// number listed when `buyers_complete`, `null` otherwise.
+    #[serde(default)]
+    pub buyer_count: Option<u32>,
+    /// Brokers that sold over the range; as `buyer_count`.
+    #[serde(default)]
+    pub seller_count: Option<u32>,
+    /// `true` when `buyers` lists every broker that bought, `false` when
+    /// brokers may be missing from it. IPOT lists its top 10, so its list is
+    /// complete when it holds fewer than 10; a page published without its
+    /// lists is not.
+    #[serde(default)]
+    pub buyers_complete: bool,
+    /// `true` when `sellers` lists every broker that sold; as
+    /// `buyers_complete`.
+    #[serde(default)]
+    pub sellers_complete: bool,
+    /// The source of this summary (`--source auto` can mix them in one
+    /// call). Summaries written before the field existed are IPOT's.
+    #[serde(default)]
+    pub source: BrokerSummarySource,
+}
+
+/// Where one broker summary came from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerSummarySource {
+    /// Indo Premier's public broker summary: the top 10 buyers and sellers.
+    #[default]
+    Ipot,
+    /// Stockbit's broker summary through the user's own session.
+    Stockbit,
+}
+
+/// Where `idx broker` reads its summaries.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerSummaryChoice {
+    /// Stockbit (every broker) when a working Stockbit session is stored,
+    /// otherwise IPOT (the top 10 per side).
+    Auto,
+    /// IPOT: the top 10 buyers and sellers, no login.
+    Ipot,
+    /// Stockbit: every broker on each side; needs `idx stockbit login`.
+    Stockbit,
+}
+
+impl std::str::FromStr for BrokerSummaryChoice {
+    type Err = IdxError;
+    fn from_str(s: &str) -> Result<Self> {
+        <BrokerSummaryChoice as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            IdxError::Usage(format!("invalid source {s:?}; use auto, ipot or stockbit"))
+        })
+    }
+}
+
+impl BrokerSummarySource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BrokerSummarySource::Ipot => "ipot",
+            BrokerSummarySource::Stockbit => "stockbit",
+        }
+    }
 }
 
 impl BrokerSummary {

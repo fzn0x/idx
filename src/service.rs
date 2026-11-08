@@ -17,13 +17,14 @@ use crate::holidays;
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
-    BrokerInvestor, BrokerStockRow, BrokerSummary, DividendHistory, DividendSummary, Earnings,
-    EarningsFilter, Fundamentals, History, Interval, Intraday, MarketOverview, MarketRow, NewsItem,
-    NewsReport, NewsSummary, OwnershipSummary, Performance, Period, Quote, ScreenReport, ScreenRow,
-    SentimentReport, StaleReason, Symbol, Technical,
+    BrokerInvestor, BrokerStockRow, BrokerSummary, BrokerSummaryChoice, DividendHistory,
+    DividendSummary, Earnings, EarningsFilter, Fundamentals, History, Interval, Intraday,
+    MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary, OwnershipSummary, Performance,
+    Period, Quote, ScreenReport, ScreenRow, SentimentReport, StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
+use crate::providers::stockbit::{self as sb_provider, Stockbit};
 use crate::providers::{Provider, Sourced};
 use crate::universe::Issuer;
 
@@ -1019,19 +1020,23 @@ pub fn today_wib() -> NaiveDate {
 
 /// The most recent weekday at or before `today` whose summary has trades,
 /// within the look-back; otherwise the last empty one with a warning.
-async fn latest_broker_day(
-    fetcher: &Arc<Fetcher>,
+/// `read` gives one day's summary from the chosen source.
+async fn latest_broker_day_by<F, Fut>(
     symbol: &Symbol,
-    q: BrokerQuery,
     today: NaiveDate,
-) -> Result<Sourced<BrokerSummary>> {
+    read: F,
+) -> Result<Sourced<BrokerSummary>>
+where
+    F: Fn(NaiveDate) -> Fut,
+    Fut: std::future::Future<Output = Result<Sourced<BrokerSummary>>>,
+{
     let mut last: Option<Sourced<BrokerSummary>> = None;
     for back in 0..BROKER_LOOKBACK_DAYS {
         let day = today - chrono::Days::new(back.into());
         if matches!(day.weekday(), Weekday::Sat | Weekday::Sun) {
             continue;
         }
-        let s = ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today).await?;
+        let s = read(day).await?;
         if !s.data.is_empty() {
             return Ok(s);
         }
@@ -1044,7 +1049,34 @@ async fn latest_broker_day(
     Ok(s)
 }
 
-/// One ticker: the given range, or its latest session with trades.
+/// [`latest_broker_day_by`] from IPOT.
+async fn latest_broker_day(
+    fetcher: &Arc<Fetcher>,
+    symbol: &Symbol,
+    q: BrokerQuery,
+    today: NaiveDate,
+) -> Result<Sourced<BrokerSummary>> {
+    latest_broker_day_by(symbol, today, |day| {
+        ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today)
+    })
+    .await
+}
+
+/// A range's summary, with a warning when it holds no trades.
+fn note_no_trades(
+    mut s: Sourced<BrokerSummary>,
+    symbol: &Symbol,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Sourced<BrokerSummary> {
+    if s.data.is_empty() {
+        s.warnings
+            .push(format!("{symbol}: no trades from {from} to {to}"));
+    }
+    s
+}
+
+/// One ticker from IPOT: the given range, or its latest session with trades.
 async fn broker_one(
     fetcher: &Arc<Fetcher>,
     symbol: Symbol,
@@ -1055,13 +1087,29 @@ async fn broker_one(
     let Some((from, to)) = range else {
         return latest_broker_day(fetcher, &symbol, q, today).await;
     };
-    let mut s =
+    let s =
         ipot::broker_summary_range(fetcher, &symbol, from, to, q.investor, q.board, today).await?;
-    if s.data.is_empty() {
-        s.warnings
-            .push(format!("{symbol}: no trades from {from} to {to}"));
-    }
-    Ok(s)
+    Ok(note_no_trades(s, &symbol, from, to))
+}
+
+/// One ticker from Stockbit, as [`broker_one`].
+async fn broker_one_stockbit(
+    sb: &Stockbit,
+    symbol: &Symbol,
+    range: Option<(NaiveDate, NaiveDate)>,
+    q: BrokerQuery,
+    today: NaiveDate,
+) -> Result<Sourced<BrokerSummary>> {
+    let Some((from, to)) = range else {
+        return latest_broker_day_by(symbol, today, |day| {
+            sb.broker_summary(symbol, day, day, q.investor, q.board, today)
+        })
+        .await;
+    };
+    let s = sb
+        .broker_summary(symbol, from, to, q.investor, q.board, today)
+        .await?;
+    Ok(note_no_trades(s, symbol, from, to))
 }
 
 /// Issuer name from the universe and broker names from the member list.
@@ -1098,14 +1146,89 @@ fn explicit_range(
     Ok(range)
 }
 
-/// Which brokers bought and sold each ticker (IPOT broker summary), with
-/// broker names from the bundled IDX member list. Tickers that fail become
-/// warnings; the call fails only when all of them do.
+/// Which brokers bought and sold each ticker from IPOT, as
+/// [`broker_from`] with `--source ipot`.
 pub async fn broker(
     fetcher: &Arc<Fetcher>,
     universe: &[Issuer],
     symbols: &[Symbol],
     q: BrokerQuery,
+    today: NaiveDate,
+) -> Result<Sourced<Vec<BrokerSummary>>> {
+    broker_from(
+        fetcher,
+        None,
+        universe,
+        symbols,
+        q,
+        BrokerSummaryChoice::Ipot,
+        today,
+    )
+    .await
+}
+
+/// The note `auto` adds when IPOT answered because no Stockbit session works.
+const IPOT_TOP_NOTE_LOGIN: &str = "IPOT lists only the top 10 buyers and sellers; sign in with `idx stockbit login` and idx lists every broker, from Stockbit";
+/// The note `auto` adds when IPOT answered for filters Stockbit is not read for.
+const IPOT_TOP_NOTE_FILTERS: &str = "IPOT lists only the top 10 buyers and sellers; Stockbit, which lists every broker, is not read for domestic investors or the cash and negotiated boards yet";
+
+/// Where [`broker_from`] reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BrokerPlan {
+    /// IPOT, with the note to add when a list reached its 10 rows.
+    Ipot(Option<&'static str>),
+    /// Stockbit; `fallback`: IPOT answers for a ticker Stockbit fails.
+    Stockbit { fallback: bool },
+}
+
+/// The plan for `source`: `auto` takes Stockbit when a working session is
+/// stored (as `idx stockbit status` says logged in) and the filters are ones
+/// Stockbit is read for, IPOT otherwise; `stockbit` without them is a usage
+/// error, before any request.
+fn broker_plan(
+    stockbit: Option<&Stockbit>,
+    q: BrokerQuery,
+    source: BrokerSummaryChoice,
+) -> Result<BrokerPlan> {
+    let serves = sb_provider::broker_summary::serves(q.investor, q.board);
+    let status = stockbit.map(|sb| sb.store().status(chrono::Utc::now().timestamp()));
+    let working = status.as_ref().is_some_and(|s| s.logged_in);
+    match source {
+        BrokerSummaryChoice::Ipot => Ok(BrokerPlan::Ipot(None)),
+        BrokerSummaryChoice::Stockbit if !serves => Err(IdxError::Usage(
+            "Stockbit's broker summary is not read for domestic investors or the cash and \
+             negotiated boards yet (none of those replies has been recorded); use source ipot"
+                .into(),
+        )),
+        BrokerSummaryChoice::Stockbit if !working => {
+            let reason = status.and_then(|s| s.reason).unwrap_or_else(|| {
+                "no Stockbit session is stored; run `idx stockbit login` to sign in".into()
+            });
+            Err(IdxError::Usage(format!(
+                "source stockbit needs a working Stockbit session: {reason}"
+            )))
+        }
+        BrokerSummaryChoice::Stockbit => Ok(BrokerPlan::Stockbit { fallback: false }),
+        BrokerSummaryChoice::Auto if !serves => Ok(BrokerPlan::Ipot(Some(IPOT_TOP_NOTE_FILTERS))),
+        BrokerSummaryChoice::Auto if !working => Ok(BrokerPlan::Ipot(Some(IPOT_TOP_NOTE_LOGIN))),
+        BrokerSummaryChoice::Auto => Ok(BrokerPlan::Stockbit { fallback: true }),
+    }
+}
+
+/// Which brokers bought and sold each ticker, with broker names from the
+/// bundled IDX member list: from IPOT (the top 10 per side) or Stockbit
+/// (every broker), as `source` and the stored session decide (see
+/// [`broker_plan`]). Under `auto`, a ticker Stockbit fails for (other than
+/// an unknown code) is read from IPOT with a warning, and after a failure no
+/// later read could get past (a refused session, a block) so are the rest.
+/// Tickers that fail become warnings; the call fails only when all do.
+pub async fn broker_from(
+    fetcher: &Arc<Fetcher>,
+    stockbit: Option<&Stockbit>,
+    universe: &[Issuer],
+    symbols: &[Symbol],
+    q: BrokerQuery,
+    source: BrokerSummaryChoice,
     today: NaiveDate,
 ) -> Result<Sourced<Vec<BrokerSummary>>> {
     if symbols.is_empty() {
@@ -1117,14 +1240,43 @@ pub async fn broker(
         )));
     }
     let range = explicit_range(q.from, q.to, today)?;
-    let results: Vec<Result<Sourced<BrokerSummary>>> = stream::iter(symbols.to_vec())
-        .map(|s| broker_one(fetcher, s, range, q, today))
-        .buffered(3)
-        .collect()
-        .await;
+    let plan = broker_plan(stockbit, q, source)?;
+    let mut pending_warnings = Vec::new();
+    let results: Vec<Result<Sourced<BrokerSummary>>> = match (plan, stockbit) {
+        // One ticker after another: Stockbit's reads are paced anyway.
+        (BrokerPlan::Stockbit { fallback }, Some(sb)) => {
+            let mut results = Vec::with_capacity(symbols.len());
+            let mut stopped = false;
+            for sym in symbols {
+                if stopped {
+                    results.push(broker_one(fetcher, sym.clone(), range, q, today).await);
+                    continue;
+                }
+                match broker_one_stockbit(sb, sym, range, q, today).await {
+                    Err(e) if fallback && !matches!(e, IdxError::NotFound(_)) => {
+                        stopped = sb_provider::is_fatal(&e);
+                        pending_warnings.push(if stopped {
+                            format!("Stockbit failed ({e}); IPOT's top 10 per side for {sym} and the rest")
+                        } else {
+                            format!("{sym}: Stockbit failed ({e}); IPOT's top 10 per side instead")
+                        });
+                        results.push(broker_one(fetcher, sym.clone(), range, q, today).await);
+                    }
+                    r => results.push(r),
+                }
+            }
+            results
+        }
+        _ => {
+            stream::iter(symbols.to_vec())
+                .map(|s| broker_one(fetcher, s, range, q, today))
+                .buffered(3)
+                .collect()
+                .await
+        }
+    };
 
     let mut out: Option<Sourced<Vec<BrokerSummary>>> = None;
-    let mut pending_warnings = Vec::new();
     let mut first_err: Option<IdxError> = None;
     for (sym, r) in symbols.iter().zip(results) {
         match r {
@@ -1151,6 +1303,14 @@ pub async fn broker(
         return Err(first_err.unwrap_or_else(|| IdxError::NotFound("no data".into())));
     };
     result.warnings.extend(pending_warnings);
+    if let BrokerPlan::Ipot(Some(note)) = plan {
+        let full = |s: &BrokerSummary| {
+            s.buyers.len() >= ipot::parse::ROWS || s.sellers.len() >= ipot::parse::ROWS
+        };
+        if result.data.iter().any(full) {
+            result.warnings.push(note.into());
+        }
+    }
     Ok(result)
 }
 
@@ -2912,6 +3072,314 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err.exit_code(), 2);
             assert_eq!(be.call_count(), 0);
+        }
+    }
+
+    mod broker_source {
+        use super::super::*;
+        use crate::cache::Cache;
+        use crate::http::{CacheMode, FixtureBackend};
+        use crate::model::{BrokerSummaryChoice as C, BrokerSummarySource};
+        use crate::providers::stockbit::{SessionStore, Stockbit};
+        use crate::providers::Ttls;
+
+        const SB_DAY: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106.json");
+        const SB_FOREIGN: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json");
+        const SB_BLOCKED: &str = include_str!("../tests/fixtures/stockbit/blocked_403.html");
+        const IPOT_DAY: &str =
+            include_str!("../tests/fixtures/ipot/brokersummary_bbca_20261106.html");
+        const IPOT_TRUK: &str =
+            include_str!("../tests/fixtures/ipot/brokersummary_truk_20261105.html");
+        /// `{"alg":"none"}.{"exp":4102444800}`: fresh until 2100, signed by
+        /// nobody, only ever sent to the fixture backend.
+        const DUMMY_ACCESS: &str = "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig";
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        /// The fetcher, a Stockbit provider on it (with a working session or
+        /// none) and the backend both read from.
+        fn setup(
+            be: FixtureBackend,
+            session: bool,
+        ) -> (
+            Arc<Fetcher>,
+            Stockbit,
+            Arc<FixtureBackend>,
+            tempfile::TempDir,
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let be = Arc::new(be);
+            let f = Arc::new(Fetcher::new(
+                be.clone(),
+                Cache::new(dir.path().join("cache")),
+                CacheMode::Normal,
+            ));
+            let store = Arc::new(SessionStore::new(
+                dir.path().join("session.json"),
+                session.then(|| DUMMY_ACCESS.to_string()),
+                session.then(|| "eyJ0.eyJleHAiOjF9.dummy".to_string()),
+            ));
+            let sb = Stockbit::new(f.clone(), Ttls::default(), store)
+                .with_pace(std::time::Duration::ZERO);
+            (f, sb, be, dir)
+        }
+
+        fn day_query(investor: BrokerInvestor) -> BrokerQuery {
+            let day = Some(d(2026, 11, 6));
+            BrokerQuery {
+                from: day,
+                to: day,
+                investor,
+                board: BrokerBoard::All,
+            }
+        }
+
+        fn stockbit_routes() -> FixtureBackend {
+            FixtureBackend::new()
+                .route("investor_type=INVESTOR_TYPE_ALL", 200, SB_DAY)
+                .route("investor_type=INVESTOR_TYPE_FOREIGN", 200, SB_FOREIGN)
+                .route("code=BBCA&start=11/06/2026", 200, IPOT_DAY)
+        }
+
+        fn bbca() -> Vec<Symbol> {
+            vec![Symbol::parse("BBCA").unwrap()]
+        }
+
+        #[tokio::test]
+        async fn auto_reads_every_broker_from_stockbit_when_the_session_works() {
+            let (f, sb, be, _d) = setup(stockbit_routes(), true);
+            let today = d(2026, 11, 8);
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::All),
+                C::Auto,
+                today,
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+            let s = &got.data[0];
+            assert_eq!(s.source, BrokerSummarySource::Stockbit);
+            assert_eq!((s.buyers.len(), s.sellers.len()), (59, 67));
+            assert!(s.buyers_complete && s.sellers_complete);
+            assert_eq!(s.buyers[0].name.as_deref(), brokers::name("KZ").as_deref());
+            assert_eq!(s.foreign_net_value, Some(218_988_301_100.0));
+            assert_eq!(be.calls_matching("indopremier"), 0);
+        }
+
+        #[tokio::test]
+        async fn auto_without_a_session_reads_ipot_and_says_what_a_login_adds() {
+            let (f, sb, be, _d) = setup(stockbit_routes(), false);
+            let today = d(2026, 11, 8);
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::All),
+                C::Auto,
+                today,
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "ipot");
+            assert_eq!(got.data[0].source, BrokerSummarySource::Ipot);
+            assert_eq!(got.data[0].buyers.len(), 10);
+            assert_eq!(be.calls_matching("marketdetectors"), 0);
+            assert!(
+                got.warnings.iter().any(|w| w.contains("top 10")
+                    && w.contains("`idx stockbit login`")
+                    && w.contains("every broker")),
+                "{:?}",
+                got.warnings
+            );
+            // A stock whose lists fit in IPOT's ten rows needs no such note.
+            let (f, sb, _be, _d) = setup(
+                FixtureBackend::new().route("code=TRUK&start=11/05/2026", 200, IPOT_TRUK),
+                false,
+            );
+            let day = Some(d(2026, 11, 5));
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &[Symbol::parse("TRUK").unwrap()],
+                BrokerQuery {
+                    from: day,
+                    to: day,
+                    investor: BrokerInvestor::All,
+                    board: BrokerBoard::All,
+                },
+                C::Auto,
+                today,
+            )
+            .await
+            .unwrap();
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+            // Chosen by name, IPOT carries no note either.
+            let (f, sb, _be, _d) = setup(stockbit_routes(), true);
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::All),
+                C::Ipot,
+                today,
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "ipot");
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        }
+
+        #[tokio::test]
+        async fn auto_leaves_unrecorded_filters_to_ipot_and_stockbit_refuses_them() {
+            let (f, sb, be, _d) = setup(
+                FixtureBackend::new().route("code=BBCA&start=11/06/2026", 200, IPOT_DAY),
+                true,
+            );
+            let today = d(2026, 11, 8);
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::Domestic),
+                C::Auto,
+                today,
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "ipot");
+            assert!(
+                got.warnings
+                    .iter()
+                    .any(|w| w.contains("top 10") && w.contains("domestic")),
+                "{:?}",
+                got.warnings
+            );
+            let e = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::Domestic),
+                C::Stockbit,
+                today,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{e}");
+            assert!(e.to_string().contains("use source ipot"), "{e}");
+            assert_eq!(be.calls_matching("marketdetectors"), 0);
+        }
+
+        #[tokio::test]
+        async fn stockbit_by_name_needs_a_working_session() {
+            let (f, sb, be, _d) = setup(stockbit_routes(), false);
+            let e = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::All),
+                C::Stockbit,
+                d(2026, 11, 8),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{e}");
+            assert!(e.to_string().contains("idx stockbit login"), "{e}");
+            assert_eq!(be.call_count(), 0);
+        }
+
+        #[tokio::test]
+        async fn auto_falls_back_to_ipot_when_stockbit_fails() {
+            let be = FixtureBackend::new()
+                .route("marketdetectors/", 403, SB_BLOCKED)
+                .route("code=BBCA&start=11/06/2026", 200, IPOT_DAY)
+                .route("code=BBRI&start=11/06/2026", 200, IPOT_DAY);
+            let (f, sb, be, _d) = setup(be, true);
+            let two = vec![
+                Symbol::parse("BBCA").unwrap(),
+                Symbol::parse("BBRI").unwrap(),
+            ];
+            let today = d(2026, 11, 8);
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &two,
+                day_query(BrokerInvestor::All),
+                C::Auto,
+                today,
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.data.len(), 2);
+            assert!(got
+                .data
+                .iter()
+                .all(|s| s.source == BrokerSummarySource::Ipot));
+            assert_eq!(got.provider, "ipot");
+            // The block stops Stockbit for the rest of the call: one request.
+            assert_eq!(be.calls_matching("marketdetectors"), 1);
+            assert!(
+                got.warnings
+                    .iter()
+                    .any(|w| w.contains("Stockbit failed") && w.contains("CDN")),
+                "{:?}",
+                got.warnings
+            );
+            // Asked for by name, Stockbit's failure stands.
+            let e = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                day_query(BrokerInvestor::All),
+                C::Stockbit,
+                today,
+            )
+            .await
+            .unwrap_err();
+            assert!(e.to_string().contains("CDN"), "{e}");
+        }
+
+        #[tokio::test]
+        async fn the_latest_session_walk_reads_stockbit_too() {
+            let (f, sb, be, _d) = setup(stockbit_routes(), true);
+            // Sunday: the walk skips the weekend to Friday 2026-11-06.
+            let got = broker_from(
+                &f,
+                Some(&sb),
+                &[],
+                &bbca(),
+                BrokerQuery {
+                    from: None,
+                    to: None,
+                    investor: BrokerInvestor::All,
+                    board: BrokerBoard::All,
+                },
+                C::Stockbit,
+                d(2026, 11, 8),
+            )
+            .await
+            .unwrap();
+            let s = &got.data[0];
+            assert_eq!((s.from, s.to), (d(2026, 11, 6), d(2026, 11, 6)));
+            assert_eq!(s.source, BrokerSummarySource::Stockbit);
+            assert_eq!(be.calls_matching("from=2026-11-06&to=2026-11-06"), 2);
+            assert_eq!(be.call_count(), 2);
         }
     }
 

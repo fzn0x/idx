@@ -351,6 +351,7 @@ const PAGE_LINES = [
   // The CLI's own forms with a flag the page has no twin for.
   "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan --limit 40", "idx stocks sentiment BBRI -n 5", "idx stocks screen --universe stocks.csv -f pe<10",
   "idx stocks screen -f roe>15 --fundamentals", "idx stocks list --board utama", "idx stocks dividends TLKM --limit 20", "idx broker BBCA -n 5",
+  "idx broker BBCA --source stockbit", "broker BBCA,BBRI --source stockbit -n 0",
   "idx market overview --top 15 --min-mcap 5T", "idx bandar screen --preset accumulation --scan 50", "idx bandar broker YP --symbols BBCA,BBRI",
   "idx ownership graph BBRI --dot", "idx ownership entity --exact \"T PERMADI RACHMAT\"", "idx -o json stocks news TLKM -s kontan", "stocks history BBCA 5y 1wk -o csv",
   "idx stocks foreign BBCA", "stocks foreign BBCA -n 10", "own graph BBRI --dot", "idx own ticker BBCA -o csv", "bandar BBCA --provider stockbit",

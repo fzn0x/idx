@@ -153,7 +153,7 @@ impl StockbitCmd {
 
 /// The process's one store for the session file (shared with the provider
 /// `--provider stockbit` builds), so refreshes queue on one lock.
-fn store(ctx: &Context) -> Arc<SessionStore> {
+pub(crate) fn store(ctx: &Context) -> Arc<SessionStore> {
     StockbitOptions {
         session_path: ctx.settings.stockbit_session.clone(),
         access_seed: ctx.settings.stockbit_access_seed.clone(),
@@ -162,7 +162,7 @@ fn store(ctx: &Context) -> Arc<SessionStore> {
     .store()
 }
 
-fn provider(ctx: &Context, store: Arc<SessionStore>) -> Stockbit {
+pub(crate) fn provider(ctx: &Context, store: Arc<SessionStore>) -> Stockbit {
     let ttls = Ttls {
         quote: ctx.settings.quote_ttl(),
         history: ctx.settings.history_ttl(),
