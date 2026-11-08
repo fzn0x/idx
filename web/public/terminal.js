@@ -933,8 +933,9 @@ const inlineCode = (s) => String(s).split("`").map((part, i) => (i % 2 ? el("cod
 
 /**
  * A command line as its words, each kept whole (styles.css): it wraps at its spaces, never inside a word (foreign-accumulation,
- * 2026-08-31). A word over 40 characters (only a typed one: route.js's own are at most 20) stays plain text and may break at its
- * hyphens, as before: kept whole, a word that long can widen the table past its sheet at a desktop's narrowest two columns.
+ * 2026-08-31). A word over 40 characters (only a typed one: route.js's own are at most 20, help's usage lines at most 24) stays
+ * plain text and may break at its hyphens, as before: kept whole, a word that long can widen the table past its sheet at a
+ * desktop's narrowest two columns.
  */
 const commandWords = (line) => line.split(" ").flatMap((w, i) => [...(i ? [" "] : []), w.length > 40 ? w : el("span", { class: "word", text: w })]);
 
@@ -1244,7 +1245,8 @@ function renderHelp(which) {
   const frag = document.createDocumentFragment();
   const list = which ? COMMANDS.filter((c) => c.name === (ALIASES[which] || which)) : COMMANDS;
   if (!list.length) frag.append(el("p", { class: "err", text: t(`tidak ada perintah "${which}"`, `no command "${which}"`) }));
-  const usage = table([{ h: t("Perintah", "Command"), k: "usage", l: true, cls: "use" }, { h: t("Kegunaan", "What it does"), k: "help", l: true, cls: "help" }], list.map((c) => ({ usage: c.usage, help: helpOf(c) })));
+  // Each usage line as its words, like a notice's offered commands: it wraps at its spaces, never at a hyphen ([-- / statement).
+  const usage = table([{ h: t("Perintah", "Command"), f: (r) => el("span", {}, commandWords(r.usage)), l: true, cls: "use" }, { h: t("Kegunaan", "What it does"), k: "help", l: true, cls: "help" }], list.map((c) => ({ usage: c.usage, help: helpOf(c) })));
   usage.classList.add("tbl-help");
   frag.append(wrapScroll(usage));
   frag.append(el("p", { class: "warn", text: t(

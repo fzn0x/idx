@@ -1,7 +1,7 @@
 // node --test web/test/*.mjs. The terminal's flag parser: public/terminal.js is
 // a browser module (it imports /app.js and reads the DOM), so the test lifts
-// BOOL_FLAGS and flags(), toolButtons(), commandWords(), nearTable() and the screen
-// renderer out of its source and runs them as they are.
+// BOOL_FLAGS and flags(), toolButtons(), commandWords(), nearTable(), renderHelp()
+// and the screen renderer out of its source and runs them as they are.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { TOOLS, byName, whatOf } from "../public/tools.js";
+import { ALIASES } from "../public/route.js";
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "public", "terminal.js"), "utf8");
 const bools = src.match(/^const BOOL_FLAGS = .*;$/m)?.[0];
@@ -97,6 +98,51 @@ test("a word over 40 characters stays plain text, so it breaks at its hyphens in
   const a = nearTable([{ line, id: "", en: "" }]).cells[0][0];
   assert.equal(a.attrs.href, `/terminal?cmd=${encodeURIComponent(line)}`);
   assert.equal(text(a), line);
+});
+
+test("help's usage lines wrap only between their words, as a notice's offered commands do", () => {
+  const lift = (re, what) => { const m = src.match(re)?.[0]; assert.ok(m, `${what} found in terminal.js`); return m; };
+  const commands = lift(/^const COMMANDS = \[[\s\S]*?^\];$/m, "COMMANDS");
+  const words = lift(/^const commandWords = .*;$/m, "commandWords");
+  const help = lift(/^function renderHelp\(which\) \{[\s\S]*?^\}$/m, "renderHelp()");
+  // Stand-ins for app.js on the English page: an el(), a fragment and a table() that keep what they are given,
+  // filling each cell as app.js's table() does (f(row), or row[k]).
+  const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [].concat(children), append(...c) { this.children.push(...c); } });
+  const document = { createDocumentFragment: () => el("fragment") };
+  const table = (cols, rows) => {
+    const tb = { tag: "table", cols, cells: rows.map((row) => cols.map((c) => (c.f ? c.f(row) : row[c.k]))), classes: [] };
+    tb.classList = { add: (c) => tb.classes.push(c) };
+    return tb;
+  };
+  const make = new Function("document", "el", "table", "wrapScroll", "t", "ALIASES", "helpOf", "TOOLS", "toolButtons",
+    `${commands}\n${words}\n${help}\nreturn { COMMANDS, renderHelp };`);
+  const { COMMANDS, renderHelp } = make(document, el, table, (x) => x, (_, en) => en, ALIASES, (c) => c.help, TOOLS, () => el("div"));
+  const usageCells = (which) => {
+    const tb = renderHelp(which).children.find((c) => c.tag === "table");
+    // The table and column the stylesheet's .tbl-help and td.use .word rules reach (checked in the offered-command test above).
+    assert.ok(tb.classes.includes("tbl-help"), "the help table is a .tbl-help");
+    const col = tb.cols.findIndex((c) => c.cls === "use");
+    assert.ok(col >= 0, "the usage column is a td.use");
+    return tb.cells.map((row) => row[col]);
+  };
+  // A cell's words: each kept-whole word as <span.word>, plain text as itself.
+  const flat = (n) => (typeof n === "string" ? [n] : n.attrs.class === "word" ? [`<span.word>${text(n)}`] : n.children.flatMap(flat));
+
+  const cells = usageCells();
+  assert.equal(cells.length, COMMANDS.length);
+  COMMANDS.forEach((c, i) => {
+    // The cell reads as the usage line, set as its words, each kept whole: the spaces between them are the only places it wraps.
+    assert.equal(text(cells[i]), c.usage, c.name);
+    assert.deepEqual(flat(cells[i]), c.usage.split(" ").flatMap((w, j) => [...(j ? [" "] : []), `<span.word>${w}`]), c.name);
+  });
+  // Every word help shows is short enough to be kept whole (commandWords leaves a word over 40 characters as plain text).
+  for (const c of COMMANDS) for (const w of c.usage.split(" ")) assert.ok(w.length <= 40, `${c.name}: ${w}`);
+  // Rows that broke at a hyphen at 1280 px (2026-11-08): "[--" / "statement", "[--" / "reported|--estimates]".
+  const one = (name) => flat(usageCells(name)[0]).filter((w) => w !== " ");
+  assert.deepEqual(one("financials"), ["<span.word>financials", "<span.word><SYMBOL>", "<span.word>[annual|quarterly|ttm]", "<span.word>[--statement", "<span.word>income,balance,cash]"]);
+  assert.ok(one("earnings").includes("<span.word>[--reported|--estimates]"));
+  // help for an alias shows its command's row the same way.
+  assert.deepEqual(one("f"), COMMANDS.find((c) => c.name === "fundamental").usage.split(" ").map((w) => `<span.word>${w}`));
 });
 
 test("the screen marks a P/B over another currency's statements and names the companies as the CLI does", () => {

@@ -483,7 +483,7 @@ pre.json { max-height: 30rem; overflow: auto; padding: 12px 16px; border-top: 1p
 .result .cmdline pre { word-break: normal; overflow-wrap: anywhere; }
 /* The install commands are short: each stays on one line instead of breaking at a hyphen (ihsg- / mcp). */
 .result .install code { white-space: nowrap; }
-/* A notice's offered command wraps only at its spaces: each word stays whole (foreign- / accumulation). */
+/* help's usage lines and a notice's offered commands wrap only at their spaces: each word stays whole ([-- / statement, foreign- / accumulation). */
 .result .tbl td.use .word { white-space: nowrap; }
 /* On a phone each command stacks over its description instead of scrolling sideways. */
 @media (max-width: 48rem) {
