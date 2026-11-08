@@ -1,7 +1,8 @@
 // node --test web/test/*.mjs. The terminal's flag parser: public/terminal.js is
 // a browser module (it imports /app.js and reads the DOM), so the test lifts
 // BOOL_FLAGS and flags(), toolButtons(), commandWords(), nearTable(), renderHelp()
-// and the screen and brokers renderers out of its source and runs them as they are.
+// and the screen, brokers and market foreign renderers out of its source and
+// runs them as they are.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -204,4 +205,35 @@ test("brokers prints IPOT's member ranking with the CLI's columns, class and net
   const plain = render({ ...ranking, rounded: false, members: 1, brokers: [{ ...row, buy_value: null, sell_value: null, net_value: null, kind: null }] });
   assert.deepEqual(plain.children.find((c) => c.tag === "table").cols.map((c) => c.h), ["#", "Code", "Member", "Value", "Share", "Volume", "Frequency"]);
   assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text).join(" "), /abbreviates|its net/);
+});
+
+test("market foreign prints the rupiah ranking with the CLI's columns and its market line", () => {
+  const body = src.match(/^ {2}marketForeign\(m\) \{[\s\S]*?^ {2}\},$/m)?.[0];
+  assert.ok(body, "R.marketForeign() found in terminal.js");
+  // Stand-ins for app.js on the English page, as above; compact as the CLI's (10.32T, 329.3B).
+  const compact = (v) => { if (v == null) return "n/a"; const [u, s] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]].find(([x]) => Math.abs(v) >= x) || [1, ""]; return `${Number((v / u).toFixed(Math.abs(v / u) >= 100 ? 1 : 2))}${s}`; };
+  const fmt = { compact, num: (v, d) => v.toFixed(d), price: (v) => (v == null ? "n/a" : v.toLocaleString("en")), pct: (v) => (v == null ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`) };
+  const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [...children], append(...c) { this.children.push(...c); } });
+  const document = { createDocumentFragment: () => el("fragment") };
+  const table = (cols, rows) => ({ tag: "table", cols, rows });
+  const signClass = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
+  const render = new Function("fmt", "el", "document", "table", "wrapScroll", "signClass", "NA", `const R = { ${body} };\nreturn (m) => R.marketForeign(m);`)(fmt, el, document, table, (t) => t, signClass, "n/a");
+  const row = { symbol: "BBCA", name: "BANK CENTRAL ASIA Tbk", price: 5200, change_pct: 1.46, value: 1.0e12, foreign_net_value: 219.0e9, foreign_net_pct: 21.9 };
+  const m = { date: "2026-11-06", scanned: 100, checked: 98, market: { value: 10.32e12, foreign_buy_value: 3.76e12, foreign_sell_value: 3.43e12, foreign_net_value: 329.33e9 }, net_buy: [row], net_sell: [], rounded: true };
+  const page = render(m);
+  // src/output/table_exchange.rs, market_foreign_value.
+  assert.equal(page.children[0].attrs.html, "<b>Foreign flow</b> · 2026-11-06 · the 100 most traded stocks (98 with trades) · rupiah (IPOT)");
+  assert.equal(page.children[1].attrs.html, 'Market · value 10.32T · foreign buy 3.76T · sell 3.43T · net <span class="up">+329.3B</span>');
+  const t = page.children.find((c) => c.tag === "table");
+  assert.deepEqual(t.cols.map((c) => c.h), ["#", "Symbol", "Name", "Price", "%", "Value", "Foreign net", "Net %"]);
+  assert.deepEqual(t.cols.map((c) => (c.f ? c.f(row) : row[c.k])), [1, "BBCA", "BANK CENTRAL ASIA Tbk", "5,200", "+1.46%", "1T", "+219B", "21.9%"]);
+  assert.equal(t.cols.find((c) => c.h === "Foreign net").cls(row), "num up");
+  const words = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text);
+  assert.deepEqual(words.slice(0, 1), ["None."], "no net selling");
+  assert.match(words[1], /^Rupiah from IPOT \(Indo Premier\): each stock's foreign net is its broker summary's, across all boards, for the 100 stocks most traded by value, not every stock/);
+  assert.match(words[1], /two for the market/);
+  // Without totals of the session, the line says so.
+  const plain = render({ ...m, market: null, rounded: false });
+  assert.equal(plain.children[1].attrs.html, "Market · no totals for this session (see the warning)");
+  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text).join(" "), /abbreviates/);
 });

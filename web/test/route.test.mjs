@@ -51,7 +51,7 @@ function runsHere(line, what) {
 }
 
 test("every CLI-and-MCP-only tool is reached from its CLI command, its JSON forms and its tool name", () => {
-  assert.equal(CLI_ONLY_TOOLS.length, 11);
+  assert.equal(CLI_ONLY_TOOLS.length, 10);
   for (const tool of CLI_ONLY_TOOLS) {
     const cli = bareCli(tool);
     const group = cli.replace(/^idx /, "");
@@ -76,10 +76,6 @@ test("every CLI-and-MCP-only tool is reached from its CLI command, its JSON form
 
 test("a notice keeps the user's words: arguments, flags, tickers in the near commands", () => {
   const cases = [
-    ["market foreign --date 2026-10-16 -n 20", "idx market foreign --date 2026-10-16 -n 20", ["foreign BBCA", "bandar screen --preset foreign-accumulation"]],
-    ["idx -o json market foreign", "idx market foreign", ["foreign BBCA", "bandar screen --preset foreign-accumulation"]],
-    // market foreign takes no ticker: it only shapes the near command.
-    ["market foreign TLKM", "idx market foreign", ["foreign TLKM", "bandar screen --preset foreign-accumulation"]],
     ["market indices LQ45 IDX30", "idx market indices LQ45 IDX30", ["market", "quote ^JKSE"]],
     ["calendar BBCA", "idx market calendar --symbol BBCA", ["actions BBCA", "holidays --upcoming"]],
     ["market calendar --type rups --days 30", "idx market calendar --type rups --days 30", ["actions BBCA", "holidays --upcoming"]],
@@ -116,7 +112,6 @@ test("a notice keeps the user's words: arguments, flags, tickers in the near com
     ["movements BBCA --action sell", "idx stockbit movements BBCA --action sell", ["ownership ticker BBCA"]],
     ["stockbit login --page", "idx stockbit login --page", []],
     ["idx --offline stockbit status", "idx --offline stockbit status", []],
-    ["market foreign --help", "idx market foreign --help", ["foreign BBCA", "bandar screen --preset foreign-accumulation"]],
   ];
   for (const [line, cli, near] of cases) {
     const r = routeLine(line);
@@ -215,7 +210,7 @@ test("schema NAME offers the page's command that prints that shape, and none for
   const body = json.slice(json.indexOf("pub fn schema_for"), json.indexOf("_ =>", json.indexOf("pub fn schema_for")));
   const names = [...body.matchAll(/^\s+"([a-z-]+)" =>/gm)].map((m) => m[1]);
   assert.ok(names.length > 50, `${names.length} schema names`);
-  const cliOnly = ["foreign", "market-foreign", "market-foreign-value", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
+  const cliOnly = ["foreign", "market-foreign", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
     "watchlist", "error", "ownership-import", "ownership-discover", "ownership-resolve-candidates", "ownership-resolution", "ownership-resolutions",
     "ownership-composition", "ownership-snapshot-sync", "ownership-status", "ownership-snapshot", "ownership-institutions"];
   for (const name of names) {
@@ -229,6 +224,7 @@ test("schema NAME offers the page's command that prints that shape, and none for
   assert.equal(routeLine("schema ownership-entity").near[0].line, 'json ownership entity "Dwimuria Investama"');
   assert.equal(routeLine("schema ownership-changes").near[0].line, "json ownership changes 2026-08-31 2026-09-30");
   assert.equal(routeLine("schema foreign-value").near[0].line, "json foreign BBCA");
+  assert.equal(routeLine("schema market-foreign-value").near[0].line, "json market foreign");
   // No name, or one the CLI does not know, gets the example.
   assert.equal(routeLine("schema").near[0].line, "json quote BBCA");
   assert.equal(routeLine("schema nope").near[0].line, "json quote BBCA");
@@ -252,6 +248,7 @@ test("the terminal's own lines are never intercepted: commands, aliases, subcomm
     "news --limit 5", "news TLKM --company-only", "insights BBCA --all", "returns BBCA BBRI --benchmark none", "fundamental BBCA --lens risk",
     "actions BBCA --since 2025-01-01", "holidays --upcoming 2027", "holidays 2027 --all", "astro 2026-12-24 --backtest --period 2y", "astro --natal base --days 7",
     "brokers --top 0 --sort volume", "brokers --date 2026-11-06", "brokers CC", "brokers BBCA",
+    "market foreign", "market foreign --top 0", "market foreign --date 2026-11-06 --top 5", "json market foreign",
     // Lines the page has always taken as they are, unknown flags included.
     "news TLKM --source kontan", "foreign BBCA --source idx", "brokers --source idx", "quote BBCA --foo",
   ];
@@ -296,6 +293,12 @@ test("lines in the CLI's words run as the page's own, and say what they ran as",
     ["market brokers --source auto --sort volume", "brokers --sort volume"],
     ["idx_market_brokers", "brokers"],
     ["idx_market_brokers --top 5", "brokers --top 5"],
+    // IPOT is the page's own source; the page spells market foreign as the CLI does.
+    ["idx market foreign --source ipot", "market foreign"],
+    ["market foreign --source ipot -n 20 -d 2026-11-06", "market foreign --top 20 --date 2026-11-06"],
+    ["idx -o json market foreign --source=ipot --sort value", "json market foreign"],
+    ["idx_market_foreign", "market foreign"],
+    ["idx_market_foreign --top 5", "market foreign --top 5"],
     ["idx stocks history BBCA -p 5y -i 1wk -n 0", "history BBCA --period 5y --interval 1wk --limit 0"],
     ["idx stocks history BBCA --period=5d --interval=1h", "history BBCA --period 5d --interval 1h"],
     ["idx stocks intraday BBCA -i 5m", "intraday BBCA --interval 5m"],
@@ -354,7 +357,7 @@ test("lines in the CLI's words run as the page's own, and say what they ran as",
 
 test("a line read again, after stocks or as a tool's web example, still reaches its notice", () => {
   const cases = [
-    ["idx stocks market foreign", "cli-mcp", "idx market foreign"],
+    ["idx stocks market foreign", "flag", "idx market foreign"],
     ["stocks ownership composition BBCA", "cli-mcp", "idx ownership composition BBCA"],
     ["stocks orderbook BBCA", "cli-mcp", "idx stockbit orderbook BBCA"],
     ["stocks watch", "cli", "idx watch"],
@@ -378,7 +381,7 @@ test("every MCP tool's CLI example runs here as its web command, or reaches its 
     const r = routeLine(tool.cli);
     if (!tool.web) { assert.equal(r.kind, "cli-mcp", tool.tool); continue; }
     // idx stocks foreign reads idx.co.id by default: its notice offers the tool's web command.
-    if (tool.tool === "idx_foreign") { assert.equal(r.kind, "flag"); assert.deepEqual(r.near.map((n) => n.line), [tool.web]); continue; }
+    if (["idx_foreign", "idx_market_foreign"].includes(tool.tool)) { assert.equal(r.kind, "flag"); assert.deepEqual(r.near.map((n) => n.line), [tool.web]); continue; }
     assert.equal(r.kind, "web", tool.tool);
     const ran = tokenize(r.line), web = tokenize(tool.web);
     assert.equal(ran[0], web[0], `${tool.tool}: ${r.line} runs ${tool.web}`);
@@ -419,6 +422,13 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     ["idx --provider stockbit stocks quote BBCA", null, ["--provider stockbit"], ["quote BBCA"], "idx --provider stockbit stocks quote BBCA"],
     ["idx --provider yahoo stocks fundamental BBCA", null, ["--provider yahoo"], ["fundamental BBCA"], "idx --provider yahoo stocks fundamental BBCA"],
     ["idx stocks foreign BBCA --source idx", "foreign", ["--source idx"], ["foreign BBCA"], "idx stocks foreign BBCA --source idx"],
+    // Every stock in shares from idx.co.id, which refuses this host: the 100 most traded in rupiah from IPOT run here.
+    ["market foreign --source idx", "market foreign", ["--source idx"], ["market foreign"], "idx market foreign --source idx"],
+    ["market foreign --sort shares -n 5", "market foreign", ["--sort shares"], ["market foreign --top 5"], "idx market foreign --top 5 --sort shares"],
+    ["idx -o json market foreign --date 2026-11-06 --source=idx", "market foreign", ["--source idx"], ["json market foreign --date 2026-11-06"], "idx market foreign --date 2026-11-06 --source=idx"],
+    // In the CLI's words, the default is idx.co.id's; typed on the page, the same words are the page's.
+    ["idx market foreign", "market foreign", ["--source idx"], ["market foreign"], "idx market foreign"],
+    ["idx market foreign -n 20", "market foreign", ["--source idx"], ["market foreign --top 20"], "idx market foreign --top 20"],
     // The ranking from idx.co.id, which refuses this host: the same ranking from IPOT runs here.
     ["market brokers --source idx", "brokers", ["--source idx"], ["brokers"], "idx market brokers --source idx"],
     ["idx -o json market brokers --source=idx --date 2026-11-06", "brokers", ["--source idx"], ["json brokers --date 2026-11-06"], "idx market brokers --date 2026-11-06 --source=idx"],
@@ -458,6 +468,9 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
   for (const line of ["idx -o csv stocks quote BBCA", "idx --provider stockbit stocks quote BBCA", "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan", "idx ownership graph BBRI --dot"]) assert.ok(routeLine(line).why, line);
   // Left out, the CLI's default says so: what the CLI reads, and what the page reads instead.
   assert.match(routeLine("idx stocks foreign BBCA").why.en, /^In the CLI, stocks foreign reads idx\.co\.id unless --source ipot/);
+  assert.match(routeLine("idx market foreign").why.en, /^In the CLI, market foreign reads idx\.co\.id unless --source ipot is given: every stock in shares/);
+  assert.match(routeLine("market foreign --source idx").why.en, /^The web terminal reads IPOT: the foreign net in rupiah of the session's 100 most traded stocks/);
+  assert.match(routeLine("market foreign --sort shares").why.en, /^The web terminal ranks IPOT's foreign net in rupiah/);
   assert.match(routeLine("idx stocks foreign BBCA").why.id, /^Di CLI, stocks foreign membaca idx\.co\.id kecuali diberi --source ipot/);
   assert.equal(routeLine("idx stocks foreign BBCA --source idx").why.en, routeLine("stocks foreign BBCA --source idx").why.en);
 });
@@ -490,10 +503,10 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
   }
   for (const sub of variants("market.rs", "MarketCmd")) {
     const r = routeLine(`market ${sub}`);
-    if (r.kind === "web") assert.equal(r.line, sub === "overview" ? "market" : sub, sub);
+    if (r.kind === "web") assert.equal(r.line, sub === "overview" ? "market" : sub === "foreign" ? "market foreign" : sub, sub);
     else assert.equal(r.kind, "cli-mcp", sub);
   }
-  assert.deepEqual(variants("market.rs", "MarketCmd").filter((s) => routeLine(`market ${s}`).kind !== "web"), ["indices", "foreign", "calendar"]);
+  assert.deepEqual(variants("market.rs", "MarketCmd").filter((s) => routeLine(`market ${s}`).kind !== "web"), ["indices", "calendar"]);
   // A subcommand the page runs is a CLI_FORM path the terminal handles; any other has a notice of its own.
   const pageRuns = (path) => Object.values(CLI_FORM).some(([p]) => p === path);
   const homes = (path) => [pageRuns(path), Object.hasOwn(MCP_ONLY, path), Object.hasOwn(CLI_ONLY, path)].filter(Boolean).length;
@@ -533,7 +546,7 @@ test("the terminal runs every line through the router, and heads every kind of n
   const kinds = new Set(lines.map((l) => routeLine(l).kind).filter((k) => k !== "web"));
   assert.deepEqual(Object.keys(NOTICE_META).sort(), [...kinds].sort());
   // A notice answers without running anything.
-  for (const line of ["market foreign", "idx -o json market foreign", "watch BBCA", "idx -o csv stocks quote BBCA", "tools idx_orderbook"]) {
+  for (const line of ["market indices", "idx -o json market indices", "watch BBCA", "idx -o csv stocks quote BBCA", "tools idx_orderbook"]) {
     const plan = routeLine(line);
     assert.deepEqual(await run(line), { local: NOTICE_META[plan.kind], node: { notice: plan } }, line);
   }

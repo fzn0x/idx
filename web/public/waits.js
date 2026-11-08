@@ -30,6 +30,7 @@ export const WAITS = {
   bandar: { on: "IPOT broker summaries, one per session", slow: IPOT_SLOW },
   "bandar screen": { on: "the bandar scan of the last session" },
   "bandar broker": { on: "the bandar scan of the last session" },
+  "market foreign": { on: "the bandar scan of the last session, and IPOT's market statistics with the BBCA statistics that date them", slow: IPOT_SLOW },
   actions: { on: "IPOT corporate actions", slow: IPOT_SLOW },
   market: { on: "the minute board" },
   ownership: { on: "the KSEI register" },
@@ -40,5 +41,6 @@ export const WAITS = {
 export function waitFor(name, arg) {
   const sub = String(arg || "").toLowerCase();
   if (name === "bandar" && (sub === "screen" || sub === "broker")) return WAITS[`bandar ${sub}`];
+  if (name === "market" && sub === "foreign") return WAITS["market foreign"];
   return WAITS[name] || {};
 }
