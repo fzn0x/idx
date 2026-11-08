@@ -763,6 +763,21 @@ test("while IPOT has answered none of the scan's checks, the warnings say so, no
   assert.ok(e.message.startsWith("no session of the bandar scan has finished yet: IPOT has not answered the scan of 2026-10-19 (the check at 16:45 WIB failed: HTTP 502). "), e.message);
 });
 
+test("with no session shown yet, a scan that stored no stock is named in the not_found message", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const now = new Date("2026-10-17T10:00:00+07:00");
+  // IPOT knows neither code (a page for an unknown code): the probe lets the stocks speak, and both fail for good.
+  await withFetch(async () => new Response(page("brokersummary_zzzz_invalid.html")), async () => {
+    assert.equal((await bandarScanStep(env, { now })).done, true);
+  });
+  const st = await scanStatus(env);
+  assert.deepEqual([st.phase, st.complete, st.last.stored, st.last.failed], ["done", null, 0, ["BBCA", "TLKM"]]);
+  const e = await bandarScreen(env, null, null, "1w", null, null, null, null, now).then(() => null, (err) => err);
+  assert.equal(e?.code, "not_found");
+  assert.ok(e.message.startsWith("no session of the bandar scan has stored a stock yet: the scan of 2026-10-16 ended with no stock stored (2 failed). "), e.message);
+});
+
 test("a session IPOT never answered for is filed as unreachable, not as unpublished", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));

@@ -1114,10 +1114,17 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
   return envelope("idx.bandar.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-/** The screen's and the broker's answer before any session of the scan has finished. */
+/**
+ * The screen's and the broker's answer while no session of the scan is
+ * shown: none has finished, or the newest that did stored no stock (then
+ * why: its stocks that failed, were not published or were not reached).
+ */
 const noScanYet = (st, now) => {
-  const where = scanProgress(st, null, now);
-  return notFound(`no session of the bandar scan has finished yet${where ? `: ${where}` : ""}. From 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
+  const last = st?.runs?.[0];
+  const why = last?.scanned ? [[last.failed.length, "failed"], [last.unpublished.length, "not published by IPOT"], [last.left, "not reached before the next session's 16:45 WIB"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}`).join(", ") : "";
+  const empty = last?.scanned && !last.stored ? `the scan of ${last.session} ended with no stock stored${why ? ` (${why})` : ""}` : null;
+  const notes = [empty, scanProgress(st, null, now)].filter(Boolean);
+  return notFound(`no session of the bandar scan has ${empty ? "stored a stock" : "finished"} yet${notes.length ? `: ${notes.join("; ")}` : ""}. From 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
 };
 
 /** /api/bandar/screen: `idx bandar screen` over the scan of the last session in D1 (idx.bandar.screen.v1). */
