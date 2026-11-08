@@ -55,3 +55,15 @@ no broker lists, an empty foreign page and `F. NVal` 0; ranges are right then
 | brokersummary_truk_20261105.html, brokersummary_truk_20261105_foreign.html | TRUK 11-05, `fd=all` and `fd=F` | 2026-11-06 07:02 | the stock traded 21.6 M and no foreigner did: the foreign page is the empty template |
 | brokersummary_bbca_20261106_insession.html, brokersummary_bbca_20261106_insession_foreign.html | BBCA 11-06, `fd=all` and `fd=F` | 2026-11-06 09:15 | during the session: `T. Val` 89.5 B so far, no broker lists, `F. NVal` 0, the foreign page empty |
 | brokersummary_bbca_20261102_20261106_insession.html, brokersummary_bbca_20261102_20261105_insession.html | BBCA, 11-02 to 11-06 and 11-02 to 11-05 | 2026-11-06 09:15 | during the session both read 292.2 B: no session counted twice (11-02..11-05 read 595.4 B before the open) |
+
+Market-wide broker ranking (`market brokers --source ipot`):
+`ma-topbroker.php` takes no parameters (`start` and `end` are ignored) and
+ranks every broker in IPOT's latest session by value; the page has no date,
+which the `Today` row of `statistic.php?code=BBCA` gives. Both were recorded
+on Sunday 2026-11-08 with the provider's headers and are byte-identical to
+the copies read at 07:02 and 07:06 that morning.
+
+| file | request | recorded | notes |
+| --- | --- | --- | --- |
+| topbroker_20261106.html | `ma-topbroker.php` | 2026-11-08 07:51 | 91 brokers for the session of 2026-11-06: CP first (`T.Val` 2.79 T), CC net -264.04 B, PS and ZZ without trades last. JB is listed as `[CC] BJB Sekuritas Jawa Barat` and idx.co.id counts it in CC (trades 210,936 + 276 = its 211,212); folded so, the 88 brokers with trades match idx.co.id's `GetBrokerSummary` for 2026-11-06 at the source's two decimals. A commented-out "Lorem Ipsum" template follows the rows |
+| statistic_bbca_20261106.html | `statistic.php?code=BBCA` | 2026-11-08 07:51 | `Today` row: high 5,200 and low 4,990, both on 2026-11-06; a commented-out copy of the table from 2015 follows |
