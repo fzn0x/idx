@@ -546,32 +546,45 @@ test("a stock IPOT has not published is read again less often as the wait grows,
   assert.ok(out.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again at 21:00 WIB"), out.warnings.join("\n"));
 });
 
-test("a stock that fails is tried again 10, then 30 minutes after its pass, then counts as failed", async () => {
+test("a stock IPOT fails for hours is read once IPOT is back", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
-  const calls = [];
-  const recorded = recordedFetch(calls);
+  const recorded = recordedFetch();
+  let clock = 0;
+  // IPOT fails TLKM from 10:00 to 13:00 WIB.
+  const fetchFn = async (u, init) => (String(u).includes("code=TLKM") && clock < Date.parse("2026-10-17T13:00:00+07:00") ? new Response("busy", { status: 503 }) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    for (clock = Date.parse("2026-10-17T10:00:00+07:00"); clock <= Date.parse("2026-10-17T15:00:00+07:00"); clock += 60e3) await bandarScanStep(env, { now: new Date(clock) });
+  });
+  const st = await scanStatus(env);
+  assert.deepEqual([st.phase, st.failed, st.retry, st.complete, st.last.stored], ["done", [], [], "2026-10-16", 2]);
+});
+
+test("a stock that fails is tried again 10, 30, 60 and 120 minutes after its pass, then every 4 hours, then counts as failed", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
   const tlkm = [];
+  const wib = (ms) => new Date(ms + 7 * 3600e3).toISOString().slice(5, 16).replace("T", " ");
+  let clock = 0;
   // IPOT is busy for TLKM (503 is not retried within a request).
-  const fetchFn = async (u, init) => (String(u).includes("code=TLKM") ? (tlkm.push(String(u)), new Response("busy", { status: 503 })) : recorded(u, init));
+  const fetchFn = async (u, init) => (String(u).includes("code=TLKM") ? (tlkm.push(wib(clock)), new Response("busy", { status: 503 })) : recorded(u, init));
   const at = (hm) => new Date(`2026-10-17T${hm}:00+07:00`);
   await withFetch(fetchFn, async () => {
+    clock = at("10:00").getTime();
     const r = await bandarScanStep(env, { now: at("10:00") });
     assert.deepEqual([r.read, r.errors, r.done], [2, { http_503: 1 }, false]);
-    let st = await scanStatus(env);
-    assert.deepEqual([st.retry, st.retry_due, st.failed, st.complete], [["TLKM"], at("10:10").toISOString(), [], null]);
-    assert.equal((await bandarScanStep(env, { now: at("10:05") })).idle, true);
-    assert.equal(tlkm.length, 1, "no retry within the pass's minute or before it is due");
-    await bandarScanStep(env, { now: at("10:10") });
-    st = await scanStatus(env);
-    assert.deepEqual([tlkm.length, st.pass, st.retry_due], [2, 1, at("10:40").toISOString()]);
-    assert.equal((await bandarScanStep(env, { now: at("10:39") })).idle, true);
-    const last = await bandarScanStep(env, { now: at("10:40") });
-    assert.equal(last.done, true);
-    st = await scanStatus(env);
-    assert.deepEqual([tlkm.length, st.failed, st.errors, st.complete], [3, ["TLKM"], { http_503: 1 }, "2026-10-16"]);
-    assert.deepEqual([st.last_errors[0].symbol, st.last_errors[0].kind, st.last_errors[0].error], ["TLKM", "http_503", "HTTP 503"]);
+    const st = await scanStatus(env);
+    // The first pass is over: the session is filed and shown, TLKM counted as failed for now.
+    assert.deepEqual([st.retry, st.retry_due, st.failed, st.complete, st.last.failed, st.last.retrying], [["TLKM"], at("10:10").toISOString(), [], "2026-10-16", ["TLKM"], 1]);
+    const out = await bandarScreen(env, null, null, "1w", null, null, null, null, at("10:05"));
+    assert.deepEqual(out.warnings, ["1 of 2 scanned stocks had no broker summary; the scan tries 1 of them again at 10:10 WIB"]);
+    for (clock = at("10:01").getTime(); clock <= Date.parse("2026-10-18T12:00:00+07:00"); clock += 60e3) await bandarScanStep(env, { now: new Date(clock) });
   });
+  assert.deepEqual(tlkm, ["10-17 10:00", "10-17 10:10", "10-17 10:40", "10-17 11:40", "10-17 13:40", "10-17 17:40", "10-17 21:40", "10-18 01:40", "10-18 05:40"]);
+  const st = await scanStatus(env);
+  assert.deepEqual([st.phase, st.failed, st.retry, st.errors, st.last.failed, st.last.retrying], ["done", ["TLKM"], [], { http_503: 1 }, ["TLKM"], 0]);
+  assert.deepEqual([st.last_errors[0].symbol, st.last_errors[0].kind, st.last_errors[0].error], ["TLKM", "http_503", "HTTP 503"]);
 });
 
 test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again and scanned", async () => {
@@ -666,15 +679,22 @@ test("a scan that read too few of its stocks is filed, and the session before it
   const fetchFn = async (u, init) => (busy && /code=(TLKM|BRPT)/.test(String(u)) ? new Response("busy", { status: 503 }) : recorded(u, init));
   await withFetch(fetchFn, async () => {
     await scanAll(env, new Date("2026-10-17T03:00:00Z"));
-    // On Monday IPOT fails TLKM and BRPT through the pass and both retries.
+    // On Monday IPOT fails TLKM and BRPT through the pass and the retry rounds.
     busy = true;
     const at = (hm) => new Date(`2026-10-19T${hm}:00+07:00`);
     for (const hm of ["16:46", "16:47", "16:57", "17:27"]) await bandarScanStep(env, { now: at(hm) });
-    const st = await scanStatus(env);
-    assert.deepEqual([st.session, st.phase, st.complete, st.last.stored, st.last.of, st.last.promoted], ["2026-10-19", "done", "2026-10-16", 1, 4, false]);
-    const out = await bandarScreen(env, null, null, "1w", null, null, null, null, at("17:30"));
+    let st = await scanStatus(env);
+    assert.deepEqual([st.session, st.phase, st.complete, st.last.stored, st.last.of, st.last.promoted], ["2026-10-19", "running", "2026-10-16", 1, 4, false]);
+    let out = await bandarScreen(env, null, null, "1w", null, null, null, null, at("17:30"));
     assert.equal(out.data.to, "2026-10-16");
-    assert.deepEqual(out.warnings, ["the scan of 2026-10-19 read only 1 of 4 stocks (3 failed, 0 not published by IPOT); showing 2026-10-16", "1 of 4 scanned stocks had no broker summary"]);
+    assert.deepEqual(out.warnings, ["the scan of 2026-10-19 has read 1 of 4 stocks so far (3 failed, 0 not published by IPOT) and reads 2 of them again later; showing 2026-10-16", "1 of 4 scanned stocks had no broker summary"]);
+    // Tuesday 16:45 WIB: 10-19 is filed with what it got and the next session's scan starts.
+    await bandarScanStep(env, { now: new Date("2026-10-20T16:45:00+07:00"), stocks: false });
+    st = await scanStatus(env);
+    const filed = JSON.parse(env.kv.get("bandar_scan")).runs.find((r) => r.session === "2026-10-19");
+    assert.deepEqual([st.complete, filed.stored, filed.of, filed.failed.length, filed.retrying, filed.promoted], ["2026-10-16", 1, 4, 3, 0, false]);
+    out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-20T16:50:00+07:00"));
+    assert.ok(out.warnings.includes("the scan of 2026-10-19 read only 1 of 4 stocks (3 failed, 0 not published by IPOT); showing 2026-10-16"), out.warnings.join("\n"));
     // Both sessions' rows stay: the shown one is never pruned.
     assert.deepEqual([...new Set([...env.scan.keys()].map((k) => k.split("|")[0]))].sort(), ["2026-10-16", "2026-10-19"]);
   });

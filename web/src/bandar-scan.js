@@ -23,12 +23,14 @@
 // seconds, so a minute ends before the next one reads the state.
 //
 // A stock whose session IPOT has not published yet is read again on the
-// probe's schedule; one that failed gets two more passes, 10 and 30 minutes
-// after its pass. When the next session's 16:45 comes, whatever the session
-// got is filed in a record (`runs`): what it stored, failed and did not get,
-// or that IPOT never published it or never answered the probe. A session is
-// shown once it holds half its stocks or more than the one shown before; the
-// API's warnings come from these records (scanNotes).
+// probe's schedule; one that failed is tried again in rounds 10, 30, 60 and
+// 120 minutes apart, then every 4 hours, eight in all. Once the first pass
+// is over, the session is filed in a record (`runs`): what it stored, failed
+// and did not get, filed again when a later read changes it, and for good at
+// the next session's 16:45, as is a session IPOT never published or never
+// answered the probe for. A session is shown once it holds half its stocks
+// or more than the one shown before; the API's warnings come from these
+// records (scanNotes).
 
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
@@ -77,12 +79,14 @@ const PROBE_ALARM_MS = 3600e3;
 /** The most traded stocks the probe turns among. */
 const PROBE_STOCKS = 3;
 /**
- * Minutes after a pass ends before the stocks that failed in it are tried
- * again: two more passes, then a failure counts. A source that fails a
- * stock tends to fail its neighbours too (2026-10-30: 72 of 100), so an
- * immediate retry fails the same way.
+ * Minutes after the first pass, then after each retry round, before the
+ * stocks that failed in it are tried again: eight rounds over about 20 hours
+ * (IPOT can fail for hours), then a failure counts, and at the next
+ * session's 16:45 WIB whatever still waits does. A source that fails a stock
+ * tends to fail its neighbours too (2026-10-30: 72 of 100), so an immediate
+ * retry fails the same way.
  */
-const RETRY_GAPS_MIN = [10, 30];
+const RETRY_GAPS_MIN = [10, 30, 60, 120, 240, 240, 240, 240];
 /** Times the budget may cut a stock short before that counts as a failure of kind "budget". */
 const CUTS_ALLOWED = 1;
 /** Failures the state keeps word for word, newest first. */
@@ -204,7 +208,7 @@ function runOf(st, at) {
 }
 
 /** What a scanned record says of its stocks, whatever their order and the time it was filed. */
-const says = (r) => JSON.stringify([r.stored, r.checked, [...r.failed].sort(), [...r.unpublished].sort(), r.left]);
+const says = (r) => JSON.stringify([r.stored, r.checked, [...r.failed].sort(), r.retrying ?? 0, [...r.unpublished].sort(), r.left]);
 
 /**
  * Files `run` as the newest record and makes its session the one shown when
@@ -397,8 +401,8 @@ async function probe(st, now, fetchPage) {
   return verdict;
 }
 
-/** No stock is left to read in the first pass or a later retry round; pending ones may wait. */
-const restDone = (st) => !st.queue.length && !st.retry.length;
+/** No stock waits for a read: none of the first pass, a retry round or IPOT's publication. */
+const settled = (st) => !st.queue.length && !st.retry.length && !st.pending.length;
 
 /** A failure's kind, for the counts the logs and the status keep. Pure, tested. */
 export function errorKind(e) {
@@ -584,12 +588,13 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
     if (Object.keys(errors).length) out.errors = errors;
     changed ||= read > 0 || cut;
   }
-  // Every stock read or failed: the session's record, shown from now on when
-  // it holds enough, though stocks IPOT has not published may still come. It
-  // is filed again only when it says something new, so a read that finds
-  // the stocks still unpublished neither moves its time nor prunes.
-  if (st.phase === "running" && restDone(st)) {
-    if (!st.pending.length) st.phase = "done";
+  // The first pass over: the session's record, shown from now on when it
+  // holds enough, though stocks may still come from the retry rounds and
+  // IPOT's late lists. It is filed again only when it says something new, so
+  // a read that finds the stocks still failing or unpublished neither moves
+  // its time nor prunes.
+  if (st.phase === "running" && !st.queue.length) {
+    if (settled(st)) st.phase = "done";
     const run = runOf(st, at), filed = (st.runs || []).find((r) => r.session === session && r.scanned);
     if (!filed || says(filed) !== says(run)) {
       keep(st, run);
@@ -640,7 +645,11 @@ export function scanProgress(st, shown = null) {
     const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${hhmm(st.first_probe_at)} WIB${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
     return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;
   }
-  if (st?.phase === "running") return `the scan of ${st.session} is running (${attempted(st)} of ${st.symbols.length})${tail}`;
+  if (st?.phase === "running" && st.queue.length) return `the scan of ${st.session} is running (${attempted(st)} of ${st.symbols.length})${tail}`;
+  if (st?.phase === "running") {
+    // The first pass is over; failed and unpublished stocks wait to be read again.
+    return `the scan of ${st.session} has read ${st.stored} of ${st.symbols.length} stocks so far (${st.failed.length + st.retry.length} failed, ${st.pending.length} not published by IPOT) and reads ${st.retry.length + st.pending.length} of them again later${tail}`;
+  }
   return null;
 }
 
@@ -686,7 +695,8 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   const scanned = rows + failed + unpublished;
   if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
   if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads them again at ${clock(st.pending_due, now)}` : "is reading them again"}`);
-  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary`);
+  const retrying = reading ? st.retry.length : 0;
+  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${retrying} of them again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
   const year = Number(latest.slice(0, 4));
