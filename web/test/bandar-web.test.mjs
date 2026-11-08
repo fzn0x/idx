@@ -534,6 +534,22 @@ test("a 404 storm stays inside the budget and the stock it cut short stays next"
   });
 });
 
+test("a stock the budget cuts short twice counts as failed instead of starting every minute", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const now = new Date("2026-10-17T03:00:00Z");
+  // Minutes with 20 subrequests left, against a stock that needs 41 in this storm.
+  await withFetch(stormFetch([]), async () => { await bandarScanStep(env, { now, budget: budget(20), pauseMs: 0 }); });
+  let st = await scanStatus(env);
+  assert.deepEqual([st.retry, st.failed, st.scanned], [[], [], 0], "cut once: still first in line");
+  await withFetch(stormFetch([]), async () => {
+    const r = await bandarScanStep(env, { now, budget: budget(20), pauseMs: 0 });
+    assert.deepEqual(r.errors, { budget: 1 });
+  });
+  st = await scanStatus(env);
+  assert.deepEqual([st.retry, st.last_errors[0].kind, st.scanned], [["BBCA"], "budget", 1], "cut twice: off to the retry pass like any failure");
+});
+
 /** Yahoo's session and quotes, the KSEI mirror's empty index, then IPOT and the charts as recorded. */
 function cronFetch(urls) {
   const recorded = recordedFetch();

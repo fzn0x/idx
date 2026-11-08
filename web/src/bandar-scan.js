@@ -69,6 +69,8 @@ const PENDING_GAP_MIN = 10;
  * immediate retry fails the same way.
  */
 const RETRY_GAPS_MIN = [10, 30];
+/** Times the budget may cut a stock short before that counts as a failure of kind "budget". */
+const CUTS_ALLOWED = 1;
 /** Failures the state keeps word for word, newest first. */
 const ERRORS_KEPT = 5;
 /** Records of finished sessions the state keeps (the API reads the shown one's and the newer ones'). */
@@ -379,8 +381,8 @@ function failure(st, symbol, kind, e, at, seen) {
 
 /**
  * Up to PER_TICK stocks off the queue into `rows`, while the budget and the
- * minute last. Returns how many it read and the kinds of the failures among
- * them.
+ * minute last. Returns how many it read, the kinds of the failures among
+ * them, and whether the budget cut a stock short.
  */
 async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   const today = hol.wibDate(now), at = now.toISOString();
@@ -389,7 +391,7 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   st.pass ??= 0;
   st.errors ??= {};
   const seen = {};
-  let read = 0;
+  let read = 0, cut = false;
   while (read < PER_TICK) {
     refill(st, now);
     if (!st.queue.length) break;
@@ -399,8 +401,19 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     try {
       r = await scanSymbol(symbol, st.session, st.quotes?.[symbol] ?? null, { today, fetchPage, fetchChart });
     } catch (e) {
-      // The budget ran out under it: it stays first in line.
-      if (isBudgetError(e)) break;
+      if (isBudgetError(e)) {
+        // The budget ran out under it: it stays first in line, once. A stock
+        // that needs more than a minute's budget (IPOT answering 404 to most
+        // tries) then counts as failed, or it would start again every minute.
+        cut = true;
+        (st.cuts ??= {})[symbol] = (st.cuts[symbol] || 0) + 1;
+        if (st.cuts[symbol] <= CUTS_ALLOWED) break;
+        delete st.cuts[symbol];
+        st.queue.shift();
+        read++;
+        failure(st, symbol, "budget", e, at, seen);
+        continue;
+      }
       st.queue.shift();
       read++;
       failure(st, symbol, errorKind(e), e, at, seen);
@@ -408,6 +421,7 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     }
     st.queue.shift();
     read++;
+    if (st.cuts) delete st.cuts[symbol];
     if (r.invalid) {
       failure(st, symbol, "invalid", "a code IPOT does not know", at, seen);
       continue;
@@ -425,7 +439,7 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     if (r.rows[0]?.v.summary.buyers.length) st.checked++;
   }
   passEnded(st, now);
-  return { read, errors: seen };
+  return { read, errors: seen, cut };
 }
 
 /**
@@ -472,10 +486,10 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   }
   const rows = [];
   if (st.phase === "running" && stocks) {
-    const { read, errors } = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
+    const { read, errors, cut } = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
     out.read = read;
     if (Object.keys(errors).length) out.errors = errors;
-    changed ||= out.read > 0;
+    changed ||= read > 0 || cut;
   }
   // Every stock read or failed: the session's record, shown from now on when
   // it holds enough, though stocks IPOT has not published may still come.
