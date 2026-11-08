@@ -311,7 +311,7 @@ test("in a year the calendar does not cover, a day without trades at IPOT or on 
     assert.deepEqual(await bandarScanStep(env, { now }), { idle: true, session: "2028-01-03" });
     // The screen says why 2028-01-03 is not shown, that it does not count as a
     // session behind, and that the calendar does not cover the year.
-    const notes = scanNotes(JSON.parse(env.kv.get("bandar_scan")), "2027-12-30", 10, now);
+    const notes = scanNotes(JSON.parse(env.kv.get("bandar_scan")), "2027-12-30", ["BBCA"], now);
     assert.deepEqual(notes.warnings, [
       "2028-01-03 had no trades at IPOT nor on the quote board, so it was not scanned",
       "the bundled holiday list does not cover 2028; the scan tells that year's closures from IPOT and the quote board",
@@ -753,6 +753,50 @@ test("a stock IPOT still had not published at the next session's 16:45 counts as
     const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date("2026-11-09T09:50:00Z"));
     assert.deepEqual(out.warnings, ["the scan of 2026-11-09 is running (0 of 2); showing 2026-11-06", "IPOT had not published 2026-11-06 for 1 of the 2 scanned stocks when its scan ended"]);
     assert.equal(out.data.scanned, 2);
+  });
+});
+
+test("a forced rescan of the shown session never takes its record or its numbers away", async () => {
+  const board = (d, ts = 0) => JSON.stringify({ ts, quotes: [quote("BBCA", 5175, 9e8, `${d}T16:14:58+07:00`), quote("TLKM", 2690, 3e8, `${d}T16:14:58+07:00`)] });
+  const sat = new Date("2026-10-17T10:00:00+07:00"), sun = new Date("2026-10-18T10:00:00+07:00");
+  const recorded = recordedFetch();
+  let mode = "recorded";
+  const fetchFn = async (u, init) => {
+    if (mode === "down" && String(u).includes("indopremier")) return new Response("bad gateway", { status: 502 });
+    if (mode === "empty" && String(u).includes("indopremier")) return new Response(page("brokersummary_bbca_20261017_no_trades.html"));
+    if (mode === "tlkm" && String(u).includes("code=TLKM")) return new Response("busy", { status: 503 });
+    return recorded(u, init);
+  };
+  const scanned = async () => { const env = memoryDb(); env.kv.set("board", board("2026-10-16")); mode = "recorded"; await scanAll(env, sat); return env; };
+  const screen = (env, now) => bandarScreen(env, null, null, "1w", null, null, null, null, now);
+  await withFetch(fetchFn, async () => {
+    // IPOT down for the forced probe and until Monday's 16:45 WIB: 10-16 keeps its record.
+    let env = await scanned();
+    mode = "down";
+    assert.equal((await bandarScanStep(env, { now: sun, force: true })).probe, "error");
+    const monday = new Date("2026-10-19T16:45:00+07:00");
+    await bandarScanStep(env, { now: monday, stocks: false });
+    let st = await scanStatus(env);
+    const kept = JSON.parse(env.kv.get("bandar_scan")).runs.find((r) => r.session === "2026-10-16");
+    assert.deepEqual([st.complete, kept.scanned, kept.stored], ["2026-10-16", true, 2]);
+    let out = await screen(env, monday);
+    assert.deepEqual([out.data.to, out.data.scanned], ["2026-10-16", 2]);
+    assert.equal((await bandarBroker(env, "YP", "1w", null, monday)).data.to, "2026-10-16");
+    // A forced probe that finds no trades at IPOT nor on a later board does not close a session the scan read.
+    env = await scanned();
+    env.kv.set("board", board("2026-10-15", unix("2026-10-18T07:00:00+07:00")));
+    mode = "empty";
+    assert.equal((await bandarScanStep(env, { now: sun, force: true })).probe, "unpublished");
+    st = await scanStatus(env);
+    assert.deepEqual([st.phase, st.holiday, st.complete], ["waiting", false, "2026-10-16"]);
+    assert.deepEqual((await screen(env, sun)).data.scanned, 2);
+    // A rescan where TLKM fails this time: its row from the first scan stays, and it counts once.
+    env = await scanned();
+    mode = "tlkm";
+    await bandarScanStep(env, { now: sun, force: true });
+    out = await screen(env, sun);
+    assert.deepEqual([out.data.scanned, out.data.checked], [2, 2]);
+    assert.ok(!(out.warnings ?? []).some((w) => w.includes("no broker summary")), out.warnings);
   });
 });
 

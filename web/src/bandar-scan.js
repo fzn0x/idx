@@ -217,9 +217,13 @@ const says = (r) => JSON.stringify([r.stored, r.checked, [...r.failed].sort(), r
  * Files `run` as the newest record and makes its session the one shown when
  * it holds enough: some stocks, and half of them or more than the shown
  * session's record (none for a session kept from before these records). The
- * shown session's record is kept however many came after it.
+ * shown session's record is kept however many came after it. A forced
+ * rescan files nothing over the session's earlier scan until it has stored
+ * as many stocks: that scan's rows are still in D1.
  */
 function keep(st, run) {
+  const prior = st.runs?.find((r) => r.session === run.session && r.scanned);
+  if (prior && (!run.scanned || run.stored < prior.stored)) return;
   const shown = st.runs?.find((r) => r.session === st.complete);
   if (run.scanned && run.stored > 0 && st.complete !== run.session && (!st.complete || run.stored * 2 >= run.of || run.stored > (shown?.stored ?? 0))) st.complete = run.session;
   run.promoted = st.complete === run.session;
@@ -384,6 +388,8 @@ async function probe(st, now, fetchPage) {
     st.probe_invalid.push(symbol);
     verdict = "published";
   }
+  // A session the scan has read traded (a forced rescan): no trades now means IPOT is not showing them.
+  if (verdict === "closed" && st.runs?.some((r) => r.session === st.session && r.scanned)) verdict = "unpublished";
   st.first_probe_at ??= at;
   st.probes = (st.probes || 0) + 1;
   st.last_probe_at = at;
@@ -675,15 +681,19 @@ function runNote(r, shown) {
  * session they show when the newest trading session is not it, and why
  * (waiting for IPOT, running, not published by the cutoff, too few stocks,
  * not started), how far behind it is, and what its own scan missed. `shown`
- * is the session the rows come from, `rows` how many stocks they hold.
- * Returns the warnings, the failed and unpublished counts, the stocks
- * scanned and when the shown session was read. Pure, tested through the API.
+ * is the session the rows come from, `rows` the symbols they hold. Each of
+ * the scan's stocks counts once: by its row when it has one (a stock a
+ * forced rescan failed keeps its row from the first scan), else by why it
+ * has none. Returns the warnings, the failed and unpublished counts, the
+ * stocks scanned and when the shown session was read. Pure, tested through
+ * the API.
  */
 export function scanNotes(st, shown, rows, now = new Date()) {
   const warnings = [];
   const latest = hol.latestSession(now);
   const runs = st?.runs || [];
-  const run = runs.find((r) => r.session === shown) ?? null;
+  const run = runs.find((r) => r.session === shown && r.scanned) ?? null;
+  const held = new Set(rows), missing = (list) => (list || []).filter((s) => !held.has(s));
   const live = st?.session === shown && underWay(st);
   if (st && latest > st.session) {
     warnings.push(hol.wibDate(now) === latest && wibMinutes(now) < READY_MIN ? `the scan of ${latest} starts at 16:45 WIB; showing ${shown}` : `the scan has not reached ${latest} yet; showing ${shown}`);
@@ -696,12 +706,12 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   // not from a record filed before stocks went back to be read again.
   const reading = live && st.phase === "running";
   const rec = reading ? runOf(st, null) : run;
-  const failed = rec ? rec.failed.length : 0;
-  const unpublished = rec ? rec.unpublished.length : 0;
-  const scanned = rows + failed + unpublished;
-  if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${rows} of ${st.symbols.length} stocks so far`);
+  const failed = missing(rec?.failed).length;
+  const unpublished = missing(rec?.unpublished).length;
+  const scanned = held.size + failed + unpublished;
+  if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${held.size} of ${st.symbols.length} stocks so far`);
   if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads them again at ${clock(st.pending_due, now)}` : "is reading them again"}`);
-  const retrying = reading ? st.retry.length : 0;
+  const retrying = reading ? missing(st.retry).length : 0;
   if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${retrying} of them again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);

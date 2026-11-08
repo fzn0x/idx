@@ -1131,7 +1131,7 @@ export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw,
   const limit = num(limitRaw, 25);
   const scan = await scanRows(env, period);
   if (!scan.session) throw noScanYet(scan.state);
-  const notes = scanNotes(scan.state, scan.session, scan.rows.length, now);
+  const notes = scanNotes(scan.state, scan.session, scan.rows.map((r) => r.symbol), now);
   const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
   let rows = traded.map((r) => bd.screenRow(bd.report(r.summary, period, top, r.price, r.chg))).filter((r) => bd.matches(r, filters));
   bd.sortRows(rows, sort, descending);
@@ -1163,7 +1163,7 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new 
   const limit = num(limitRaw, 20);
   const scan = await scanRows(env, period);
   if (!scan.session) throw noScanYet(scan.state);
-  const notes = scanNotes(scan.state, scan.session, scan.rows.length, now);
+  const notes = scanNotes(scan.state, scan.session, scan.rows.map((r) => r.symbol), now);
   const warnings = [];
   if (!BROKERS[code]) warnings.push(`${code} is not on the bundled exchange-member list`);
   warnings.push(...notes.warnings);
