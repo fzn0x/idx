@@ -403,8 +403,8 @@ pub async fn foreign_day(
 }
 
 /// One HTML fragment, retrying the spurious 404 stretches; any other
-/// failure is a provider error naming `what` for `subject` (a stock code).
-/// `key` is the cache key when not the URL.
+/// failure is a provider error naming `what` for `subject` (a stock code,
+/// or the market for the ranking). `key` is the cache key when not the URL.
 async fn page(
     fetcher: &Arc<Fetcher>,
     url: &str,

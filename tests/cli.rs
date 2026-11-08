@@ -1714,7 +1714,7 @@ fn market_brokers_from_ipot_or_idx_co_id() {
             "as IPOT (Indo Premier) publishes them",
         ))
         .stdout(predicate::str::contains(
-            "abbreviates figures to two decimals",
+            "abbreviates figures of a million and more to two decimals",
         ))
         .stderr(predicate::str::contains(
             "JB ([CC] BJB Sekuritas Jawa Barat) is counted in CC",

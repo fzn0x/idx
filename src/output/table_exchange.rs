@@ -96,7 +96,7 @@ pub fn market_brokers(r: &BrokerRanking, provider: &str, color: bool) -> String 
     out.push_str(&format!("Each member's buying and selling together, as {source} publishes them{net}; shares sum to 100% of all members' value, which is twice the market's.\n"));
     if r.rounded {
         out.push_str(&format!(
-            "{source} abbreviates figures to two decimals (2.79T), so they and the totals carry that precision.\n"
+            "{source} abbreviates figures of a million and more to two decimals (2.79T), so they and the totals carry that precision.\n"
         ));
     }
     out

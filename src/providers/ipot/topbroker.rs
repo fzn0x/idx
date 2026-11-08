@@ -4,11 +4,12 @@
 //! `ma-topbroker.php` (no parameters) is a 9-column table of every broker
 //! in IPOT's latest session, ranked by value: `#`, code, name, `T.Val`
 //! (value bought plus value sold), `N.Val` (bought minus sold), `B.Val`,
-//! `S.Val`, `T.Vol` (shares bought plus sold) and `T.Freq` (trades). Values
-//! and volumes of a thousand and more are abbreviated to two decimals
-//! (`2.79 T`, `-264.04 B`), smaller ones and the frequency are exact
-//! (`43,020`). `N.Val` carries its own two decimals, so it is kept as
-//! published rather than taken from the rounded `B.Val` and `S.Val`. Code
+//! `S.Val`, `T.Vol` (shares bought plus sold) and `T.Freq` (trades).
+//! Figures of a million and more are abbreviated to two decimals (`2.79 T`,
+//! `-264.04 B`, `56.37 M`), smaller ones are exact (`278,800`, `43,020`; no
+//! broker reached a million trades on 2026-11-06). `N.Val` carries its own
+//! two decimals, so it is kept as published rather than taken from the
+//! rounded `B.Val` and `S.Val`. Code
 //! and name sit in a `<span class="text-local|text-foreign|text-bumn">`.
 //! Brokers without trades are listed too, with zeros. A commented-out
 //! template of placeholder rows ("Lorem Ipsum") follows the real ones, so

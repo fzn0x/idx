@@ -566,12 +566,12 @@ summary (any session), or `ipot`, IPOT's ranking of its latest session
 (`--source ipot`, MCP `source: "ipot"`; also `auto`, the default, when
 idx.co.id refuses the connection or fails, with a warning). IPOT takes no
 date: another session is a usage error, and under `auto` idx.co.id's error
-stands. It abbreviates figures to two decimals (`2.79 T`, so `rounded:
-true`) and publishes `net_value` with its own two decimals, so it can differ
-from `buy_value - sell_value`. Members without trades are left out, as
-idx.co.id leaves them out; a broker IPOT lists apart under another member's
-code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in that member, as
-idx.co.id counts it, with a warning.
+stands. It abbreviates figures of a million and more to two decimals
+(`2.79 T`, so `rounded: true`) and publishes `net_value` with its own two
+decimals, so it can differ from `buy_value - sell_value`. Members without
+trades are left out, as idx.co.id leaves them out; a broker IPOT lists apart
+under another member's code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is
+counted in that member, as idx.co.id counts it, with a warning.
 
 ## `idx.indices.v1` (`market indices`)
 
