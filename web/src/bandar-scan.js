@@ -31,8 +31,10 @@
 // and did not get, filed again when a later read changes it, and for good at
 // the next session's 16:45, as is a session IPOT never published or never
 // answered the probe for. A session is shown once it holds half its stocks
-// or more than the one shown before; the API's warnings come from these
-// records (scanNotes).
+// or more than the one shown before (a session shown from before these
+// records counts as holding none, so the first session scanned with them
+// replaces it once it is filed with a stock stored); the API's warnings come
+// from these records (scanNotes).
 
 import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";

@@ -71,18 +71,22 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   passed; a probe that fails is tried again after 5 minutes, doubling up to
   that gap, and an hour of failures logs an error each hour. Only a page
   without trades on a day the quote board shows none either closes the
-  session. Then it reads three stocks a minute, inside the minute's
-  first 45 seconds, each over 1d, 1w, 1m and 3m plus its daily candles, into
-  the `bandar_scan` table (`migrations/0003_bandar.sql`; the newest two
-  sessions and the one shown are kept), rows and state in one D1 batch
+  session. Then it reads up to three stocks a minute (fewer when IPOT is
+  slow), inside the minute's first 45 seconds, each over 1d, 1w, 1m and 3m
+  plus its daily candles, into the `bandar_scan` table
+  (`migrations/0003_bandar.sql`; once a session's first pass ends, the newest
+  two sessions and the one shown are kept), rows and state in one D1 batch
   written over the state's revision. A stock IPOT has not published (totals
   without lists, or no trades while the board shows it trading) is read again
   on the probe's schedule; one that failed is tried again in up to eight
   rounds, 10, 30, 60 and 120 minutes apart and then every 4 hours. Once the
   first pass is over the session is filed with what it got, again when a
   later read changes that, and for good at the next session's 16:45; it is
-  shown once it holds half its stocks or more than the one shown, and the
-  screen's and the broker's warnings say which session they show and why.
+  shown once it holds half its stocks or more than the one shown (a session
+  shown from before these records counts as holding none, so the first
+  session scanned with them replaces it once it is filed with a stock
+  stored), and the screen's and the broker's warnings say which session they
+  show and why.
   `/api/bandar/status` shows the progress and the last record; a maintainer
   can force a step with `/api/refresh?token=…&what=bandar` (a rescan of the
   shown session keeps its record until it has stored as many stocks).
