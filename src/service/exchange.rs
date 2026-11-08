@@ -1091,15 +1091,18 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
             provider,
             message: format!("{message}; {note}"),
         },
+        IdxError::Network(m) => IdxError::Network(format!("{m}; {note}")),
+        IdxError::OfflineMiss(m) => IdxError::OfflineMiss(format!("{m}; {note}")),
         other => other,
     }
 }
 
 /// The member ranking from `source`. `auto` asks idx.co.id and, when it
-/// refuses (code `blocked`) or fails (code `provider`), answers from IPOT's
-/// latest session with a warning saying so. When IPOT cannot stand in (a
-/// `date` it does not hold, or a failure), idx.co.id's error stands with
-/// IPOT's reason after it.
+/// refuses (code `blocked`), cannot be reached (`network`), fails
+/// (`provider`) or, offline, has no copy (`offline_miss`), answers from
+/// IPOT's latest session with a warning saying so. When IPOT cannot stand
+/// in (a `date` it does not hold, or a failure), idx.co.id's error stands
+/// with IPOT's reason after it.
 pub async fn market_brokers_from(
     fetcher: &Arc<Fetcher>,
     source: crate::model::BrokerSource,
@@ -1115,7 +1118,12 @@ pub async fn market_brokers_from(
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
             let refused = match market_brokers(fetcher, date, top, sort, today).await {
-                Err(e @ (IdxError::Blocked { .. } | IdxError::Provider { .. })) => e,
+                Err(
+                    e @ (IdxError::Blocked { .. }
+                    | IdxError::Provider { .. }
+                    | IdxError::Network(_)
+                    | IdxError::OfflineMiss(_)),
+                ) => e,
                 answered => return answered,
             };
             let s = match ipot::top_brokers(fetcher, now).await {
@@ -1132,6 +1140,10 @@ pub async fn market_brokers_from(
             let why = match &refused {
                 IdxError::Blocked { refusal, .. } => {
                     format!("idx.co.id answered with {}", refusal.noun())
+                }
+                IdxError::Network(m) => format!("idx.co.id could not be reached ({m})"),
+                IdxError::OfflineMiss(_) => {
+                    "idx.co.id's broker summary is not cached (offline)".to_string()
                 }
                 other => format!("idx.co.id failed ({other})"),
             };
@@ -2100,6 +2112,75 @@ mod tests {
                 "HTTP 500; IPOT could not stand in: ipot: broker ranking for the market: HTTP 503"
             ),
             "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_stands_in_when_idx_co_id_cannot_be_reached_or_is_not_cached() {
+        use crate::model::BrokerSource;
+        // No route for GetBrokerSummary: the request fails as a network error.
+        let (f, _be, _d) = fetcher(ipot_ranking(FixtureBackend::new(), TOP_BROKERS));
+        let s = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap();
+        assert_eq!((s.provider, s.data.date), ("ipot", d(2026, 11, 6)));
+        assert!(
+            s.warnings[0].starts_with("idx.co.id could not be reached (")
+                && s.warnings[0].ends_with(
+                    "), so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+                ),
+            "{:?}",
+            s.warnings
+        );
+        // Nobody answers: idx.co.id's network error stands, saying why.
+        let (f, _be, _d) = fetcher(FixtureBackend::new());
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("network", 3));
+        assert!(
+            err.to_string().contains("; IPOT could not stand in: "),
+            "{err}"
+        );
+
+        // Offline with only IPOT's pages cached, read on Saturday: they answer.
+        let saturday = chrono::DateTime::parse_from_rfc3339("2026-11-07T10:00:00+07:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        for (url, page) in [
+            (
+                "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+                TOP_BROKERS,
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+                BBCA_STATISTIC,
+            ),
+        ] {
+            cache.put_fetched_at(url, 200, page, saturday).unwrap();
+        }
+        let offline = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            cache,
+            CacheMode::Offline,
+        ));
+        let s = market_brokers_from(
+            &offline,
+            BrokerSource::Auto,
+            None,
+            5,
+            BrokerSort::Value,
+            sunday(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.provider, "ipot");
+        assert!(s.stale);
+        assert_eq!(
+            s.warnings[0],
+            "idx.co.id's broker summary is not cached (offline), so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
     }
 

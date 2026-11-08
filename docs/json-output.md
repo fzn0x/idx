@@ -564,7 +564,8 @@ is twice the market's value.
 `provider` says which source answered: `idx`, idx.co.id's daily broker
 summary (any session), or `ipot`, IPOT's ranking of its latest session
 (`--source ipot`, MCP `source: "ipot"`; also `auto`, the default, when
-idx.co.id refuses the connection or fails, with a warning). IPOT takes no
+idx.co.id refuses (Cloudflare), cannot be reached, fails or, offline, has
+no copy, with a warning). IPOT takes no
 date: another session is a usage error, and under `auto` idx.co.id's error
 stands. It abbreviates figures of a million and more to two decimals
 (`2.79 T`, so `rounded: true`) and publishes `net_value` with its own two
