@@ -425,9 +425,11 @@ const R = {
     const frag = document.createDocumentFragment();
     const company = n.items.filter((i) => i.scope === "company"), market = n.items.filter((i) => i.scope !== "company");
     if (n.symbol) {
-      frag.append(el("p", { class: "prose", text: `${n.company_matches ?? company.length} of ${n.scanned} scanned headlines mention ${n.symbol}${n.matched_name ? ` or ${n.matched_name}` : ""} · ${n.sources.join(", ")}` }));
+      // Verb and noun follow their counts, as in the CLI's news table.
+      const matches = n.company_matches ?? company.length;
+      frag.append(el("p", { class: "prose", text: `${matches} of ${n.scanned} scanned headlines ${matches === 1 ? "mentions" : "mention"} ${n.symbol}${n.matched_name ? ` or ${n.matched_name}` : ""} · ${n.sources.join(", ")}` }));
       if (company.length) frag.append(newsTable(company)); else frag.append(el("p", { class: "warn", text: "No headline mentions the company in the current feeds." }));
-      if (market.length) { frag.append(el("h3", { class: "stmt-title", text: `Market context · ${market.length} headlines` })); frag.append(newsTable(market)); }
+      if (market.length) { frag.append(el("h3", { class: "stmt-title", text: `Market context · ${market.length} headline${market.length === 1 ? "" : "s"}` })); frag.append(newsTable(market)); }
     } else {
       frag.append(el("p", { class: "prose", text: `${n.items.length} of ${n.scanned} headlines · ${n.sources.join(", ")}` }));
       frag.append(newsTable(n.items));
