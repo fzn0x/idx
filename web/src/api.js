@@ -111,24 +111,29 @@ export function marketIsOpen(now = new Date()) {
   return mins >= 8 * 60 + 45 && mins <= 16 * 60 + 30;
 }
 
-/** Refreshes the quote board (one JSON row) and the index tape. */
-export async function refreshSnapshot(env, { force = false } = {}) {
-  const now = new Date();
+/**
+ * Refreshes the quote board (one JSON row) and the index tape: every minute
+ * in trading hours, every 15 minutes otherwise, at once with `force`. The
+ * Yahoo session is read from D1 once for every batch; `fetchFn` stands in for
+ * fetch (the cron's counted one).
+ */
+export async function refreshSnapshot(env, { force = false, now = new Date(), fetchFn } = {}) {
   const minute = Math.floor(now.getTime() / 60000);
   if (!force && !marketIsOpen(now) && minute % 15 !== 0) return { skipped: "market closed" };
+  const yahoo = { fetchFn, held: {} };
   const quotes = [];
   const warnings = [];
   for (let i = 0; i < SYMBOLS.length; i += 190) {
     const batch = SYMBOLS.slice(i, i + 190);
     try {
-      for (const q of await y.fetchQuotes(env, batch)) quotes.push(y.parseV7Quote(q));
+      for (const q of await y.fetchQuotes(env, batch, yahoo)) quotes.push(y.parseV7Quote(q));
     } catch (e) {
       warnings.push(`batch ${i / 190 + 1}: ${e.message}`);
     }
   }
   let index = null;
   try {
-    const r = await y.fetchQuotes(env, ["^JKSE"]);
+    const r = await y.fetchQuotes(env, ["^JKSE"], yahoo);
     if (r[0]) index = y.parseV7Quote(r[0]);
   } catch (e) {
     warnings.push(`index: ${e.message}`);
