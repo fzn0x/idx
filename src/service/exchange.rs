@@ -966,8 +966,8 @@ fn member_ranking(
 
 /// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
 /// Before idx.co.id publishes a session its summary is an empty list, so a
-/// copy read on `day` itself without rows does not show that `day` had no
-/// session. Once that session has ended (`ended`), such a copy is read
+/// copy read on `day` itself without rows does not show that a trading day
+/// had no session. Once that session has ended (`ended`), such a copy is read
 /// again: the cache keeps a past day's summary for a closed session's 30
 /// days, so it is asked for with today's short lifetime instead. A copy
 /// served because it could not be read again (the live fetch failed, or
@@ -981,7 +981,10 @@ async fn broker_day(
 ) -> Result<Sourced<Vec<idx::BrokerDay>>> {
     let read = |s: &Sourced<Vec<idx::BrokerDay>>| s.fetched_at.with_timezone(&crate::model::wib());
     let early = |s: &Sourced<Vec<idx::BrokerDay>>| {
-        s.data.is_empty() && day <= ended && read(s).date_naive() <= day
+        s.data.is_empty()
+            && day <= ended
+            && holidays::is_trading_day(day)
+            && read(s).date_naive() <= day
     };
     let mut s = idx::broker_summary(fetcher, day, today).await?;
     if early(&s) && s.cached && !s.stale && day < today {
@@ -993,7 +996,7 @@ async fn broker_day(
     let clock = read(&s).format("%H:%M");
     if s.stale_reason == Some(crate::model::StaleReason::Offline) {
         return Err(IdxError::OfflineMiss(format!(
-            "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, as before idx.co.id publishes a session"
+            "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, which it has until idx.co.id publishes the session"
         )));
     }
     let why = s
@@ -1004,7 +1007,7 @@ async fn broker_day(
     Err(IdxError::provider(
         idx::NAME,
         format!(
-            "the broker summary for {day} could not be read again ({why}), and the copy read at {clock} WIB that day has no rows, as before idx.co.id publishes a session"
+            "the broker summary for {day} could not be read again ({why}); the copy read at {clock} WIB that day has no rows, which it has until idx.co.id publishes the session"
         ),
     ))
 }
@@ -2386,7 +2389,7 @@ mod tests {
             err.to_string().contains(
                 "the broker summary for 2026-11-06 could not be read again (fixture backend has no route for"
             ) && err.to_string().ends_with(
-                "and the copy read at 11:00 WIB that day has no rows, as before idx.co.id publishes a session"
+                "; the copy read at 11:00 WIB that day has no rows, which it has until idx.co.id publishes the session"
             ),
             "{err}"
         );
@@ -2434,6 +2437,30 @@ mod tests {
             err.to_string().contains(
                 "the broker summary for 2026-11-06 is cached only as read at 11:00 WIB that day"
             ),
+            "{err}"
+        );
+        // A Saturday read that Saturday has no session to miss, even offline.
+        Cache::new(dir.path())
+            .put_fetched_at(
+                "https://www.idx.co.id/primary/TradingSummary/GetBrokerSummary?date=20261031&start=0&length=9999",
+                200,
+                NO_TRADING,
+                wib_at("2026-10-31T11:00:00"),
+            )
+            .unwrap();
+        let err = market_brokers_from(
+            &offline,
+            BrokerSource::Idx,
+            Some(d(2026, 10, 31)),
+            5,
+            BrokerSort::Value,
+            sunday(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "not_found");
+        assert!(
+            err.to_string().contains("2026-10-31 is a Saturday"),
             "{err}"
         );
     }
