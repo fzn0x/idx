@@ -818,8 +818,9 @@ pub async fn foreign_flow_ipot(
         list.drain(..extra);
         if list.len() < n {
             warnings.push(format!(
-                "{symbol}: {} sessions with trades from {first} to {last}, fewer than the {n} asked for",
-                list.len()
+                "{symbol}: {} session{} with trades from {first} to {last}, fewer than the {n} asked for",
+                list.len(),
+                if list.len() == 1 { "" } else { "s" }
             ));
         }
     }
@@ -2133,6 +2134,17 @@ mod tests {
         assert!(
             s.warnings.iter().any(|w| w
                 == "BBCA: 5 sessions with trades from 2026-09-23 to 2026-10-17, fewer than the 7 asked for"),
+            "{:?}",
+            s.warnings
+        );
+        // Read on 10-12, the first recorded day, only that session traded.
+        let s = foreign_flow_ipot(&f, &[], &sym, ForeignRange::Latest(2), d(2026, 10, 12))
+            .await
+            .unwrap();
+        assert_eq!(s.data.days.len(), 1);
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "BBCA: 1 session with trades from 2026-09-28 to 2026-10-12, fewer than the 2 asked for"),
             "{:?}",
             s.warnings
         );
