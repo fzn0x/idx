@@ -376,3 +376,28 @@ test("bandar over a period counts its latest session's page, as service::bandar_
     globalThis.fetch = realFetch;
   }
 });
+
+test("bandar for one investor side names a failed read of its value traded, as service::with_value_traded absorbs it", async () => {
+  const realFetch = globalThis.fetch;
+  const recorded = ipotFetch(), down = { value: false };
+  // Only the all-investor pages (fd=all) fail; the foreign side's page still reads.
+  globalThis.fetch = async (u) => {
+    if (down.value && /[?&]fd=all\b/.test(String(u))) throw new TypeError("connection reset");
+    return recorded(u);
+  };
+  try {
+    const env = { DB: fullDb({ kv: boardKv }) };
+    const ask = () => bandar(env, "BBCA", null, null, "2026-10-12", "2026-10-16", null, "foreign", "all");
+    const first = await ask();
+    assert.equal(first.stale, false);
+    // The value traded's copy has expired and IPOT does not answer: it is served stale, and says why.
+    env.DB.rows.get("ipot:BBCA:2026-10-12:2026-10-16:all:all").expires_at = 0;
+    down.value = true;
+    const late = await ask();
+    assert.equal(late.stale, true);
+    assert.equal(late.stale_reason, "fetch_failed");
+    assert.deepEqual(late.warnings.filter((w) => /^live fetch failed \(.*\); showing cached copy$/.test(w)), ["live fetch failed (ipot: broker summary for BBCA: connection reset); showing cached copy"]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -779,7 +779,9 @@ async function withValueTraded(env, sum, investor, board, today) {
     const all = await ipotPage(env, d.symbol, d.from, d.to, "all", board, today);
     d.total_value = all.value.total_value;
     d.total_lots = all.value.total_lots;
+    // Its provenance with its warning, each once, as the CLI's side.absorb(&all).
     sum.cached &&= all.cached; sum.stale ||= all.stale; sum.fetched_at = Math.min(sum.fetched_at, all.fetched_at);
+    if (all.warning && !sum.warnings.includes(all.warning)) sum.warnings.push(all.warning);
   } catch (e) {
     sum.warnings.push(`${d.symbol}: no value traded from ${d.from} to ${d.to}, so no percentages (${e.message})`);
   }
