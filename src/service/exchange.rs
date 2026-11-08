@@ -2438,11 +2438,13 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
+        // Whether IPOT was then asked or not (nothing is cached), its pages
+        // would be read after 08:58.
+        let says = err.to_string();
+        assert!(says.contains("; IPOT could not stand in: ipot: "), "{says}");
         assert!(
-            err.to_string().contains(
-                "; IPOT could not stand in: ipot: the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"
-            ),
-            "{err}"
+            says.contains(" read at 08:58 WIB on 2026-11-09, in a trading day's hours"),
+            "{says}"
         );
     }
 

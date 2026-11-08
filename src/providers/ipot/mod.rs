@@ -568,6 +568,29 @@ fn unusable(ranked: &Fetched, dated: &Fetched, why: String) -> IdxError {
     IdxError::provider(NAME, why)
 }
 
+/// `true` when copies of both pages read together outside [`UNDATED`] are
+/// cached, whatever their age, for the fetcher to serve: fresh, or in
+/// place of a read that fails. `--no-cache` reads no copy.
+fn cached_outside_hours(fetcher: &Fetcher) -> bool {
+    if fetcher.mode() != crate::http::CacheMode::Normal {
+        return false;
+    }
+    let read = |url: &str| {
+        fetcher
+            .cache()
+            .get(url, Duration::ZERO)
+            .map(|h| h.stored.fetched_at)
+    };
+    match (read(TOP_BROKERS_ENDPOINT), read(SESSION_ENDPOINT)) {
+        (Some(a), Some(b)) => {
+            !undated_at(a)
+                && !undated_at(b)
+                && (a - b).abs().to_std().is_ok_and(|d| d <= READ_TOGETHER)
+        }
+        _ => false,
+    }
+}
+
 /// `t` falls in [`UNDATED`] on a trading day.
 fn undated_at(t: DateTime<Utc>) -> bool {
     let local = t.with_timezone(&crate::model::wib());
@@ -589,7 +612,9 @@ fn undated_at(t: DateTime<Utc>) -> bool {
 /// fetches counts as read when it came, `now` moved on by the wall time the
 /// call has taken since. A pair either page of which was read on a trading
 /// day between 08:58 and 19:00 WIB ([`UNDATED`]) cannot be dated and
-/// fails. So does a ranking with trades dated a session that had not
+/// fails; when `now` is in those hours IPOT is not asked at all unless a
+/// pair read outside them is cached, which can answer (fresh, or in place
+/// of a read that fails). So does a ranking with trades dated a session that had not
 /// opened then (before 08:58), or one without trades dated a session that
 /// had ended, both of which mean the pages rolled over at different times,
 /// and a date that is not a trading day. Outside those hours both pages are
@@ -606,6 +631,19 @@ pub async fn top_brokers(
     now: DateTime<Utc>,
 ) -> Result<Sourced<topbroker::Ranking>> {
     let started = Utc::now();
+    // A page read now, in those hours, cannot be dated: IPOT is asked only
+    // when a pair read outside them is cached, which can answer, fresh or
+    // in place of a read that fails. Offline nothing is asked anyway.
+    if !fetcher.is_offline() && undated_at(now) && !cached_outside_hours(fetcher) {
+        let local = now.with_timezone(&crate::model::wib());
+        let (day, clock) = (local.date_naive(), local.format("%H:%M"));
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "a broker ranking read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+            ),
+        ));
+    }
     let ttl = top_brokers_ttl(now);
     let ranking = |ttl| {
         page(
@@ -1447,25 +1485,34 @@ mod tests {
         assert_eq!(be.call_count(), 2, "both pages from the cache");
 
         // Read in a trading day's hours, the two pages can be on different
-        // sessions: the ranking cannot be dated.
+        // sessions: the ranking cannot be dated. With a pair read the night
+        // before cached, IPOT is asked (without one, it is not: see
+        // ipot_is_not_asked_when_a_page_read_now_cannot_be_dated).
+        let asked_at = |during: &'static str| async move {
+            let (f, be, dir) = fetcher(ranking_pages());
+            for (url, page) in [(TOP_BROKERS_ENDPOINT, TOP), (SESSION_ENDPOINT, STATISTIC)] {
+                Cache::new(dir.path())
+                    .put_fetched_at(url, 200, page, at("2026-11-05T19:30:00"))
+                    .unwrap();
+            }
+            let err = top_brokers(&f, at(during)).await.unwrap_err();
+            assert_eq!(be.call_count(), 2, "{during}");
+            err
+        };
         for during in [
             "2026-11-06T08:58:00",
             "2026-11-06T10:00:00",
             "2026-11-06T16:15:00",
             "2026-11-06T18:59:59",
         ] {
-            let (f, _be, _d) = fetcher(ranking_pages());
-            let err = top_brokers(&f, at(during)).await.unwrap_err();
+            let err = asked_at(during).await;
             assert_eq!(err.code(), "provider");
             assert!(
                 err.to_string().contains("so it cannot be dated"),
                 "{during}: {err}"
             );
         }
-        let (f, _be, _d) = fetcher(ranking_pages());
-        let err = top_brokers(&f, at("2026-11-06T10:00:00"))
-            .await
-            .unwrap_err();
+        let err = asked_at("2026-11-06T10:00:00").await;
         assert_eq!(
             err.to_string(),
             "ipot: the broker ranking was read at 10:00 WIB on 2026-11-06, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
@@ -1546,6 +1593,54 @@ mod tests {
         let (f, _be, _d) = fetcher(ranking_pages());
         let s = top_brokers(&f, call).await.unwrap();
         assert_eq!(s.data.date, d(2026, 11, 6));
+    }
+
+    #[tokio::test]
+    async fn ipot_is_not_asked_when_a_page_read_now_cannot_be_dated() {
+        let monday = at("2026-11-09T10:00:00");
+        // Nothing cached: a page read in a trading day's hours cannot be
+        // dated, so none is asked for.
+        let (f, be, _d) = fetcher(ranking_pages());
+        let err = top_brokers(&f, monday).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: a broker ranking read at 10:00 WIB on 2026-11-09, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+        );
+        assert_eq!(be.call_count(), 0);
+        // Nor under --no-cache, which reads no copy.
+        let dir = tempfile::tempdir().unwrap();
+        let (bypass, be) = {
+            let be = Arc::new(ranking_pages());
+            let f = Fetcher::new(be.clone(), Cache::new(dir.path()), CacheMode::Bypass);
+            (Arc::new(f), be)
+        };
+        assert!(top_brokers(&bypass, monday).await.is_err());
+        assert_eq!(be.call_count(), 0);
+
+        // A pair read on Friday night can answer: IPOT is asked, and when it
+        // cannot be read, the copy stands in.
+        let (f, _d) = copies_read_at("2026-11-06T19:30:00", TOP, STATISTIC, false);
+        let s = top_brokers(&f, monday).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        assert!(s.stale, "the copy, after the failed read");
+        // When IPOT answers, the page read now cannot be dated.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        for (url, page) in [(TOP_BROKERS_ENDPOINT, TOP), (SESSION_ENDPOINT, STATISTIC)] {
+            cache
+                .put_fetched_at(url, 200, page, at("2026-11-06T19:30:00"))
+                .unwrap();
+        }
+        let be = Arc::new(ranking_pages());
+        let f = Arc::new(Fetcher::new(be.clone(), cache, CacheMode::Normal));
+        let err = top_brokers(&f, monday).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("the broker ranking was read at 10:00 WIB on 2026-11-09"),
+            "{err}"
+        );
+        assert_eq!(be.call_count(), 2);
     }
 
     #[tokio::test]
