@@ -4,22 +4,22 @@
 // The minute cron (src/cron.js) runs one step a minute. The session to scan
 // comes from the bundled calendar (src/holidays.js): today from 16:45 WIB on
 // a trading day, else the trading day before. The first step ranks the quote
-// board's 100 stocks most traded that session and probes the first one's
-// one-day IPOT broker summary. IPOT publishes a closed session's broker
-// lists some time after the close and shows the totals without them until
-// then, so the scan waits and probes again, every 10 minutes until 21:00 WIB
-// and every 30 after; only a page without trades, on a day the quote board
-// (refreshed after that session) shows no trade either, closes the session
-// unscanned. Then PER_TICK stocks a minute: for each, the IPOT broker summary
-// over 1d, 1w, 1m and 3m ending on that session and the daily candles for
-// the price move, one D1 row per stock and period in `bandar_scan`, written
-// with the state in one batch. /api/bandar/screen and /api/bandar/broker
-// answer from D1 alone with the same rules as the CLI (src/bandar.js). The
-// foreign net of 1w, 1m and 3m is rebuilt from single sessions (the range
-// page counts the latest session twice): the session before the scanned one
-// and each period's rest, so a stock costs 9 requests (a chart, four period
-// pages, one more session, three rests), inside the invocation's budget
-// (src/budget.js).
+// board's 100 stocks most traded that session and probes the one-day IPOT
+// broker summary of the first, then of the second and third in turn. IPOT
+// publishes a closed session's broker lists some time after the close and
+// shows the totals without them until then, so the scan waits and probes
+// again, every 10 minutes until 21:00 WIB and every 30 after; only a page
+// without trades, on a day the quote board (refreshed after that session)
+// shows no trade either, closes the session unscanned. Then PER_TICK stocks a
+// minute: for each, the IPOT broker summary over 1d, 1w, 1m and 3m ending on
+// that session and the daily candles for the price move, one D1 row per stock
+// and period in `bandar_scan`, written with the state in one batch.
+// /api/bandar/screen and /api/bandar/broker answer from D1 alone with the
+// same rules as the CLI (src/bandar.js). The foreign net of 1w, 1m and 3m is
+// rebuilt from single sessions (the range page counts the latest session
+// twice): the session before the scanned one and each period's rest, so a
+// stock costs 9 requests (a chart, four period pages, one more session, three
+// rests), inside the invocation's budget (src/budget.js).
 //
 // A stock whose session IPOT has not published yet is read again every 10
 // minutes; one that failed gets two more passes, 10 and 30 minutes after its
