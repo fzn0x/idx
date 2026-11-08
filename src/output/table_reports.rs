@@ -865,8 +865,13 @@ pub fn brief(b: &Brief, color: bool) -> String {
     if let Some(n) = &b.news {
         if !n.headlines.is_empty() {
             out.push_str(&format!(
-                "Headlines · {} mention the company · sentiment {} ({:+.2})\n",
+                "Headlines · {} {} the company · sentiment {} ({:+.2})\n",
                 n.company_matches,
+                if n.company_matches == 1 {
+                    "mentions"
+                } else {
+                    "mention"
+                },
                 n.sentiment.as_str(),
                 n.score
             ));
@@ -1451,5 +1456,52 @@ mod tests {
         assert!(s.contains("BBCA"));
         assert!(s.contains("BBRI"));
         assert!(s.contains("P/E (ttm)"));
+    }
+
+    #[test]
+    fn brief_headlines_line_agrees_with_the_count() {
+        use crate::model::{NewsItem, NewsSummary, SentimentLabel};
+        let item = NewsItem {
+            title: "Laba BBCA naik".into(),
+            url: "https://x.test/a".into(),
+            source: "kontan/investasi".into(),
+            published: None,
+            summary: String::new(),
+            matched_by: "ticker".into(),
+            scope: "company".into(),
+            sentiment: 0.5,
+            positive_terms: vec!["naik".into()],
+            negative_terms: vec![],
+        };
+        let mut b = Brief {
+            symbol: Symbol::parse("BBCA").unwrap(),
+            name: None,
+            generated_at: chrono::Utc::now(),
+            key_points: vec![],
+            quote: None,
+            fundamentals: None,
+            technical: None,
+            returns: None,
+            dividends: None,
+            ownership: None,
+            news: Some(NewsSummary {
+                company_matches: 1,
+                sentiment: SentimentLabel::Positive,
+                score: 0.5,
+                headlines: vec![item],
+            }),
+            sections_failed: vec![],
+        };
+        let s = brief(&b, false);
+        assert!(
+            s.contains("Headlines · 1 mentions the company · sentiment positive (+0.50)\n"),
+            "{s}"
+        );
+        b.news.as_mut().unwrap().company_matches = 2;
+        let s = brief(&b, false);
+        assert!(
+            s.contains("Headlines · 2 mention the company · sentiment positive (+0.50)\n"),
+            "{s}"
+        );
     }
 }

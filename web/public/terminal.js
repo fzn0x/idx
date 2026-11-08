@@ -272,7 +272,7 @@ const R = {
     if (f.verdict) {
       const vv = f.verdict;
       const cls = vv.label === "undervalued" ? "up" : vv.label === "overvalued" ? "dn" : "";
-      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: vv.label.replace("_", " ") }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} inputs · heuristic from public ratios, not investment advice`]));
+      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: vv.label.replace("_", " ") }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} input${vv.inputs_available === 1 ? "" : "s"} · heuristic from public ratios, not investment advice`]));
       frag.append(el("ul", { class: "reasons" }, vv.reasons.map((r) => el("li", { text: r }))));
     }
     frag.append(el("p", { class: "warn", text: `Sources: ${f.sources.join(", ")}` }));
@@ -425,9 +425,11 @@ const R = {
     const frag = document.createDocumentFragment();
     const company = n.items.filter((i) => i.scope === "company"), market = n.items.filter((i) => i.scope !== "company");
     if (n.symbol) {
-      frag.append(el("p", { class: "prose", text: `${n.company_matches ?? company.length} of ${n.scanned} scanned headlines mention ${n.symbol}${n.matched_name ? ` or ${n.matched_name}` : ""} · ${n.sources.join(", ")}` }));
+      // Verb and noun follow their counts, as in the CLI's news table.
+      const matches = n.company_matches ?? company.length;
+      frag.append(el("p", { class: "prose", text: `${matches} of ${n.scanned} scanned headlines ${matches === 1 ? "mentions" : "mention"} ${n.symbol}${n.matched_name ? ` or ${n.matched_name}` : ""} · ${n.sources.join(", ")}` }));
       if (company.length) frag.append(newsTable(company)); else frag.append(el("p", { class: "warn", text: "No headline mentions the company in the current feeds." }));
-      if (market.length) { frag.append(el("h3", { class: "stmt-title", text: `Market context · ${market.length} headlines` })); frag.append(newsTable(market)); }
+      if (market.length) { frag.append(el("h3", { class: "stmt-title", text: `Market context · ${market.length} headline${market.length === 1 ? "" : "s"}` })); frag.append(newsTable(market)); }
     } else {
       frag.append(el("p", { class: "prose", text: `${n.items.length} of ${n.scanned} headlines · ${n.sources.join(", ")}` }));
       frag.append(newsTable(n.items));
@@ -474,7 +476,7 @@ const R = {
     if (b.technical) { frag.append(el("h3", { class: "stmt-title", text: "Technical" })); frag.append(R.technical(b.technical)); }
     if (b.returns) { frag.append(el("h3", { class: "stmt-title", text: "Returns" })); frag.append(R.returns([b.returns])); }
     if (b.ownership) { frag.append(el("h3", { class: "stmt-title", text: `Holders above 1 % as of ${b.ownership.as_of} · ${b.ownership.holders_listed} listed = ${pct(b.ownership.listed_pct)} · foreign ${pct(b.ownership.foreign_pct)}` })); frag.append(wrapScroll(table([{ h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "%", f: (r) => pct(r.pct) }], b.ownership.top_holders))); }
-    if (b.news?.headlines?.length) { frag.append(el("h3", { class: "stmt-title", text: `Headlines · ${b.news.company_matches} mention the company · sentiment ${b.news.sentiment}` })); frag.append(newsTable(b.news.headlines)); }
+    if (b.news?.headlines?.length) { frag.append(el("h3", { class: "stmt-title", text: `Headlines · ${b.news.company_matches} ${b.news.company_matches === 1 ? "mentions" : "mention"} the company · sentiment ${b.news.sentiment}` })); frag.append(newsTable(b.news.headlines)); }
     if (b.sections_failed.length) frag.append(el("p", { class: "warn", text: `Missing sections: ${b.sections_failed.join(", ")} (see warnings above).` }));
     frag.append(el("p", { class: "warn", text: "Verdicts, signals and sentiment are transparent rule scores, not investment advice." }));
     return frag;

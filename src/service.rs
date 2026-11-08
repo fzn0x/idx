@@ -181,11 +181,8 @@ pub async fn screen(
     }
     out.warnings.retain(|w| !w.starts_with("no data for"));
     if quoted < symbols.len() {
-        out.warnings.push(format!(
-            "{} of {} tickers returned no quote and were skipped",
-            symbols.len() - quoted,
-            symbols.len()
-        ));
+        out.warnings
+            .push(no_quote_warning(symbols.len() - quoted, symbols.len()));
     }
 
     // Return windows: one market-wide request. When a filter or the sort needs
@@ -341,13 +338,22 @@ pub async fn quotes_all(p: &dyn Provider, symbols: &[Symbol]) -> Result<Sourced<
     }
     out.warnings.retain(|w| !w.starts_with("no data for"));
     if out.data.len() < symbols.len() {
-        out.warnings.push(format!(
-            "{} of {} tickers returned no quote and were skipped",
+        out.warnings.push(no_quote_warning(
             symbols.len() - out.data.len(),
-            symbols.len()
+            symbols.len(),
         ));
     }
     Ok(out)
+}
+
+/// The warning for `missing` of `total` tickers without a quote, shared by
+/// the screen and the whole-universe quotes: "1 of 5 tickers ... was
+/// skipped", "2 of 6 tickers ... were skipped".
+fn no_quote_warning(missing: usize, total: usize) -> String {
+    format!(
+        "{missing} of {total} tickers returned no quote and {} skipped",
+        if missing == 1 { "was" } else { "were" }
+    )
 }
 
 /// The board: index quote, breadth and ranked lists from one pass over the
@@ -551,13 +557,15 @@ impl Sections {
 
 /// The brief's "Valuation verdict" key point, `None` without a verdict. A P/B
 /// over statements in another currency is not a ratio, so it is left out.
+/// The noun follows the count, as in the fundamentals footer: "1 input".
 fn valuation_key_point(f: &Fundamentals) -> Option<String> {
     let v = f.verdict.as_ref()?;
     Some(format!(
-        "Valuation verdict: {} (score {:+}, {} inputs){}",
+        "Valuation verdict: {} (score {:+}, {} input{}){}",
         v.label.as_str(),
         v.score,
         v.inputs_available,
+        if v.inputs_available == 1 { "" } else { "s" },
         match (
             f.valuation.pe_trailing,
             f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
@@ -739,42 +747,13 @@ pub async fn brief(
         }
     }
     if let Some(d) = &dividends {
-        match d.ttm_yield_pct {
-            Some(y) => key_points.push(format!(
-                "Dividends: TTM yield {y:.2}% over {} payment{}, {} consecutive years",
-                d.ttm_payments,
-                if d.ttm_payments == 1 { "" } else { "s" },
-                d.consecutive_years
-            )),
-            None if d.payments_on_record == 0 => {
-                key_points.push("Dividends: none on record".into())
-            }
-            None => key_points.push("Dividends: none in the last twelve months".into()),
-        }
+        key_points.push(dividends_key_point(d));
     }
     if let Some(o) = &ownership {
-        key_points.push(format!(
-            "Ownership ({}): {} holders above 1% hold {:.1}%, foreign {:.1}%{}",
-            o.as_of,
-            o.holders_listed,
-            o.listed_pct,
-            o.foreign_pct,
-            o.top_holders
-                .first()
-                .map(|h| format!("; largest {} {:.1}%", h.holder, h.pct))
-                .unwrap_or_default()
-        ));
+        key_points.push(ownership_key_point(o));
     }
     if let Some(n) = &news {
-        key_points.push(match n.company_matches {
-            0 => "News: no current headline mentions the company".into(),
-            k => format!(
-                "News: {k} current headline{} mention the company, lexicon sentiment {} ({:+.2})",
-                if k == 1 { "" } else { "s" },
-                n.sentiment.as_str(),
-                n.score
-            ),
-        });
+        key_points.push(news_key_point(n));
     }
 
     let brief = Brief {
@@ -792,6 +771,63 @@ pub async fn brief(
         sections_failed: failed,
     };
     Ok(out.map(|_| brief))
+}
+
+/// The brief's "Dividends" key point: the trailing yield, its payments and
+/// the streak, or why there is no yield. Each noun follows its count, as in
+/// the dividends table: "1 payment, 1 consecutive year".
+fn dividends_key_point(d: &DividendSummary) -> String {
+    match d.ttm_yield_pct {
+        Some(y) => format!(
+            "Dividends: TTM yield {y:.2}% over {} payment{}, {} consecutive year{}",
+            d.ttm_payments,
+            if d.ttm_payments == 1 { "" } else { "s" },
+            d.consecutive_years,
+            if d.consecutive_years == 1 { "" } else { "s" }
+        ),
+        None if d.payments_on_record == 0 => "Dividends: none on record".into(),
+        None => "Dividends: none in the last twelve months".into(),
+    }
+}
+
+/// The brief's "News" key point: how many current headlines mention the
+/// company, and their lexicon sentiment. The verb follows the count: "1
+/// current headline mentions", "2 current headlines mention".
+fn news_key_point(n: &NewsSummary) -> String {
+    match n.company_matches {
+        0 => "News: no current headline mentions the company".into(),
+        k => format!(
+            "News: {k} current {} the company, lexicon sentiment {} ({:+.2})",
+            if k == 1 {
+                "headline mentions"
+            } else {
+                "headlines mention"
+            },
+            n.sentiment.as_str(),
+            n.score
+        ),
+    }
+}
+
+/// The brief's "Ownership" key point from the local KSEI register. Noun and
+/// verb follow the count: "1 holder above 1% holds", "2 holders ... hold".
+fn ownership_key_point(o: &OwnershipSummary) -> String {
+    let (holders, hold) = if o.holders_listed == 1 {
+        ("holder", "holds")
+    } else {
+        ("holders", "hold")
+    };
+    format!(
+        "Ownership ({}): {} {holders} above 1% {hold} {:.1}%, foreign {:.1}%{}",
+        o.as_of,
+        o.holders_listed,
+        o.listed_pct,
+        o.foreign_pct,
+        o.top_holders
+            .first()
+            .map(|h| format!("; largest {} {:.1}%", h.holder, h.pct))
+            .unwrap_or_default()
+    )
 }
 
 /// Dividend and split history with totals, trailing yield and streak.
@@ -1990,6 +2026,25 @@ mod tests {
     }
 
     #[test]
+    fn valuation_key_point_agrees_with_the_input_count() {
+        // Only the trailing P/E, as in fundamental's too_little_data.
+        let mut f = Fundamentals::empty(Symbol::parse("BBCA").unwrap(), "t");
+        f.valuation.pe_trailing = Some(12.9);
+        f.verdict = Some(analysis::fundamental::verdict(&f));
+        assert_eq!(
+            valuation_key_point(&f).as_deref(),
+            Some("Valuation verdict: insufficient data (score +1, 1 input); P/E 12.9")
+        );
+        // A net margin between 5% and 20% counts without moving the score.
+        f.profitability.net_margin_pct = Some(10.0);
+        f.verdict = Some(analysis::fundamental::verdict(&f));
+        assert_eq!(
+            valuation_key_point(&f).as_deref(),
+            Some("Valuation verdict: insufficient data (score +1, 2 inputs); P/E 12.9")
+        );
+    }
+
+    #[test]
     fn match_names_and_items() {
         assert_eq!(match_name("PT Bank Central Asia Tbk"), "Bank Central Asia");
         assert_eq!(
@@ -2054,6 +2109,99 @@ mod tests {
             Some("name")
         );
         assert_eq!(item_matches(&mk("BBCAX bukan BBCA?"), "BBRI", None), None);
+    }
+
+    #[test]
+    fn dividends_key_point_agrees_with_its_counts() {
+        // The key point reads the yield and the counts, not the total.
+        let summary =
+            |ttm_yield_pct, ttm_payments, consecutive_years, payments_on_record| DividendSummary {
+                ttm_total: None,
+                ttm_payments,
+                ttm_yield_pct,
+                consecutive_years,
+                last: None,
+                payments_on_record,
+            };
+        // A 2026 payment after a 2024 one: the streak is one year.
+        assert_eq!(
+            dividends_key_point(&summary(Some(2.13), 1, 1, 2)),
+            "Dividends: TTM yield 2.13% over 1 payment, 1 consecutive year"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(Some(4.0), 2, 2, 4)),
+            "Dividends: TTM yield 4.00% over 2 payments, 2 consecutive years"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(None, 0, 1, 3)),
+            "Dividends: none in the last twelve months"
+        );
+        assert_eq!(
+            dividends_key_point(&summary(None, 0, 0, 0)),
+            "Dividends: none on record"
+        );
+    }
+
+    #[test]
+    fn news_key_point_agrees_with_the_headline_count() {
+        use crate::model::SentimentLabel;
+        let summary = |company_matches, sentiment, score| NewsSummary {
+            company_matches,
+            sentiment,
+            score,
+            headlines: vec![],
+        };
+        assert_eq!(
+            news_key_point(&summary(0, SentimentLabel::NoCoverage, 0.0)),
+            "News: no current headline mentions the company"
+        );
+        assert_eq!(
+            news_key_point(&summary(1, SentimentLabel::Positive, 0.5)),
+            "News: 1 current headline mentions the company, lexicon sentiment positive (+0.50)"
+        );
+        assert_eq!(
+            news_key_point(&summary(2, SentimentLabel::Negative, -0.25)),
+            "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)"
+        );
+    }
+
+    #[test]
+    fn ownership_key_point_agrees_with_the_holder_count() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        let largest = crate::model::Holding {
+            as_of,
+            symbol: "BBCA".into(),
+            issuer_name: Some("BANK CENTRAL ASIA Tbk".into()),
+            holder: "PT DWIMURIA INVESTAMA ANDALAN".into(),
+            holder_raw: "PT DWIMURIA INVESTAMA ANDALAN".into(),
+            entity_key: "DWIMURIA INVESTAMA ANDALAN".into(),
+            investor_type: Some("CORPORATE".into()),
+            local_foreign: Some("L".into()),
+            nationality: None,
+            domicile: Some("INDONESIA".into()),
+            shares_scripless: Some(0),
+            shares_scrip: Some(67_729_950_000),
+            shares_total: 67_729_950_000,
+            pct: 54.94,
+            accounts: Some(1),
+            controller_or_affiliate: Some("CONTROLLER".into()),
+        };
+        let mut o = OwnershipSummary {
+            as_of,
+            listed_pct: 54.94,
+            foreign_pct: 0.0,
+            holders_listed: 1,
+            top_holders: vec![largest],
+        };
+        assert_eq!(
+            ownership_key_point(&o),
+            "Ownership (2026-10-30): 1 holder above 1% holds 54.9%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%"
+        );
+        (o.holders_listed, o.listed_pct) = (2, 56.7);
+        assert_eq!(
+            ownership_key_point(&o),
+            "Ownership (2026-10-30): 2 holders above 1% hold 56.7%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%"
+        );
     }
     use async_trait::async_trait;
 
@@ -2212,6 +2360,49 @@ mod tests {
             Some(chrono::DateTime::parse_from_rfc3339("2026-11-05T17:30:00Z").unwrap());
         mark_behind(&mut rows, NaiveDate::from_ymd_opt(2026, 11, 6).unwrap());
         assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
+    }
+
+    /// A quote for each asked symbol it knows and none for the rest, like a
+    /// source without data on some tickers.
+    struct Knows(&'static [&'static str]);
+
+    #[async_trait]
+    impl Provider for Knows {
+        fn name(&self) -> &'static str {
+            "knows"
+        }
+        async fn quotes(&self, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let rows = symbols
+                .iter()
+                .filter(|s| self.0.contains(&s.as_str()))
+                .map(|s| Quote::empty(s.clone(), "knows"))
+                .collect();
+            Ok(Sourced::fresh(rows, "knows"))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn skipped_tickers_agree_with_their_count() {
+        let p = Knows(&["WIKA", "BBCA", "BBRI", "TLKM"]);
+        // ASII has no quote.
+        let five = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII"]);
+        let got = quotes_all(&p, &five).await.unwrap();
+        assert_eq!(got.data.len(), 4);
+        assert_eq!(
+            got.warnings,
+            ["1 of 5 tickers returned no quote and was skipped"]
+        );
+        // ASII and UNVR have none.
+        let six = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII", "UNVR"]);
+        let got = quotes_all(&p, &six).await.unwrap();
+        assert_eq!(got.data.len(), 4);
+        assert_eq!(
+            got.warnings,
+            ["2 of 6 tickers returned no quote and were skipped"]
+        );
     }
 
     #[tokio::test]

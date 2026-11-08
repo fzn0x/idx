@@ -185,9 +185,11 @@ fn item_rows(t: &mut comfy_table::Table, items: &[&NewsItem], color: bool) {
 pub fn news(r: &NewsReport, color: bool) -> String {
     let company: Vec<&NewsItem> = r.items.iter().filter(|i| i.scope == "company").collect();
     let market: Vec<&NewsItem> = r.items.iter().filter(|i| i.scope != "company").collect();
+    // Verb and noun follow their counts: "1 of 60 scanned headlines mentions
+    // the company", "Market context · 1 headline".
     let mut out = match &r.symbol {
         Some(s) => format!(
-            "News for {}{} · {} of {} scanned headlines mention the company{}{} · sources: {}\n",
+            "News for {}{} · {} of {} scanned headlines {} the company{}{} · sources: {}\n",
             s,
             r.matched_name
                 .as_ref()
@@ -195,6 +197,11 @@ pub fn news(r: &NewsReport, color: bool) -> String {
                 .unwrap_or_default(),
             r.company_matches,
             r.scanned,
+            if r.company_matches == 1 {
+                "mentions"
+            } else {
+                "mention"
+            },
             if company.len() < r.company_matches {
                 format!(" (showing {})", company.len())
             } else {
@@ -226,7 +233,11 @@ pub fn news(r: &NewsReport, color: bool) -> String {
             out.push('\n');
         }
         if !market.is_empty() {
-            out.push_str(&format!("Market context · {} headlines\n", market.len()));
+            out.push_str(&format!(
+                "Market context · {} headline{}\n",
+                market.len(),
+                if market.len() == 1 { "" } else { "s" }
+            ));
             let mut t = base_table(color);
             t.set_header(header(&cols));
             item_rows(&mut t, &market, color);
@@ -313,4 +324,53 @@ pub fn sentiment(r: &SentimentReport, color: bool) -> String {
     }
     out.push_str("Method: lexicon count over Indonesian and English finance terms. Indicative only, not advice.\n");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Symbol;
+
+    fn item(scope: &str, i: usize) -> NewsItem {
+        NewsItem {
+            title: format!("{scope} headline {i}"),
+            url: format!("https://x.test/{scope}/{i}"),
+            source: "kontan/investasi".into(),
+            published: None,
+            summary: String::new(),
+            matched_by: if scope == "company" { "ticker" } else { "all" }.into(),
+            scope: scope.into(),
+            sentiment: 0.0,
+            positive_terms: vec![],
+            negative_terms: vec![],
+        }
+    }
+
+    #[test]
+    fn news_headings_agree_with_their_counts() {
+        let report = |company: usize, market: usize| NewsReport {
+            symbol: Some(Symbol::parse("BBCA").unwrap()),
+            matched_name: Some("Bank Central Asia".into()),
+            sources: vec!["kontan/investasi".into()],
+            scanned: 60,
+            company_matches: company,
+            company_only: false,
+            items: (0..company)
+                .map(|i| item("company", i))
+                .chain((0..market).map(|i| item("market", i)))
+                .collect(),
+        };
+        let s = news(&report(1, 1), false);
+        assert!(
+            s.starts_with("News for BBCA (Bank Central Asia) · 1 of 60 scanned headlines mentions the company · sources: kontan/investasi\n"),
+            "{s}"
+        );
+        assert!(s.contains("Market context · 1 headline\n"), "{s}");
+        let s = news(&report(2, 2), false);
+        assert!(
+            s.starts_with("News for BBCA (Bank Central Asia) · 2 of 60 scanned headlines mention the company · sources: kontan/investasi\n"),
+            "{s}"
+        );
+        assert!(s.contains("Market context · 2 headlines\n"), "{s}");
+    }
 }

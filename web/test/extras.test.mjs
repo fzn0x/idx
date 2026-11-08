@@ -252,6 +252,16 @@ test("ownership releases on the web: lines, positions and legacy copies", async 
   assert.ok(!r.warnings.some((w) => w.includes("2026-09-30")), JSON.stringify(r.warnings));
 });
 
+test("ownership notes on the web: rows dated otherwise agree with their count (ingest::other_date_note)", async () => {
+  const release = (as_of, other_date_rows) => ({ as_of, format: "xlsx", source: "a", rows: 7151, synced_at: 2, sha256: "s", issuers: 961, entities: 5145, lines: 7154, other_date_rows, controller_column: 0 });
+  const env = { DB: fakeD1({ own_releases: [release("2026-08-31", 1), release("2026-09-30", 2)], kv: [] }) };
+  const r = await route(env, new URL("https://x/api/ownership/releases"));
+  assert.deepEqual(r.warnings, [
+    "the 2026-08-31 file also lists 1 row dated otherwise; it is not part of the 2026-08-31 holdings",
+    "the 2026-09-30 file also lists 2 rows dated otherwise; they are not part of the 2026-09-30 holdings",
+  ]);
+});
+
 test("ownership ticker on the web carries accounts and the controller flag", async () => {
   const holdings = [
     { as_of: "2026-10-30", symbol: "BBCA", issuer_name: "BANK CENTRAL ASIA Tbk", entity_key: "DWIMURIA INVESTAMA ANDALAN", holder: "PT DWIMURIA INVESTAMA ANDALAN", holder_raw: "PT DWIMURIA INVESTAMA ANDALAN", investor_type: "CORPORATE", local_foreign: "L", nationality: null, domicile: "INDONESIA", shares_scripless: 0, shares_scrip: 67729950000, shares_total: 67729950000, pct: 54.94, accounts: 1, controller_or_affiliate: "CONTROLLER" },

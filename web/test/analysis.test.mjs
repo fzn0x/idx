@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 
 import * as an from "../src/analysis.js";
 import * as y from "../src/yahoo.js";
-import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint } from "../src/api.js";
+import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, dividendsKeyPoint, newsKeyPoint, ownershipKeyPoint } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
@@ -152,6 +152,18 @@ test("brief key point leaves out a mixed-currency P/B (service::valuation_key_po
   const bbca = withVerdict("quote_summary_fundamentals_bbca.json", "BBCA");
   assert.ok(valuationKeyPoint(bbca).includes(", P/B "), valuationKeyPoint(bbca));
   assert.equal(valuationKeyPoint({ ...itmg, verdict: null }), null);
+});
+
+test("brief valuation key point agrees with the input count (service::valuation_key_point)", () => {
+  // Only the trailing P/E, as in the Rust test too_little_data.
+  const f = y.parseFundamentals(JSON.parse(fixture("yahoo/quote_summary_fundamentals_bbca.json")).quoteSummary.result[0], "BBCA");
+  for (const group of ["valuation", "profitability", "health", "growth", "dividend", "analyst"]) for (const k of Object.keys(f[group])) if (!(group === "valuation" && k === "pe_trailing")) f[group][k] = null;
+  f.verdict = an.verdict(f);
+  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient_data (score +1, 1 input); P/E 12.9");
+  // A net margin between 5% and 20% counts without moving the score.
+  f.profitability.net_margin_pct = 10;
+  f.verdict = an.verdict(f);
+  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient_data (score +1, 2 inputs); P/E 12.9");
 });
 
 // ---- growth, valuation and risk lenses: same fixtures and figures as the
@@ -502,6 +514,30 @@ test("sentiment lexicon", () => {
   const r = an.aggregateSentiment("BBCA", null, items, 2);
   assert.equal(r.label, "positive");
   assert.equal(r.headlines.length, 2);
+});
+
+test("brief dividends key point agrees with its counts (service::dividends_key_point)", () => {
+  // The key point reads the yield and the counts, not the total.
+  const s = (ttm_yield_pct, ttm_payments, consecutive_years, payments_on_record) => ({ ttm_total: null, ttm_payments, ttm_yield_pct, consecutive_years, last: null, payments_on_record });
+  // A 2026 payment after a 2024 one: the streak is one year.
+  assert.equal(dividendsKeyPoint(s(2.13, 1, 1, 2)), "Dividends: TTM yield 2.13% over 1 payment, 1 consecutive year");
+  assert.equal(dividendsKeyPoint(s(4, 2, 2, 4)), "Dividends: TTM yield 4.00% over 2 payments, 2 consecutive years");
+  assert.equal(dividendsKeyPoint(s(null, 0, 1, 3)), "Dividends: none in the last twelve months");
+  assert.equal(dividendsKeyPoint(s(null, 0, 0, 0)), "Dividends: none on record");
+});
+
+test("brief news key point agrees with the headline count (service::news_key_point)", () => {
+  const s = (company_matches, sentiment, score) => ({ company_matches, sentiment, score, headlines: [] });
+  assert.equal(newsKeyPoint(s(0, "no_coverage", 0)), "News: no current headline mentions the company");
+  assert.equal(newsKeyPoint(s(1, "positive", 0.5)), "News: 1 current headline mentions the company, lexicon sentiment positive (+0.50)");
+  assert.equal(newsKeyPoint(s(2, "negative", -0.25)), "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)");
+});
+
+test("brief ownership key point agrees with the holder count (service::ownership_key_point)", () => {
+  const largest = { as_of: "2026-10-30", symbol: "BBCA", holder: "PT DWIMURIA INVESTAMA ANDALAN", local_foreign: "L", pct: 54.94 };
+  const o = { as_of: "2026-10-30", listed_pct: 54.94, foreign_pct: 0, holders_listed: 1, top_holders: [largest] };
+  assert.equal(ownershipKeyPoint(o), "Ownership (2026-10-30): 1 holder above 1% holds 54.9%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%");
+  assert.equal(ownershipKeyPoint({ ...o, holders_listed: 2, listed_pct: 56.7 }), "Ownership (2026-10-30): 2 holders above 1% hold 56.7%, foreign 0.0%; largest PT DWIMURIA INVESTAMA ANDALAN 54.9%");
 });
 
 test("rss parse and name matching", () => {

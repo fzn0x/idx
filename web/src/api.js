@@ -1249,7 +1249,8 @@ async function ownershipNotes(env, dates) {
   const notes = [];
   const legacy = rows.filter((r) => r.lines == null).map((r) => r.as_of);
   if (legacy.length) notes.push(`the web copy of ${legacy.join(", ")} predates idx 0.8.2, which sums a holder's accounts; it reloads once the mirror is rebuilt`);
-  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} row${r.other_date_rows === 1 ? "" : "s"} dated otherwise; they are not part of the ${r.as_of} holdings`);
+  // Noun and verb follow the count, as in the CLI's ingest::other_date_note.
+  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} ${r.other_date_rows === 1 ? "row dated otherwise; it is" : "rows dated otherwise; they are"} not part of the ${r.as_of} holdings`);
   return notes;
 }
 async function controllerReported(env, date) {
@@ -1428,11 +1429,12 @@ export async function ownershipGraph(env, rootRaw, depth = 2, minPct = 0, maxNod
 
 // The brief's "Valuation verdict" key point, null without a verdict. A P/B
 // over statements in another currency is not a ratio, so it is left out (as
-// service::valuation_key_point does in the CLI).
+// service::valuation_key_point does in the CLI). The noun follows the count:
+// "1 input", "8 inputs".
 export function valuationKeyPoint(f) {
   if (!f?.verdict) return null;
   const v = f.verdict, pe = f.valuation.pe_trailing, pb = an.mixedCurrency(f) ? null : f.valuation.price_to_book;
-  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} inputs)${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
+  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} input${v.inputs_available === 1 ? "" : "s"})${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
 }
 
 export async function brief(env, symbolRaw) {
@@ -1468,19 +1470,46 @@ export async function brief(env, symbolRaw) {
   if (valuation) key_points.push(valuation);
   if (t) key_points.push(`Technical signal: ${t.signal.label} (score ${t.signal.score >= 0 ? "+" : ""}${t.signal.score}), trend ${t.trend}${t.rsi14 != null ? `, RSI ${t.rsi14.toFixed(0)}` : ""}`);
   if (r?.returns?.["1y"] != null) key_points.push(`1y return ${pct(r.returns["1y"])}${r.benchmark?.excess?.["1y"] != null ? ` (${r.benchmark.excess["1y"] >= 0 ? "+" : ""}${r.benchmark.excess["1y"].toFixed(1)} pp vs ${r.benchmark.symbol})` : ""}; YTD ${r.returns.ytd != null ? pct(r.returns.ytd) : "n/a"}`);
-  if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");
+  const div = d ? { ttm_total: d.ttm_total, ttm_payments: d.ttm_payments, ttm_yield_pct: d.ttm_yield_pct, consecutive_years: d.consecutive_years, last: d.last, payments_on_record: d.dividends.length } : null;
+  if (div) key_points.push(dividendsKeyPoint(div));
   const own = o ? { as_of: o.as_of, listed_pct: o.listed_pct, foreign_pct: o.holders.filter((h) => h.local_foreign === "A").reduce((s, h) => s + h.pct, 0), holders_listed: o.holders.length, top_holders: o.holders.slice(0, 5) } : null;
-  if (own) key_points.push(`Ownership (${own.as_of}): ${own.holders_listed} holders above 1% hold ${own.listed_pct.toFixed(1)}%, foreign ${own.foreign_pct.toFixed(1)}%${own.top_holders[0] ? `; largest ${own.top_holders[0].holder} ${own.top_holders[0].pct.toFixed(1)}%` : ""}`);
-  if (n) key_points.push(n.company_matches ? `News: ${n.company_matches} current headline${n.company_matches === 1 ? "" : "s"} mention the company, lexicon sentiment ${rep.label} (${rep.score >= 0 ? "+" : ""}${rep.score.toFixed(2)})` : "News: no current headline mentions the company");
+  if (own) key_points.push(ownershipKeyPoint(own));
+  const newsSummary = n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null;
+  if (newsSummary) key_points.push(newsKeyPoint(newsSummary));
   const data = {
     symbol, name: q?.name || f?.name || t?.name || NAME_BY_SYMBOL.get(symbol) || null, generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), key_points,
     quote: q, fundamentals: f, technical: t, returns: r,
-    dividends: d ? { ttm_total: d.ttm_total, ttm_payments: d.ttm_payments, ttm_yield_pct: d.ttm_yield_pct, consecutive_years: d.consecutive_years, last: d.last, payments_on_record: d.dividends.length } : null,
+    dividends: div,
     ownership: own,
-    news: n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null,
+    news: newsSummary,
     sections_failed: failed,
   };
   return envelope("idx.brief.v1", data, { cached: cachedAll, stale, fetched_at: fetched, warnings });
+}
+
+// The brief's "Dividends" key point from its dividends section: the trailing
+// yield, its payments and the streak, or why there is no yield. Each noun
+// follows its count, "1 payment, 1 consecutive year"
+// (service::dividends_key_point in the CLI).
+export function dividendsKeyPoint(d) {
+  if (d.ttm_yield_pct == null) return d.payments_on_record ? "Dividends: none in the last twelve months" : "Dividends: none on record";
+  return `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive year${d.consecutive_years === 1 ? "" : "s"}`;
+}
+
+// The brief's "News" key point from its news section; the verb follows the
+// count, "1 current headline mentions", "2 current headlines mention"
+// (service::news_key_point in the CLI).
+export function newsKeyPoint(s) {
+  if (!s.company_matches) return "News: no current headline mentions the company";
+  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
+}
+
+// The brief's "Ownership" key point from its ownership section; noun and verb
+// follow the count, "1 holder above 1% holds", "2 holders above 1% hold"
+// (service::ownership_key_point in the CLI).
+export function ownershipKeyPoint(o) {
+  const [holders, hold] = o.holders_listed === 1 ? ["holder", "holds"] : ["holders", "hold"];
+  return `Ownership (${o.as_of}): ${o.holders_listed} ${holders} above 1% ${hold} ${o.listed_pct.toFixed(1)}%, foreign ${o.foreign_pct.toFixed(1)}%${o.top_holders[0] ? `; largest ${o.top_holders[0].holder} ${o.top_holders[0].pct.toFixed(1)}%` : ""}`;
 }
 
 // ---- GitHub repository (the Star button) -------------------------------
