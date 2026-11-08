@@ -56,8 +56,9 @@ pub use corporate::{CorporateEvent, CorporateEventKind, CorporateEvents};
 pub use dividends::{DividendEvent, DividendHistory, DividendYear, SplitEvent};
 pub use flow::{
     BrokerActivity, BrokerDayRow, BrokerRanking, BrokerSort, BrokerSource, BrokerStockRow,
-    ForeignDay, ForeignFlow, ForeignRow, ForeignSort, ForeignSource, ForeignTotals,
-    ForeignValueDay, ForeignValueFlow, ForeignValueTotals, MarketForeign,
+    ForeignDay, ForeignFlow, ForeignMarketValue, ForeignRow, ForeignSort, ForeignSource,
+    ForeignTotals, ForeignValueDay, ForeignValueFlow, ForeignValueRow, ForeignValueTotals,
+    MarketForeign, MarketForeignValue,
 };
 pub use fundamentals::{
     Analyst, BalanceSheet, CashFlow, Director, Dividend, Earnings, EarningsEstimate,

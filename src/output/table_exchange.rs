@@ -8,7 +8,10 @@ use comfy_table::{Attribute, Cell};
 use crate::model::{ActionKind, CorporateActions};
 use crate::model::{BrokerRanking, BrokerSort};
 use crate::model::{Calendar, CalendarCategory, Holidays, IndexBoard, InstrumentList, MemberList};
-use crate::model::{ForeignFlow, ForeignRow, ForeignSort, ForeignValueFlow, MarketForeign};
+use crate::model::{
+    ForeignFlow, ForeignRow, ForeignSort, ForeignValueFlow, ForeignValueRow, MarketForeign,
+    MarketForeignValue,
+};
 use crate::output::format as f;
 use crate::output::table::{base_table, header, right, signed};
 
@@ -308,6 +311,74 @@ pub fn market_foreign(m: &MarketForeign, color: bool) -> String {
     );
     out.push_str("Foreign figures are shares as IDX publishes them; net × close gives a rupiah scale, not the traded value.\n");
     out
+}
+
+/// Foreign net buying and selling in rupiah among the most traded stocks,
+/// with the market's totals, from IPOT.
+pub fn market_foreign_value(m: &MarketForeignValue, color: bool) -> String {
+    let mut out = format!(
+        "Foreign flow · {} · the {} most traded stocks ({} with trades) · rupiah (IPOT)\n",
+        m.date, m.scanned, m.checked
+    );
+    match &m.market {
+        Some(t) => out.push_str(&format!(
+            "Market: value {} · foreign buy {} · sell {} · net {}\n",
+            f::compact(t.value),
+            f::compact(t.foreign_buy_value),
+            f::compact(t.foreign_sell_value),
+            signed_compact(t.foreign_net_value),
+        )),
+        None => out.push_str("Market: no totals for this session (see the warning)\n"),
+    }
+    foreign_value_list(&mut out, "Foreign net buying", &m.net_buy, color);
+    foreign_value_list(&mut out, "Foreign net selling", &m.net_sell, color);
+    out.push_str(&format!(
+        "Rupiah from IPOT (Indo Premier): each stock's foreign net is its broker summary's, across all boards, for the {} stocks most traded by value, not every stock; the market line is IPOT's market statistics.",
+        m.scanned
+    ));
+    if m.rounded {
+        out.push_str(" The source abbreviates figures of a million and more, to one decimal per stock and two for the market.");
+    }
+    out.push_str(" For every stock in shares, as IDX publishes them, use --source idx.\n");
+    out
+}
+
+fn foreign_value_list(out: &mut String, title: &str, rows: &[ForeignValueRow], color: bool) {
+    out.push_str(title);
+    out.push('\n');
+    if rows.is_empty() {
+        out.push_str("None.\n");
+        return;
+    }
+    let mut t = base_table(color);
+    t.set_header(header(&[
+        "#",
+        "Symbol",
+        "Name",
+        "Price",
+        "%",
+        "Value",
+        "Foreign net",
+        "Net %",
+    ]));
+    for (i, r) in rows.iter().enumerate() {
+        t.add_row(vec![
+            right((i + 1).to_string()),
+            Cell::new(r.symbol.as_str()).add_attribute(Attribute::Bold),
+            Cell::new(f::clip(r.name.as_deref().unwrap_or(f::DASH), 26)),
+            right(f::price(r.price)),
+            signed(f::pct(r.change_pct), r.change_pct, color),
+            right(f::compact(r.value)),
+            signed(
+                signed_compact(r.foreign_net_value),
+                r.foreign_net_value,
+                color,
+            ),
+            signed(pct1(r.foreign_net_pct), r.foreign_net_pct, color),
+        ]);
+    }
+    out.push_str(&t.to_string());
+    out.push('\n');
 }
 
 fn day(d: Option<chrono::NaiveDate>) -> String {
@@ -632,4 +703,64 @@ pub fn indices(b: &IndexBoard, color: bool) -> String {
         "COMPOSITE is IHSG (^JKSE). Value and market cap in IDR, as published by idx.co.id.\n",
     );
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ForeignMarketValue, Symbol};
+
+    fn row(sym: &str, net: f64) -> ForeignValueRow {
+        ForeignValueRow {
+            symbol: Symbol::parse(sym).unwrap(),
+            name: None,
+            price: Some(5_200.0),
+            change_pct: Some(1.46),
+            value: Some(1.0e12),
+            foreign_net_value: Some(net),
+            foreign_net_pct: Some(net / 1.0e12 * 100.0),
+        }
+    }
+
+    #[test]
+    fn the_rupiah_ranking_names_its_scan_and_the_market_line() {
+        let mut m = MarketForeignValue {
+            date: chrono::NaiveDate::from_ymd_opt(2026, 11, 6).unwrap(),
+            scanned: 100,
+            checked: 98,
+            market: Some(ForeignMarketValue {
+                value: Some(10.32e12),
+                foreign_buy_value: Some(3.76e12),
+                foreign_sell_value: Some(3.43e12),
+                foreign_net_value: Some(329.33e9),
+            }),
+            net_buy: vec![row("BBCA", 219.0e9)],
+            net_sell: vec![],
+            rounded: true,
+        };
+        let out = market_foreign_value(&m, false);
+        assert!(
+            out.starts_with("Foreign flow · 2026-11-06 · the 100 most traded stocks (98 with trades) · rupiah (IPOT)\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Market: value 10.32T · foreign buy 3.76T · sell 3.43T · net +329.3B\n"),
+            "{out}"
+        );
+        assert!(out.contains("+219.0B") && out.contains("21.9%"), "{out}");
+        assert!(out.contains("Foreign net selling\nNone.\n"), "{out}");
+        assert!(
+            out.contains("for the 100 stocks most traded by value, not every stock"),
+            "{out}"
+        );
+        assert!(out.contains("two for the market"), "{out}");
+        m.market = None;
+        m.rounded = false;
+        let out = market_foreign_value(&m, false);
+        assert!(
+            out.contains("Market: no totals for this session (see the warning)\n"),
+            "{out}"
+        );
+        assert!(!out.contains("abbreviates"), "{out}");
+    }
 }

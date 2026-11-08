@@ -215,7 +215,7 @@ test("schema NAME offers the page's command that prints that shape, and none for
   const body = json.slice(json.indexOf("pub fn schema_for"), json.indexOf("_ =>", json.indexOf("pub fn schema_for")));
   const names = [...body.matchAll(/^\s+"([a-z-]+)" =>/gm)].map((m) => m[1]);
   assert.ok(names.length > 50, `${names.length} schema names`);
-  const cliOnly = ["foreign", "market-foreign", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
+  const cliOnly = ["foreign", "market-foreign", "market-foreign-value", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
     "watchlist", "error", "ownership-import", "ownership-discover", "ownership-resolve-candidates", "ownership-resolution", "ownership-resolutions",
     "ownership-composition", "ownership-snapshot-sync", "ownership-status", "ownership-snapshot", "ownership-institutions"];
   for (const name of names) {

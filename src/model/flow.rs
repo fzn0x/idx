@@ -11,7 +11,9 @@
 //! instead: foreign buying, selling and net in rupiah across all boards
 //! ([`ForeignValueFlow`], its own schema). The two sources answer different
 //! questions (shares on the regular board against rupiah on every board) and
-//! share no field names.
+//! share no field names. So does `idx market foreign --source ipot`
+//! ([`MarketForeignValue`]): the foreign net in rupiah of the most traded
+//! stocks only, with the market's totals from IPOT's market statistics.
 //!
 //! `idx market brokers` reads idx.co.id's broker summary or IPOT's ranking
 //! of its latest session ([`BrokerSource`]), both in [`BrokerRanking`]; only
@@ -232,6 +234,64 @@ pub struct MarketForeign {
     pub net_buy: Vec<ForeignRow>,
     /// Largest foreign net selling first.
     pub net_sell: Vec<ForeignRow>,
+}
+
+/// One stock in the foreign ranking from IPOT: the session's foreign net
+/// in rupiah, from its broker summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ForeignValueRow {
+    pub symbol: Symbol,
+    pub name: Option<String>,
+    /// Last price of the session, IDR.
+    pub price: Option<f64>,
+    /// From the previous session's close to `price`, percent, computed by idx.
+    pub change_pct: Option<f64>,
+    /// Value traded by all investors on all boards, IDR.
+    pub value: Option<f64>,
+    /// Foreign buy minus foreign sell value on all boards, IDR, as published
+    /// (the broker summary's `F. NVal`).
+    pub foreign_net_value: Option<f64>,
+    /// `foreign_net_value` as a percent of `value`, computed by idx.
+    pub foreign_net_pct: Option<f64>,
+}
+
+/// The market's foreign trading in the session, from IPOT's market
+/// statistics (`ma-marketstatistic.php`), as published. IPOT does not say
+/// which boards its foreign figures cover.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ForeignMarketValue {
+    /// Value traded on the regular, negotiated and cash boards, IDR (the
+    /// page's `TOTAL`).
+    pub value: Option<f64>,
+    /// Value foreign investors bought, IDR.
+    pub foreign_buy_value: Option<f64>,
+    /// Value foreign investors sold, IDR.
+    pub foreign_sell_value: Option<f64>,
+    /// Foreign buy minus sell value, IDR, as published.
+    pub foreign_net_value: Option<f64>,
+}
+
+/// Foreign net buying and selling in rupiah among the most traded stocks
+/// for one session, from IPOT (`idx.market.foreign.value.v1`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MarketForeignValue {
+    pub date: NaiveDate,
+    /// The most traded stocks read, by value on the latest quotes: these,
+    /// not every stock, are ranked.
+    pub scanned: usize,
+    /// Scanned stocks with a broker summary that had trades that session.
+    pub checked: usize,
+    /// The market's totals for `date`; `null` when IPOT's market statistics
+    /// could not be dated to it (a warning says why).
+    pub market: Option<ForeignMarketValue>,
+    /// Largest foreign net buying first.
+    pub net_buy: Vec<ForeignValueRow>,
+    /// Largest foreign net selling first.
+    pub net_sell: Vec<ForeignValueRow>,
+    /// `true` when the source abbreviated at least one figure: the broker
+    /// summaries to one decimal (`1.6 M`), the market statistics to two
+    /// (`10.32 T`).
+    pub rounded: bool,
 }
 
 /// One exchange member's trading on one day, both sides together.

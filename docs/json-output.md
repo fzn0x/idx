@@ -76,7 +76,7 @@ already documents.
 | `idx.stockbit.actions.v1` | `data.actions[]` |
 | `idx.stockbit.movements.v1` | `data.movements[]` |
 | `idx.profile.v1`, `idx.fundamentals.v1`, `idx.growth.v1`, `idx.valuation.v1`, `idx.risk.v1`, `idx.technical.v1`, `idx.brief.v1`, `idx.sentiment.v1`, `idx.ownership.snapshot.v1` | `data` on one line (a single record) |
-| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1`, `idx.ownership.graph.v1`, `idx.ownership.composition.v1`, `idx.ownership.snapshot-sync.v1`, `idx.ownership.status.v1`, `idx.astro.v1` | `data` on one line (several peer lists kept together) |
+| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.market.foreign.value.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1`, `idx.ownership.graph.v1`, `idx.ownership.composition.v1`, `idx.ownership.snapshot-sync.v1`, `idx.ownership.status.v1`, `idx.astro.v1` | `data` on one line (several peer lists kept together) |
 
 ```sh
 idx -o jsonl stocks history BBCA --period 1mo | jq -c '{time, close}'

@@ -231,7 +231,7 @@ const SCHEMA_CMD = {
   "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders", "ownership-concentration": "ownership concentration",
   "ownership-graph": "ownership graph BBCA",
   // idx.co.id's foreign flow in shares (the page's foreign prints foreign-value), the other CLI-and-MCP-only commands, the local database, the error envelope.
-  foreign: null, "market-foreign": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
+  foreign: null, "market-foreign": null, "market-foreign-value": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
   "stockbit-movements": null, "stockbit-status": null, watchlist: null, error: null, "ownership-import": null, "ownership-discover": null,
   "ownership-resolve-candidates": null, "ownership-resolution": null, "ownership-resolutions": null, "ownership-composition": null,
   "ownership-snapshot-sync": null, "ownership-status": null, "ownership-snapshot": null, "ownership-institutions": null,
