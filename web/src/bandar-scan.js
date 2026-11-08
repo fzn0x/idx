@@ -118,21 +118,24 @@ const tradedOn = (q) => (q?.market_time ? hol.wibDate(q.market_time) : null);
 
 /**
  * The board's stocks most traded on `session`, by value (price x volume),
- * most first. A quote whose last trade is dated another day is left out: a
- * suspended or idle stock keeps its last volume. When the board has moved
- * past the session (quotes dated later number more than a tenth of those
- * dated on it) or holds no quote of it, the whole board is ranked by its
- * latest value instead, and `ranked_from` names the newest date it holds.
- * Without a session the whole board is ranked. Pure, tested.
+ * most first. A quote whose last trade is dated before the session is left
+ * out: a suspended or idle stock keeps its last volume. Once the next
+ * session has opened, the stocks that traded since come first, by their
+ * latest value: the most traded trade first, and their value of the session
+ * has left the board. When the board holds no quote of the session or
+ * later, the whole board is ranked by its latest value. `ranked_from` names
+ * the newest date the ranking read. Without a session the whole board is
+ * ranked. Pure, tested.
  */
 export function ranking(quotes, session = null, n = SCAN_SIZE) {
   const stocks = quotes.filter((q) => valueOf(q) > 0 && !String(q.symbol).startsWith("^"));
-  const top = (list) => [...list].sort((a, b) => valueOf(b) - valueOf(a)).slice(0, n).map((q) => q.symbol);
-  if (!session) return { symbols: top(stocks), ranked_from: null };
+  const byValue = (list) => [...list].sort((a, b) => valueOf(b) - valueOf(a));
+  const ranked = (list) => { const top = list.slice(0, n); return { symbols: top.map((q) => q.symbol), ranked_from: top.map(tradedOn).filter(Boolean).sort().pop() ?? null }; };
+  if (!session) return { symbols: byValue(stocks).slice(0, n).map((q) => q.symbol), ranked_from: null };
   const on = stocks.filter((q) => tradedOn(q) === session);
-  const later = stocks.filter((q) => (tradedOn(q) ?? "") > session).length;
-  if (on.length && later * 10 <= on.length) return { symbols: top(on), ranked_from: session };
-  return { symbols: top(stocks), ranked_from: stocks.map(tradedOn).filter(Boolean).sort().pop() ?? null };
+  const later = stocks.filter((q) => (tradedOn(q) ?? "") > session);
+  if (!on.length && !later.length) return ranked(byValue(stocks));
+  return ranked([...byValue(later), ...byValue(on)]);
 }
 
 /** The symbols of {@link ranking}. Pure, tested. */
@@ -201,7 +204,7 @@ function runOf(st, at) {
   for (const s of retry) { const kind = st.kinds?.[s] || "other"; errors[kind] = (errors[kind] || 0) + 1; }
   return {
     session: st.session, scanned: true, of: st.symbols.length, stored: st.stored, checked: st.checked,
-    failed, retrying: retry.length, unpublished: [...pending], left: st.queue.length, errors,
+    failed, retrying: retry.length, unpublished: [...pending], left: st.queue.length, errors, ranked_from: st.ranked_from ?? null,
     started_at: st.started_at ?? null, published_at: st.published_at ?? null, done_at: at,
     partial: failed.length + pending.length + st.queue.length > 0,
   };
@@ -329,7 +332,8 @@ export async function scanSymbol(symbol, session, quote, { fetchPage = ipot.fetc
     const summary = named(symbol, p, from, session);
     if (ipot.rangeNetSuspect(from, session, p, today, today)) summary.foreign_net_value = await ipot.rebuildNet(from, session, today, get);
     const move = bd.priceMove(candles, from, session, quote);
-    rows.push({ period, v: { summary, price: move.price ?? quote?.price ?? null, chg: move.chg } });
+    // Without candles, the quote's price only when it is the session's (a stock ranked after the next open has a later one).
+    rows.push({ period, v: { summary, price: move.price ?? bd.liveQuote(quote, session)?.price ?? null, chg: move.chg } });
   }
   return { rows };
 }
@@ -701,6 +705,7 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${retrying} of them again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
+  if (rec?.ranked_from && rec.ranked_from !== shown) warnings.push(`the scan of ${shown} picked its ${rec.of} stocks from the quote board of ${rec.ranked_from}, not from that session's close`);
   const year = Number(latest.slice(0, 4));
   if (!hol.covers(year)) warnings.push(`the bundled holiday list does not cover ${year}; the scan tells that year's closures from IPOT and the quote board`);
   // A session kept from before these records: the earliest its scan could have read it.

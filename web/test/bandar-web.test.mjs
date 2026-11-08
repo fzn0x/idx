@@ -212,11 +212,27 @@ test("the ranking counts the stocks that traded on the session", () => {
   const idle = quote("TMPO", 1000, 5, "2026-10-14T15:59:00+07:00"); // last traded two sessions earlier
   assert.deepEqual(mostTraded([quote("A", 10, 5), quote("B", 100, 5), idle], 5, "2026-10-16"), ["B", "A"]);
   assert.deepEqual(ranking([quote("A", 10, 5), idle], "2026-10-16"), { symbols: ["A"], ranked_from: "2026-10-16" });
-  // The board has moved on to the next session: the whole board, by its latest value.
-  const next = quote("B", 100, 5, "2026-10-19T10:01:00+07:00");
-  assert.deepEqual(ranking([quote("A", 10, 5), next, idle], "2026-10-16"), { symbols: ["TMPO", "B", "A"], ranked_from: "2026-10-19" });
+  // The board has moved on to the next session: what traded since comes first; the idle stock stays out.
+  const next = quote("B", 1, 5, "2026-10-19T10:01:00+07:00");
+  assert.deepEqual(ranking([quote("A", 10, 5), next, idle], "2026-10-16"), { symbols: ["B", "A"], ranked_from: "2026-10-19" });
   // A board without a quote of the session, refreshed before it traded.
   assert.deepEqual(ranking([idle], "2026-10-16"), { symbols: ["TMPO"], ranked_from: "2026-10-14" });
+});
+
+test("once the next session opens, the stocks that traded since still rank first, and the screen says which board ranked them", async () => {
+  const fri = "2026-11-06T16:14:58+07:00", mon = "2026-11-09T09:01:00+07:00";
+  // Stock i was the (i+1)-th most traded on Friday; the 40 most traded have traded on Monday too, a few minutes' worth.
+  const board = Array.from({ length: 300 }, (_, i) => (i < 40 ? quote(`S${i}`, 1000, (300 - i) * 10, mon) : quote(`S${i}`, 1000, (300 - i) * 1e6, fri)));
+  const r = ranking(board, "2026-11-06");
+  assert.deepEqual([...r.symbols].sort(), Array.from({ length: 100 }, (_, i) => `S${i}`).sort(), "Friday's 100 most traded");
+  assert.equal(r.ranked_from, "2026-11-09");
+  // Scanned from that board, the screen says so.
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-09T09:02:00+07:00"), quotes: [quote("BBCA", 5100, 2e6, mon), quote("TLKM", 2690, 1e8, fri)] }));
+  await withFetch(recordedFetch(), async () => { await scanAll(env, new Date("2026-11-09T10:00:00+07:00")); });
+  const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date("2026-11-09T10:05:00+07:00"));
+  assert.deepEqual([out.data.to, out.data.scanned], ["2026-11-06", 2]);
+  assert.ok(out.warnings.includes("the scan of 2026-11-06 picked its 2 stocks from the quote board of 2026-11-09, not from that session's close"), out.warnings.join("\n"));
 });
 
 test("the scan fills D1 and the screen reads it like the CLI", async () => {
