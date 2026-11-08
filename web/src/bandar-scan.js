@@ -65,8 +65,13 @@ const READY_MIN = 16 * 60 + 45;
  */
 const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
-/** Minutes before a probe that failed (an error, not an answer) is tried again. */
+/**
+ * Minutes before a probe that failed (an error, not an answer) is tried
+ * again, doubled for each failure in a row up to an hour; failures for an
+ * hour in a row log an error (IPOT may block or have moved the page).
+ */
 const PROBE_RETRY_MIN = 5;
+const PROBE_ALARM_MS = 3600e3;
 /** The most traded stocks the probe turns among. */
 const PROBE_STOCKS = 3;
 /** Minutes before stocks whose session IPOT had not published are read again, until the next session's 16:45 WIB. */
@@ -343,7 +348,12 @@ async function probe(st, now, fetchPage) {
       st.first_probe_at ??= at;
       st.probe_errors = (st.probe_errors || 0) + 1;
       st.probe_error = short(e);
-      st.next_probe_at = after(now, PROBE_RETRY_MIN);
+      st.failing_since ??= at;
+      st.failures = (st.failures || 0) + 1;
+      st.next_probe_at = after(now, Math.min(PROBE_RETRY_MIN * 2 ** (st.failures - 1), PROBE_GAP_MIN.stale));
+      if (now.getTime() - Date.parse(st.failing_since) >= PROBE_ALARM_MS) {
+        console.error(`bandar scan: IPOT has failed the probe of ${st.session} since ${stamp(st.failing_since)} (${st.failures} in a row, the last: ${st.probe_error}); it may block the Worker or have moved its page`);
+      }
       return "error";
     }
     verdict = probeVerdict(page, st.board_traded);
@@ -355,6 +365,8 @@ async function probe(st, now, fetchPage) {
   st.probes = (st.probes || 0) + 1;
   st.last_probe_at = at;
   st.probe_error = null;
+  st.failing_since = null;
+  st.failures = 0;
   if (verdict === "published") {
     Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
     // A week of these shows when IPOT publishes a session.
@@ -641,7 +653,7 @@ export async function scanStatus(env) {
     session: st.session, complete: st.complete, running: ["new", "waiting", "running"].includes(st.phase), holiday: st.phase === "closed",
     scanned: attempted(st), of: (st.symbols || []).length, with_trades: st.checked || 0,
     failed: st.failed || [], started_at: st.started_at || null, done_at: st.done_at || null,
-    phase: st.phase, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null,
+    phase: st.phase, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null, probe_failing_since: st.failing_since ?? null,
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
     pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,
     retry: st.retry || [], retry_due: st.retry_due ?? null, pass: st.pass ?? 0, errors: st.errors || {}, last_errors: st.last_errors || [],

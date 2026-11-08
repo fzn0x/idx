@@ -341,6 +341,33 @@ test("a session IPOT has not published waits, is probed again every 10 minutes, 
   });
 });
 
+test("while IPOT fails the probe, the probe backs off and an hour of failures logs an error", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, traded), quote("TLKM", 2690, 1e8, traded)] }));
+  const probed = [];
+  const wib = (ms) => new Date(ms + 7 * 3600e3).toISOString().slice(11, 16);
+  let clock = 0;
+  const fetchFn = async () => { probed.push(wib(clock)); return new Response("bad gateway", { status: 502 }); };
+  const { error } = console;
+  const errors = [];
+  console.error = (...a) => errors.push(`${wib(clock)} ${a.join(" ")}`);
+  try {
+    await withFetch(fetchFn, async () => {
+      for (clock = Date.parse("2026-11-06T16:45:00+07:00"); clock <= Date.parse("2026-11-06T19:30:00+07:00"); clock += 60e3) {
+        await bandarScanStep(env, { now: new Date(clock), stocks: false });
+      }
+    });
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(probed, ["16:45", "16:50", "17:00", "17:20", "18:00", "19:00"], "5, 10, 20 and 40 minutes, then an hour");
+  assert.deepEqual(errors.map((e) => e.slice(0, 5)), ["18:00", "19:00"], errors.join("\n"));
+  assert.match(errors[0], /IPOT has failed the probe of 2026-11-06 since 2026-11-06 16:45 WIB \(5 in a row, the last: HTTP 502\)/);
+  const st = await scanStatus(env);
+  assert.deepEqual([st.phase, st.probes, st.probe_errors, st.probe_error], ["waiting", 0, 6, "HTTP 502"]);
+});
+
 test("a probe stock without trades that session does not hold the scan up: the next probe asks the next stock", async () => {
   const env = memoryDb();
   const traded = "2026-11-06T16:14:58+07:00";
