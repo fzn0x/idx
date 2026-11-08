@@ -17,9 +17,10 @@ use crate::error::{IdxError, Result};
 use crate::model::{CorporateEventKind, MovementFilter, MovementSource, Symbol};
 use crate::output::json::{SCHEMA_ORDERBOOK, SCHEMA_STOCKBIT_ACTIONS, SCHEMA_STOCKBIT_MOVEMENTS};
 use crate::output::{self, table, table_corporate, table_movements};
+use crate::providers::stockbit::auth::TokenInfo;
 use crate::providers::stockbit::movement::MovementQuery;
 use crate::providers::stockbit::signin::Accepted;
-use crate::providers::stockbit::{login, page, SessionStore, Stockbit};
+use crate::providers::stockbit::{login, page, SessionStore, Status, Stockbit};
 use crate::providers::{StockbitOptions, Ttls};
 use crate::service;
 use crate::universe;
@@ -30,7 +31,7 @@ use super::{emit, Context};
 pub enum StockbitCmd {
     /// Sign in to Stockbit and store the session: in a browser idx opens, through a local page for your own browser, or by pasting the session cookie.
     #[command(
-        after_help = "Examples:\n  idx stockbit login                       # opens Chrome/Edge/Brave on Stockbit's sign-in page\n  idx stockbit login --page                # a page on 127.0.0.1 for your own browser\n  idx stockbit login --page --port 7878    # over SSH, then: ssh -N -L 7878:127.0.0.1:7878 you@host\n  pbpaste | ssh you@host idx stockbit login   # or pipe the credentialStorage cookie\n  idx stockbit login --manual              # paste it into this terminal\n\nWithout --page, idx uses the page anyway over SSH, without a display, or without a Chromium-family\nbrowser. On the page, sign in to Stockbit in a private window, then send the session with the\npage's bookmark or paste the cookie; close that window afterwards without signing out. Google\nsign-in refuses browsers idx drives: use --page.\n\nidx never asks for your Stockbit password: you sign in on stockbit.com and idx takes only the\nsession (the credentialStorage cookie), checks it with one request and stores it (0600); a\nsession Stockbit refuses leaves the previous one in place. When the stored session still works,\nlogin says so and stops (--force signs in anyway). Stockbit rotates the refresh token on every\nrefresh, so never share one session with another tool or browser (they would log each other out)."
+        after_help = "Examples:\n  idx stockbit login                       # opens Chrome/Edge/Brave on Stockbit's sign-in page\n  idx stockbit login --page                # a page on 127.0.0.1 for your own browser\n  idx stockbit login --page --port 7878    # over SSH, then: ssh -N -L 7878:127.0.0.1:7878 you@host\n  pbpaste | ssh you@host idx stockbit login   # or pipe the credentialStorage cookie\n  idx stockbit login --manual              # paste it into this terminal\n\nWithout --page, idx uses the page anyway over SSH, without a display, or without a Chromium-family\nbrowser. On the page, sign in to Stockbit in a private window, then send the session with the\npage's bookmark or paste the cookie; close that window afterwards without signing out. Google\nsign-in refuses browsers idx drives: use --page.\n\nidx never asks for your Stockbit password: you sign in on stockbit.com and idx takes only the\nsession (the credentialStorage cookie), checks it with one request and stores it (0600); a\nsession Stockbit refuses leaves the previous one in place. When the stored session still works\nand idx can renew it, login says so and stops (--force signs in anyway). Stockbit rotates the\nrefresh token on every refresh, so never share one session with another tool or browser (they\nwould log each other out)."
     )]
     Login {
         /// Paste the session cookie into this terminal (also what happens when stdin is a pipe).
@@ -280,32 +281,53 @@ fn status_cmd(ctx: &Context) -> Result<()> {
     if output::print_value(ctx.settings.output, &status)? {
         return Ok(());
     }
-    let dur = |secs: Option<i64>| match secs {
-        Some(s) if s <= 0 => "expired".to_string(),
-        Some(s) => format!("in {}h {}m", s / 3600, (s % 3600) / 60),
-        None => "unknown".to_string(),
-    };
-    let mut out = String::new();
-    out.push_str(&format!("session file : {}\n", status.session_file));
-    if status.logged_in {
-        out.push_str("logged in    : yes\n");
-        out.push_str(&format!(
-            "access token : {} (expires {})\n",
-            if status.access.present {
-                "present"
-            } else {
-                "missing"
-            },
-            dur(status.access.expires_in_secs)
-        ));
-        out.push_str(&format!(
-            "refresh token: present (expires {})\n",
-            dur(status.refresh.expires_in_secs)
-        ));
+    output::print_stdout(&status_table(&status))
+}
+
+/// The `idx stockbit status` table: whether the session works, why not (or
+/// why idx cannot renew it) and what to run, and when each token expires.
+fn status_table(status: &Status) -> String {
+    let mut out = format!("session file : {}\n", status.session_file);
+    out.push_str(if status.logged_in {
+        "logged in    : yes\n"
     } else {
-        out.push_str("logged in    : no; run `idx stockbit login`\n");
+        "logged in    : no\n"
+    });
+    if let Some(reason) = &status.reason {
+        out.push_str(&format!("note         : {reason}\n"));
     }
-    output::print_stdout(&out)
+    if status.access.present || status.refresh.present {
+        let mut access = token_row(&status.access);
+        let spent = !status.access.present || status.access.expires_in_secs.is_some_and(|s| s <= 0);
+        if status.renewable && spent {
+            access.push_str("; idx gets a new one on the next request");
+        }
+        out.push_str(&format!("access token : {access}\n"));
+        out.push_str(&format!("refresh token: {}\n", token_row(&status.refresh)));
+    }
+    out
+}
+
+/// One token's line in the status table.
+fn token_row(t: &TokenInfo) -> String {
+    if !t.present {
+        return "missing".into();
+    }
+    match t.expires_in_secs {
+        Some(s) if s <= 0 => format!("present (expired {} ago)", span(-s)),
+        Some(s) => format!("present (expires in {})", span(s)),
+        None => "present (expiry unknown)".into(),
+    }
+}
+
+/// `6d 23h` from a day up, `5h 12m` below.
+fn span(secs: i64) -> String {
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else {
+        format!("{h}h {m}m")
+    }
 }
 
 /// How `idx stockbit login` takes the session in.
@@ -427,13 +449,10 @@ fn report(ctx: &Context, acc: &Accepted) -> Result<()> {
     status_cmd(ctx)
 }
 
-/// `true` (after saying so) when the stored session still works, so a
-/// sign-in would only replace a good session.
+/// `true` (after saying so) when the stored session still works and idx can
+/// renew it, so a sign-in would only replace a good session.
 async fn already_signed_in(ctx: &Context, sb: &Stockbit) -> Result<bool> {
-    if !sb.store().status(chrono::Utc::now().timestamp()).logged_in {
-        return Ok(false);
-    }
-    if sb.verify().await.is_err() {
+    if !sb.already_signed_in().await {
         return Ok(false);
     }
     output::print_notice(
@@ -620,5 +639,106 @@ mod tests {
                 other => panic!("{why}: {other:?}"),
             }
         }
+    }
+
+    /// 2026-11-08 00:00 UTC, the "now" of the status tables.
+    const NOW: i64 = 1_794_096_000;
+    const DAY: i64 = 86_400;
+
+    /// The status table, and its session file, for a stored pair of
+    /// synthetic JWTs (signed by nobody) whose `exp` is `access` and
+    /// `refresh` (`None`: no such token; both `None`: no session file).
+    fn table_for(access: Option<i64>, refresh: Option<i64>) -> (String, String) {
+        use base64::Engine;
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        let jwt = |exp: Option<i64>| match exp {
+            Some(e) => format!(
+                "{}.{}.sig",
+                b64(r#"{"alg":"none"}"#),
+                b64(&format!(r#"{{"exp":{e}}}"#))
+            ),
+            None => String::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        if access.is_some() || refresh.is_some() {
+            let session = crate::providers::stockbit::Session {
+                access: jwt(access),
+                refresh: jwt(refresh),
+            };
+            store.save(&session).unwrap();
+        }
+        let status = store.status(NOW);
+        (status_table(&status), status.session_file)
+    }
+
+    #[test]
+    fn the_status_table_says_plainly_when_the_session_expired() {
+        // This machine's session on 2026-11-08: the access token expired 19
+        // days before, the refresh token 13.
+        let (table, file) = table_for(Some(NOW - 19 * DAY), Some(NOW - 13 * DAY));
+        assert_eq!(
+            table,
+            format!(
+                "session file : {file}\n\
+                 logged in    : no\n\
+                 note         : the Stockbit session has expired; run `idx stockbit login` to renew it\n\
+                 access token : present (expired 19d 0h ago)\n\
+                 refresh token: present (expired 13d 0h ago)\n"
+            )
+        );
+        // No session: what to run, and no token lines.
+        let (table, file) = table_for(None, None);
+        assert_eq!(
+            table,
+            format!(
+                "session file : {file}\n\
+                 logged in    : no\n\
+                 note         : no Stockbit session is stored; run `idx stockbit login` to sign in\n"
+            )
+        );
+    }
+
+    #[test]
+    fn the_status_table_shows_when_a_working_session_ends() {
+        let (table, _) = table_for(Some(NOW + 5 * 3600), Some(NOW + 6 * DAY + 3600));
+        assert!(table.contains("logged in    : yes\n"), "{table}");
+        assert!(!table.contains("note"), "{table}");
+        assert!(
+            table.contains("access token : present (expires in 5h 0m)\n"),
+            "{table}"
+        );
+        assert!(
+            table.contains("refresh token: present (expires in 6d 1h)\n"),
+            "{table}"
+        );
+        // An expired access token beside a live refresh token is renewed.
+        let (table, _) = table_for(Some(NOW - 2 * 3600), Some(NOW + 5 * DAY));
+        assert!(table.contains("logged in    : yes\n"), "{table}");
+        assert!(!table.contains("note"), "{table}");
+        let renewed =
+            "access token : present (expired 2h 0m ago); idx gets a new one on the next request\n";
+        assert!(table.contains(renewed), "{table}");
+        // An expired refresh token: the access token works until its exp.
+        let (table, _) = table_for(Some(NOW + 5 * 3600 + 12 * 60), Some(NOW - 3600));
+        assert!(table.contains("logged in    : yes\n"), "{table}");
+        let note = "note         : the refresh token has expired, so idx cannot renew this session";
+        assert!(table.contains(note), "{table}");
+        assert!(table.contains("idx stockbit login"), "{table}");
+        assert!(
+            table.contains("access token : present (expires in 5h 12m)\n"),
+            "{table}"
+        );
+        assert!(
+            table.contains("refresh token: present (expired 1h 0m ago)\n"),
+            "{table}"
+        );
+        // An access token alone, as IDX_STOCKBIT_ACCESS_TOKEN seeds it.
+        let (table, _) = table_for(Some(NOW + 3600), None);
+        assert!(
+            table.contains("note         : no refresh token is stored"),
+            "{table}"
+        );
+        assert!(table.contains("refresh token: missing\n"), "{table}");
     }
 }

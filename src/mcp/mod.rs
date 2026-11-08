@@ -2098,7 +2098,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_status",
-        description = "Whether a Stockbit session is stored and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask). While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
+        description = "Whether the stored Stockbit session can work now, and when its access and refresh tokens expire (never the token values). Call this before idx_orderbook, idx_stockbit_actions, idx_stockbit_movements or the stockbit provider. logged_in is false when no session is stored or it cannot work (expired is true when its tokens have expired); renewable is false when idx cannot renew it, so a logged-in session stops working when its access token expires; reason says why and what to do. If logged_in is false, tell the user to run `idx stockbit login` in a terminal (or start idx_stockbit_login when they ask); when only renewable is false, suggest the same before the access token expires. While a page sign-in started by idx_stockbit_login runs, sign_in shows its state (waiting, signed_in, failed), url, ssh_forward, expires_in_secs and the latest warning."
     )]
     async fn stockbit_status(&self) -> std::result::Result<CallToolResult, McpError> {
         finish(
@@ -2115,7 +2115,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_stockbit_login",
-        description = "Starts a Stockbit sign-in for the machine running this server; use it only when the user asks (otherwise tell them to run `idx stockbit login` in a terminal). method 'page' returns at once with sign_in.url, a page on 127.0.0.1 (plus sign_in.ssh_forward, an ssh -L command, when this server is reached over SSH): give the user the URL; they sign in to stockbit.com in their own browser, ideally a private window, and send the session with the page's bookmark or by pasting the cookie there; then poll idx_stockbit_status until sign_in.state is signed_in or failed. method 'browser' opens Chrome, Edge or Brave on Stockbit's sign-in page on this machine and waits until the user signs in or the timeout; it suits a local stdio server the user sits at. Default 'auto' picks page over SSH, without a display or without a browser. Either way idx checks the session with Stockbit before storing it, and a session that already works is reported (sign_in.state already_signed_in) without opening anything unless force is true. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
+        description = "Starts a Stockbit sign-in for the machine running this server; use it only when the user asks (otherwise tell them to run `idx stockbit login` in a terminal). method 'page' returns at once with sign_in.url, a page on 127.0.0.1 (plus sign_in.ssh_forward, an ssh -L command, when this server is reached over SSH): give the user the URL; they sign in to stockbit.com in their own browser, ideally a private window, and send the session with the page's bookmark or by pasting the cookie there; then poll idx_stockbit_status until sign_in.state is signed_in or failed. method 'browser' opens Chrome, Edge or Brave on Stockbit's sign-in page on this machine and waits until the user signs in or the timeout; it suits a local stdio server the user sits at. Default 'auto' picks page over SSH, without a display or without a browser. Either way idx checks the session with Stockbit before storing it, and a session that already works and that idx can renew is reported (sign_in.state already_signed_in) without opening anything unless force is true. Never ask the user for their Stockbit password, and never ask them to paste the cookie or a token into this conversation."
     )]
     async fn stockbit_login(
         &self,
@@ -2169,11 +2169,8 @@ impl IdxServer {
                         json::to_pretty(status)?,
                     )]))
                 };
-                // A session that already works is reported, not replaced.
-                if !a.force.unwrap_or(false)
-                    && sb.store().status(now).logged_in
-                    && sb.verify().await.is_ok()
-                {
+                // A session that works and that idx can renew is reported, not replaced.
+                if !a.force.unwrap_or(false) && sb.already_signed_in().await {
                     let mut status = sb.store().status(now);
                     status.sign_in = Some(SignInProgress {
                         state: "already_signed_in".into(),

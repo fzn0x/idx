@@ -26,8 +26,8 @@ and idx takes only what that sign-in leaves behind: the `credentialStorage`
 cookie, which holds the session's two tokens. Whichever way it arrives, idx
 first stores it (`0600`), then checks it with one request to Stockbit; when
 Stockbit refuses it, the previous session is put back (or none, if there was
-none) and nothing changes. When the session already stored still works,
-`login` says so and stops; `--force` signs in anyway.
+none) and nothing changes. When the session already stored still works and
+idx can renew it, `login` says so and stops; `--force` signs in anyway.
 
 **In a browser idx opens** (the default on a desktop): idx launches a
 Chromium-family browser (Chrome, Edge, Brave; `--browser` or `IDX_BROWSER`
@@ -96,6 +96,25 @@ for you from then on. Check it any time:
 idx stockbit status        # logged in? when do the tokens expire?
 idx stockbit logout        # delete the stored session
 ```
+
+`status` reads the stored tokens' own expiry and sends nothing. The access
+token lasts about a day and the refresh token about a week. idx refreshes
+only when a request needs it (the access token has expired, expires within the
+hour, or Stockbit refused it), and each refresh replaces both tokens, so a
+request made while the access token is still good renews nothing. The refresh
+token therefore runs out about a week after the last refresh, which can be up
+to a day short of a week after the last use; using idx at least every six days
+keeps the session working. Once the refresh token has run out too, `status`
+says logged in `no`, with a note that the session expired and that
+`idx stockbit login` renews it (`"logged_in": false, "expired": true` in JSON).
+While only the access token can still be used (its refresh token expired, or
+none is stored), logged in is `yes` with a note that the session stops working
+when that token expires (`"renewable": false`). A session Stockbit ended early
+(signed out elsewhere, or refreshed by another tool) still reads as logged in
+until a request finds out: that request fails naming `idx stockbit login`, and
+the process that sent it (a running `idx mcp` server, say) then reports that
+Stockbit refused the refresh token; `idx stockbit status`, a process of its
+own, cannot tell.
 
 ## Use it
 
@@ -263,8 +282,10 @@ view.
 
 The MCP server exposes five Stockbit tools alongside the rest:
 
-- `idx_stockbit_status`: is a session stored, and when do the tokens expire
-  (never the token values). Call it before the others.
+- `idx_stockbit_status`: can the stored session work now (`logged_in`;
+  `expired`, `renewable` and `reason` say why not, or why idx cannot renew it),
+  and when do the tokens expire (never the token values). Call it before the
+  others.
 - `idx_orderbook`: the live depth ladder and foreign flow for one ticker.
 - `idx_stockbit_actions`: one stock's corporate actions (`symbol`), or the
   market calendar without one; `kind`, `from`, `to`, `days` as on the CLI.
@@ -276,10 +297,11 @@ The MCP server exposes five Stockbit tools alongside the rest:
   agent then polls `idx_stockbit_status`, whose `sign_in` shows `waiting`,
   `signed_in` or `failed`. `method: browser` opens a browser **on the machine
   running the server** and waits, which only suits a local stdio server the user
-  sits at. A session that already works is reported without opening anything
-  (`force` signs in anyway). The tool never asks for, and agents should never
-  ask the user for, a password, a cookie or a token in the chat. Prefer telling
-  the user to run `idx stockbit login` in a terminal themselves.
+  sits at. A session that already works, and that idx can renew, is reported
+  without opening anything (`force` signs in anyway). The tool never asks for,
+  and agents should never ask the user for, a password, a cookie or a token in
+  the chat. Prefer telling the user to run `idx stockbit login` in a terminal
+  themselves.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
 provider: `idx --provider stockbit mcp`. For Stockbit candles with the free

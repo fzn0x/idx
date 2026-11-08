@@ -117,12 +117,82 @@ pub fn normalize_token(raw: &str) -> String {
 /// the signature — we only ever carry these, never issue them. `None` when the
 /// token is not a JWT or has no numeric `exp`.
 pub fn token_expiry(token: &str) -> Option<i64> {
+    claims(token)?.get("exp").and_then(|e| e.as_i64())
+}
+
+/// A JWT's claims (its middle segment, base64url JSON), without verifying the
+/// signature. `None` when the token is not a JWT.
+fn claims(token: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("exp").and_then(|e| e.as_i64())
+    match serde_json::from_slice(&bytes).ok()? {
+        serde_json::Value::Object(map) => Some(map),
+        _ => None,
+    }
+}
+
+/// What a stored token can still do at `now`, judged by its own `exp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenState {
+    /// No token is stored.
+    Missing,
+    /// A JWT whose `exp` is still ahead, or one without an `exp`: nothing in
+    /// it says it has expired, so Stockbit's answer decides.
+    Live,
+    /// A JWT whose `exp` has passed: Stockbit refuses it.
+    Expired,
+    /// Not a JWT, so not a token Stockbit issued: it cannot work.
+    NotJwt,
+    /// A refresh token Stockbit refused in this process before its `exp`:
+    /// the session was ended, and idx cannot renew it.
+    Refused,
+}
+
+impl TokenState {
+    fn of(token: &str, now: i64) -> Self {
+        if token.trim().is_empty() {
+            TokenState::Missing
+        } else if claims(token).is_none() {
+            TokenState::NotJwt
+        } else if token_expiry(token).is_some_and(|exp| now >= exp) {
+            TokenState::Expired
+        } else {
+            TokenState::Live
+        }
+    }
+}
+
+/// [`Status::reason`] for these token states: `None` while the session works
+/// and idx can renew it.
+fn status_reason(access: TokenState, refresh: TokenState) -> Option<String> {
+    use TokenState::{Expired, Live, Missing, NotJwt, Refused};
+    let unrenewable = match refresh {
+        Live => return None,
+        Missing => "no refresh token is stored",
+        Expired => "the refresh token has expired",
+        NotJwt => "the refresh token is not a JWT",
+        Refused => "Stockbit refused the refresh token",
+    };
+    Some(match (access, refresh) {
+        (Missing, Missing) => {
+            "no Stockbit session is stored; run `idx stockbit login` to sign in".into()
+        }
+        (Live, _) => format!(
+            "{unrenewable}, so idx cannot renew this session: it stops working when the access \
+             token expires; run `idx stockbit login` to renew it"
+        ),
+        (_, Refused) => "Stockbit refused the refresh token, so this session has ended; run \
+                         `idx stockbit login` to sign in again"
+            .into(),
+        (Expired, _) | (_, Expired) => {
+            "the Stockbit session has expired; run `idx stockbit login` to renew it".into()
+        }
+        _ => "the stored Stockbit session holds no JWT, so Stockbit cannot accept it; run \
+              `idx stockbit login` to sign in again"
+            .into(),
+    })
 }
 
 /// A readable, non-secret summary of a token for `status` and logs: never the
@@ -151,8 +221,26 @@ impl TokenInfo {
 /// Session status without exposing any token (`idx schema stockbit-status`).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct Status {
-    /// `true` when a refresh token is present (whether or not it is still live).
+    /// `true` when the stored session can work now: its refresh token has not
+    /// expired (idx renews the access token with it), or its access token
+    /// has not. Each token's own `exp` decides; one without an `exp` counts as
+    /// unexpired, one that is not a JWT, or a refresh token Stockbit refused
+    /// in this process, as unusable.
     pub logged_in: bool,
+    /// `true` when idx can renew the access token: a refresh token is stored
+    /// and its `exp` has not passed (one without an `exp` counts as
+    /// unexpired; a token that is not a JWT, or that Stockbit refused in this
+    /// process, as unusable).
+    #[serde(default)]
+    pub renewable: bool,
+    /// `true` when a session is stored but cannot work because its tokens
+    /// have expired; `idx stockbit login` renews it.
+    #[serde(default)]
+    pub expired: bool,
+    /// Why the session cannot work, or why idx cannot renew it, with what to
+    /// do (`idx stockbit login`), in one sentence; `null` while it works and
+    /// idx can renew it.
+    pub reason: Option<String>,
     pub access: TokenInfo,
     pub refresh: TokenInfo,
     /// Absolute path of the session file.
@@ -372,13 +460,31 @@ impl SessionStore {
 
     pub fn status(&self, now: i64) -> Status {
         let s = self.load();
+        let access = TokenState::of(&s.access, now);
+        let refresh = match TokenState::of(&s.refresh, now) {
+            TokenState::Live if self.refused_here(&s.refresh) => TokenState::Refused,
+            state => state,
+        };
+        let renewable = refresh == TokenState::Live;
+        let logged_in = renewable || access == TokenState::Live;
         Status {
-            logged_in: !s.refresh.trim().is_empty(),
+            logged_in,
+            renewable,
+            expired: !logged_in
+                && refresh != TokenState::Refused
+                && (access == TokenState::Expired || refresh == TokenState::Expired),
+            reason: status_reason(access, refresh),
             access: TokenInfo::of(&s.access, now),
             refresh: TokenInfo::of(&s.refresh, now),
             session_file: self.path.display().to_string(),
             sign_in: None,
         }
+    }
+
+    /// `true` when Stockbit refused `refresh` in this process, so
+    /// [`refresh_checked`](Self::refresh_checked) will not present it again.
+    fn refused_here(&self, refresh: &str) -> bool {
+        *self.refused.lock().unwrap_or_else(|e| e.into_inner()) == Some(digest(refresh))
     }
 
     /// A valid access token, refreshing proactively when the current one is
@@ -793,6 +899,222 @@ mod tests {
         store.restore_raw(Some(br#"{"refresh":"x"}"#)).unwrap();
         assert_eq!(store.read_raw().unwrap(), br#"{"refresh":"x"}"#);
         store.restore_raw(None).unwrap();
+        assert!(!dir.path().join("session.json").exists());
+    }
+
+    /// 2026-11-08 00:00 UTC, the "now" of the status tests.
+    const NOW: i64 = 1_794_096_000;
+    const DAY: i64 = 86_400;
+
+    /// A synthetic JWT, signed by nobody, carrying `claims`.
+    fn jwt(claims: &str) -> String {
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        format!("{}.{}.sig", b64(r#"{"alg":"none"}"#), b64(claims))
+    }
+
+    /// A synthetic JWT whose `exp` is `exp`.
+    fn expiring(exp: i64) -> String {
+        jwt(&format!(r#"{{"exp":{exp}}}"#))
+    }
+
+    /// The status of a stored session at `now`.
+    fn status_of(access: &str, refresh: &str, now: i64) -> Status {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        store
+            .save(&Session {
+                access: access.into(),
+                refresh: refresh.into(),
+            })
+            .unwrap();
+        store.status(now)
+    }
+
+    #[test]
+    fn renewable_needs_a_refresh_token_whose_exp_has_not_passed() {
+        let live = expiring(NOW + DAY);
+        for (refresh, renewable) in [
+            (expiring(NOW + 6 * DAY), true),
+            (expiring(NOW - 13 * DAY), false),
+            // `exp` is the first second Stockbit refuses the token.
+            (expiring(NOW), false),
+            // Nothing in a JWT without `exp` says it has expired.
+            (jwt(r#"{"sub":"1"}"#), true),
+            ("not-a-jwt".to_string(), false),
+            (String::new(), false),
+        ] {
+            let got = status_of(&live, &refresh, NOW);
+            assert_eq!(got.renewable, renewable, "{refresh:?}");
+        }
+    }
+
+    /// What status says at [`NOW`] for a stored pair: `[logged_in,
+    /// renewable, expired]`, and a phrase its reason holds (`None`: no reason).
+    fn check(case: &str, access: &str, refresh: &str, want: [bool; 3], reason: Option<&str>) {
+        let got = status_of(access, refresh, NOW);
+        let flags = [got.logged_in, got.renewable, got.expired];
+        assert_eq!(flags, want, "{case}: [logged_in, renewable, expired]");
+        match (reason, got.reason.as_deref()) {
+            (None, None) => {}
+            (Some(want), Some(said)) => {
+                assert!(said.contains(want), "{case}: {said}");
+                assert!(said.contains("idx stockbit login"), "{case}: {said}");
+            }
+            (want, said) => panic!("{case}: reason {said:?}, wanted {want:?}"),
+        }
+    }
+
+    #[test]
+    fn logged_in_says_whether_the_session_can_work_now() {
+        // [logged_in, renewable, expired]: works and renews; works until the
+        // access token expires; expired; cannot work, nothing expired.
+        const WORKS: [bool; 3] = [true, true, false];
+        const ENDS: [bool; 3] = [true, false, false];
+        const EXPIRED: [bool; 3] = [false, false, true];
+        const UNUSABLE: [bool; 3] = [false, false, false];
+        let (a, r) = (expiring(NOW + 5 * 3600), expiring(NOW + 6 * DAY));
+        // This machine's session on 2026-11-08: the access token expired 19
+        // days before, the refresh token 13.
+        let (a_old, r_old) = (expiring(NOW - 19 * DAY), expiring(NOW - 13 * DAY));
+        let no_exp = jwt(r#"{"sub":"1"}"#);
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        let not_json = format!("{}.{}.sig", b64(r#"{"alg":"none"}"#), b64("exp=1"));
+        let gone = Some("the Stockbit session has expired");
+
+        check("both valid", &a, &r, WORKS, None);
+        check("access expired", &a_old, &r, WORKS, None);
+        check("no access token", "", &r, WORKS, None);
+        let why = Some("the refresh token has expired, so idx cannot renew this session");
+        check("refresh expired", &a, &r_old, ENDS, why);
+        let why = Some("no refresh token is stored, so idx cannot renew this session");
+        check("access only", &a, "", ENDS, why);
+        check("both expired", &a_old, &r_old, EXPIRED, gone);
+        check("access expired, no refresh", &a_old, "", EXPIRED, gone);
+        check("refresh expired, no access", "", &r_old, EXPIRED, gone);
+        // Nothing in a JWT without `exp` says it has expired.
+        check("no exp claim", &a_old, &no_exp, WORKS, None);
+        check("no exp claim, access only", &no_exp, "", ENDS, why);
+        // A token that is not a JWT is not one Stockbit issued.
+        check("malformed access", "a.b.c", &r, WORKS, None);
+        let why = Some("the refresh token is not a JWT, so idx cannot renew this session");
+        check("malformed refresh", &a, "not-a-jwt", ENDS, why);
+        let no_jwt = Some("holds no JWT");
+        check("malformed pair", &not_json, "d.e.f", UNUSABLE, no_jwt);
+        check("malformed refresh, old access", &a_old, "x", EXPIRED, gone);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_token_stockbit_refused_here_cannot_renew_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = std::sync::Arc::new(crate::http::FixtureBackend::new().route(
+            "login/refresh",
+            401,
+            r#"{"error_type":"UNAUTHORIZED","message":"Unauthorized"}"#,
+        ));
+        let fetcher = fetcher_with(be.clone(), dir.path());
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        // Stockbit ended the session (signed out elsewhere, or another tool
+        // renewed it) while its refresh token had six days left to run.
+        let ended = Session {
+            access: expiring(NOW - 3600),
+            refresh: expiring(NOW + 6 * DAY),
+        };
+        store.save(&ended).unwrap();
+        assert!(
+            store.status(NOW).renewable,
+            "nothing says so before a request"
+        );
+        assert!(matches!(
+            store.rotate(&fetcher, &ended, NOW).await,
+            Err(RefreshError::Rejected)
+        ));
+        let got = store.status(NOW);
+        assert_eq!([got.logged_in, got.renewable, got.expired], [false; 3]);
+        assert_eq!(
+            got.reason.as_deref(),
+            Some(
+                "Stockbit refused the refresh token, so this session has ended; run \
+                 `idx stockbit login` to sign in again"
+            )
+        );
+        // An access token still good works until its exp, and no longer.
+        let live = Session {
+            access: expiring(NOW + 5 * 3600),
+            ..ended.clone()
+        };
+        store.save(&live).unwrap();
+        let got = store.status(NOW);
+        assert_eq!(
+            [got.logged_in, got.renewable, got.expired],
+            [true, false, false]
+        );
+        let why = got.reason.unwrap();
+        let said = "Stockbit refused the refresh token, so idx cannot renew this session";
+        assert!(why.starts_with(said), "{why}");
+        // Past its own exp the token reads as expired, refused or not.
+        assert!(store.status(NOW + 7 * DAY).expired);
+        // A new sign-in stores a refresh token Stockbit has not refused.
+        store
+            .save(&Session {
+                access: expiring(NOW + DAY),
+                refresh: expiring(NOW + 7 * DAY),
+            })
+            .unwrap();
+        let got = store.status(NOW);
+        assert!(got.renewable && got.reason.is_none());
+        assert_eq!(be.calls_matching("login/refresh"), 1);
+    }
+
+    #[test]
+    fn an_expired_session_says_so_and_shows_no_token() {
+        let (access, refresh) = (expiring(NOW - 19 * DAY), expiring(NOW - 13 * DAY));
+        let got = status_of(&access, &refresh, NOW);
+        assert!(!got.logged_in && got.expired && !got.renewable);
+        assert_eq!(
+            got.reason.as_deref(),
+            Some("the Stockbit session has expired; run `idx stockbit login` to renew it")
+        );
+        assert_eq!(got.access.expires_at, Some(NOW - 19 * DAY));
+        assert_eq!(got.access.expires_in_secs, Some(-19 * DAY));
+        assert_eq!(got.refresh.expires_in_secs, Some(-13 * DAY));
+        let json = serde_json::to_string(&got).unwrap();
+        assert!(json.contains(r#""logged_in":false"#), "{json}");
+        assert!(json.contains(r#""expired":true"#), "{json}");
+        assert!(
+            !json.contains(&access) && !json.contains(&refresh),
+            "{json}"
+        );
+        // It stopped working when the refresh token expired, 13 days before.
+        let got = status_of(&access, &refresh, NOW - 13 * DAY - 1);
+        assert!(got.logged_in && got.renewable && !got.expired && got.reason.is_none());
+        assert!(status_of(&access, &refresh, NOW - 13 * DAY).expired);
+    }
+
+    #[test]
+    fn the_status_schema_gains_only_optional_fields() {
+        let schema = crate::output::json::schema_for("stockbit-status").unwrap();
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["access", "logged_in", "refresh", "session_file"])
+        );
+        assert_eq!(schema["properties"]["logged_in"]["type"], "boolean");
+        for field in ["renewable", "expired", "reason"] {
+            assert!(schema["properties"][field].is_object(), "{field}");
+        }
+    }
+
+    #[test]
+    fn no_session_at_all_is_not_logged_in_and_not_expired() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        let got = store.status(NOW);
+        assert!(!got.logged_in && !got.renewable && !got.expired);
+        assert!(!got.access.present && !got.refresh.present);
+        assert_eq!(got.refresh.expires_at, None);
+        assert_eq!(
+            got.reason.as_deref(),
+            Some("no Stockbit session is stored; run `idx stockbit login` to sign in")
+        );
         assert!(!dir.path().join("session.json").exists());
     }
 
