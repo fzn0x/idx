@@ -610,22 +610,28 @@ fn undated_at(t: DateTime<Utc>) -> bool {
 /// judged by when it was read, not by when it is served (a copy can be
 /// served offline or after a failed fetch, days later); a page this call
 /// fetches counts as read when it came, `now` moved on by the wall time the
-/// call has taken since. A pair either page of which was read on a trading
-/// day between 08:58 and 19:00 WIB ([`UNDATED`]) cannot be dated and
-/// fails; when `now` is in those hours IPOT is not asked at all unless a
-/// pair read outside them is cached, which can answer (fresh, or in place
-/// of a read that fails). So does a ranking with trades dated a session that had not
-/// opened then (before 08:58), or one without trades dated a session that
-/// had ended, both of which mean the pages rolled over at different times,
-/// and a date that is not a trading day. Outside those hours both pages are
-/// taken to have rolled over to the latest session that had ended when they
-/// were read (how long they take has not been measured), so a ranking with
-/// trades dated an older session fails too: its date page may lag a ranking
-/// that has rolled over. Only the very pair accepted before for that session
-/// passes. A ranking with trades that is accepted is remembered with its
-/// date ([`topbroker::digest`]), and the same ranking dated another session
+/// call has taken since.
+///
+/// A pair either page of which was read on a trading day between 08:58 and
+/// 19:00 WIB ([`UNDATED`]) cannot be dated and fails. So does a ranking with
+/// trades dated a session that had not opened then (before 08:58), or one
+/// without trades dated a session that had ended, both of which mean the
+/// pages rolled over at different times, and a date that is not a trading
+/// day. Outside those hours both pages are taken to have rolled over to the
+/// latest session that had ended when they were read (how long they take
+/// has not been measured), so a ranking with trades dated an older session
+/// fails too: its date page may lag a ranking that has rolled over. Only
+/// the very pair accepted before for that session passes. A ranking with
+/// trades that is accepted is remembered with its date
+/// ([`topbroker::digest`]), and the same ranking dated another session
 /// later fails as well: the date page has rolled over and the ranking has
-/// not. A ranking refused is never remembered.
+/// not. A ranking refused is never remembered. A refusal of a copy served
+/// in place of a failed fetch is that failure (`network`), and of one
+/// served offline an `offline_miss` ([`unusable`]).
+///
+/// When `now` is in those hours IPOT is not asked at all unless a pair read
+/// outside them is cached, which can answer (fresh, or in place of a read
+/// that fails).
 pub async fn top_brokers(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,

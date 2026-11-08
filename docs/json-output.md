@@ -570,15 +570,26 @@ or after today, is a usage error; a later one up to today, or a day without
 a session, is `not_found`; and under `auto` idx.co.id's error stands. It
 abbreviates figures of a million and more to two decimals (`2.79 T`, so
 `rounded: true`) and publishes `net_value` with its own two decimals, so it
-can differ from `buy_value - sell_value`. A ranking read on a trading day
-from 08:58 to 19:00 WIB cannot be dated (when IPOT's two pages roll over to
-a new session has not been measured), so in those hours the source answers
-a `provider` error (a copy read then is `offline_miss` when served
-offline, and `network`, naming the failure, when served because IPOT could
-not be read) and, under `auto`, idx.co.id's error stands. Members without trades
-are left out, as idx.co.id leaves them out; a broker IPOT lists apart under
-another member's code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in
-that member, as idx.co.id counts it, with a warning.
+can differ from `buy_value - sell_value`. Members without trades are left
+out, as idx.co.id leaves them out; a broker IPOT lists apart under another
+member's code (`JB`, `[CC] BJB Sekuritas Jawa Barat`) is counted in that
+member, as idx.co.id counts it, with a warning.
+
+IPOT's ranking page carries no date: the session comes from a second page,
+the `Today` row of BBCA's statistics, read with the ranking (within a
+minute). When the two pages roll over to a new session has not been
+measured, so a ranking read on a trading day from 08:58 to 19:00 WIB cannot
+be dated: in those hours the source answers a `provider` error (a copy read
+then is `offline_miss` when served offline, and `network`, naming the
+failure, when served because IPOT could not be read), under `auto`
+idx.co.id's error stands, and IPOT is not asked at all unless a copy read
+outside those hours is cached. Until the rollover is measured, both pages
+are assumed to have rolled over by 19:00 WIB. A date page that names an
+older session than the latest that had ended when the pages were read is
+then refused, unless the pair is the very one accepted for that session
+before. A ranking that has not rolled over by 19:00 while its date page has
+is caught only when this cache remembers the previous session's ranking,
+from an earlier IPOT read: the same figures under a new date are refused.
 
 ## `idx.indices.v1` (`market indices`)
 
