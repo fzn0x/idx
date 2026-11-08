@@ -1202,6 +1202,7 @@ pub async fn market_brokers_from(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
     use crate::model::BrokerSource;
+    let entered = chrono::Utc::now();
     let today = now.with_timezone(&crate::model::wib()).date_naive();
     let ended = holidays::latest_session(now);
     match source {
@@ -1217,7 +1218,10 @@ pub async fn market_brokers_from(
                 ) => e,
                 answered => return answered,
             };
-            let s = match ipot::top_brokers(fetcher, now).await {
+            // IPOT is asked now, after idx.co.id's requests (and retries):
+            // its pages are judged by this clock, not the call's.
+            let asked = now + (chrono::Utc::now() - entered);
+            let s = match ipot::top_brokers(fetcher, asked).await {
                 Ok(s) => s,
                 Err(e) => return Err(with_note(refused, &format!("IPOT could not stand in: {e}"))),
             };
@@ -2232,6 +2236,63 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert_eq!(be.calls_matching("indopremier"), asked);
+    }
+
+    /// `inner`, answering a URL that contains `slow` only after `pause` of
+    /// wall time.
+    struct Slow {
+        inner: FixtureBackend,
+        slow: &'static str,
+        pause: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::http::Backend for Slow {
+        async fn get(
+            &self,
+            url: &str,
+            headers: &[(String, String)],
+        ) -> Result<crate::http::RawResponse> {
+            if url.contains(self.slow) {
+                tokio::time::sleep(self.pause).await;
+            }
+            self.inner.get(url, headers).await
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_judges_ipot_by_when_it_asks_after_idx_co_id() {
+        use crate::model::BrokerSource;
+        // idx.co.id takes 400 ms to refuse, from 300 ms before Monday's
+        // first trades at 08:58: IPOT's pages come in the session's hours.
+        let refusing = FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            CHALLENGE,
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        );
+        let slow = Slow {
+            inner: ipot_ranking(refusing, TOP_BROKERS),
+            slow: "GetBrokerSummary",
+            pause: std::time::Duration::from_millis(400),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let f = Arc::new(Fetcher::new(
+            Arc::new(slow),
+            Cache::new(dir.path()),
+            CacheMode::Normal,
+        ));
+        let call = wib_at("2026-11-09T08:57:59") + chrono::Duration::milliseconds(700);
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, call)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string().contains(
+                "; IPOT could not stand in: ipot: the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"
+            ),
+            "{err}"
+        );
     }
 
     #[tokio::test]
