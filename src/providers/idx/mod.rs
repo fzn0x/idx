@@ -102,18 +102,27 @@ fn refused(r: &RawResponse) -> Option<Refusal> {
         .or((r.status == 403).then_some(Refusal::Block))
 }
 
-/// What a refused try met, for the error and for a cached copy's warning:
+/// What the tries met, for the error and for a cached copy's warning. Only
+/// a challenge is asked again, so every try before the last met one:
 /// `idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated:
-/// challenge) on 4 tries over 30 s`.
+/// challenge) on 4 tries over 30 s`, or, when the last met a block page,
+/// `idx.co.id answered with a Cloudflare block page (HTTP 403) on try 2,
+/// after a challenge 5 s earlier`.
 fn refusal_text(kind: Refusal, r: &RawResponse, tries: usize, waited: Duration) -> String {
     let what = cloudflare::describe(kind, r.status, &r.headers);
-    if tries == 1 {
-        format!("idx.co.id answered with {what}")
-    } else {
-        format!(
-            "idx.co.id answered with {what} on {tries} tries over {} s",
-            waited.as_secs()
-        )
+    let secs = waited.as_secs();
+    match (kind, tries) {
+        (_, 1) => format!("idx.co.id answered with {what}"),
+        (Refusal::Challenge, n) => {
+            format!("idx.co.id answered with {what} on {n} tries over {secs} s")
+        }
+        (Refusal::Block, 2) => {
+            format!("idx.co.id answered with {what} on try 2, after a challenge {secs} s earlier")
+        }
+        (Refusal::Block, n) => format!(
+            "idx.co.id answered with {what} on try {n}, after challenges on the {} tries before it, the first {secs} s earlier",
+            n - 1
+        ),
     }
 }
 
@@ -560,6 +569,31 @@ mod tests {
         assert!(
             msg.contains(" over 0 s, and --no-cache skipped the cache (--offline serves a cached copy if there is one). idx.co.id's bot protection"),
             "{msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_block_page_after_challenges_says_what_each_try_met() {
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_times("date=20261016", 1, 403, CHALLENGE, FLAGGED)
+                .route("date=20261016", 403, BLOCKED)
+                .route_times("date=20261015", 3, 403, CHALLENGE, FLAGGED)
+                .route("date=20261015", 403, BLOCKED),
+        );
+        let err = broker_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().starts_with("idx: idx.co.id answered with a Cloudflare block page (HTTP 403) on try 2, after a challenge 0 s earlier, and nothing is cached for it. "),
+            "{err}"
+        );
+        let err = broker_summary(&f, d(2026, 10, 15), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().starts_with("idx: idx.co.id answered with a Cloudflare block page (HTTP 403) on try 4, after challenges on the 3 tries before it, the first 0 s earlier, and nothing is cached for it. "),
+            "{err}"
         );
     }
 
