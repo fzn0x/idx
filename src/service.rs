@@ -2362,17 +2362,43 @@ mod tests {
         assert_eq!(rows[3].behind_session, Some(false), "00:30 WIB on the 6th");
     }
 
+    /// A quote for each asked symbol it knows and none for the rest, like a
+    /// source without data on some tickers.
+    struct Knows(&'static [&'static str]);
+
+    #[async_trait]
+    impl Provider for Knows {
+        fn name(&self) -> &'static str {
+            "knows"
+        }
+        async fn quotes(&self, symbols: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let rows = symbols
+                .iter()
+                .filter(|s| self.0.contains(&s.as_str()))
+                .map(|s| Quote::empty(s.clone(), "knows"))
+                .collect();
+            Ok(Sourced::fresh(rows, "knows"))
+        }
+        async fn history(&self, _: &Symbol, _: Period, _: Interval) -> Result<Sourced<History>> {
+            unimplemented!()
+        }
+    }
+
     #[tokio::test]
     async fn skipped_tickers_agree_with_their_count() {
-        // Stamped answers four quotes whatever is asked.
+        let p = Knows(&["WIKA", "BBCA", "BBRI", "TLKM"]);
+        // ASII has no quote.
         let five = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII"]);
-        let got = quotes_all(&Stamped, &five).await.unwrap();
+        let got = quotes_all(&p, &five).await.unwrap();
+        assert_eq!(got.data.len(), 4);
         assert_eq!(
             got.warnings,
             ["1 of 5 tickers returned no quote and was skipped"]
         );
+        // ASII and UNVR have none.
         let six = syms(&["WIKA", "BBCA", "BBRI", "TLKM", "ASII", "UNVR"]);
-        let got = quotes_all(&Stamped, &six).await.unwrap();
+        let got = quotes_all(&p, &six).await.unwrap();
+        assert_eq!(got.data.len(), 4);
         assert_eq!(
             got.warnings,
             ["2 of 6 tickers returned no quote and were skipped"]
