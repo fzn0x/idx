@@ -47,13 +47,14 @@ test("only the idx.co.id, KSEI composition, local-database, Stockbit and uncheck
 });
 
 test("a CLI-and-MCP-only tool says what it gives and why in the page's language", () => {
-  // The Indonesian words are the Indonesian landing page's, row for row.
-  const html = read("web", "public", "index.html");
+  // The words are each landing page's, row for row: the Indonesian page's and the English one's.
   const unescape = (s) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-  const cells = new Map([...html.matchAll(/<tr><td>(idx_[a-z_]+)<\/td><td><code>[^<]+<\/code><\/td><td>.*?<\/td><td class="muted">(.*?)<\/td><\/tr>/g)].map((m) => [m[1], unescape(m[2])]));
+  const cellsOf = (...page) => new Map([...read("web", "public", ...page).matchAll(/<tr><td>(idx_[a-z_]+)<\/td><td><code>[^<]+<\/code><\/td><td>.*?<\/td><td class="muted">(.*?)<\/td><\/tr>/g)].map((m) => [m[1], unescape(m[2])]));
+  const cells = cellsOf("index.html"), cellsEn = cellsOf("en", "index.html");
   for (const t of TOOLS.filter((x) => !x.web)) {
     assert.equal(whatOf(t, "en"), t.what, t.tool);
     assert.equal(whatOf(t, "id"), cells.get(t.tool), t.tool);
+    assert.equal(whatOf(t, "en"), cellsEn.get(t.tool), `${t.tool} on the English page`);
     const en = cliOnlyReason(t, "en"), id = cliOnlyReason(t, "id");
     // Outside a browser the page's language is English.
     assert.equal(cliOnlyReason(t), en, t.tool);
