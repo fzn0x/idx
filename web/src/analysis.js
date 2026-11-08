@@ -245,6 +245,9 @@ export function verdict(f) {
   const label = inputs < 3 ? "insufficient_data" : score >= 3 ? "undervalued" : score <= -3 ? "overvalued" : "fair";
   return { label, score, reasons, inputs_available: inputs };
 }
+// The words the CLI prints for each verdict label (VerdictLabel::as_str);
+// the JSON keeps the label itself.
+export const VERDICT_WORDS = { undervalued: "undervalued", fair: "fairly valued", overvalued: "overvalued", insufficient_data: "insufficient data" };
 
 // ---- growth, valuation and risk lenses ---------------------------------------
 // Ports of src/analysis/lens.rs: same rule ids, points, reasons, labels and
