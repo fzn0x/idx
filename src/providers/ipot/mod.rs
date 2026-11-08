@@ -67,6 +67,7 @@ use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, ForeignValueDay, 
 use super::Sourced;
 
 pub mod actions;
+pub mod marketstat;
 pub mod parse;
 pub mod topbroker;
 

@@ -42,6 +42,15 @@ the copies read at 07:02 and 07:06 that morning.
 | topbroker_20261106.html | `ma-topbroker.php` | 2026-11-08 07:51 | 91 brokers for the session of 2026-11-06: CP first (`T.Val` 2.79 T), CC net -264.04 B, PS and ZZ without trades last. JB is listed as `[CC] BJB Sekuritas Jawa Barat` and idx.co.id counts it in CC (trades 210,936 + 276 = its 211,212); folded so, the 88 brokers with trades are idx.co.id's members in `GetBrokerSummary` for 2026-11-06, each with the same trades, and values and volumes agree within about one unit of IPOT's second decimal, not half a unit (IT's value 1,485,442,500 shows as 1.48 B; 9 of the 176 figures are off by 0.0053 to 0.0060 of the unit shown, B or T, where rounding would allow 0.005). A commented-out "Lorem Ipsum" template follows the rows |
 | statistic_bbca_20261106.html | `statistic.php?code=BBCA` | 2026-11-08 07:51 | `Today` row: high 5,200 and low 4,990, both on 2026-11-06; a commented-out copy of the table from 2015 follows |
 
+The market's totals (`market foreign --source ipot`): `ma-marketstatistic.php`
+takes no parameters and sums up IPOT's latest session by board and by
+foreign investors' side; like the ranking it has no date, and the same
+`statistic.php?code=BBCA` dates it.
+
+| file | request | recorded | notes |
+| --- | --- | --- | --- |
+| marketstatistic_20261106.html | `ma-marketstatistic.php` | 2026-11-08 15:00 | the session of 2026-11-06, byte-identical to the copy read at 07:07 that morning: `TOTAL` 10.32 T, `F. Buy` 3.76 T, `F. Sell` 3.43 T, `F. NET` 329.33 B. Its regular 7.83 T and negotiated 2.49 T match idx.co.id's `GetStockSummary` for 2026-11-06 (7,825.6 B regular, 2,493.0 B non-regular); its foreign lots (121.98 M bought, 165.65 M sold) are above idx.co.id's regular-board foreign shares (96.78 M and 143.90 M lots), so the page does not say which boards they cover. The index figures above the tables are a script's placeholders (`00,000`), and a `Crossing` row is commented out |
+
 One investor side (`fd=F` foreign, `fd=D` domestic) and one board: the
 footer's `T. Val`, `T.Lot` and `Avg` are that side's buying, and `F. NVal`
 is the all-board foreign net on every page.

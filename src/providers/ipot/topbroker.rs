@@ -95,7 +95,7 @@ pub struct Folded {
 }
 
 /// `html` without its `<!-- ... -->` comments; an unclosed one runs to the end.
-fn uncommented(html: &str) -> String {
+pub(super) fn uncommented(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
     while let Some(start) = rest.find("<!--") {
@@ -110,7 +110,7 @@ fn uncommented(html: &str) -> String {
 }
 
 /// The headings in the page's `<thead>`, each with its `colspan`.
-fn headings(html: &str) -> Vec<(String, usize)> {
+pub(super) fn headings(html: &str) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     let Some(at) = html.find("<thead") else {
         return out;
