@@ -272,7 +272,7 @@ const R = {
     if (f.verdict) {
       const vv = f.verdict;
       const cls = vv.label === "undervalued" ? "up" : vv.label === "overvalued" ? "dn" : "";
-      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: vv.label.replace("_", " ") }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} inputs · heuristic from public ratios, not investment advice`]));
+      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: vv.label.replace("_", " ") }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} input${vv.inputs_available === 1 ? "" : "s"} · heuristic from public ratios, not investment advice`]));
       frag.append(el("ul", { class: "reasons" }, vv.reasons.map((r) => el("li", { text: r }))));
     }
     frag.append(el("p", { class: "warn", text: `Sources: ${f.sources.join(", ")}` }));

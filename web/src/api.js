@@ -1423,11 +1423,12 @@ export async function ownershipGraph(env, rootRaw, depth = 2, minPct = 0, maxNod
 
 // The brief's "Valuation verdict" key point, null without a verdict. A P/B
 // over statements in another currency is not a ratio, so it is left out (as
-// service::valuation_key_point does in the CLI).
+// service::valuation_key_point does in the CLI). The noun follows the count:
+// "1 input", "8 inputs".
 export function valuationKeyPoint(f) {
   if (!f?.verdict) return null;
   const v = f.verdict, pe = f.valuation.pe_trailing, pb = an.mixedCurrency(f) ? null : f.valuation.price_to_book;
-  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} inputs)${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
+  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} input${v.inputs_available === 1 ? "" : "s"})${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
 }
 
 export async function brief(env, symbolRaw) {
