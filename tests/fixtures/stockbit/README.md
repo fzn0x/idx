@@ -63,7 +63,7 @@ HD local where Stockbit says `Asing`.
 
 | file | request | notes |
 | --- | --- | --- |
-| marketdetectors_bbca_20261106.json | BBCA, 2026-11-06 | 59 buyers and 67 sellers, `total_buyer` 59, `total_seller` 67; both sides sum to 1,035,652,066,452 IDR and 2,027,579.8 lots. The same bytes came back with `limit=1000` and with no `limit` at all |
+| marketdetectors_bbca_20261106.json | BBCA, 2026-11-06 | 59 buyers and 67 sellers, `total_buyer` 59, `total_seller` 67; both sides sum to 1,035,652,066,452 IDR and 2,027,579.79 lots. The same bytes came back with `limit=1000` and with no `limit` at all |
 | marketdetectors_bbca_20261106_net.json | same, `transaction_type=TRANSACTION_TYPE_NET` | net mode: each broker once, on the side where it was net (16 buyers, 55 sellers); `blot` / `bval` are the net (negative on the sell side), `blotv` / `bvalv` and the average stay that side's gross (KZ net 356,958 lots of 687,161 bought). Not what idx asks for |
 | marketdetectors_bbca_20261102_20261106.json | BBCA, 2026-11-02 to 2026-11-06 | one aggregate over the five sessions (81 buyers, 78 sellers, 5,999,367,547,273 IDR; IPOT: 6.0 T); `netbs_date` is 20261102 on every row |
 | marketdetectors_bbca_20251106_20261106.json | BBCA, 2025-11-06 to 2026-11-06, `limit=1000` | 92 buyers and 92 sellers, all listed: a large `limit` returns every broker |
