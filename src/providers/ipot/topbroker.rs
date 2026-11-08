@@ -4,7 +4,8 @@
 //! `ma-topbroker.php` (no parameters) is a 9-column table of every broker
 //! in IPOT's latest session, ranked by value: `#`, code, name, `T.Val`
 //! (value bought plus value sold), `N.Val` (bought minus sold), `B.Val`,
-//! `S.Val`, `T.Vol` (shares bought plus sold) and `T.Freq` (trades).
+//! `S.Val`, `T.Vol` (shares bought plus sold) and `T.Freq` (trades). Cells
+//! are read by position, so a page with other headings is refused.
 //! Figures of a million and more are abbreviated to two decimals (`2.79 T`,
 //! `-264.04 B`, `56.37 M`), smaller ones are exact (`278,800`, `43,020`; no
 //! broker reached a million trades on 2026-11-06). `N.Val` carries its own
@@ -25,8 +26,21 @@ use crate::error::{IdxError, Result};
 use crate::model::BrokerKind;
 
 use super::actions::decode;
-use super::parse::{cells, kind, number};
+use super::parse::{cells, kind, number, strip_tags};
 use super::NAME;
+
+/// The head of the ranking's table, label and span of each heading: the
+/// rows are read by position, so a page headed otherwise is refused.
+const COLUMNS: [(&str, usize); 8] = [
+    ("#", 1),
+    ("Company", 2),
+    ("T.Val", 1),
+    ("N.Val", 1),
+    ("B.Val", 1),
+    ("S.Val", 1),
+    ("T.Vol", 1),
+    ("T.Freq", 1),
+];
 
 /// One broker's row as the page shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,8 +109,52 @@ fn uncommented(html: &str) -> String {
     out
 }
 
+/// The headings in the page's `<thead>`, each with its `colspan`.
+fn headings(html: &str) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    let Some(at) = html.find("<thead") else {
+        return out;
+    };
+    let head = &html[at + 6..];
+    let mut rest = &head[..head.find("</thead>").unwrap_or(head.len())];
+    while let Some(i) = rest.find("<th") {
+        let after = &rest[i + 3..];
+        let (Some(open_end), Some(close)) = (after.find('>'), after.find("</th>")) else {
+            break;
+        };
+        let attrs = &after[..open_end];
+        if !attrs.is_empty() && !attrs.starts_with(char::is_whitespace) || close < open_end {
+            rest = after;
+            continue;
+        }
+        let span = attrs
+            .find("colspan=\"")
+            .and_then(|j| attrs[j + 9..].split('"').next()?.parse().ok())
+            .unwrap_or(1);
+        out.push((strip_tags(&after[open_end + 1..close]), span));
+        rest = &after[close + 5..];
+    }
+    out
+}
+
+/// `#, Company (2 wide), T.Val` for messages.
+fn show(columns: &[(String, usize)]) -> String {
+    if columns.is_empty() {
+        return "none".into();
+    }
+    columns
+        .iter()
+        .map(|(label, span)| match span {
+            1 => label.clone(),
+            n => format!("{label} ({n} wide)"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The ranking on a `ma-topbroker.php` page, for the session `date`: the
-/// page does not say which (see [`session_date`]).
+/// page does not say which (see [`session_date`]). A page whose head is not
+/// [`COLUMNS`] is refused before any row is read.
 pub fn ranking(html: &str, date: NaiveDate) -> Result<Ranking> {
     let html = uncommented(html);
     let (Some(start), Some(end)) = (html.find("<tbody>"), html.find("</tbody>")) else {
@@ -105,6 +163,18 @@ pub fn ranking(html: &str, date: NaiveDate) -> Result<Ranking> {
             "unexpected broker ranking page (no table)",
         ));
     };
+    let head = headings(&html);
+    let want: Vec<(String, usize)> = COLUMNS.iter().map(|(l, s)| (l.to_string(), *s)).collect();
+    if head != want {
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "unexpected broker ranking layout: the columns read {}, not {}",
+                show(&head),
+                show(&want)
+            ),
+        ));
+    }
     let mut rounded = false;
     let mut brokers: Vec<TopBroker> = Vec::new();
     for row in html[start..end].split("</tr>") {
@@ -287,13 +357,53 @@ mod tests {
             .all(|b| !b.name.as_deref().unwrap_or("").contains("Lorem")));
         // The template alone, as the page would show it without rows.
         let start = TOP.find("<!--tr>").unwrap();
+        let head = &TOP[TOP.find("<thead>").unwrap()..TOP.find("</thead>").unwrap() + 8];
         let empty = format!(
-            "<table><tbody>{}</tbody></table>",
+            "<table>{head}<tbody>{}</tbody></table>",
             &TOP[start..TOP.find("</tbody>").unwrap()]
         );
         assert!(ranking(&empty, d(2026, 11, 6)).unwrap().brokers.is_empty());
         let err = ranking("<html>maintenance</html>", d(2026, 11, 6)).unwrap_err();
         assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn a_page_whose_columns_moved_is_refused() {
+        let swapped = TOP
+            .replacen(">B.Val<", ">\u{0}<", 1)
+            .replacen(">S.Val<", ">B.Val<", 1)
+            .replacen(">\u{0}<", ">S.Val<", 1);
+        let err = ranking(&swapped, d(2026, 11, 6)).unwrap_err().to_string();
+        assert!(
+            err.ends_with(
+                "the columns read #, Company (2 wide), T.Val, N.Val, S.Val, B.Val, T.Vol, T.Freq, not #, Company (2 wide), T.Val, N.Val, B.Val, S.Val, T.Vol, T.Freq"
+            ),
+            "{err}"
+        );
+        for (page, why) in [
+            (swapped, "bought and sold swapped"),
+            (
+                TOP.replacen(">S.Val</th>", ">Avg</th><th>S.Val</th>", 1),
+                "a column added",
+            ),
+            (
+                TOP.replacen("<th colspan=\"2\" align=\"left\">", "<th>", 1),
+                "code and name in one column",
+            ),
+            (
+                TOP.replacen("<thead>", "", 1).replacen("</thead>", "", 1),
+                "no head",
+            ),
+        ] {
+            let Err(err) = ranking(&page, d(2026, 11, 6)) else {
+                panic!("{why}: read as a ranking");
+            };
+            assert_eq!(err.exit_code(), 3, "{why}");
+            assert!(
+                err.to_string().contains("unexpected broker ranking layout"),
+                "{why}: {err}"
+            );
+        }
     }
 
     #[test]

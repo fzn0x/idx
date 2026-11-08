@@ -2117,7 +2117,8 @@ mod tests {
                     )
                 })
                 .collect();
-            format!("<table><tbody>{body}</tbody></table>")
+            let head = "<thead><tr><th>#</th><th colspan=\"2\">Company</th><th>T.Val</th><th>N.Val</th><th>B.Val</th><th>S.Val</th><th>T.Vol</th><th>T.Freq</th></tr></thead>";
+            format!("<table>{head}<tbody>{body}</tbody></table>")
         };
         let ranking = |html: String| async move {
             let (f, _be, _d) = fetcher(ipot_ranking(FixtureBackend::new(), &html));

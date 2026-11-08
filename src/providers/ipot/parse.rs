@@ -113,7 +113,7 @@ pub(super) struct Cell {
     pub(super) text: String,
 }
 
-fn strip_tags(s: &str) -> String {
+pub(super) fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {
