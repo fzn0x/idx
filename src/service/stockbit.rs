@@ -189,11 +189,14 @@ pub async fn stockbit_actions(
     let before = s.data.len();
     s.data
         .retain(|e| e.symbol.as_str().starts_with(symbol.as_str()));
-    if s.data.len() < before {
-        s.warnings.push(format!(
-            "left out {} rows Stockbit returned for other codes",
-            before - s.data.len()
-        ));
+    match before - s.data.len() {
+        0 => {}
+        1 => s
+            .warnings
+            .push("left out 1 row Stockbit returned for another code".into()),
+        n => s.warnings.push(format!(
+            "left out {n} rows Stockbit returned for other codes"
+        )),
     }
     let total = s.data.len();
     s.data
@@ -433,6 +436,34 @@ mod tests {
         // Second time round both kinds come from the cache: no request.
         assert_eq!(be.calls_matching("corpaction/"), 2);
         assert!(got.cached);
+    }
+
+    #[tokio::test]
+    async fn rows_for_other_codes_are_left_out_and_counted() {
+        // BBCA's 37 recorded dividends, the first `k` of them under another code.
+        let body = |k| {
+            fx("corpaction_dividend_bbca").replacen(
+                r#""company_symbol":"BBCA""#,
+                r#""company_symbol":"BBRI""#,
+                k,
+            )
+        };
+        for (k, warning) in [
+            (1, "left out 1 row Stockbit returned for another code"),
+            (2, "left out 2 rows Stockbit returned for other codes"),
+        ] {
+            let (sb, _be, _d) =
+                sb(FixtureBackend::new().route("corpaction/dividend?symbol=BBCA", 200, &body(k)));
+            let got = stockbit_actions(&sb, &[], &sym("BBCA"), &[K::Dividend], None, None)
+                .await
+                .unwrap();
+            assert_eq!(got.data.total, 37 - k);
+            assert!(
+                got.warnings.iter().any(|w| w == warning),
+                "{:?}",
+                got.warnings
+            );
+        }
     }
 
     #[tokio::test]
