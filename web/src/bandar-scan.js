@@ -537,6 +537,9 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
     const quotes = Object.fromEntries(symbols.map((s) => { const q = bySym.get(s); return [s, { price: q.price ?? null, previous_close: q.previous_close ?? null, market_time: q.market_time ?? null }]; }));
     Object.assign(st, { phase: "waiting", symbols, quotes, ranked_from, board_traded: boardTraded(board, session), probes: 0 });
     changed = true;
+  } else if (st.phase === "waiting" && st.board_traded == null) {
+    // The board was refreshed before the session ended; the one there now may tell.
+    st.board_traded = boardTraded(await kvGet(env, "board"), session);
   }
   if (st.phase === "waiting") {
     out.probe = await probe(st, now, fetchPage);

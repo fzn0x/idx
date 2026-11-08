@@ -309,6 +309,21 @@ test("in a year the calendar does not cover, a day without trades at IPOT or on 
   });
 });
 
+test("while the board cannot tell whether the session traded, each probe asks the board again", async () => {
+  const env = memoryDb();
+  // 2028 is not on the bundled list and 2028-01-26 is closed; Yahoo failed from 16:00 WIB, so at 16:45 the board is from 15:59.
+  const board = (hm) => JSON.stringify({ ts: unix(`2028-01-26T${hm}:00+07:00`), quotes: [quote("BBCA", 5175, 9e8, "2028-01-25T16:14:58+07:00")] });
+  env.kv.set("board", board("15:59"));
+  await withFetch(async () => new Response(page("brokersummary_bbca_20261017_no_trades.html")), async () => {
+    assert.equal((await bandarScanStep(env, { now: new Date("2028-01-26T16:45:00+07:00") })).probe, "unpublished");
+    assert.equal(JSON.parse(env.kv.get("bandar_scan")).board_traded, null);
+    // Refreshed after the close, the board shows no trade that day either.
+    env.kv.set("board", board("16:50"));
+    const r = await bandarScanStep(env, { now: new Date("2028-01-26T16:55:00+07:00") });
+    assert.deepEqual([r.probe, r.phase], ["closed", "closed"]);
+  });
+});
+
 test("a session IPOT has not published waits, is probed again every 10 minutes, then scanned", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 2e8, "2026-11-06T16:14:58+07:00")] }));
