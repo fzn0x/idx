@@ -4,7 +4,7 @@
 import { api, fmt, NA, table, wrapScroll, el, sparkline, signClass, machineLine, loadUniverse, copyButton } from "/app.js";
 import { priceChart } from "/chart.js";
 import { TOOLS, byName, whatOf } from "/tools.js";
-import { routeLine, tokenize, ALIASES, INSTALL, AGENT } from "/route.js";
+import { routeLine, tokenize, shownLine, ALIASES, INSTALL, AGENT } from "/route.js";
 import { SHOW_MS, SLOW_MS, WAITS, FEED_TIMEOUT_S, IPOT_TRIES, waitFor } from "/waits.js";
 import { mountGate, suggestions } from "/gate.js";
 import { initShell, hotkeys, lamp } from "/shell.js";
@@ -1100,9 +1100,7 @@ function entry(cmdLine) {
   const n = ++seq;
   const sec = el("section", { class: "panel result", id: `r${n}`, tabindex: "-1", "aria-labelledby": `r${n}-h` });
   const meta = el("p", { class: "meta", text: t("berjalan", "running") });
-  // A line pasted from the CLI already starts with idx.
-  const shown = /^idx(\s|$)/i.test(cmdLine) ? cmdLine : `idx ${cmdLine}`;
-  const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), shown]), meta]);
+  const cap = el("header", { class: "ph" }, [el("h2", { id: `r${n}-h` }, [el("span", { class: "no", text: String(n).padStart(2, "0") }), shownLine(cmdLine)]), meta]);
   const body = el("div", { class: "body" });
   const mline = el("p", { class: "mline" });
   sec.append(cap, body, mline);

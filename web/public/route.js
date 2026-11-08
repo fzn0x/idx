@@ -24,6 +24,13 @@ export const ALIASES = { q: "quote", h: "history", f: "fundamental", t: "technic
 export const INSTALL = "npm install -g ihsg-cli";
 export const AGENT = "npx -y ihsg-mcp";
 
+/**
+ * A result's heading: the line as the CLI would read it. A line pasted from
+ * the CLI already starts with idx, and an MCP tool name (idx_market_foreign)
+ * is shown as typed rather than as a CLI command that does not exist.
+ */
+export const shownLine = (line) => (/^idx(\s|_|$)/i.test(line) ? line : `idx ${line}`);
+
 /** Splits a line into words; "double" or 'single' quotes keep spaces inside one word. */
 export function tokenize(line) {
   const toks = [];

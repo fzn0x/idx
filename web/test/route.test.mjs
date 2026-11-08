@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { routeLine, tokenize, cliPath, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES, SPEC, CLI_FORM, MCP_ONLY, CLI_ONLY } from "../public/route.js";
+import { routeLine, tokenize, cliPath, shownLine, ALIASES, BARE, INSTALL, AGENT, WEB_SWITCHES, SPEC, CLI_FORM, MCP_ONLY, CLI_ONLY } from "../public/route.js";
 import { TOOLS, byName, cliOnlyReason } from "../public/tools.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -536,7 +536,7 @@ test("the terminal runs every line through the router, and heads every kind of n
 });
 
 test("the router and the terminal share one tokenizer, one alias list and the same switches", () => {
-  assert.match(terminal, /^import \{ routeLine, tokenize, ALIASES, INSTALL, AGENT \} from "\/route\.js";$/m);
+  assert.match(terminal, /^import \{ routeLine, tokenize, shownLine, ALIASES, INSTALL, AGENT \} from "\/route\.js";$/m);
   assert.doesNotMatch(terminal, /^function tokenize|^const ALIASES/m);
   const bools = terminal.match(/^const BOOL_FLAGS = new Set\((\[.*\])\);$/m)?.[1];
   assert.deepEqual(JSON.parse(bools), WEB_SWITCHES);
@@ -564,4 +564,17 @@ test("the install lines are the README's", () => {
   const readme = read("README.md");
   assert.ok(readme.includes(`${INSTALL} `), INSTALL);
   assert.ok(readme.includes(AGENT), AGENT);
+});
+
+test("a result's heading reads like the CLI line, never idx idx_<tool>", () => {
+  assert.equal(shownLine("market foreign"), "idx market foreign");
+  assert.equal(shownLine("idx market foreign"), "idx market foreign");
+  assert.equal(shownLine("IDX -o json market brokers"), "IDX -o json market brokers");
+  assert.equal(shownLine("idx"), "idx");
+  assert.equal(shownLine("idx_market_foreign"), "idx_market_foreign");
+  assert.equal(shownLine("json idx_market_foreign"), "idx json idx_market_foreign");
+  // A word that only starts with idx is still a command of the page.
+  assert.equal(shownLine("idxfoo"), "idx idxfoo");
+  // The terminal heads every result this way.
+  assert.match(terminal, /\[el\("span", \{ class: "no", text: String\(n\)\.padStart\(2, "0"\) \}\), shownLine\(cmdLine\)\]/);
 });
