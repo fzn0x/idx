@@ -11,14 +11,23 @@ const API_TIMEOUT_MS = 60_000;
 
 // When each answer was asked, on the clock its fetched_at is on: the server's
 // Date less the time the request took (this machine's clock when an answer
-// has no Date). Kept beside the envelope, which stays the CLI's.
+// has no Date). Kept beside the envelope, which stays the CLI's, and only for
+// a fresh request: within the max-age the Worker sends (20 to 60 s) the
+// browser may answer any other from its own copy, at once and under the Date
+// that copy was sent with, which says nothing of when it was asked.
 const ASKED = new WeakMap();
 
-export async function api(path) {
+/**
+ * GET /api/<path>: the envelope, or an error carrying the CLI's code and exit
+ * code. `fresh` asks the Worker past the browser's HTTP cache (the Worker
+ * sends no validators, so it answers in full), for a result whose head says
+ * how it was served.
+ */
+export async function api(path, { fresh = false } = {}) {
   let r;
   const t0 = performance.now();
   try {
-    r = await fetch(`${API}/${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout?.(API_TIMEOUT_MS) });
+    r = await fetch(`${API}/${path}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout?.(API_TIMEOUT_MS), ...(fresh ? { cache: "no-cache" } : {}) });
   } catch (err) {
     const e = new Error(err?.name === "TimeoutError" ? `no answer within ${API_TIMEOUT_MS / 1000}s; try again` : `network error: ${err?.message || err}`);
     e.code = "network";
@@ -34,11 +43,11 @@ export async function api(path) {
     e.exit = body.exit_code ?? 3;
     throw e;
   }
-  if (body && typeof body === "object") ASKED.set(body, asked);
+  if (fresh && body && typeof body === "object") ASKED.set(body, asked);
   return body;
 }
 
-/** When the request behind an envelope api() returned was asked (ms, server clock); undefined for anything else. */
+/** When the request behind an envelope api() returned fresh was asked (ms, server clock); undefined for anything else. */
 export const askedAt = (env) => ASKED.get(env);
 
 /** Leeway for the whole seconds fetched_at and the Date header are given in. */

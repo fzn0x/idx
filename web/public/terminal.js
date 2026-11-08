@@ -943,6 +943,11 @@ function statements(v) {
 
 function need(pos, n, usage) { if (pos.length < n) throw usageLine(usage); }
 
+// A command's request goes to the Worker even when the browser holds a copy
+// from a moment ago (the language switch, Run again, Back), so the head and
+// the machine line describe an answer sent for this run.
+const ask = (path) => api(path, { fresh: true });
+
 /**
  * Runs a typed line. route.js reads it first: a line in the CLI's words runs in
  * the page's (the result carries a note saying so), and one this page cannot
@@ -981,14 +986,14 @@ async function runWeb(line) {
   switch (name) {
     case "help": return { help: pos[0] };
     case "clear": return { clear: true };
-    case "quote": need(pos, 1, cmd.usage); env = await api(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
-    case "history": need(pos, 1, cmd.usage); env = await api(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
-    case "intraday": need(pos, 1, cmd.usage); env = await api(`intraday?${qs({ symbol: sym(), interval: pos[1] || opt.interval || "1m", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.intraday; break;
-    case "profile": need(pos, 1, cmd.usage); env = await api(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
+    case "quote": need(pos, 1, cmd.usage); env = await ask(`quote?symbols=${encodeURIComponent(pos.join(","))}`); render = R.quotes; break;
+    case "history": need(pos, 1, cmd.usage); env = await ask(`history?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y", interval: pos[2] || opt.interval || "1d", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.history; break;
+    case "intraday": need(pos, 1, cmd.usage); env = await ask(`intraday?${qs({ symbol: sym(), interval: pos[1] || opt.interval || "1m", limit: rawJson ? opt.limit || 0 : 0 })}`); render = R.intraday; break;
+    case "profile": need(pos, 1, cmd.usage); env = await ask(`profile?symbol=${encodeURIComponent(sym())}`); render = R.profile; break;
     case "financials": {
       need(pos, 1, cmd.usage);
       const only = statements(opt.statement);
-      env = await api(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`);
+      env = await ask(`financials?${qs({ symbol: sym(), period: pos[1] || opt.period || "annual" })}`);
       render = (d) => R.financials(d, only);
       break;
     }
@@ -999,48 +1004,48 @@ async function runWeb(line) {
       const reported = opt.reported || opt.history, estimates = opt.estimates || opt.forecast;
       const period = opt.annual && !opt.quarterly ? "annual" : opt.quarterly && !opt.annual ? "quarterly" : null;
       const kind = reported && !estimates ? "reported" : estimates && !reported ? "estimates" : null;
-      env = await api(`earnings?${qs({ symbol: sym(), period, kind })}`);
+      env = await ask(`earnings?${qs({ symbol: sym(), period, kind })}`);
       render = R.earnings;
       break;
     }
-    case "fundamental": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: opt.lens })}`); render = opt.lens ? R[String(opt.lens).toLowerCase()] : R.fundamentals; break;
-    case "growth": case "valuation": case "risk": need(pos, 1, cmd.usage); env = await api(`fundamental?${qs({ symbol: sym(), lens: name })}`); render = R[name]; break;
-    case "technical": need(pos, 1, cmd.usage); env = await api(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
-    case "compare": need(pos, 1, cmd.usage); env = await api(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
-    case "screen": env = await api(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
-    case "news": env = await api(`news?${qs({ symbol: sym(), limit: opt.limit || 20, company_only: opt["company-only"] ? "1" : null })}`); render = R.news; break;
-    case "dividends": need(pos, 1, cmd.usage); env = await api(`dividends?symbol=${encodeURIComponent(sym())}`); render = R.dividends; break;
-    case "returns": need(pos, 1, cmd.usage); env = await api(`returns?${qs({ symbols: pos.join(","), benchmark: opt.benchmark })}`); render = R.returns; break;
-    case "brief": need(pos, 1, cmd.usage); env = await api(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
-    case "sentiment": need(pos, 1, cmd.usage); env = await api(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
+    case "fundamental": need(pos, 1, cmd.usage); env = await ask(`fundamental?${qs({ symbol: sym(), lens: opt.lens })}`); render = opt.lens ? R[String(opt.lens).toLowerCase()] : R.fundamentals; break;
+    case "growth": case "valuation": case "risk": need(pos, 1, cmd.usage); env = await ask(`fundamental?${qs({ symbol: sym(), lens: name })}`); render = R[name]; break;
+    case "technical": need(pos, 1, cmd.usage); env = await ask(`technical?${qs({ symbol: sym(), period: pos[1] || opt.period || "1y" })}`); render = R.technical; break;
+    case "compare": need(pos, 1, cmd.usage); env = await ask(`compare?symbols=${encodeURIComponent(pos.join(","))}`); render = R.compare; break;
+    case "screen": env = await ask(`screen?${qs({ filter: pos.join(","), preset: opt.preset, sort: opt.sort, limit: opt.limit, max_fundamentals: opt["max-fundamentals"], asc: opt.asc ? "1" : opt.desc ? "0" : null, returns: opt.returns ? "1" : null })}`); render = R.screen; break;
+    case "news": env = await ask(`news?${qs({ symbol: sym(), limit: opt.limit || 20, company_only: opt["company-only"] ? "1" : null })}`); render = R.news; break;
+    case "dividends": need(pos, 1, cmd.usage); env = await ask(`dividends?symbol=${encodeURIComponent(sym())}`); render = R.dividends; break;
+    case "returns": need(pos, 1, cmd.usage); env = await ask(`returns?${qs({ symbols: pos.join(","), benchmark: opt.benchmark })}`); render = R.returns; break;
+    case "brief": need(pos, 1, cmd.usage); env = await ask(`brief?symbol=${encodeURIComponent(sym())}`); render = R.brief; break;
+    case "sentiment": need(pos, 1, cmd.usage); env = await ask(`sentiment?symbol=${encodeURIComponent(sym())}`); render = R.sentiment; break;
     case "insights": {
       need(pos, 1, cmd.usage);
       const all = opt.all != null;
-      env = await api(`insights?symbol=${encodeURIComponent(sym())}`);
+      env = await ask(`insights?symbol=${encodeURIComponent(sym())}`);
       render = (d) => R.insights(d, all);
       break;
     }
-    case "broker": need(pos, 1, cmd.usage); env = await api(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
-    case "foreign": need(pos, 1, cmd.usage); env = await api(`foreign?${qs({ symbol: sym(), days: opt.days, from: opt.from, to: opt.to })}`); render = R.foreignFlow; break;
+    case "broker": need(pos, 1, cmd.usage); env = await ask(`broker?${qs({ symbols: pos.join(","), date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`); render = R.broker; break;
+    case "foreign": need(pos, 1, cmd.usage); env = await ask(`foreign?${qs({ symbol: sym(), days: opt.days, from: opt.from, to: opt.to })}`); render = R.foreignFlow; break;
     case "bandar": {
       if ((pos[0] || "").toLowerCase() === "screen") {
-        env = await api(`bandar/screen?${qs({ preset: opt.preset, filter: opt.filter, period: opt.period, top: opt.top, sort: opt.sort, asc: opt.asc ? "1" : opt.desc ? "0" : null, limit: opt.limit })}`);
+        env = await ask(`bandar/screen?${qs({ preset: opt.preset, filter: opt.filter, period: opt.period, top: opt.top, sort: opt.sort, asc: opt.asc ? "1" : opt.desc ? "0" : null, limit: opt.limit })}`);
         render = R.bandarScreen;
       } else if ((pos[0] || "").toLowerCase() === "broker") {
         need(pos, 2, "bandar broker <CODE> [--period 1d|1w|1m|3m] [--limit N]");
-        env = await api(`bandar/broker?${qs({ code: pos[1], period: opt.period, limit: opt.limit })}`);
+        env = await ask(`bandar/broker?${qs({ code: pos[1], period: opt.period, limit: opt.limit })}`);
         render = R.bandarBroker;
       } else {
         const syms = (pos[0] || "").toLowerCase() === "detect" ? pos.slice(1) : pos;
         need(syms, 1, cmd.usage);
-        env = await api(`bandar?${qs({ symbols: syms.join(","), period: opt.period, top: opt.top, daily: opt.daily ? "1" : null, date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`);
+        env = await ask(`bandar?${qs({ symbols: syms.join(","), period: opt.period, top: opt.top, daily: opt.daily ? "1" : null, date: opt.date, from: opt.from, to: opt.to, investor: opt.investor, board: opt.board })}`);
         render = R.bandar;
       }
       break;
     }
-    case "market": env = await api("market"); await calendar; render = R.market; break;
-    case "list": env = await api(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
-    case "members": env = await api(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
+    case "market": env = await ask("market"); await calendar; render = R.market; break;
+    case "list": env = await ask(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
+    case "members": env = await ask(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
     case "tools": {
       if (!pos[0]) return { local: t(`${TOOLS.length} alat MCP`, `${TOOLS.length} MCP tools`), node: R.tools() };
       const tool = byName(pos[0]);
@@ -1048,38 +1053,38 @@ async function runWeb(line) {
       if (tool.web) return run(rawJson ? `json ${tool.web}` : tool.web);
       return { local: CLI_ONLY, node: R.notice(routeLine(tool.tool)) };
     }
-    case "actions": need(pos, 1, cmd.usage); env = await api(`actions?${qs({ symbol: sym(), since: opt.since })}`); render = R.actions; break;
+    case "actions": need(pos, 1, cmd.usage); env = await ask(`actions?${qs({ symbol: sym(), since: opt.since })}`); render = R.actions; break;
     case "holidays": {
       // `holidays --upcoming 2027`: the flag parser hands the year to the flag.
       const year = pos[0] || [opt.upcoming, opt.all].find((v) => typeof v === "string" && /^\d{4}$/.test(v)) || opt.year;
-      env = await api(`holidays?${qs({ year, all: opt.all ? "1" : null, upcoming: opt.upcoming ? "1" : null })}`);
+      env = await ask(`holidays?${qs({ year, all: opt.all ? "1" : null, upcoming: opt.upcoming ? "1" : null })}`);
       render = R.holidays;
       break;
     }
     case "astro": {
       const date = pos[0] || opt.date;
-      env = await api(`astro?${qs({ date, days: opt.days, natal: opt.natal, backtest: opt.backtest ? "1" : null, period: opt.period })}`);
+      env = await ask(`astro?${qs({ date, days: opt.days, natal: opt.natal, backtest: opt.backtest ? "1" : null, period: opt.period })}`);
       render = R.astro;
       break;
     }
     case "ownership": {
       const sub = (pos[0] || "").toLowerCase();
-      if (sub === "ticker") { need(pos, 2, cmd.usage); env = await api(`ownership/ticker?${qs({ symbol: pos[1], as_of: opt["as-of"] })}`); render = R.holders; }
-      else if (sub === "entity") { need(pos, 2, cmd.usage); env = await api(`ownership/entity?${qs({ name: pos.slice(1).join(" "), as_of: opt["as-of"] })}`); render = R.entity; }
-      else if (sub === "changes") { need(pos, 3, cmd.usage); env = await api(`ownership/changes?${qs({ from: pos[1], to: pos[2], symbol: pos[3], min_change: opt["min-change"], limit: opt.limit, offset: opt.offset })}`); render = R.changes; }
-      else if (sub === "foreign") { env = await api(`ownership/foreign?${qs({ symbol: pos[1], from: opt.from, to: opt.to, limit: opt.limit })}`); render = R.foreign; }
-      else if (sub === "releases") { env = await api("ownership/releases"); render = R.releases; }
-      else if (sub === "search") { need(pos, 2, cmd.usage); env = await api(`ownership/search?${qs({ q: pos.slice(1).join(" "), limit: opt.limit, as_of: opt["as-of"] })}`); render = R.ownSearch; }
-      else if (sub === "cross-holders") { env = await api(`ownership/cross-holders?${qs({ min_issuers: opt["min-issuers"] ?? opt["min-tickers"], type: opt.type, origin: opt.origin, limit: opt.limit, as_of: opt["as-of"] })}`); render = R.crossHolders; }
+      if (sub === "ticker") { need(pos, 2, cmd.usage); env = await ask(`ownership/ticker?${qs({ symbol: pos[1], as_of: opt["as-of"] })}`); render = R.holders; }
+      else if (sub === "entity") { need(pos, 2, cmd.usage); env = await ask(`ownership/entity?${qs({ name: pos.slice(1).join(" "), as_of: opt["as-of"] })}`); render = R.entity; }
+      else if (sub === "changes") { need(pos, 3, cmd.usage); env = await ask(`ownership/changes?${qs({ from: pos[1], to: pos[2], symbol: pos[3], min_change: opt["min-change"], limit: opt.limit, offset: opt.offset })}`); render = R.changes; }
+      else if (sub === "foreign") { env = await ask(`ownership/foreign?${qs({ symbol: pos[1], from: opt.from, to: opt.to, limit: opt.limit })}`); render = R.foreign; }
+      else if (sub === "releases") { env = await ask("ownership/releases"); render = R.releases; }
+      else if (sub === "search") { need(pos, 2, cmd.usage); env = await ask(`ownership/search?${qs({ q: pos.slice(1).join(" "), limit: opt.limit, as_of: opt["as-of"] })}`); render = R.ownSearch; }
+      else if (sub === "cross-holders") { env = await ask(`ownership/cross-holders?${qs({ min_issuers: opt["min-issuers"] ?? opt["min-tickers"], type: opt.type, origin: opt.origin, limit: opt.limit, as_of: opt["as-of"] })}`); render = R.crossHolders; }
       else if (sub === "concentration") {
         // `--asc BBCA` hands the symbol to the flag; take it back.
         const syms = [...pos.slice(1), ...[opt.asc, opt.ascending].filter((v) => typeof v === "string")];
-        env = await api(`ownership/concentration?${qs({ symbols: syms.join(","), by: opt.by, asc: opt.asc || opt.ascending ? "1" : null, limit: opt.limit, as_of: opt["as-of"] })}`);
+        env = await ask(`ownership/concentration?${qs({ symbols: syms.join(","), by: opt.by, asc: opt.asc || opt.ascending ? "1" : null, limit: opt.limit, as_of: opt["as-of"] })}`);
         render = R.concentration;
       } else if (sub === "graph") {
         const root = [...pos.slice(1), ...(typeof opt.holder === "string" ? [opt.holder] : [])];
         need(root, 1, cmd.usage);
-        env = await api(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
+        env = await ask(`ownership/graph?${qs({ root: root.join(" "), depth: opt.depth, min_pct: opt["min-pct"], max_nodes: opt["max-nodes"], holder: opt.holder ? "1" : null, as_of: opt["as-of"] })}`);
         render = R.graph;
       }
       else throw usageLine(cmd.usage);
