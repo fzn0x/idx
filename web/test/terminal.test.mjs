@@ -1,7 +1,7 @@
 // node --test web/test/*.mjs. The terminal's flag parser: public/terminal.js is
 // a browser module (it imports /app.js and reads the DOM), so the test lifts
 // BOOL_FLAGS and flags(), toolButtons(), commandWords(), nearTable(), renderHelp()
-// and the screen renderer out of its source and runs them as they are.
+// and the screen and brokers renderers out of its source and runs them as they are.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -174,4 +174,34 @@ test("the screen marks a P/B over another currency's statements and names the co
   });
   // Same currency, or one not named: no mark and no note.
   assert.deepEqual(shown([row("BBCA", "IDR", 2.25), row("TLKM", null, 2.1)]), { pb: ["2.25", "2.10"], notes: [] });
+});
+
+test("brokers prints IPOT's member ranking with the CLI's columns, class and net included", () => {
+  const body = src.match(/^ {2}marketBrokers\(r\) \{[\s\S]*?^ {2}\},$/m)?.[0];
+  assert.ok(body, "R.marketBrokers() found in terminal.js");
+  // Stand-ins for app.js on the English page, as above; compact as the CLI's (2.79T, 4.77B, 43.02K).
+  const compact = (v) => { if (v == null) return "n/a"; const [u, s] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]].find(([x]) => Math.abs(v) >= x) || [1, ""]; return `${Number((v / u).toFixed(Math.abs(v / u) >= 100 ? 1 : 2))}${s}`; };
+  const fmt = { compact, num: (v, d) => v.toFixed(d) };
+  const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [...children], append(...c) { this.children.push(...c); } });
+  const document = { createDocumentFragment: () => el("fragment") };
+  const table = (cols, rows) => ({ tag: "table", cols, rows });
+  const signClass = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
+  const render = new Function("fmt", "el", "document", "table", "wrapScroll", "signClass", "NA", `const R = { ${body} };\nreturn (r) => R.marketBrokers(r);`)(fmt, el, document, table, (t) => t, signClass, "n/a");
+  const row = { rank: 3, code: "CC", name: "MANDIRI SEKURITAS", volume: 4_508_660_000, value: 1_881_490_000_000, frequency: 211_212, value_share_pct: 9.111, buy_value: 808.3e9, sell_value: 1.07e12, net_value: -262_910_000_000, kind: "state_owned" };
+  const ranking = { date: "2026-11-06", members: 88, total_volume: 9.47e10, total_value: 20_648_897_010_000, total_frequency: 2_205_570, sort: "value", rounded: true, brokers: [row] };
+  const page = render(ranking);
+  const t = page.children.find((c) => c.tag === "table");
+  // src/output/table_exchange.rs, IPOT's rows.
+  assert.deepEqual(t.cols.map((c) => c.h), ["#", "Code", "Member", "Class", "Value", "Share", "Net", "Volume", "Frequency"]);
+  assert.deepEqual(t.cols.map((c) => (c.f ? c.f(row) : row[c.k])), [3, "CC", "MANDIRI SEKURITAS", "BUMN", "1.88T", "9.11%", "-262.9B", "4.51B", "211.2K"]);
+  assert.equal(t.cols.find((c) => c.h === "Net").cls(row), "num dn");
+  assert.equal(page.children[0].attrs.html, "<b>Exchange members</b> · 2026-11-06 · 88 active · by value · all members' value 20.65T (both sides)");
+  const notes = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text);
+  assert.deepEqual(notes.slice(0, 1), ["Showing 1 of 88 members; --top 0 for all."]);
+  assert.match(notes[1], /^Each member's buying and selling together, as IPOT \(Indo Premier\) publishes them, and its net \(bought minus sold; json brokers adds the value bought and sold\)/);
+  assert.match(notes[1], /abbreviates figures of a million and more to two decimals/);
+  // Rows without a side or a class (idx.co.id's shape) print without those columns, as the CLI does.
+  const plain = render({ ...ranking, rounded: false, members: 1, brokers: [{ ...row, buy_value: null, sell_value: null, net_value: null, kind: null }] });
+  assert.deepEqual(plain.children.find((c) => c.tag === "table").cols.map((c) => c.h), ["#", "Code", "Member", "Value", "Share", "Volume", "Frequency"]);
+  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text).join(" "), /abbreviates|its net/);
 });

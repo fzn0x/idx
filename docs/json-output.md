@@ -653,6 +653,14 @@ before. A ranking that has not rolled over by 19:00 while its date page has
 is caught only when this cache remembers the previous session's ranking,
 from an earlier IPOT read: the same figures under a new date are refused.
 
+The web terminal's `brokers` (`/api/market/brokers`) answers from IPOT
+only, with this shape and the `--source ipot` rules and messages: idx.co.id
+refuses the site's Cloudflare Worker, so `source=idx` is a `usage` error
+there, and `source=auto` reads IPOT with a warning saying so. The Worker
+keeps the two pages as one pair and replaces it only when both were read
+again, so the copy that stands in for a failed read (`stale: true`) is
+always a pair read together.
+
 ## `idx.indices.v1` (`market indices`)
 
 `date` and `indices[]` in the source's order (IHSG first): `code`

@@ -1,10 +1,11 @@
-// Indo Premier (IPOT) broker summary and corporate actions: the web twin of
-// src/providers/ipot. Same endpoints and parsing rules, tested on the same
-// tests/fixtures/ipot pages. Figures of a million and more arrive abbreviated
-// to one decimal (1.6 M); they keep that precision and set `rounded`. A
-// spurious nginx 404 is retried. Over a range that reaches the latest
-// session the footer's foreign net counts that session twice; rebuildNet
-// sums single sessions instead, like ipot::broker_summary_range.
+// Indo Premier (IPOT) broker summary, corporate actions and the market-wide
+// broker ranking: the web twin of src/providers/ipot. Same endpoints and
+// parsing rules, tested on the same tests/fixtures/ipot pages. Figures of a
+// million and more arrive abbreviated to one decimal (1.6 M; two in the
+// ranking, 2.79 T); they keep that precision and set `rounded`. A spurious
+// nginx 404 is retried. Over a range that reaches the latest session the
+// footer's foreign net counts that session twice; rebuildNet sums single
+// sessions instead, like ipot::broker_summary_range.
 
 import { fetchWithin } from "./net.js";
 import * as hol from "./holidays.js";
@@ -324,4 +325,320 @@ export function parseActions(html) {
     };
   }).filter(Boolean)).sort(newestFirst("listing_date"));
   return { actions, meetings, warrants_rights };
+}
+
+// ---- market-wide broker ranking (ma-topbroker.php) ---------------------------
+
+// The port of src/providers/ipot/topbroker.rs and of the dating rules in
+// ipot::top_brokers. ma-topbroker.php ranks every broker of IPOT's latest
+// session by value; it carries no date, so BBCA's statistics page dates it:
+// on its Today row the days of the high and the low are the session's. Both
+// pages carry commented-out copies (a "Lorem Ipsum" template, a 2015 table),
+// so comments go before anything is read.
+
+export const TOP_BROKERS_ENDPOINT = "https://www.indopremier.com/module/saham/include/ma-topbroker.php";
+/** The page that dates the ranking. */
+export const SESSION_ENDPOINT = "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA";
+
+/** The head of the ranking's table, label and span of each heading: the rows are read by position, so a page headed otherwise is refused. */
+const COLUMNS = [["#", 1], ["Company", 2], ["T.Val", 1], ["N.Val", 1], ["B.Val", 1], ["S.Val", 1], ["T.Vol", 1], ["T.Freq", 1]];
+
+/** `html` without its <!-- ... --> comments; an unclosed one runs to the end. */
+export function uncommented(html) {
+  let out = "", rest = String(html);
+  for (;;) {
+    const start = rest.indexOf("<!--");
+    if (start < 0) return out + rest;
+    out += rest.slice(0, start);
+    const end = rest.indexOf("-->", start + 4);
+    if (end < 0) return out;
+    rest = rest.slice(end + 3);
+  }
+}
+
+/** Text outside tags, as parse::strip_tags: every < starts a tag and every > ends one; &nbsp; is a space; trimmed. */
+function stripTags(s) {
+  let out = "", inTag = false;
+  for (const c of s) {
+    if (c === "<") inTag = true;
+    else if (c === ">") inTag = false;
+    else if (!inTag) out += c;
+  }
+  return out.replace(/&nbsp;/g, " ").trim();
+}
+
+/** A row's cells as parse::cells: the first class="..." inside each, and its text. */
+function cellsOf(row) {
+  const out = [];
+  let rest = row;
+  for (;;) {
+    const start = rest.indexOf("<td");
+    if (start < 0) return out;
+    const after = rest.slice(start);
+    const openEnd = after.indexOf(">");
+    if (openEnd < 0) return out;
+    const close = after.indexOf("</td>", openEnd + 1);
+    if (close < 0) return out;
+    const inner = after.slice(openEnd + 1, close);
+    const at = inner.indexOf('class="');
+    const value = at < 0 ? "" : inner.slice(at + 7);
+    out.push({ cls: at >= 0 && value.includes('"') ? value.slice(0, value.indexOf('"')) : null, text: stripTags(inner) });
+    rest = after.slice(close + 5);
+  }
+}
+
+/** The headings in the page's <thead>, each with its colspan. */
+function headings(html) {
+  const out = [];
+  const at = html.indexOf("<thead");
+  if (at < 0) return out;
+  const head = html.slice(at + 6);
+  const end = head.indexOf("</thead>");
+  let rest = end < 0 ? head : head.slice(0, end);
+  for (;;) {
+    const i = rest.indexOf("<th");
+    if (i < 0) return out;
+    const after = rest.slice(i + 3);
+    const openEnd = after.indexOf(">"), close = after.indexOf("</th>");
+    if (openEnd < 0 || close < 0) return out;
+    const attrs = after.slice(0, openEnd);
+    // <thing ...>, or a <th whose own > comes after its </th>: not a heading.
+    if ((attrs && !/^\s/.test(attrs)) || close < openEnd) { rest = after; continue; }
+    const j = attrs.indexOf('colspan="');
+    const n = j < 0 ? "" : attrs.slice(j + 9).split('"')[0];
+    out.push([stripTags(after.slice(openEnd + 1, close)), /^\+?\d+$/.test(n) ? Number(n) : 1]);
+    rest = after.slice(close + 5);
+  }
+}
+
+/** `#, Company (2 wide), T.Val` for messages. */
+const showColumns = (cols) => (cols.length ? cols.map(([label, span]) => (span === 1 ? label : `${label} (${span} wide)`)).join(", ") : "none");
+
+const RANKING_KIND = { local: "local", foreign: "foreign", bumn: "state_owned" };
+const kindOf = (cls) => (cls && cls.startsWith("text-") && Object.hasOwn(RANKING_KIND, cls.slice(5)) ? RANKING_KIND[cls.slice(5)] : null);
+
+/**
+ * The ranking on a ma-topbroker.php page, like topbroker::ranking: every
+ * broker in the page's order (`rank` is its #), with its class and value
+ * bought plus sold, net, bought, sold, shares and trades, and whether a
+ * figure was abbreviated. A page without the table, or headed otherwise
+ * than COLUMNS, throws before any row is read.
+ */
+export function parseRanking(html) {
+  const page = uncommented(html);
+  const start = page.indexOf("<tbody>"), end = page.indexOf("</tbody>");
+  if (start < 0 || end < 0) throw new Error("unexpected broker ranking page (no table)");
+  const head = headings(page);
+  const same = head.length === COLUMNS.length && head.every(([l, s], i) => l === COLUMNS[i][0] && s === COLUMNS[i][1]);
+  if (!same) throw new Error(`unexpected broker ranking layout: the columns read ${showColumns(head)}, not ${showColumns(COLUMNS)}`);
+  let rounded = false;
+  const brokers = [];
+  for (const row of page.slice(start, end).split("</tr>")) {
+    const c = cellsOf(row);
+    if (c.length < 9) continue;
+    const code = c[1].text.toUpperCase();
+    if (!code) continue;
+    const num = (i) => { const n = number(c[i].text); if (!n) return null; rounded ||= n.rounded; return n.v; };
+    const name = decode(c[2].text).trim();
+    brokers.push({
+      rank: /^\d+$/.test(c[0].text) ? Number(c[0].text) : brokers.length + 1, code, name: name || null, kind: kindOf(c[1].cls),
+      value: num(3), net_value: num(4), buy_value: num(5), sell_value: num(6), volume: num(7), frequency: num(8),
+    });
+  }
+  return { brokers, rounded };
+}
+
+/** `false` for a broker the page lists without trades (all zeros). */
+export const brokerTraded = (b) => [b.value, b.volume, b.frequency].some((v) => v != null && v !== 0);
+
+const isDay = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t) && new Date(`${t}T00:00:00Z`).toISOString().slice(0, 10) === t;
+
+/**
+ * The session on a statistic.php page, like topbroker::session_date: the
+ * date on its Today row, where the day's high and its low were both made.
+ * null without that row (an unknown code answers "Invalid stock code!") or
+ * when its two dates differ.
+ */
+export function sessionDate(html) {
+  const page = uncommented(html);
+  const at = page.indexOf("<tbody>");
+  if (at < 0) return null;
+  const row = page.slice(at).split("</tr>").map(cellsOf).find((c) => c[0]?.text.toLowerCase() === "today");
+  if (!row) return null;
+  const date = (i) => { const t = row[i]?.text.trim(); return t && isDay(t) ? t : null; };
+  const high = date(1), low = date(3);
+  return high && low && high === low ? high : null;
+}
+
+/** A fingerprint of the ranking's rows, codes and figures as published (not names), to tell the same ranking read again from another session's. */
+export async function rankingDigest(brokers) {
+  const text = brokers.map((b) => [b.code, b.value, b.net_value, b.buy_value, b.sell_value, b.volume, b.frequency].join("|")).join("\n");
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return [...bytes].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** CC from "[CC] BJB Sekuritas Jawa Barat". */
+export function memberInBrackets(name) {
+  const t = String(name ?? "").trimStart();
+  if (!t.startsWith("[")) return null;
+  const close = t.indexOf("]");
+  if (close < 0) return null;
+  const code = t.slice(1, close).trim();
+  return /^[A-Za-z0-9]{1,4}$/.test(code) ? code.toUpperCase() : null;
+}
+
+const addKnown = (a, b) => (a == null || b == null ? null : a + b);
+
+/**
+ * Moves every row IPOT lists apart for a broker that trades under another
+ * member's code into that member, which is how idx.co.id counts it, like
+ * topbroker::fold_listed_apart. Such a row names the member in brackets: JB,
+ * "[CC] BJB Sekuritas Jawa Barat" (2026-11-06: CC's 210,936 trades and JB's
+ * 276 make the 211,212 idx.co.id reports for CC). A row whose member is not
+ * on the page stays. Returns the rows moved that had trades.
+ */
+export function foldListedApart(r) {
+  const folded = [];
+  for (let i = 0; i < r.brokers.length;) {
+    const row = r.brokers[i];
+    const m = memberInBrackets(row.name);
+    const at = m && m !== row.code ? r.brokers.findIndex((b) => b.code === m) : -1;
+    if (at < 0) { i++; continue; }
+    r.brokers.splice(i, 1);
+    const into = r.brokers[at > i ? at - 1 : at];
+    for (const k of ["value", "buy_value", "sell_value", "net_value", "volume", "frequency"]) into[k] = addKnown(into[k], row[k]);
+    if (brokerTraded(row)) folded.push({ code: row.code, name: row.name ?? "", into: into.code });
+  }
+  return folded;
+}
+
+// ---- when the ranking can be dated (ipot::top_brokers) ------------------------
+
+const WIB_MS = 7 * 3600e3;
+/** Seconds after midnight WIB, on a trading day, from before the pre-opening (08:45) until well after the close (16:15) when the ranking may change between two reads. */
+const BUSY_FROM = 8 * 3600 + 30 * 60, BUSY_TO = 19 * 3600;
+const TTL_BUSY_SECS = 5 * 60;
+/** The longest a copy is kept outside the busy hours. */
+const TTL_QUIET_SECS = 6 * 3600;
+/** The ranking and its date count as one read when fetched this close. */
+export const READ_TOGETHER_MS = 60e3;
+/** A session's first trades: the pre-opening match starts at 08:58:00 WIB (IDX trading hours, Kep-00158/BEI/10-2026). */
+const FIRST_TRADES_SECS = 8 * 3600 + 58 * 60;
+/** How long the ranking last accepted is remembered: long past the next session. */
+export const ACCEPTED_TTL_MS = 30 * 86400e3;
+
+/** An instant (epoch ms) as its WIB day, clock (HH:MM) and seconds after midnight. */
+function wibParts(ms) {
+  const iso = new Date(ms + WIB_MS).toISOString();
+  return { day: iso.slice(0, 10), clock: iso.slice(11, 16), secs: Number(iso.slice(11, 13)) * 3600 + Number(iso.slice(14, 16)) * 60 + Number(iso.slice(17, 19)) };
+}
+
+/**
+ * How long, in seconds, a copy of the ranking (and of the page that dates
+ * it) is good for at `now`, like ipot::top_brokers_ttl: five minutes on a
+ * trading day from 08:30 to 19:00 WIB; outside them six hours at most, and
+ * never a copy read before those hours last ended, so the settled figures
+ * are read once after them.
+ */
+export function topBrokersTtl(now) {
+  const ms = Number(now);
+  const { day, secs } = wibParts(ms);
+  const trading = hol.isTradingDay(day);
+  if (trading && secs >= BUSY_FROM && secs < BUSY_TO) return TTL_BUSY_SECS;
+  const last = trading && secs >= BUSY_TO ? day : prevTradingDay(day);
+  const ended = Date.parse(`${last}T00:00:00Z`) - WIB_MS + BUSY_TO * 1000;
+  return Math.min(Math.max(0, (ms - ended) / 1000), TTL_QUIET_SECS);
+}
+
+/** `t` (epoch ms) falls on a trading day from the session's first trades (08:58) until the busy hours end (19:00 WIB), when a ranking cannot be dated. */
+export function undatedAt(t) {
+  const { day, secs } = wibParts(Number(t));
+  return hol.isTradingDay(day) && secs >= FIRST_TRADES_SECS && secs < BUSY_TO;
+}
+
+/**
+ * The two pages read as one pair, as the Worker keeps them: when each was
+ * read (epoch ms), the date page's session, and the ranking (or why its page
+ * could not be read as one: the error is kept with the copy, as the CLI's
+ * cache keeps the page that gives it).
+ */
+export function rankingPair(rankedHtml, datedHtml, rankedAt, datedAt = rankedAt) {
+  let ranking;
+  try { ranking = parseRanking(rankedHtml); } catch (e) { ranking = { error: e.message }; }
+  return { ranked_at: rankedAt, dated_at: datedAt, session: sessionDate(datedHtml), ranking };
+}
+
+/** Both pages of a pair read within READ_TOGETHER_MS of each other. */
+export const readTogether = (p) => Math.abs(p.ranked_at - p.dated_at) <= READ_TOGETHER_MS;
+
+/** A copy that can answer in the hours a page read now cannot be dated, like ipot::cached_outside_hours: both pages read together outside them. */
+export const answersInHours = (p) => !!p && readTogether(p) && !undatedAt(p.ranked_at) && !undatedAt(p.dated_at);
+
+/** Why IPOT is not asked at `now`, in those hours, without such a copy. */
+export function notAsked(now) {
+  const { day, clock } = wibParts(Number(now));
+  return `a broker ranking read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked`;
+}
+
+/** Why a pair has no date: `code` provider (IPOT's pages themselves), or network (a copy that stood in for a failed read). */
+export class RankingError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
+/**
+ * Dates a pair like ipot::top_brokers, judged by when its pages were read
+ * (a copy keeps its read times, at most `now`), not when it is served:
+ * refused when the pages were read apart, or either in a trading day's
+ * hours (08:58 to 19:00 WIB); when the date page has no Today row or names a
+ * day without a session; when a ranking with trades is dated a session that
+ * had not opened, or one without trades a session that had ended; when the
+ * ranking `accepted` before for one session (its figures' digest) is dated
+ * another; and when a ranking with trades is dated an older session than the
+ * latest that had ended, unless it is the very pair accepted for it. A
+ * refusal of a copy that stood in for a failed read (`failure`, its cause) is
+ * that failure (network). Returns the session, the brokers with those IPOT
+ * lists apart folded in (a warning names each), and the record to remember
+ * for a ranking with trades (`accept`).
+ */
+export async function dateRanking(pair, { cached = false, failure = null, now, accepted = null }) {
+  const unusable = (why) => (failure
+    ? new RankingError("network", `IPOT could not be read (${failure}), and its cached copy cannot be used: ${why}`)
+    : new RankingError("provider", `ipot: ${why}`));
+  if (!readTogether(pair)) throw unusable("the broker ranking and the page that dates it were read at different times, so the ranking has no date");
+  const readAt = (t) => (cached ? Math.min(t, Number(now)) : t);
+  const rankedAt = readAt(pair.ranked_at), datedAt = readAt(pair.dated_at);
+  if (undatedAt(rankedAt)) {
+    const { day, clock } = wibParts(rankedAt);
+    throw unusable(`the broker ranking was read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated`);
+  }
+  if (undatedAt(datedAt)) {
+    const { day, clock } = wibParts(datedAt);
+    throw unusable(`the page that dates the broker ranking was read at ${clock} WIB on ${day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated`);
+  }
+  // Both reads are outside those hours and a minute apart at most, so either gives the same session below.
+  const read = Math.min(rankedAt, datedAt);
+  const { day, clock, secs } = wibParts(read);
+  const date = pair.session;
+  if (!date) throw unusable("BBCA's statistics page has no Today row to date the broker ranking");
+  if (!hol.isTradingDay(date)) throw unusable(`the page that dates the broker ranking names ${date}, which is not a trading day`);
+  if (pair.ranking.error) throw new RankingError("provider", `ipot: ${pair.ranking.error}`);
+  const r = { brokers: pair.ranking.brokers.map((b) => ({ ...b })), rounded: pair.ranking.rounded };
+  const traded = r.brokers.some(brokerTraded);
+  // A date whose session had not opened when the pages were read cannot have trades, and one whose session had ended cannot be without them.
+  const opened = date < day || (date === day && secs >= FIRST_TRADES_SECS);
+  if (!opened && traded) throw unusable(`the broker ranking read at ${clock} WIB on ${day} is dated ${date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree`);
+  const latest = hol.latestSession(new Date(read));
+  if (!traded && date <= latest) throw unusable(`the broker ranking read at ${clock} WIB on ${day} shows no trades, yet the page that dates it names ${date}, a session that had ended then: the two pages are on different sessions`);
+  let accept = null;
+  if (traded) {
+    const digest = await rankingDigest(r.brokers);
+    if (accepted && accepted.digest === digest && accepted.date !== date) throw unusable(`the broker ranking is the one IPOT showed for ${accepted.date}, yet the page that dates it now names ${date}: the ranking has not rolled over to that session`);
+    // Outside the refused hours both pages are taken to have rolled over to the latest session that had ended.
+    // A date page naming an older one may lag a ranking that has: only the very pair accepted before is that older session's.
+    const before = !!accepted && accepted.digest === digest && accepted.date === date;
+    if (date < latest && !before) throw unusable(`the broker ranking read at ${clock} WIB on ${day} is dated ${date}, yet the session of ${latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated`);
+    accept = { date, digest };
+  }
+  const warnings = foldListedApart(r).map((f) => `${f.code} (${f.name}) is counted in ${f.into}, as idx.co.id counts it; IPOT lists it apart`);
+  return { date, brokers: r.brokers, rounded: r.rounded, warnings, accept };
 }

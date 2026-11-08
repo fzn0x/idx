@@ -903,6 +903,145 @@ export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourc
   return envelope("idx.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
+// ---- market brokers (IPOT) ---------------------------------------------
+
+/**
+ * D1 rows: IPOT's ranking and the page that dates it, kept as one pair (cache
+ * table), and the ranking last accepted, by its figures, with its date (kv),
+ * as ipot::top_brokers keeps them in the CLI's cache.
+ */
+const RANKING_KEY = "ipot:ma-topbroker";
+const ACCEPTED_KEY = "ipot:ma-topbroker:accepted";
+const network = (m) => new ApiError("network", m, 502, 3);
+
+/** Both pages read now, at once; each counts as read when it came, `at` (the call's clock) moved on by the wall time since `started`. */
+async function readRankingPair(at, started) {
+  const read = async (url, what, subject) => {
+    try {
+      const html = await ipot.fetchPage(url);
+      return { html, at: at + (Date.now() - started) };
+    } catch (e) {
+      const cause = `${what} for ${subject}: ${e.message}`;
+      throw Object.assign(provider(`ipot: ${cause}`), { failure: cause });
+    }
+  };
+  const [ranked, dated] = await Promise.allSettled([read(ipot.TOP_BROKERS_ENDPOINT, "broker ranking", "the market"), read(ipot.SESSION_ENDPOINT, "session date", "BBCA")]);
+  for (const r of [ranked, dated]) if (r.status === "rejected") throw r.reason;
+  return ipot.rankingPair(ranked.value.html, dated.value.html, ranked.value.at, dated.value.at);
+}
+
+/**
+ * IPOT's ranking of its latest session with its date, like ipot::top_brokers,
+ * through D1: a pair read together is good for ipot.topBrokersTtl(now) (five
+ * minutes on a trading day from 08:30 to 19:00 WIB, up to six hours
+ * otherwise, never a copy read before 19:00 that day). The pair is replaced
+ * only when both pages were read again, so the copy that stands in for a
+ * failed read is a pair read together (the CLI keeps each page apart and
+ * refuses a fresh ranking beside an old date page). In a trading day's hours
+ * (08:58 to 19:00 WIB) IPOT is not asked unless a pair read outside them is
+ * kept, which can answer: fresh, or in place of a read that fails.
+ */
+export async function topBrokers(env, now = new Date()) {
+  const started = Date.now(), at = Number(now);
+  const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(RANKING_KEY).first();
+  const copy = row ? JSON.parse(row.v) : null;
+  if (ipot.undatedAt(at) && !ipot.answersInHours(copy)) throw provider(`ipot: ${ipot.notAsked(at)}`);
+  const ttl = ipot.topBrokersTtl(at);
+  let pair = copy, cached = true, failure = null;
+  const fresh = copy && ipot.readTogether(copy) && at - Math.min(copy.ranked_at, copy.dated_at) < ttl * 1000;
+  if (!fresh) {
+    try {
+      pair = await readRankingPair(at, started);
+      cached = false;
+      const fetched = Math.floor(Math.min(pair.ranked_at, pair.dated_at) / 1000);
+      await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
+        .bind(RANKING_KEY, JSON.stringify(pair), fetched + Math.ceil(ttl), fetched).run();
+    } catch (e) {
+      if (!copy || !e.failure) throw e;
+      failure = redactUrls(e.failure);
+    }
+  }
+  const seen = (await kvGet(env, ACCEPTED_KEY))?.value;
+  const accepted = seen && at - seen.at < ipot.ACCEPTED_TTL_MS ? seen : null;
+  let d;
+  try {
+    d = await ipot.dateRanking(pair, { cached, failure, now: at, accepted });
+  } catch (e) {
+    if (e instanceof ipot.RankingError) throw e.code === "network" ? network(e.message) : provider(e.message);
+    throw e;
+  }
+  if (d.accept) await kvPut(env, ACCEPTED_KEY, { ...d.accept, at });
+  return {
+    date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure,
+    fetched_at: new Date(Math.min(pair.ranked_at, pair.dated_at)),
+    warnings: failure ? [`live fetch failed (${failure}); showing cached copy`, ...d.warnings] : d.warnings,
+  };
+}
+
+const BROKER_SORTS = ["value", "volume", "frequency"];
+/** Rows `market brokers` shows by default, like the CLI's --top. */
+const MARKET_BROKERS_TOP = 20;
+
+/**
+ * The ranking of one session's rows, like service::member_ranking: totals over
+ * all of them, each member's share of all members' value, ranked by `sort`
+ * (largest first, ties in the order they came), the `top` first kept (0 = all).
+ */
+function memberRanking(date, rows, sort, top, rounded) {
+  const total = (k) => rows.reduce((t, r) => (r[k] == null ? t : t + r[k]), 0);
+  const total_value = total("value"), total_volume = total("volume"), total_frequency = total("frequency");
+  const key = (r) => r[sort] ?? -Infinity;
+  rows.sort((a, b) => (key(b) > key(a)) - (key(b) < key(a)));
+  rows.forEach((r, i) => { r.rank = i + 1; r.value_share_pct = r.value != null && total_value > 0 ? (r.value / total_value) * 100 : null; });
+  return { date, members: rows.length, total_volume, total_value, total_frequency, sort, rounded, brokers: top > 0 ? rows.slice(0, top) : rows };
+}
+
+/**
+ * /api/market/brokers: `idx market brokers --source ipot` (idx.market.brokers.v1).
+ * Every member's trading in IPOT's latest session, members without trades
+ * left out as idx.co.id leaves them out, with each one's value bought and
+ * sold, net and class. IPOT holds that session only: an earlier date is a
+ * usage error, a later one not found, and a day without a session or one
+ * whose session has not ended is not found without a request
+ * (service::market_brokers_ipot). idx.co.id refuses this host, so `idx` is
+ * not offered; `auto` reads IPOT and says why.
+ */
+export async function marketBrokers(env, dateRaw, topRaw, sortRaw, sourceRaw, now = new Date()) {
+  const source = String(sourceRaw ?? "").trim().toLowerCase() || "ipot";
+  if (source === "idx") throw usage("idx.co.id refuses requests from this site's host, so the web terminal reads IPOT's ranking of its latest session (source ipot); the CLI and MCP read idx.co.id too");
+  if (source !== "ipot" && source !== "auto") throw usage(`invalid source "${sourceRaw}"; the web terminal reads ipot`);
+  const sort = String(sortRaw ?? "").trim().toLowerCase() || "value";
+  if (!BROKER_SORTS.includes(sort)) throw usage(`invalid sort "${sortRaw}"; use value, volume or frequency`);
+  const top = topRaw == null || topRaw === "" ? MARKET_BROKERS_TOP : Number(topRaw);
+  if (!Number.isInteger(top) || top < 0) throw usage(`invalid top "${topRaw}"; give a number of rows, 0 for every member`);
+  const date = isoDate(dateRaw, "date");
+  if (date) {
+    if (date > hol.wibDate(now)) throw usage(`${date} is in the future`);
+    if (!hol.isTradingDay(date)) throw notFound(`no trading data: ${hol.closedReason(date)}`);
+    if (date > hol.latestSession(now)) throw notFound(`the session of ${date} has not ended (it ends at 16:15 WIB), and IPOT's ranking of it cannot be dated before 19:00 WIB`);
+  }
+  const s = await topBrokers(env, now);
+  const held = s.date;
+  if (date && date < held) throw usage(`IPOT holds only its latest session, ${held}, not ${date}; source idx (idx.co.id) has the others`);
+  if (date && date > held) throw notFound(`IPOT has not published ${date} yet: its latest session is ${held}; source idx (idx.co.id) publishes each session after its close`);
+  const warnings = [...s.warnings], unlisted = [];
+  const rows = s.brokers.filter(ipot.brokerTraded).map((b) => {
+    if (!BROKERS[b.code]) unlisted.push(b.name ? `${b.code} (${b.name})` : b.code);
+    return { rank: 0, code: b.code, name: b.name, volume: b.volume, value: b.value, frequency: b.frequency, value_share_pct: null, buy_value: b.buy_value, sell_value: b.sell_value, net_value: b.net_value, kind: b.kind };
+  });
+  if (!rows.length) throw notFound(`IPOT's broker ranking for ${held} has no trades yet`);
+  if (unlisted.length) warnings.push(`IPOT lists trades for codes that are not on the IDX member list: ${unlisted.join(", ")}`);
+  if (source === "auto") {
+    // As the CLI's auto words its fallback: a copy of an older session than the latest is no latest session.
+    const whose = s.stale && held < hol.latestSession(now) ? `for ${held}, from its copy read at ${wibClock(s.fetched_at)}` : `for its latest session, ${held}`;
+    warnings.unshift(`idx.co.id refuses requests from this site's host, so the ranking is IPOT's (Indo Premier) ${whose}`);
+  }
+  const data = memberRanking(held, rows, sort, top, s.rounded);
+  return envelope("idx.market.brokers.v1", data, { provider: ipot.NAME, cached: s.cached, stale: s.stale, fetched_at: s.fetched_at, warnings });
+}
+/** 10:00 WIB on 2026-10-17. */
+const wibClock = (d) => { const iso = new Date(d.getTime() + 7 * 3600e3).toISOString(); return `${iso.slice(11, 16)} WIB on ${iso.slice(0, 10)}`; };
+
 // ---- corporate actions and holidays ------------------------------------
 
 /** Days `actions` reaches back without `since`, like the CLI. */
@@ -1562,6 +1701,7 @@ export async function route(env, url) {
     case "/sentiment": return sentiment(env, q.get("symbol"));
     case "/broker": return broker(env, q.get("symbols") || q.get("symbol"), q.get("date"), q.get("from"), q.get("to"), q.get("investor") || "all", q.get("board") || "all");
     case "/foreign": return foreignFlow(env, q.get("symbol"), q.get("days"), q.get("from"), q.get("to"), q.get("source"));
+    case "/market/brokers": return marketBrokers(env, q.get("date"), q.get("top"), q.get("sort"), q.get("source"));
     case "/bandar": return bandar(env, q.get("symbols") || q.get("symbol"), q.get("period"), q.get("date"), q.get("from"), q.get("to"), q.get("top"), q.get("investor") || "all", q.get("board") || "all", q.get("daily"));
     case "/bandar/screen": return bandarScreen(env, q.get("preset"), q.get("filter"), q.get("period"), q.get("top"), q.get("sort"), q.get("asc"), q.get("limit"));
     case "/bandar/status": return envelope("idx.bandar.scan.v1", await scanStatus(env), { provider: ipot.NAME, cached: true });
