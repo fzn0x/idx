@@ -3,7 +3,9 @@
 //! `--filter "pe<15,roe>15,sector=Banking,mcap>10T"`: comma-separated
 //! clauses, each `key op value`. Numeric values accept `K`, `M`, `B`, `T`
 //! suffixes and a trailing `%`. String keys (`sector`, `industry`) match
-//! case-insensitively as a substring with `=` / `!=`.
+//! case-insensitively as a substring with `=` / `!=`. A missing value never
+//! matches, and neither does a P/B or P/S over statements in another
+//! currency than the price ([`numeric`]).
 //!
 //! Presets ([`ScreenPreset`]) are idx's own ready-made screens: a filter
 //! string plus a sort key and direction, run through the same screener.
@@ -354,11 +356,17 @@ pub fn parse_filters(spec: &str) -> Result<Vec<Filter>> {
     Ok(out)
 }
 
+/// The value a filter or the sort reads for `key`. P/B and P/S that divide
+/// the price by statements in another currency ([`ScreenRow::mixed_currency`])
+/// are not ratios, so they read as missing: no `pb` or `ps` clause matches
+/// them, and a `pb` or `ps` sort puts them last. The row keeps them as
+/// reported.
 pub fn numeric(row: &ScreenRow, key: Key) -> Option<f64> {
+    let ratio = |v: Option<f64>| v.filter(|_| !row.mixed_currency());
     match key {
         Key::Pe => row.pe_trailing,
         Key::Fpe => row.pe_forward,
-        Key::Pb => row.price_to_book,
+        Key::Pb => ratio(row.price_to_book),
         Key::Mcap => row.market_cap,
         Key::Price => row.price,
         Key::Div => row.dividend_yield_pct,
@@ -380,7 +388,7 @@ pub fn numeric(row: &ScreenRow, key: Key) -> Option<f64> {
         Key::Growth => row.revenue_growth_pct,
         Key::EpsGrowth => row.earnings_growth_pct,
         Key::Peg => row.peg,
-        Key::Ps => row.price_to_sales,
+        Key::Ps => ratio(row.price_to_sales),
         Key::Sector | Key::Industry => None,
     }
 }
@@ -812,5 +820,39 @@ mod tests {
         apply_fundamentals(&mut r, &msn);
         assert_eq!(r.price_to_sales, Some(0.84));
         assert_eq!(r.financial_currency, None);
+    }
+
+    #[test]
+    fn pb_and_ps_pass_over_multiples_that_mix_currencies() {
+        let mut bssr = reporting_in("BSSR", Some("USD"), Some(48921.57));
+        (bssr.price_to_sales, bssr.pe_trailing) = (Some(9876.5), Some(7.95));
+        let mut bbca = reporting_in("BBCA", Some("IDR"), Some(2.25));
+        bbca.price_to_sales = Some(5.82);
+        let unnamed = reporting_in("TLKM", None, Some(2.1));
+
+        assert_eq!(
+            (numeric(&bssr, Key::Pb), numeric(&bssr, Key::Ps)),
+            (None, None)
+        );
+        assert_eq!(numeric(&bbca, Key::Pb), Some(2.25));
+        assert_eq!(numeric(&bbca, Key::Ps), Some(5.82));
+        assert_eq!(numeric(&unnamed, Key::Pb), Some(2.1), "no currency named");
+        // Not a ratio: it matches no pb or ps clause, low or high, like a missing value.
+        for spec in ["pb>0", "pb<1", "pb>1000", "pb!=1", "ps>0", "ps<1"] {
+            assert!(!matches(&bssr, &parse_filters(spec).unwrap()), "{spec}");
+        }
+        assert!(matches(&bbca, &parse_filters("pb>1,ps<10").unwrap()));
+        // P/E is in the price's terms and still filters.
+        assert!(matches(&bssr, &parse_filters("pe<10").unwrap()));
+
+        // Sorted last either way; the row keeps its value as reported.
+        let mut rows = vec![bssr.clone(), bbca.clone(), unnamed.clone()];
+        sort_rows(&mut rows, Key::Pb, true);
+        let order: Vec<&str> = rows.iter().map(|r| r.symbol.as_str()).collect();
+        assert_eq!(order, ["BBCA", "TLKM", "BSSR"]);
+        sort_rows(&mut rows, Key::Pb, false);
+        let order: Vec<&str> = rows.iter().map(|r| r.symbol.as_str()).collect();
+        assert_eq!(order, ["TLKM", "BBCA", "BSSR"]);
+        assert_eq!(rows[2].price_to_book, Some(48921.57));
     }
 }

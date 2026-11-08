@@ -2821,6 +2821,95 @@ fn screen_presets_offline() {
 }
 
 #[test]
+fn screen_passes_over_pb_and_ps_that_mix_currencies() {
+    // The 2026-11-06 close: BSSR, GEMS, ESSA, UNIC and ITMG report in USD and
+    // trade in IDR; BBCA reports in IDR.
+    let sb = sandbox();
+    let universe = sb.config.parent().unwrap().join("u.csv");
+    std::fs::write(
+        &universe,
+        "symbol,name\nBSSR,\nGEMS,\nESSA,\nUNIC,\nITMG,\nBBCA,\n",
+    )
+    .unwrap();
+    let u = universe.to_str().unwrap();
+    // The screen asks for its universe in symbol order; the rows are the same.
+    seed(
+        &sb.cache,
+        "https://query1.finance.yahoo.com/v7/finance/quote?symbols=BBCA.JK,BSSR.JK,ESSA.JK,GEMS.JK,ITMG.JK,UNIC.JK",
+        "yahoo/quote_v7_usd_reporters_bbca.json",
+    );
+    for s in ["ITMG", "BBCA"] {
+        seed(
+            &sb.cache,
+            &format!("{QUOTE_SUMMARY}/{s}.JK?{FUNDAMENTAL_MODULES}"),
+            &format!("yahoo/quote_summary_fundamentals_{}.json", s.to_lowercase()),
+        );
+    }
+    let run = |args: &[&str]| {
+        let out = idx(&sb.cache, &sb.config)
+            .args(["--provider", "yahoo"])
+            .args(args)
+            .args(["--universe", u])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    let json = |args: &[&str]| -> serde_json::Value {
+        let mut all = vec!["-o", "json", "stocks", "screen"];
+        all.extend_from_slice(args);
+        serde_json::from_slice(&run(&all)).unwrap()
+    };
+    let symbols = |v: &serde_json::Value| -> Vec<String> {
+        v["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["symbol"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // The web terminal's example screen keeps the USD reporters, values as reported.
+    let v = json(&["-f", "pe<10,div>5,mcap>5T", "--sort", "div"]);
+    assert_eq!(symbols(&v), ["BSSR", "GEMS", "ESSA", "UNIC", "ITMG"]);
+    let bssr = &v["data"]["rows"][0];
+    assert_eq!(bssr["currency"], "IDR");
+    assert_eq!(bssr["financial_currency"], "USD");
+    assert_eq!(bssr["price_to_book"], 48921.57);
+
+    // No pb clause matches them, low or high, and a pb sort puts them last.
+    assert_eq!(symbols(&json(&["-f", "pb>0"])), ["BBCA"]);
+    assert_eq!(json(&["-f", "pb>1000"])["data"]["total_matches"], 0);
+    let v = json(&["--sort", "pb"]);
+    assert_eq!(
+        symbols(&v),
+        ["BBCA", "BSSR", "ESSA", "GEMS", "ITMG", "UNIC"]
+    );
+    assert_eq!(v["data"]["rows"][0]["financial_currency"], "IDR");
+
+    // P/S comes with the fundamentals: ITMG's 13807 over USD statements is
+    // passed over too (the other four have no fundamentals cached).
+    let v = json(&["-f", "ps>0"]);
+    assert_eq!(symbols(&v), ["BBCA"]);
+    assert_eq!(v["data"]["fundamentals_checked"], 2);
+    let v = json(&["--fundamentals", "--sort", "ps", "-f", "mcap>20T"]);
+    assert_eq!(symbols(&v), ["BBCA", "GEMS", "ITMG"]);
+    assert_eq!(v["data"]["rows"][2]["price_to_sales"], 13807.103);
+
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "screen", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "pb and ps filters and sorts read them as missing",
+        ));
+}
+
+#[test]
 fn insights_offline() {
     let sb = sandbox();
     idx(&sb.cache, &sb.config)

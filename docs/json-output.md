@@ -299,14 +299,22 @@ over statements in another currency fills neither (under `auto`, an MSN report
 for a company whose quote names USD statements, since MSN names no statement
 currency).
 
-Filters apply to the values as published. `price_to_book` comes from the quote
-and is negative for a company whose shareholders' equity is below zero, so
-`pb<1` matches those too; add `pb>0` (`pb>0,pb<1`) to keep only companies
-trading below a positive book value. A negative `debt_to_equity` means the
-same, so `de<0.5` matches it too; add `de>0`. For an issuer that reports in
-USD, `price_to_book` and `price_to_sales` divide the IDR price by USD figures,
-so `pb` and `ps` filters say little about those (see `financial_currency`
-under `idx.fundamentals.v1`).
+Filters apply to the values as published, with one exception below.
+`price_to_book` comes from the quote and is negative for a company whose
+shareholders' equity is below zero, so `pb<1` matches those too; add `pb>0`
+(`pb>0,pb<1`) to keep only companies trading below a positive book value. A
+negative `debt_to_equity` means the same, so `de<0.5` matches it too; add
+`de>0`.
+
+The exception: when a row's `financial_currency` differs from its `currency`
+(issuers such as BSSR, GEMS and ITMG report in USD), its `price_to_book` and
+`price_to_sales` divide the IDR price by USD figures (BSSR's P/B 48,921.57 on
+2026-11-06). The row keeps them as reported, but they are not ratios, so `pb`
+and `ps` read them as missing: no `pb` or `ps` clause matches the row, low or
+high, and a `pb` or `ps` sort puts it last, as for a row without the value.
+Through 0.8.2 they were compared as published, so such a row passed `pb>3`
+and led `--sort pb`. P/E, EPS and the dividend yield are in the price's terms
+and filter as before.
 
 Added in 0.8.2, all optional:
 
