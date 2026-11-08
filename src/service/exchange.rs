@@ -1007,46 +1007,33 @@ fn read_unpublished(
 /// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
 /// Before idx.co.id publishes a session its summary is an empty list, so a
 /// summary read on `day` itself without rows does not show that a trading
-/// day had no session ([`read_unpublished`]). Once that session has ended
-/// (`ended`), such a copy is read again: the cache keeps a past day's
-/// summary for a closed session's 30 days, so it is asked for with today's
-/// short lifetime instead. An empty answer read so is returned for the walk
-/// to tell from a day without a session. A copy served because it could
-/// not be read again (the live fetch failed, or offline) is an error rather
-/// than a day without trading: the walk does not skip a session it could
-/// not read.
+/// day had no session ([`read_unpublished`]). The idx provider reads such a
+/// copy of a past day again, with today's short lifetime instead of a closed
+/// session's 30 days, and never lets an empty copy stand in for a failed
+/// fetch: the failure stands, naming the copy. An empty answer read so is
+/// returned for the walk to tell from a day without a session. Offline such
+/// a copy cannot be read again, and once its session has ended (`ended`) it
+/// is an error rather than a day without trading: the walk does not skip a
+/// session it could not read.
 async fn broker_day(
     fetcher: &Arc<Fetcher>,
     day: NaiveDate,
     today: NaiveDate,
     ended: NaiveDate,
 ) -> Result<Sourced<Vec<idx::BrokerDay>>> {
-    let read = |s: &Sourced<Vec<idx::BrokerDay>>| s.fetched_at.with_timezone(&crate::model::wib());
-    let early = |s: &Sourced<Vec<idx::BrokerDay>>| read_unpublished(s, day, today, ended);
-    let mut s = idx::broker_summary(fetcher, day, today).await?;
-    if early(&s) && s.cached && !s.stale && day < today {
-        s = idx::broker_summary(fetcher, day, day).await?;
-    }
-    if !early(&s) || !s.stale {
-        return Ok(s);
-    }
-    let clock = read(&s).format("%H:%M");
-    if s.stale_reason == Some(crate::model::StaleReason::Offline) {
+    let s = idx::broker_summary(fetcher, day, today).await?;
+    if s.stale_reason == Some(crate::model::StaleReason::Offline)
+        && read_unpublished(&s, day, today, ended)
+    {
+        let clock = s
+            .fetched_at
+            .with_timezone(&crate::model::wib())
+            .format("%H:%M");
         return Err(IdxError::OfflineMiss(format!(
             "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, which it has until idx.co.id publishes the session"
         )));
     }
-    let why = s
-        .warnings
-        .iter()
-        .find_map(|w| crate::providers::fetch_failed_cause(w))
-        .unwrap_or("the live fetch failed");
-    Err(IdxError::provider(
-        idx::NAME,
-        format!(
-            "the broker summary for {day} could not be read again ({why}); the copy read at {clock} WIB that day has no rows, which it has until idx.co.id publishes the session"
-        ),
-    ))
+    Ok(s)
 }
 
 /// Every exchange member's trading for one session (default: the latest
