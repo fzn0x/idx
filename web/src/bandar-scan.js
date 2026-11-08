@@ -60,6 +60,8 @@ const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
 /** Minutes before a probe that failed (an error, not an answer) is tried again. */
 const PROBE_RETRY_MIN = 5;
+/** The most traded stocks the probe turns among. */
+const PROBE_STOCKS = 3;
 /** Minutes before stocks whose session IPOT had not published are read again, until the next session's 16:45 WIB. */
 const PENDING_GAP_MIN = 10;
 /**
@@ -299,12 +301,19 @@ function probeGap(st, now) {
   return hol.wibDate(now) === st.session && wibMinutes(now) < LATE_MIN ? PROBE_GAP_MIN.early : PROBE_GAP_MIN.late;
 }
 
-/** Reads the probe stock's one-day page and moves the state on; returns the verdict, "error" or "budget". */
+/**
+ * Reads a probe stock's one-day page and moves the state on; returns the
+ * verdict, "error" or "budget". The probe turns among the PROBE_STOCKS most
+ * traded: one that did not trade that session shows no trades however long
+ * ago IPOT published it.
+ */
 async function probe(st, now, fetchPage) {
   const at = now.toISOString();
+  const symbol = st.symbols[((st.probes || 0) + (st.probe_errors || 0)) % Math.min(PROBE_STOCKS, st.symbols.length)];
+  st.probe_symbol = symbol;
   let page;
   try {
-    page = ipot.parse(await fetchPage(ipot.url(st.symbols[0], st.session, st.session)));
+    page = ipot.parse(await fetchPage(ipot.url(symbol, st.session, st.session)));
   } catch (e) {
     if (isBudgetError(e)) return "budget"; // the next minute probes
     st.first_probe_at ??= at;
@@ -599,6 +608,6 @@ export async function scanStatus(env) {
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
     pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,
     retry: st.retry || [], retry_due: st.retry_due ?? null, pass: st.pass ?? 0, errors: st.errors || {}, last_errors: st.last_errors || [],
-    ranked_from: st.ranked_from ?? null, last: st.runs?.[0] ?? null,
+    probe_symbol: st.probe_symbol ?? null, ranked_from: st.ranked_from ?? null, last: st.runs?.[0] ?? null,
   };
 }

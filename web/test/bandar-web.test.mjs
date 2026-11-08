@@ -290,6 +290,23 @@ test("a session IPOT has not published waits, is probed again every 10 minutes, 
   });
 });
 
+test("a probe stock without trades that session does not hold the scan up: the next probe asks the next stock", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-06T16:14:58+07:00";
+  // TMPO tops the board, but IPOT shows no trades for it on 11-06 (suspended); BBCA's lists are out.
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: [quote("TMPO", 9000, 2e8, traded), quote("BBCA", 5100, 2e8, traded)] }));
+  const recorded = recordedFetch();
+  const fetchFn = async (u, init) => (String(u).includes("code=TMPO") ? new Response(page("brokersummary_bbca_20261017_no_trades.html")) : recorded(u, init));
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    assert.equal((await bandarScanStep(env, { now: at("16:45"), stocks: false })).probe, "unpublished");
+    assert.equal((await scanStatus(env)).probe_symbol, "TMPO");
+    assert.equal((await bandarScanStep(env, { now: at("16:55"), stocks: false })).probe, "published");
+    const st = await scanStatus(env);
+    assert.deepEqual([st.probe_symbol, st.phase, st.probes], ["BBCA", "running", 2]);
+  });
+});
+
 test("a stock IPOT has not published is read again, not stored without its lists", async () => {
   const env = memoryDb();
   const traded = "2026-11-06T16:14:58+07:00";
