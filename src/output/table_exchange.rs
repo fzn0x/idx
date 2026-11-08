@@ -89,7 +89,7 @@ pub fn market_brokers(r: &BrokerRanking, provider: &str, color: bool) -> String 
         other => other,
     };
     let net = if sides {
-        ", and its net (bought minus sold)"
+        ", and its net (bought minus sold; -o json, csv and jsonl add the value bought and sold)"
     } else {
         ""
     };

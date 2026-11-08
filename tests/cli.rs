@@ -1729,6 +1729,9 @@ fn market_brokers_from_ipot_or_idx_co_id() {
             "as IPOT (Indo Premier) publishes them",
         ))
         .stdout(predicate::str::contains(
+            "-o json, csv and jsonl add the value bought and sold",
+        ))
+        .stdout(predicate::str::contains(
             "abbreviates figures of a million and more to two decimals",
         ))
         .stderr(predicate::str::contains(
@@ -1827,7 +1830,10 @@ fn market_brokers_from_ipot_or_idx_co_id() {
         .args(["market", "brokers", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--source ipot"));
+        .stdout(predicate::str::contains(
+            "--source ipot             # with each broker's class and net
+",
+        ));
     let out = idx(&sb.cache, &sb.config)
         .args(["schema", "market-brokers"])
         .output()

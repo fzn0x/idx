@@ -311,7 +311,8 @@ pub enum BrokerSource {
     Auto,
     /// idx.co.id's daily broker summary: any session.
     Idx,
-    /// IPOT's ranking: its latest session only, with each member's buying, selling and net.
+    /// IPOT's ranking: its latest session only, with each member's class and net (and in json,
+    /// csv and jsonl its value bought and sold).
     Ipot,
 }
 
