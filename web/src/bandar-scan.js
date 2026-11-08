@@ -197,8 +197,16 @@ function upgrade(st) {
   return { ...base, phase: "new" };
 }
 
-/** A new state for `session`: what the last one showed and its records carry over. */
-const fresh = (session, prev) => ({ v: 2, session, phase: "new", complete: prev?.complete ?? null, runs: prev?.runs ?? [] });
+/**
+ * A new state for `session`: what the last one showed and its records carry
+ * over. A forced rescan of the same session keeps its stocks, their quotes
+ * and the board they were ranked from instead of ranking the board again:
+ * the session's rows in D1 are those stocks'.
+ */
+const fresh = (session, prev) => ({
+  v: 2, session, phase: "new", complete: prev?.complete ?? null, runs: prev?.runs ?? [],
+  ...(prev?.session === session && prev.symbols?.length ? { symbols: prev.symbols, quotes: prev.quotes ?? {}, ranked_from: prev.ranked_from ?? null } : {}),
+});
 
 /**
  * The record of the scan of `st.session` as the API reads it; `at` is when
@@ -594,12 +602,15 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   const out = { session };
   if (st.phase === "new") {
     const board = await kvGet(env, "board");
-    const { symbols, ranked_from } = ranking(board?.quotes || [], session);
-    if (!symbols.length) return { skipped: "no quote board yet" };
-    // The quotes the price moves need, so later steps do not parse the board again.
-    const bySym = new Map(board.quotes.map((q) => [q.symbol, q]));
-    const quotes = Object.fromEntries(symbols.map((s) => { const q = bySym.get(s); return [s, { price: q.price ?? null, previous_close: q.previous_close ?? null, market_time: q.market_time ?? null }]; }));
-    Object.assign(st, { phase: "waiting", symbols, quotes, ranked_from, board_traded: boardTraded(board, session), probes: 0 });
+    if (!st.symbols) {
+      const { symbols, ranked_from } = ranking(board?.quotes || [], session);
+      if (!symbols.length) return { skipped: "no quote board yet" };
+      // The quotes the price moves need, so later steps do not parse the board again.
+      const bySym = new Map(board.quotes.map((q) => [q.symbol, q]));
+      const quotes = Object.fromEntries(symbols.map((s) => { const q = bySym.get(s); return [s, { price: q.price ?? null, previous_close: q.previous_close ?? null, market_time: q.market_time ?? null }]; }));
+      Object.assign(st, { symbols, quotes, ranked_from });
+    }
+    Object.assign(st, { phase: "waiting", board_traded: boardTraded(board, session), probes: 0 });
     changed = true;
   } else if (st.phase === "waiting" && st.board_traded == null) {
     // The board was refreshed before the session ended; the one there now may tell.
@@ -699,16 +710,18 @@ function runNote(r, shown) {
  * is the session the rows come from, `rows` the symbols they hold. Each of
  * the scan's stocks counts once: by its row when it has one (a stock a
  * forced rescan failed keeps its row from the first scan), else by why it
- * has none. Returns the warnings, the failed and unpublished counts, the
- * stocks scanned and when the shown session was read. Pure, tested through
- * the API.
+ * has none; while the state is the shown session's, a row of a stock outside
+ * its stocks does not count. Returns the warnings, the failed and
+ * unpublished counts, the stocks scanned and when the shown session was
+ * read. Pure, tested through the API.
  */
 export function scanNotes(st, shown, rows, now = new Date()) {
   const warnings = [];
   const latest = hol.latestSession(now);
   const runs = st?.runs || [];
   const run = runs.find((r) => r.session === shown && r.scanned) ?? null;
-  const held = new Set(rows), missing = (list) => (list || []).filter((s) => !held.has(s));
+  const own = st?.session === shown && st.symbols?.length ? new Set(st.symbols) : null;
+  const held = new Set(own ? rows.filter((s) => own.has(s)) : rows), missing = (list) => (list || []).filter((s) => !held.has(s));
   const live = st?.session === shown && underWay(st);
   if (st && latest > st.session) {
     warnings.push(hol.wibDate(now) === latest && wibMinutes(now) < READY_MIN ? `the scan of ${latest} starts at 16:45 WIB; showing ${shown}` : `the scan has not reached ${latest} yet; showing ${shown}`);
@@ -724,7 +737,8 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   const failed = missing(rec?.failed).length;
   const unpublished = missing(rec?.unpublished).length;
   const scanned = held.size + failed + unpublished;
-  if (reading && st.queue.length) warnings.push(`the scan of ${shown} is still running: ${held.size} of ${st.symbols.length} stocks so far`);
+  // A rescan's progress is what it has stored; until it has read a stock, its row is the earlier scan's.
+  if (reading && st.queue.length) warnings.push(run?.stored ? `the scan of ${shown} is reading its stocks again: ${st.stored} of ${st.symbols.length} so far; the others are from its earlier scan` : `the scan of ${shown} is still running: ${st.stored} of ${st.symbols.length} stocks so far`);
   if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads them again at ${clock(st.pending_due, now)}` : "is reading them again"}`);
   const retrying = reading ? missing(st.retry).length : 0;
   if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${retrying} of them again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);

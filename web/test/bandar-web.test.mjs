@@ -876,6 +876,36 @@ test("a forced rescan that has stored fewer stocks than the first scan writes no
   assert.deepEqual([st.complete, st.last.session, st.last.stored], ["2026-10-16", "2026-10-16", 2], "the first scan's record stands");
 });
 
+test("a forced rescan reads the session's own stocks again, however the board has moved since", async () => {
+  const env = memoryDb();
+  const fri = "2026-11-06T16:14:58+07:00", mon = "2026-11-09T09:59:00+07:00";
+  const stocks = ["AAAA", "BBBB", "CCCC", "DDDD"];
+  const friday = stocks.map((s, i) => quote(s, 1000, 1e8 - i, fri));
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-06T16:45:00+07:00"), quotes: friday }));
+  const screen = (now) => bandarScreen(env, null, null, "1d", null, null, null, null, now);
+  const now = new Date("2026-11-09T10:00:00+07:00");
+  await withFetch(lateFetch(new Set()), async () => {
+    await scanAll(env, new Date("2026-11-06T17:00:00+07:00"));
+    // Monday 10:00 WIB: two other stocks trade heavily this morning, and a maintainer forces a rescan of 11-06.
+    env.kv.set("board", JSON.stringify({ ts: unix("2026-11-09T10:00:00+07:00"), quotes: [...friday, quote("EEEE", 1000, 5e8, mon), quote("FFFF", 1000, 4e8, mon)] }));
+    await bandarScanStep(env, { now, force: true });
+    const st = JSON.parse(env.kv.get("bandar_scan"));
+    assert.deepEqual([st.symbols, st.ranked_from, Object.keys(st.quotes)], [stocks, "2026-11-06", stocks]);
+    // Three read again so far; the screen counts each stock once and says where the others come from.
+    const out = await screen(now);
+    assert.equal(out.data.scanned, 4);
+    assert.deepEqual(out.warnings, ["the scan of 2026-11-06 is reading its stocks again: 3 of 4 so far; the others are from its earlier scan"]);
+    await scanAll(env, now);
+  });
+  let out = await screen(now);
+  assert.deepEqual([out.data.scanned, out.data.checked, out.warnings], [4, 4, undefined]);
+  assert.deepEqual([...new Set([...env.scan.keys()].map((k) => k.split("|")[2]))].sort(), stocks);
+  // A row of a stock outside the scan's own (a rescan before this one ranked the board again) is not one of its stocks.
+  env.scan.set("2026-11-06|1d|EEEE", env.scan.get("2026-11-06|1d|AAAA"));
+  out = await screen(now);
+  assert.equal(out.data.scanned, 4);
+});
+
 test("a cron minute that runs late does not take the scan back to the session before", async () => {
   const env = memoryDb();
   const board = (d) => env.kv.set("board", JSON.stringify({ ts: unix(`${d}T16:45:00+07:00`), quotes: [quote("BBCA", 5100, 2e8, `${d}T16:14:58+07:00`), quote("TLKM", 2690, 1e8, `${d}T16:14:58+07:00`)] }));
