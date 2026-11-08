@@ -195,7 +195,7 @@ pub struct ErrorEnvelope {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ErrorBody {
     /// `usage` | `config` | `network` | `provider` | `blocked` | `not_found` | `offline_miss` | `unsupported` | `io` | `internal`.
-    /// `blocked` (exit 3): the source's bot protection (Cloudflare) refused this network.
+    /// `blocked` (exit 3): the source's bot protection (Cloudflare) refused the request.
     pub code: String,
     pub message: String,
 }

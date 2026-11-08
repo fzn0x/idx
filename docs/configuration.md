@@ -142,6 +142,14 @@ a TTL applies immediately.
   failure (`live fetch failed (...); showing cached copy`). Table mode prints
   the warnings and `warning: showing stale cached data from <fetch time> WIB`
   to stderr.
+- idx.co.id's bot protection (Cloudflare) refusing a request counts as such a
+  failure. A challenged request is asked again after 5, 10 and 15 s (four
+  tries, at most 30 s of waiting per request; the loading line shows
+  `www.idx.co.id retry 1`); one met by a block page is not. A refusal is
+  never cached.
+  With nothing cached the error is `blocked` (exit 3) and says what to do;
+  under `--no-cache` it says the cache was skipped and that `--offline`
+  serves a copy if there is one.
 - Network error text and warnings never include a URL's query string, and
   cache keys never hold a session token, so the Yahoo crumb and the MSN key
   stay out of every message; `-vv` debug logging still prints full request

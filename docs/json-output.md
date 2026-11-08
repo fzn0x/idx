@@ -114,8 +114,8 @@ Every successful command wraps its payload:
 | `provider` | string | Source that produced the data (`yahoo`, later `msn`, ...). |
 | `fetched_at` | RFC 3339 UTC | When the underlying response left the network. For cached responses this is the original fetch time. |
 | `cached` | bool | Served from the local cache. |
-| `stale` | bool | The cached copy was older than its TTL and was used anyway (`--offline`, or the network failed). |
-| `stale_reason` | string? | Why `stale` is true: `offline` (`--offline`: the network was not tried) or `fetch_failed` (the live request failed; a `live fetch failed (...); showing cached copy` warning names the failure). Omitted when `stale` is false. |
+| `stale` | bool | The cached copy was older than its TTL and was used anyway (`--offline`, or the network failed or the source refused the request). |
+| `stale_reason` | string? | Why `stale` is true: `offline` (`--offline`: the network was not tried) or `fetch_failed` (the live request failed, or the source's bot protection refused it, such as an idx.co.id challenge that stayed through the retries; a `live fetch failed (...); showing cached copy` warning names the failure). Omitted when `stale` is false. |
 | `warnings` | string[] | Non-fatal notes. Omitted when empty. |
 | `data` | object or array | The payload, see below. |
 
@@ -1258,7 +1258,7 @@ where one helps:
 | --- | --- | --- |
 | 1 | `internal`, `io` | unexpected failure |
 | 2 | `usage` | bad flags or symbol |
-| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused this network with a challenge or a block page. Retry later or from another network, use cached data (`--offline`), or for the ownership register the GitHub mirror |
+| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused the request with a challenge or a block page. For idx.co.id's data a challenged request is retried for 30 s first, and a cached copy, when there is one, is served marked stale instead of the error. A challenge usually passes within a minute: retry then. A block page can last longer: retry later, or from another network if it persists. The message names any other source for the same question (`--source ipot` for a stock's foreign flow, `idx bandar screen --period 1d --sort fnet` for the latest session's foreign net per stock); for the ownership register, the GitHub mirror |
 | 4 | `not_found` | symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` and nothing cached |
 | 6 | `config`, `unsupported` | bad config file or env value; or the selected provider cannot serve this command (`--provider auto` can) |

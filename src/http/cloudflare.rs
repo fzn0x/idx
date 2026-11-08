@@ -1,11 +1,13 @@
 //! Telling a Cloudflare refusal apart from an ordinary HTTP failure.
 //!
-//! Sites behind Cloudflare bot management (idx.co.id) answer some clients,
-//! typically data centres, VPNs and CI runners, with one of two pages:
+//! Sites behind Cloudflare bot management (idx.co.id) answer some requests,
+//! now and then from any network and more often from data centres, VPNs and
+//! CI runners, with one of two pages:
 //!
 //! - a **challenge** ("Just a moment...", `window._cf_chl_opt`), which only a
-//!   browser running its JavaScript can pass; Cloudflare marks it with the
-//!   response header `cf-mitigated: challenge`;
+//!   browser running its JavaScript can pass, though it often lifts within a
+//!   minute; Cloudflare marks it with the response header
+//!   `cf-mitigated: challenge`;
 //! - a **block page** ("Attention Required! | Cloudflare", "Sorry, you have
 //!   been blocked"), served without that header.
 //!
@@ -17,7 +19,8 @@
 /// What kind of refusal a response is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// A managed or JavaScript challenge only a browser can solve.
+    /// A managed or JavaScript challenge only a browser can solve; it often
+    /// lifts within a minute, so a later request can pass without one.
     Challenge,
     /// A block page (firewall rule or bot score); no browser step passes it.
     Block,

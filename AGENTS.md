@@ -44,7 +44,7 @@ src/
                      corporate actions, RUPS, warrants/rights (actions.rs; nested announcement tables)
     idx/             idx.co.id JSON endpoints: stock/broker/index daily summaries, per-stock history,
                      exchange calendar (parse.rs classifies entries), securities, members; Cloudflare
-                     403 becomes a provider error
+                     challenges retried for 30 s, then the cached copy or a `blocked` error
     stockbit/        OPT-IN realtime (exodus.stockbit.com), the one provider that carries a credential
                      (the user's own session) and the one not in the Auto chain: orderbook endpoint ->
                      quote + full depth ladder (model/orderbook.rs), charts/daily -> candles,

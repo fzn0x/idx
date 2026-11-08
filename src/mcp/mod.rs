@@ -73,10 +73,11 @@ stale=true means a cached copy older than its TTL was served: stale_reason is of
 request; a warning names the failure).
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
 means the ticker is unknown, offline_miss means --offline with nothing cached, blocked
-means the source's bot protection (Cloudflare, idx.co.id) refused the request and no
-cached copy could stand in. It usually passes within a minute (a challenged request is
-already retried for 30 s): call again then, or take the alternative the message names;
-for the ownership register, the GitHub mirror.
+means the source's bot protection (Cloudflare, idx.co.id) refused the request; for
+idx.co.id's data a challenged request is already retried for 30 s and a cached copy,
+when there is one, is served instead. It usually passes within a minute: call again
+then, or take the alternative the message names; for the ownership register, the
+GitHub mirror.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.

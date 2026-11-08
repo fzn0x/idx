@@ -2,7 +2,8 @@
 //!
 //! Providers never talk to `reqwest` directly: they ask the [`Fetcher`] for a
 //! URL with a TTL. The fetcher consults the [`Cache`], honours `--offline` and
-//! `--no-cache`, and falls back to a stale entry when the network fails. The
+//! `--no-cache`, and falls back to a stale entry when the network fails or
+//! the source refuses ([`Fetcher::get_unless`]). The
 //! [`Backend`] trait lets tests substitute recorded fixtures for the network.
 
 use std::collections::HashMap;

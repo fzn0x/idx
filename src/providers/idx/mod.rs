@@ -20,13 +20,13 @@
 //! on 2026-11-08; the same request passed 25 s later) and refuses
 //! data-centre addresses (CI runners, Cloudflare Workers) more often, with a
 //! "Just a moment" challenge or a 403 "Attention Required" block page
-//! ([`http::cloudflare`](crate::http::cloudflare)). A challenge is
-//! asked again three times within 30 s (`CHALLENGE_PAUSES`); a block page
-//! is not. A refusal that stays is a failed fetch: the cached copy is served
-//! in its place, marked stale with a warning naming it, and with no copy it
-//! becomes a `blocked` error (exit 3) naming the cause. Any other failure
-//! keeps its HTTP status as a `provider` error. Answers are cached like any
-//! other; refusals never are.
+//! ([`http::cloudflare`](crate::http::cloudflare)). A challenged request is
+//! asked again three times within 30 s (`CHALLENGE_PAUSES`); one met by a
+//! block page is not. A refusal that stays is a failed fetch: the cached
+//! copy is served in its place, marked stale with a warning naming it, and
+//! with no copy it becomes a `blocked` error (exit 3) naming the cause. Any
+//! other failure keeps its HTTP status as a `provider` error. Answers are
+//! cached like any other; refusals never are.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -144,10 +144,11 @@ fn advise(e: IdxError, mode: CacheMode) -> IdxError {
     }
 }
 
-/// One idx.co.id endpoint. A Cloudflare challenge is asked again after each
-/// of [`CHALLENGE_PAUSES`]; one that stays, or a block page, is a failed
-/// fetch: the cached copy stands in for it, marked stale with a warning
-/// naming the refusal, or the call fails with a `blocked` error.
+/// One idx.co.id endpoint. A request met by a Cloudflare challenge is asked
+/// again after each of [`CHALLENGE_PAUSES`]; a challenge that stays, or a
+/// block page, is a failed fetch: the cached copy stands in for it, marked
+/// stale with a warning naming the refusal, or the call fails with a
+/// `blocked` error.
 async fn get(fetcher: &Arc<Fetcher>, path: &str, ttl: Duration) -> Result<Fetched> {
     let url = format!("{BASE}/{path}");
     let headers = headers();

@@ -25,7 +25,8 @@ to the other.
   stderr. Parse the JSON rather than the tables.
 - Check `stale` and `warnings` in the envelope before quoting a number.
   `stale: true` means a cached copy older than its lifetime was served
-  because the network failed or `--offline` was set.
+  because the network failed, the source's bot protection refused the
+  request, or `--offline` was set.
 - A field the source did not publish is `null`. Say the value is
   unavailable; do not estimate it.
 - The fundamentals verdict, the technical signal, news sentiment and the
@@ -42,7 +43,7 @@ to the other.
 | 0 | | success |
 | 1 | `internal`, `io` | unexpected; report it |
 | 2 | `usage` | fix the command, a flag or the symbol |
-| 3 | `network`, `provider`, `blocked` | a source failed or refused; retry later. `blocked`: its bot protection (Cloudflare) refused this network; use cached data, another network or, for the ownership register, the GitHub mirror |
+| 3 | `network`, `provider`, `blocked` | a source failed or refused; retry later. `blocked`: its bot protection (Cloudflare) refused the request; for idx.co.id's data a challenged request is already retried for 30 s and a cached copy is served instead when there is one, so the error means none was. It usually passes within a minute: retry then, or take the alternative the message names (`stocks foreign --source ipot`, `bandar screen --period 1d --sort fnet`); for the ownership register, the GitHub mirror |
 | 4 | `not_found` | the symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` was set and nothing is cached |
 | 6 | `config`, `unsupported` | fix the config, or drop `--provider` so the automatic chain answers |
