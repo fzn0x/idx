@@ -1339,6 +1339,86 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new 
   return envelope("idx.bandar.broker.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings });
 }
 
+// ---- market foreign (bandar scan + IPOT's market statistics) -------------
+
+/** IPOT's market statistics of its latest session with their date, like ipot::market_summary (latestPage). */
+export async function marketSummary(env, now = new Date()) {
+  const { d, cached, failure, fetched_at, notes } = await latestPage(env, SUMMARY_PAGE, now);
+  return { date: d.date, summary: d.page, cached, stale: !!failure, fetched_at, warnings: notes };
+}
+
+/** Rows `market foreign` shows per side by default, like the CLI's --top. */
+const MARKET_FOREIGN_TOP = 10;
+
+/** One scanned stock as service::foreign_value_row gives it: the 1d row's value traded and foreign net, its price and move. */
+function foreignValueRow(r) {
+  const s = r.summary, value = s.total_value ?? null, net = s.foreign_net_value ?? null;
+  return {
+    symbol: r.symbol, name: s.name ?? null, price: r.price ?? null, change_pct: r.chg ?? null, value,
+    foreign_net_value: net, foreign_net_pct: net != null && value > 0 ? (net / value) * 100 : null,
+  };
+}
+
+/**
+ * /api/market/foreign: `idx market foreign --source ipot`
+ * (idx.market.foreign.value.v1) over the bandar scan's 1d rows in D1 (the
+ * session's 100 most traded stocks, src/bandar-scan.js), ranked by each one's
+ * foreign net in rupiah from its broker summary, with the market's totals
+ * from IPOT's market statistics when they can be dated to that session
+ * (marketSummary), else null with a warning. The scan's own notes say which
+ * session is shown and why. idx.co.id refuses this host, so `idx` is not
+ * offered, nor its sort by net shares.
+ */
+export async function marketForeign(env, dateRaw, topRaw, sortRaw, sourceRaw, now = new Date()) {
+  const source = String(sourceRaw ?? "").trim().toLowerCase() || "ipot";
+  if (source === "idx") throw usage("idx.co.id refuses requests from this site's host, so the web terminal reads IPOT (source ipot): the foreign net in rupiah of the session's 100 most traded stocks; the CLI and MCP also read idx.co.id's, every stock in shares");
+  if (source !== "ipot") throw usage(`invalid source "${sourceRaw}"; the web terminal reads ipot`);
+  const sort = String(sortRaw ?? "").trim().toLowerCase() || "value";
+  if (sort === "shares") throw usage("source ipot ranks the foreign net in rupiah; sort shares is idx.co.id's net shares (source idx)");
+  if (sort !== "value") throw usage(`invalid sort "${sortRaw}"; use value or shares`);
+  const top = topRaw == null || topRaw === "" ? MARKET_FOREIGN_TOP : Number(topRaw);
+  if (!Number.isInteger(top) || top < 0) throw usage(`invalid top "${topRaw}"; give a number of rows per side, 0 for all`);
+  const date = isoDate(dateRaw, "date");
+  if (date) {
+    if (date > hol.wibDate(now)) throw usage(`${date} is in the future`);
+    if (!hol.isTradingDay(date)) throw notFound(`no trading data: ${hol.closedReason(date)}`);
+  }
+  const scan = await scanRows(env, "1d");
+  if (!scan.session) throw noScanYet(scan.state, now);
+  const end = scan.session;
+  if (date && date < end) throw usage(`source ipot shows the latest session IPOT has published, ${end}, not ${date}; source idx (idx.co.id) has the others`);
+  if (date && date > end) throw notFound(`the bandar scan has not read ${date} yet: it shows ${end}`);
+  const notes = scanNotes(scan.state, end, scan.rows.map((r) => r.symbol), now);
+  const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
+  let rounded = traded.some((r) => r.summary.rounded);
+  const rows = traded.map(foreignValueRow);
+  const net = (r) => r.foreign_net_value ?? 0;
+  const buy = rows.filter((r) => net(r) > 0).sort((a, b) => net(b) - net(a));
+  const sell = rows.filter((r) => net(r) < 0).sort((a, b) => net(a) - net(b));
+  const warnings = [...notes.warnings];
+  let market = null, cachedAll = true, stale = false, fetched = new Date(notes.fetched_at);
+  try {
+    const m = await marketSummary(env, now);
+    if (m.date === end) {
+      const s = m.summary;
+      market = { value: s.value, foreign_buy_value: s.foreign_buy_value, foreign_sell_value: s.foreign_sell_value, foreign_net_value: s.foreign_net_value };
+      rounded ||= s.rounded;
+      cachedAll = m.cached;
+      stale = m.stale;
+      if (m.fetched_at < fetched) fetched = m.fetched_at;
+      warnings.push(...m.warnings);
+    } else warnings.push(`no market totals: IPOT's market summary is for ${m.date}, not ${end}`);
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    warnings.push(`no market totals: ${e.message}`);
+  }
+  const data = {
+    date: end, scanned: notes.scanned, checked: traded.length, market,
+    net_buy: top > 0 ? buy.slice(0, top) : buy, net_sell: top > 0 ? sell.slice(0, top) : sell, rounded,
+  };
+  return envelope("idx.market.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
+}
+
 // ---- directories (bundled) ---------------------------------------------
 
 const matchesSearch = (q, code, name) => {
@@ -1721,6 +1801,7 @@ export async function route(env, url) {
     case "/bandar/screen": return bandarScreen(env, q.get("preset"), q.get("filter"), q.get("period"), q.get("top"), q.get("sort"), q.get("asc"), q.get("limit"));
     case "/bandar/status": return envelope("idx.bandar.scan.v1", await scanStatus(env), { provider: ipot.NAME, cached: true });
     case "/bandar/broker": return bandarBroker(env, q.get("code"), q.get("period"), q.get("limit"));
+    case "/market/foreign": return marketForeign(env, q.get("date"), q.get("top"), q.get("sort"), q.get("source"));
     case "/actions": return actions(env, q.get("symbol"), q.get("since"));
     case "/holidays": return holidays(q.get("year"), q.get("all"), q.get("upcoming"));
     case "/astro": return astro(env, q.get("date"), q.get("days"), q.get("natal"), q.get("backtest"), q.get("period"));
