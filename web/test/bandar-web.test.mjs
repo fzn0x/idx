@@ -656,6 +656,44 @@ test("a stock that fails is tried again 10, 30, 60 and 120 minutes after its pas
   assert.deepEqual([st.last_errors[0].symbol, st.last_errors[0].kind, st.last_errors[0].error], ["TLKM", "http_503", "HTTP 503"]);
 });
 
+test("a retry round or a re-read due after the next session's 16:45 is not promised: the stocks count as they stand then", async () => {
+  const env = memoryDb();
+  const traded = "2026-11-11T16:14:58+07:00";
+  env.kv.set("board", JSON.stringify({ ts: unix("2026-11-11T16:45:00+07:00"), quotes: [quote("BBCA", 5100, 3e8, traded), quote("TLKM", 2690, 2e8, traded), quote("BRPT", 1210, 1e8, traded)] }));
+  const day = page("brokersummary_bbca_20261106.html"), range = page("brokersummary_bbca_20261012_20261016.html"), unpub = page("brokersummary_bbca_20261106_insession.html");
+  // Wednesday 11-11 is read from 21:30 WIB: IPOT fails TLKM every time and never publishes BRPT.
+  const fetchFn = async (u) => {
+    const url = String(u);
+    if (url.includes("finance/chart")) return new Response(CHART);
+    if (url.includes("code=TLKM")) return new Response("busy", { status: 503 });
+    if (url.includes("start=11/11/2026&end=11/11/2026")) return new Response(url.includes("code=BRPT") ? unpub : day);
+    return new Response(range);
+  };
+  const notes = {};
+  await withFetch(fetchFn, async () => {
+    for (let t = Date.parse("2026-11-11T21:30:00+07:00"); t <= Date.parse("2026-11-12T16:35:00+07:00"); t += 60e3) {
+      const now = new Date(t);
+      await bandarScanStep(env, { now });
+      const wib = new Date(t + 7 * 3600e3).toISOString(), hm = wib.slice(11, 16);
+      if (wib.startsWith("2026-11-12") && ["13:05", "13:15", "16:35"].includes(hm)) notes[hm] = (await bandarScreen(env, null, null, "1d", null, null, null, null, now)).warnings;
+    }
+  });
+  // TLKM's seventh round is at 13:10 and its eighth would be at 17:10; BRPT is read again every 30 minutes.
+  assert.deepEqual(notes["13:05"], [
+    "IPOT has not published 2026-11-11 for 1 of the 3 stocks yet; the scan reads it again at 13:30 WIB",
+    "1 of 3 scanned stocks had no broker summary; the scan tries it again at 13:10 WIB",
+  ]);
+  assert.deepEqual(notes["13:15"], [
+    "IPOT has not published 2026-11-11 for 1 of the 3 stocks yet; the scan reads it again at 13:30 WIB",
+    "1 of 3 scanned stocks had no broker summary; it counts as failed at 16:45 WIB, when the scan of 2026-11-12 starts",
+  ]);
+  assert.deepEqual(notes["16:35"], [
+    "the scan of 2026-11-12 starts at 16:45 WIB; showing 2026-11-11",
+    "IPOT has not published 2026-11-11 for 1 of the 3 stocks yet; it counts as not published at 16:45 WIB, when the scan of 2026-11-12 starts",
+    "1 of 3 scanned stocks had no broker summary; it counts as failed at 16:45 WIB, when the scan of 2026-11-12 starts",
+  ]);
+});
+
 test("/api/bandar/status gives done_at only once the scan is done, and when its record was filed meanwhile", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));

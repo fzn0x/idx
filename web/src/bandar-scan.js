@@ -664,6 +664,10 @@ const clock = (iso, now) => (hol.wibDate(iso) === hol.wibDate(now) ? `${hhmm(iso
 const underWay = (st) => ["new", "waiting", "running"].includes(st?.phase);
 /** How a warning names `n` of the `of` stocks it has just counted: "it" for the one, "them" for all of several, else "N of them". */
 const them = (n, of) => (n < of ? `${n} of them` : n === 1 ? "it" : "them");
+/** The same as the subject of "count". */
+const theyCount = (n, of) => (n < of ? `${n} of them count` : n === 1 ? "it counts" : "they count");
+/** 16:45 WIB of `date`, from when the scan looks at that day's session. */
+const readyAt = (date) => new Date(Date.parse(`${date}T00:00:00+07:00`) + READY_MIN * 60e3).toISOString();
 
 /** Trading days after `from` up to `to`. */
 function sessionsAfter(from, to) {
@@ -751,12 +755,24 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   const scanned = held.size + failed + unpublished;
   // A rescan's progress is what it has stored; until it has read a stock, its row is the earlier scan's.
   if (reading && st.queue.length) warnings.push(run?.stored ? `the scan of ${shown} is reading its stocks again: ${st.stored} of ${st.symbols.length} so far; the others are from its earlier scan` : `the scan of ${shown} is still running: ${st.stored} of ${st.symbols.length} stocks so far`);
+  // A round or a re-read due at or after the next session's 16:45 WIB never
+  // comes: cutoff() files the stocks as they stand first.
+  const next = reading ? hol.nextTradingDay(st.session) : null;
+  const cut = next && readyAt(next);
+  const late = (due) => !!due && Date.parse(due) >= Date.parse(cut);
+  const atCut = () => `at ${clock(cut, now)}, when the scan of ${next} starts`;
   if (reading && unpublished) {
     const it = them(unpublished, unpublished);
-    warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads ${it} again at ${clock(st.pending_due, now)}` : `is reading ${it} again`}`);
+    const when = late(st.pending_due) ? `${theyCount(unpublished, unpublished)} as not published ${atCut()}`
+      : `the scan ${st.pending_due ? `reads ${it} again at ${clock(st.pending_due, now)}` : `is reading ${it} again`}`;
+    warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; ${when}`);
   }
   const retrying = reading ? missing(st.retry).length : 0;
-  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${them(retrying, failed)} again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
+  if (failed) {
+    const when = !retrying ? "" : late(st.retry_due) ? `; ${theyCount(retrying, failed)} as failed ${atCut()}`
+      : `; the scan tries ${them(retrying, failed)} again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}`;
+    warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${when}`);
+  }
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
   if (rec?.ranked_from && rec.ranked_from !== shown) warnings.push(`the scan of ${shown} picked its ${rec.of} stocks from the quote board of ${rec.ranked_from}, not from that session's close`);
@@ -765,7 +781,7 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   // When the shown session's scan last stored a stock; before it stored one,
   // when it started; for a session kept from before these records, the
   // earliest its scan could have read it.
-  const fetched_at = rec?.stored_at || run?.done_at || (st?.session === shown ? st.started_at : null) || new Date(Date.parse(`${shown}T00:00:00+07:00`) + READY_MIN * 60e3).toISOString();
+  const fetched_at = rec?.stored_at || run?.done_at || (st?.session === shown ? st.started_at : null) || readyAt(shown);
   return { warnings, failed, unpublished, scanned, fetched_at };
 }
 
