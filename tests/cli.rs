@@ -1826,14 +1826,22 @@ fn market_brokers_from_ipot_or_idx_co_id() {
         .args(["market", "brokers", "--source", "rti"])
         .assert()
         .code(2);
-    idx(&sb.cache, &sb.config)
+    // At 80 columns the examples fit and clap wraps the prose.
+    let out = idx(&sb.cache, &sb.config)
+        .env("COLUMNS", "80")
         .args(["market", "brokers", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "--source ipot             # with each broker's class and net
-",
-        ));
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8(out.stdout).unwrap();
+    let after = &help[help.find("Examples:").unwrap()..];
+    assert!(
+        after.contains(
+            "\n  idx market brokers --source ipot     # with each broker's class and net\n"
+        ),
+        "{after}"
+    );
+    assert!(after.lines().all(|l| l.chars().count() <= 80), "{after}");
     let out = idx(&sb.cache, &sb.config)
         .args(["schema", "market-brokers"])
         .output()
