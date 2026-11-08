@@ -574,6 +574,30 @@ test("stocks IPOT has not published are read again apart from the pass, and coun
   });
 });
 
+test("while the shown session's first pass runs, its stocks that wait are read again after that pass", async () => {
+  const env = memoryDb();
+  env.kv.set("board", lateBoard(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE"]));
+  const late = lateFetch(new Set(["CCCC"]));
+  // No session is shown yet. IPOT fails BBBB and has not published CCCC.
+  const fetchFn = async (u, init) => (String(u).includes("code=BBBB") ? new Response("busy", { status: 503 }) : late(u, init));
+  const at = (hm) => new Date(`2026-11-06T${hm}:00+07:00`);
+  const screen = (hm) => bandarScreen(env, null, null, "1d", null, null, null, null, at(hm));
+  await withFetch(fetchFn, async () => {
+    await bandarScanStep(env, { now: at("17:00") });
+    assert.deepEqual((await screen("17:00")).warnings, [
+      "the scan of 2026-11-06 is still running: 1 of 5 stocks so far",
+      "IPOT has not published 2026-11-06 for 1 of the 5 stocks yet; the scan reads it again after its first pass",
+      "1 of 3 scanned stocks had no broker summary; the scan tries it again after its first pass",
+    ]);
+    // The pass ends at 17:01: BBBB's round is due 10 minutes later, CCCC's re-read when it was set.
+    await bandarScanStep(env, { now: at("17:01") });
+    assert.deepEqual((await screen("17:01")).warnings, [
+      "IPOT has not published 2026-11-06 for 1 of the 5 stocks yet; the scan reads it again at 17:10 WIB",
+      "1 of 5 scanned stocks had no broker summary; the scan tries it again at 17:11 WIB",
+    ]);
+  });
+});
+
 test("while stocks are read again, the screen counts each of them once", async () => {
   const env = memoryDb();
   env.kv.set("board", lateBoard(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE", "FFFF", "GGGG", "HHHH"]));
