@@ -2120,22 +2120,31 @@ mod tests {
             let head = "<thead><tr><th>#</th><th colspan=\"2\">Company</th><th>T.Val</th><th>N.Val</th><th>B.Val</th><th>S.Val</th><th>T.Vol</th><th>T.Freq</th></tr></thead>";
             format!("<table>{head}<tbody>{body}</tbody></table>")
         };
-        let ranking = |html: String| async move {
+        let ranking_at = |html: String, now| async move {
             let (f, _be, _d) = fetcher(ipot_ranking(FixtureBackend::new(), &html));
-            market_brokers_from(&f, BrokerSource::Ipot, None, 0, BrokerSort::Value, sunday()).await
+            market_brokers_from(&f, BrokerSource::Ipot, None, 0, BrokerSort::Value, now).await
         };
-        let err = ranking(page(&[
-            ("PS", "PARAMITRA ALFA SEKURITAS", "0"),
-            ("ZZ", "Kliring", "0"),
-        ]))
-        .await
-        .unwrap_err();
+        let ranking = |html: String| ranking_at(html, sunday());
+        // Read on the morning of 2026-11-06, before its first trades.
+        let morning = chrono::DateTime::parse_from_rfc3339("2026-11-06T08:00:00+07:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let none = || {
+            page(&[
+                ("PS", "PARAMITRA ALFA SEKURITAS", "0"),
+                ("ZZ", "Kliring", "0"),
+            ])
+        };
+        let err = ranking_at(none(), morning).await.unwrap_err();
         assert_eq!(err.exit_code(), 4);
         assert!(
             err.to_string()
                 .contains("IPOT's broker ranking for 2026-11-06 has no trades yet"),
             "{err}"
         );
+        // Read on the Sunday after, the session had trades: no date fits.
+        let err = ranking(none()).await.unwrap_err();
+        assert_eq!(err.code(), "provider");
 
         let s = ranking(page(&[
             ("Q9", "Unknown Sekuritas", "12"),

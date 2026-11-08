@@ -607,15 +607,32 @@ pub async fn top_brokers(
             "BBCA's statistics page has no Today row to date the broker ranking",
         )
     })?;
+    if !holidays::is_trading_day(date) {
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "the page that dates the broker ranking names {date}, which is not a trading day"
+            ),
+        ));
+    }
     let mut data = topbroker::ranking(&ranked.body, date)?;
+    let traded = data.brokers.iter().any(topbroker::TopBroker::traded);
     // A date whose session had not opened when the pages were read cannot
-    // have trades.
+    // have trades, and one whose session had ended cannot be without them.
     let opened = date < day || date == day && secs >= FIRST_TRADES_SECS;
-    if !opened && data.brokers.iter().any(topbroker::TopBroker::traded) {
+    if !opened && traded {
         return Err(IdxError::provider(
             NAME,
             format!(
                 "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+            ),
+        ));
+    }
+    if !traded && date <= holidays::latest_session(read) {
+        return Err(IdxError::provider(
+            NAME,
+            format!(
+                "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
             ),
         ));
     }
@@ -1499,6 +1516,52 @@ mod tests {
         let s = top_brokers(&f, at("2026-11-06T09:00:00")).await.unwrap();
         assert_eq!(s.data.date, d(2026, 11, 5));
         assert_eq!(s.warnings.len(), 1, "only the fold: {:?}", s.warnings);
+    }
+
+    #[tokio::test]
+    async fn a_date_that_cannot_be_the_rankings_session_is_refused() {
+        let sunday = at("2026-11-08T10:00:00");
+        let empty = {
+            let start = TOP.find("<tbody>").unwrap() + 7;
+            format!("{}{}", &TOP[..start], &TOP[TOP.find("</tbody>").unwrap()..])
+        };
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, &empty)
+                .route(SESSION_ENDPOINT, 200, STATISTIC),
+        );
+        // Reset for a new session while the date page names the last one,
+        // which had trades: the pages are on different sessions.
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert_eq!(err.code(), "provider");
+        assert!(
+            err.to_string().contains(
+                "shows no trades, yet the page that dates it names 2026-11-06, a session that had ended then"
+            ),
+            "{err}"
+        );
+        // Before the open, a ranking without trades dated that day is right.
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, &empty)
+                .route(SESSION_ENDPOINT, 200, STATISTIC),
+        );
+        let s = top_brokers(&f, at("2026-11-06T08:00:00")).await.unwrap();
+        assert!(s.data.brokers.is_empty());
+
+        // A Saturday is no session.
+        let saturday = STATISTIC.replacen("2026-11-06", "2026-11-07", 2);
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                .route(SESSION_ENDPOINT, 200, &saturday),
+        );
+        let err = top_brokers(&f, sunday).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("names 2026-11-07, which is not a trading day"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
