@@ -1015,22 +1015,33 @@ async fn broker_day(
 /// Every exchange member's trading for one session (default: the latest
 /// published), ranked by value, volume or frequency; the `top` first (0 =
 /// all). Each member's figures count both its buying and its selling.
-///
-/// idx.co.id publishes a session's summary after its close, so with no
-/// `date` the walk back starts at the latest session that had ended by
-/// `now` (16:15 WIB): before then the day's own summary is not asked for,
-/// and a refusal of that request cannot hide the session before it. A
-/// session that could not be read is not skipped either (see
-/// [`broker_day`]).
+/// `today` counts as after its close; [`market_brokers_from`] knows the
+/// hour (see [`members_until`]).
 pub async fn market_brokers(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
     top: usize,
     sort: BrokerSort,
-    now: chrono::DateTime<chrono::Utc>,
+    today: NaiveDate,
 ) -> Result<Sourced<BrokerRanking>> {
-    let today = now.with_timezone(&crate::model::wib()).date_naive();
-    let ended = holidays::latest_session(now);
+    let ended = holidays::last_trading_day(today);
+    members_until(fetcher, date, top, sort, today, ended).await
+}
+
+/// [`market_brokers`] with `ended`, the latest session that has ended.
+/// idx.co.id publishes a session's summary after its close, so with no
+/// `date` the walk back starts there: before the close the day's own
+/// summary is not asked for, and a refusal of that request cannot hide the
+/// session before it. A session that could not be read is not skipped
+/// either (see [`broker_day`]).
+async fn members_until(
+    fetcher: &Arc<Fetcher>,
+    date: Option<NaiveDate>,
+    top: usize,
+    sort: BrokerSort,
+    today: NaiveDate,
+    ended: NaiveDate,
+) -> Result<Sourced<BrokerRanking>> {
     let from = match date {
         Some(_) => today,
         None => ended,
@@ -1191,11 +1202,13 @@ pub async fn market_brokers_from(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Sourced<BrokerRanking>> {
     use crate::model::BrokerSource;
+    let today = now.with_timezone(&crate::model::wib()).date_naive();
+    let ended = holidays::latest_session(now);
     match source {
-        BrokerSource::Idx => market_brokers(fetcher, date, top, sort, now).await,
+        BrokerSource::Idx => members_until(fetcher, date, top, sort, today, ended).await,
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
-            let refused = match market_brokers(fetcher, date, top, sort, now).await {
+            let refused = match members_until(fetcher, date, top, sort, today, ended).await {
                 Err(
                     e @ (IdxError::Blocked { .. }
                     | IdxError::Provider { .. }
@@ -2607,7 +2620,7 @@ mod tests {
             Some(d(2026, 10, 16)),
             5,
             BrokerSort::Value,
-            wib_at("2026-10-18T10:00:00"),
+            d(2026, 10, 18),
         )
         .await
         .unwrap();
@@ -2626,7 +2639,7 @@ mod tests {
             Some(d(2026, 10, 16)),
             0,
             BrokerSort::Frequency,
-            wib_at("2026-10-18T10:00:00"),
+            d(2026, 10, 18),
         )
         .await
         .unwrap();
