@@ -150,7 +150,10 @@ a TTL applies immediately.
   the next idx.co.id requests (from any command or MCP call on the same
   cache, `--no-cache` aside) are asked once, so a command that makes several
   meets the refusal or its cached copies at once instead of waiting 30 s
-  for each.
+  for each. `market brokers` under `--source auto` asks idx.co.id once,
+  without the pauses, where IPOT could answer for the session asked for,
+  and lets IPOT stand in; only if IPOT cannot is idx.co.id asked again
+  with every pause.
   An empty copy of a day's stock, broker or index summary does not stand in
   for a failed fetch, as it may be from before the summary was out: the
   error stands and names the copy. So does a copy of a stock's history

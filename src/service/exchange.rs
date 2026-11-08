@@ -492,6 +492,14 @@ pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
     mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
 };
 
+/// When idx.co.id refuses the member ranking of a session IPOT could hold:
+/// IPOT's ranking, which answers from anywhere, but only of its latest
+/// session.
+pub const BROKERS_IPOT_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or use --source ipot (or the default, --source auto) for IPOT's (Indo Premier) ranking of its latest session",
+    mcp: "; or call the tool again with source \"ipot\" (or \"auto\", the default) for IPOT's (Indo Premier) ranking of its latest session",
+};
+
 /// idx.co.id refused the request and nothing was cached: add what else
 /// answers the question. A Cloudflare refusal keeps its JSON code `blocked`.
 fn with_alternative(e: IdxError, advice: crate::error::Advice) -> IdxError {
@@ -1007,46 +1015,35 @@ fn read_unpublished(
 /// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
 /// Before idx.co.id publishes a session its summary is an empty list, so a
 /// summary read on `day` itself without rows does not show that a trading
-/// day had no session ([`read_unpublished`]). Once that session has ended
-/// (`ended`), such a copy is read again: the cache keeps a past day's
-/// summary for a closed session's 30 days, so it is asked for with today's
-/// short lifetime instead. An empty answer read so is returned for the walk
-/// to tell from a day without a session. A copy served because it could
-/// not be read again (the live fetch failed, or offline) is an error rather
-/// than a day without trading: the walk does not skip a session it could
-/// not read.
+/// day had no session ([`read_unpublished`]). The idx provider reads such a
+/// copy of a past day again, with today's short lifetime instead of a closed
+/// session's 30 days, and never lets an empty copy stand in for a failed
+/// fetch: the failure stands, naming the copy. An empty answer read so is
+/// returned for the walk to tell from a day without a session. Offline such
+/// a copy cannot be read again, and once its session has ended (`ended`) it
+/// is an error rather than a day without trading: the walk does not skip a
+/// session it could not read. `patience` says whether a challenge is waited
+/// out.
 async fn broker_day(
     fetcher: &Arc<Fetcher>,
     day: NaiveDate,
     today: NaiveDate,
     ended: NaiveDate,
+    patience: idx::Patience,
 ) -> Result<Sourced<Vec<idx::BrokerDay>>> {
-    let read = |s: &Sourced<Vec<idx::BrokerDay>>| s.fetched_at.with_timezone(&crate::model::wib());
-    let early = |s: &Sourced<Vec<idx::BrokerDay>>| read_unpublished(s, day, today, ended);
-    let mut s = idx::broker_summary(fetcher, day, today).await?;
-    if early(&s) && s.cached && !s.stale && day < today {
-        s = idx::broker_summary(fetcher, day, day).await?;
-    }
-    if !early(&s) || !s.stale {
-        return Ok(s);
-    }
-    let clock = read(&s).format("%H:%M");
-    if s.stale_reason == Some(crate::model::StaleReason::Offline) {
+    let s = idx::broker_summary_with(fetcher, day, today, patience).await?;
+    if s.stale_reason == Some(crate::model::StaleReason::Offline)
+        && read_unpublished(&s, day, today, ended)
+    {
+        let clock = s
+            .fetched_at
+            .with_timezone(&crate::model::wib())
+            .format("%H:%M");
         return Err(IdxError::OfflineMiss(format!(
             "the broker summary for {day} is cached only as read at {clock} WIB that day, with no rows, which it has until idx.co.id publishes the session"
         )));
     }
-    let why = s
-        .warnings
-        .iter()
-        .find_map(|w| crate::providers::fetch_failed_cause(w))
-        .unwrap_or("the live fetch failed");
-    Err(IdxError::provider(
-        idx::NAME,
-        format!(
-            "the broker summary for {day} could not be read again ({why}); the copy read at {clock} WIB that day has no rows, which it has until idx.co.id publishes the session"
-        ),
-    ))
+    Ok(s)
 }
 
 /// Every exchange member's trading for one session (default: the latest
@@ -1082,13 +1079,15 @@ async fn members_until(
     today: NaiveDate,
     ended: NaiveDate,
 ) -> Result<Sourced<BrokerRanking>> {
-    let (walked, unpublished) = idx_walk(fetcher, date, top, sort, today, ended).await;
+    let (walked, unpublished) =
+        idx_walk(fetcher, date, top, sort, today, ended, idx::Patience::Wait).await;
     idx_answer(walked, date, unpublished, None)
 }
 
 /// idx.co.id's walk for [`members_until`]: the ranking, or the error that
 /// ended the walk, and the session it found unpublished on the way (see
-/// [`read_unpublished`]), if any.
+/// [`read_unpublished`]), if any. `patience` says whether a challenge is
+/// waited out.
 async fn idx_walk(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -1096,6 +1095,7 @@ async fn idx_walk(
     sort: BrokerSort,
     today: NaiveDate,
     ended: NaiveDate,
+    patience: idx::Patience,
 ) -> (Result<Sourced<BrokerRanking>>, Option<NaiveDate>) {
     if let Some(d) = date.filter(|d| *d <= today && !holidays::is_trading_day(*d)) {
         let none = IdxError::NotFound(format!("no trading data: {}", closed_reason(d)));
@@ -1109,7 +1109,7 @@ async fn idx_walk(
     let walked = session(date, from, |d| {
         let unpublished = &unpublished;
         async move {
-            let s = broker_day(fetcher, d, today, ended).await?;
+            let s = broker_day(fetcher, d, today, ended, patience).await?;
             if read_unpublished(&s, d, today, ended) {
                 unpublished.lock().expect("not poisoned").get_or_insert(d);
             }
@@ -1300,6 +1300,17 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
     }
 }
 
+/// `true` when IPOT could answer for `date` at `at`: it holds only its
+/// latest session, so `date` must be none or the latest session that has
+/// ended (`ended`), and its ranking cannot be dated in a trading day's hours.
+fn ipot_could_answer(
+    date: Option<NaiveDate>,
+    ended: NaiveDate,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    date.is_none_or(|d| d == ended) && ipot::top_brokers_datable(at)
+}
+
 /// The member ranking from `source`. `auto` asks idx.co.id and, when it
 /// refuses (code `blocked`), cannot be reached (`network`), fails
 /// (`provider`), offline has no copy (`offline_miss`), or has not
@@ -1307,7 +1318,12 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
 /// if IPOT holds the session asked for: `date`, or with none the latest
 /// session that has ended. When IPOT cannot stand in (another session, such
 /// as an old copy served offline or after a failed fetch, or a failure),
-/// idx.co.id's answer stands with IPOT's reason after it.
+/// idx.co.id's answer stands with IPOT's reason after it. Where IPOT could
+/// answer ([`ipot_could_answer`]), `auto` does not wait for a Cloudflare
+/// challenge to pass: idx.co.id is asked once and IPOT stands in at once,
+/// and only when IPOT cannot is idx.co.id asked again with every pause.
+/// `idx` asks idx.co.id only, with every pause, and a refusal names IPOT
+/// where it could answer.
 pub async fn market_brokers_from(
     fetcher: &Arc<Fetcher>,
     source: crate::model::BrokerSource,
@@ -1321,10 +1337,27 @@ pub async fn market_brokers_from(
     let today = now.with_timezone(&crate::model::wib()).date_naive();
     let ended = holidays::latest_session(now);
     match source {
-        BrokerSource::Idx => members_until(fetcher, date, top, sort, today, ended).await,
+        BrokerSource::Idx => {
+            let walked = members_until(fetcher, date, top, sort, today, ended).await;
+            // Judged by the clock after idx.co.id's requests (and retries).
+            let at = now + (chrono::Utc::now() - entered);
+            if !ipot_could_answer(date, ended, at) {
+                return walked;
+            }
+            walked.map_err(|e| with_alternative(e, BROKERS_IPOT_ADVICE))
+        }
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
-            let (walked, unpublished) = idx_walk(fetcher, date, top, sort, today, ended).await;
+            // IPOT answers at once where it could: a challenge is not waited
+            // out for idx.co.id unless IPOT cannot stand in after all.
+            let hurried = ipot_could_answer(date, ended, now);
+            let patience = if hurried {
+                idx::Patience::Once
+            } else {
+                idx::Patience::Wait
+            };
+            let (walked, unpublished) =
+                idx_walk(fetcher, date, top, sort, today, ended, patience).await;
             // The session asked for: with no date, the latest that ended,
             // where idx.co.id's walk begins. IPOT stands in for it when
             // idx.co.id refused, could not be reached, failed or, offline,
@@ -1344,18 +1377,28 @@ pub async fn market_brokers_from(
             // IPOT is asked now, after idx.co.id's requests (and retries):
             // its pages are judged by this clock, not the call's.
             let asked = now + (chrono::Utc::now() - entered);
-            let s = match ipot::top_brokers(fetcher, asked).await {
-                Ok(s) => s,
-                Err(e) => {
-                    let note = format!("IPOT could not stand in: {e}");
+            let (mut s, whose) = match ipot_stand_in(fetcher, asked, want, ended, top, sort).await {
+                Ok(got) => got,
+                Err(note) => {
+                    // IPOT could not after all: a challenge idx.co.id met on
+                    // its one try gets every pause now, as under source idx.
+                    let challenged = matches!(
+                        walked,
+                        Err(IdxError::Blocked {
+                            refusal: crate::http::cloudflare::Refusal::Challenge,
+                            ..
+                        })
+                    );
+                    let (walked, unpublished) = if hurried && challenged {
+                        let wait = idx::Patience::Wait;
+                        let (w, u) = idx_walk(fetcher, date, top, sort, today, ended, wait).await;
+                        (w, u.filter(|u| *u == want))
+                    } else {
+                        (walked, unpublished)
+                    };
                     return idx_answer(walked, date, unpublished, Some(&note));
                 }
             };
-            let held = s.data.date;
-            // A copy of an older session is not the one asked for.
-            if held != want {
-                return idx_answer(walked, date, unpublished, Some(&ipot_holds_only(&s)));
-            }
             let why = match (&walked, unpublished) {
                 (_, Some(u)) => format!("idx.co.id has not published {u} yet"),
                 (Err(IdxError::Blocked { refusal, .. }), None) => {
@@ -1370,19 +1413,6 @@ pub async fn market_brokers_from(
                 (Err(other), None) => format!("idx.co.id failed ({other})"),
                 (Ok(_), None) => "idx.co.id has not answered it".to_string(),
             };
-            // A copy of an older session than the latest is no latest session.
-            let copy = copy_read_at(&s).filter(|_| held < ended);
-            let mut s = match ipot_member_ranking(s, top, sort) {
-                Ok(s) => s,
-                Err(e) => {
-                    let note = format!("IPOT could not stand in: {e}");
-                    return idx_answer(walked, date, unpublished, Some(&note));
-                }
-            };
-            let whose = match copy {
-                Some(read) => format!("for {held}, from its copy read at {read}"),
-                None => format!("for its latest session, {held}"),
-            };
             s.warnings.insert(
                 0,
                 format!("{why}, so the ranking is IPOT's (Indo Premier) {whose}"),
@@ -1390,6 +1420,34 @@ pub async fn market_brokers_from(
             Ok(s)
         }
     }
+}
+
+/// IPOT's ranking standing in under `auto` for idx.co.id's of `want`, asked
+/// at `asked`, with the words that say whose it is (`for its latest
+/// session, 2026-11-06`), or the note after idx.co.id's answer saying why
+/// it cannot.
+async fn ipot_stand_in(
+    fetcher: &Arc<Fetcher>,
+    asked: chrono::DateTime<chrono::Utc>,
+    want: NaiveDate,
+    ended: NaiveDate,
+    top: usize,
+    sort: BrokerSort,
+) -> std::result::Result<(Sourced<BrokerRanking>, String), String> {
+    let cannot = |e: IdxError| format!("IPOT could not stand in: {e}");
+    let s = ipot::top_brokers(fetcher, asked).await.map_err(cannot)?;
+    let held = s.data.date;
+    // A copy of an older session is not the one asked for.
+    if held != want {
+        return Err(ipot_holds_only(&s));
+    }
+    // A copy of an older session than the latest is no latest session.
+    let whose = match copy_read_at(&s).filter(|_| held < ended) {
+        Some(read) => format!("for {held}, from its copy read at {read}"),
+        None => format!("for its latest session, {held}"),
+    };
+    let s = ipot_member_ranking(s, top, sort).map_err(cannot)?;
+    Ok((s, whose))
 }
 
 /// When a copy of IPOT's ranking served in place of a read (offline, or
@@ -2531,6 +2589,133 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert_eq!(be.calls_matching("indopremier"), asked);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_idx_co_id_names_ipot_where_it_could_answer() {
+        use crate::model::BrokerSource;
+        // idx.co.id answers every summary with a block page; nothing is cached.
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route(
+            "GetBrokerSummary",
+            403,
+            include_str!("../../tests/fixtures/idx/cloudflare_blocked.html"),
+        ));
+        let idx =
+            |date, now| market_brokers_from(&f, BrokerSource::Idx, date, 5, BrokerSort::Value, now);
+        // On Sunday IPOT's latest session is the latest that has ended,
+        // 2026-11-06: source idx names it, with no date or with that one.
+        for date in [None, Some(d(2026, 11, 6))] {
+            let err = idx(date, sunday()).await.unwrap_err();
+            assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+            assert!(
+                err.to_string().ends_with(
+                    "; or use --source ipot (or the default, --source auto) for IPOT's (Indo Premier) ranking of its latest session"
+                ),
+                "{err}"
+            );
+        }
+        // Not for a session before it, which IPOT never holds, nor in a
+        // trading day's hours, when IPOT's ranking cannot be dated.
+        for (date, now) in [
+            (Some(d(2026, 10, 16)), sunday()),
+            (None, wib_at("2026-11-09T10:00:00")),
+        ] {
+            let err = idx(date, now).await.unwrap_err();
+            assert_eq!(err.code(), "blocked", "{err}");
+            assert!(!err.to_string().contains("--source"), "{err}");
+        }
+        // An agent passes a tool argument, not a flag.
+        assert!(
+            BROKERS_IPOT_ADVICE.mcp.contains("source \"ipot\""),
+            "{BROKERS_IPOT_ADVICE:?}"
+        );
+        assert!(!BROKERS_IPOT_ADVICE.mcp.contains("--"));
+        // auto has asked IPOT already: its own note stands, without advice.
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let says = err.to_string();
+        assert!(says.contains("; IPOT could not stand in: "), "{says}");
+        assert!(!says.contains("--source"), "{says}");
+    }
+
+    const FLAGGED: &[(&str, &str)] = &[("cf-mitigated", "challenge"), ("server", "cloudflare")];
+
+    #[tokio::test]
+    async fn auto_does_not_wait_out_a_challenge_where_ipot_can_answer() {
+        use crate::model::BrokerSource;
+        // idx.co.id is challenged on every try. Each call on its own cache,
+        // where a challenge that lasted through every pause is remembered.
+        let tries = |source, date, now| async move {
+            let be = FixtureBackend::new().route_with_headers(
+                "GetBrokerSummary",
+                403,
+                CHALLENGE,
+                FLAGGED,
+            );
+            let (f, be, _d) = fetcher(ipot_ranking(be, TOP_BROKERS));
+            let got = market_brokers_from(&f, source, date, 5, BrokerSort::Value, now).await;
+            (got, be.calls_matching("GetBrokerSummary"))
+        };
+        // On Sunday IPOT holds the latest session that has ended: one try,
+        // then IPOT.
+        for date in [None, Some(d(2026, 11, 6))] {
+            let (got, n) = tries(BrokerSource::Auto, date, sunday()).await;
+            assert_eq!((got.unwrap().provider, n), ("ipot", 1), "{date:?}");
+        }
+        // Every try (tests do not pause) for a session IPOT does not hold,
+        // in a trading day's hours, when IPOT's ranking cannot be dated, and
+        // from source idx.
+        for (source, date, now) in [
+            (BrokerSource::Auto, Some(d(2026, 10, 16)), sunday()),
+            (BrokerSource::Auto, None, wib_at("2026-11-09T10:00:00")),
+            (BrokerSource::Idx, None, sunday()),
+        ] {
+            let (got, n) = tries(source, date, now).await;
+            assert_eq!(got.unwrap_err().code(), "blocked", "{source:?} {date:?}");
+            assert_eq!(n, 4, "{source:?} {date:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_waits_out_the_challenge_when_ipot_cannot_stand_in_after_all() {
+        use crate::model::BrokerSource;
+        // IPOT fails: idx.co.id, asked once, is asked again with every pause.
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_with_headers("GetBrokerSummary", 403, CHALLENGE, FLAGGED)
+                .route("ma-topbroker.php", 503, "busy"),
+        );
+        let err = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
+        assert_eq!(be.calls_matching("GetBrokerSummary"), 5);
+        let says = err.to_string();
+        assert!(
+            says.contains(" on 4 tries over 0 s, and nothing is cached for it. "),
+            "{says}"
+        );
+        assert!(
+            says.contains(
+                "; IPOT could not stand in: ipot: broker ranking for the market: HTTP 503"
+            ),
+            "{says}"
+        );
+        // Once the challenge lifts, idx.co.id's answer stands.
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route_times("GetBrokerSummary", 2, 403, CHALLENGE, FLAGGED)
+                .route("GetBrokerSummary", 200, BROKERS)
+                .route("ma-topbroker.php", 503, "busy"),
+        );
+        let s = market_brokers_from(&f, BrokerSource::Auto, None, 5, BrokerSort::Value, sunday())
+            .await
+            .unwrap();
+        assert_eq!((s.provider, s.data.date), ("idx", d(2026, 11, 6)));
+        assert!(s.warnings.is_empty() && !s.stale, "{:?}", s.warnings);
+        assert_eq!(be.calls_matching("GetBrokerSummary"), 3);
     }
 
     /// `inner`, answering a URL that contains `slow` only after `pause` of
