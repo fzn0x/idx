@@ -1117,7 +1117,7 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
 /** The screen's and the broker's answer before any session of the scan has finished. */
 const noScanYet = (st, now) => {
   const where = scanProgress(st, null, now);
-  return notFound(`no session of the bandar scan has finished yet${where ? ` (${where})` : ""}: from 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
+  return notFound(`no session of the bandar scan has finished yet${where ? `: ${where}` : ""}. From 16:45 WIB after each close the minute cron waits for IPOT to publish that session's broker lists, then reads its 100 most traded stocks; the CLI scans live meanwhile`);
 };
 
 /** /api/bandar/screen: `idx bandar screen` over the scan of the last session in D1 (idx.bandar.screen.v1). */

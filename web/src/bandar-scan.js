@@ -164,7 +164,7 @@ export function boardTraded(board, session) {
  * lists), "invalid" (a code IPOT does not know, which says nothing of the
  * session), "unpublished" (totals without lists, or a page without trades
  * while the board shows trades that day or cannot tell) or "closed" (no
- * trades at IPOT nor on a board refreshed after that session). Pure, tested.
+ * trades at IPOT or on a board refreshed after that session). Pure, tested.
  */
 export function probeVerdict(page, boardTradedOnSession) {
   if (page.invalid) return "invalid";
@@ -662,6 +662,8 @@ const stamp = (iso) => `${new Date(Date.parse(iso) + WIB_MS).toISOString().slice
 /** A time in WIB, with its date when it is not `now`'s day. */
 const clock = (iso, now) => (hol.wibDate(iso) === hol.wibDate(now) ? `${hhmm(iso)} WIB` : stamp(iso));
 const underWay = (st) => ["new", "waiting", "running"].includes(st?.phase);
+/** How a warning names `n` of the `of` stocks it has just counted: "it" for the one, "them" for all of several, else "N of them". */
+const them = (n, of) => (n < of ? `${n} of them` : n === 1 ? "it" : "them");
 
 /** Trading days after `from` up to `to`. */
 function sessionsAfter(from, to) {
@@ -680,23 +682,26 @@ export function scanProgress(st, shown = null, now = new Date()) {
   if (st?.phase === "new") return `the scan of ${st.session} has not started yet${tail}`;
   if (st?.phase === "waiting") {
     const n = (st.probes || 0) + (st.probe_errors || 0);
-    const since = st.first_probe_at ? ` (checked ${n} time${n === 1 ? "" : "s"} since ${clock(st.first_probe_at, now)}${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
+    const checked = () => (n === 1 ? `checked once, at ${clock(st.first_probe_at, now)}` : `checked ${n} times since ${clock(st.first_probe_at, now)}`);
+    const since = st.first_probe_at ? ` (${checked()}${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
     return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;
   }
   if (st?.phase === "running" && st.queue.length) return `the scan of ${st.session} is running (${attempted(st)} of ${st.symbols.length})${tail}`;
   if (st?.phase === "running") {
     // The first pass is over; failed and unpublished stocks wait to be read again.
-    return `the scan of ${st.session} has read ${st.stored} of ${st.symbols.length} stocks so far (${st.failed.length + st.retry.length} failed, ${st.pending.length} not published by IPOT) and reads ${st.retry.length + st.pending.length} of them again later${tail}`;
+    const failed = st.failed.length + st.retry.length, waiting = st.retry.length + st.pending.length;
+    return `the scan of ${st.session} has read ${st.stored} of ${st.symbols.length} stocks so far (${failed} failed, ${st.pending.length} not published by IPOT) and reads ${them(waiting, failed + st.pending.length)} again later${tail}`;
   }
   return null;
 }
 
 /** Why a finished session newer than the one shown is not the one shown. */
 function runNote(r, shown) {
-  if (r.reason === "closed") return `${r.session} had no trades at IPOT nor on the quote board, so it was not scanned`;
+  if (r.reason === "closed") return `${r.session} had no trades at IPOT or on the quote board, so it was not scanned`;
   if (r.reason === "unreachable") {
     const n = r.probe_errors || 0;
-    return n ? `IPOT did not answer the scan's ${n} check${n === 1 ? "" : "s"} of ${r.session} (the last failed: ${r.probe_error}); showing ${shown}` : `the scan did not get to check ${r.session} with IPOT; showing ${shown}`;
+    if (!n) return `the scan did not get to check ${r.session} with IPOT; showing ${shown}`;
+    return n === 1 ? `IPOT did not answer the scan's check of ${r.session} (${r.probe_error}); showing ${shown}` : `IPOT did not answer the scan's ${n} checks of ${r.session} (the last failed: ${r.probe_error}); showing ${shown}`;
   }
   if (!r.scanned) return `IPOT had not published the broker lists of ${r.session} by ${stamp(r.last_probe_at ?? r.done_at)}; showing ${shown}`;
   return `the scan of ${r.session} read only ${r.stored} of ${r.of} stocks (${r.failed.length} failed, ${r.unpublished.length} not published by IPOT); showing ${shown}`;
@@ -739,9 +744,12 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   const scanned = held.size + failed + unpublished;
   // A rescan's progress is what it has stored; until it has read a stock, its row is the earlier scan's.
   if (reading && st.queue.length) warnings.push(run?.stored ? `the scan of ${shown} is reading its stocks again: ${st.stored} of ${st.symbols.length} so far; the others are from its earlier scan` : `the scan of ${shown} is still running: ${st.stored} of ${st.symbols.length} stocks so far`);
-  if (reading && unpublished) warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads them again at ${clock(st.pending_due, now)}` : "is reading them again"}`);
+  if (reading && unpublished) {
+    const it = them(unpublished, unpublished);
+    warnings.push(`IPOT has not published ${shown} for ${unpublished} of the ${st.symbols.length} stocks yet; the scan ${st.pending_due ? `reads ${it} again at ${clock(st.pending_due, now)}` : `is reading ${it} again`}`);
+  }
   const retrying = reading ? missing(st.retry).length : 0;
-  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${retrying} of them again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
+  if (failed) warnings.push(`${failed} of ${scanned} scanned stocks had no broker summary${retrying ? `; the scan tries ${them(retrying, failed)} again ${st.retry_due ? `at ${clock(st.retry_due, now)}` : "now"}` : ""}`);
   if (!reading && unpublished) warnings.push(`IPOT had not published ${shown} for ${unpublished} of the ${scanned} scanned stocks when its scan ended`);
   if (!reading && rec?.left) warnings.push(`the scan of ${shown} ended before it read ${rec.left} of its ${rec.of} stocks`);
   if (rec?.ranked_from && rec.ranked_from !== shown) warnings.push(`the scan of ${shown} picked its ${rec.of} stocks from the quote board of ${rec.ranked_from}, not from that session's close`);

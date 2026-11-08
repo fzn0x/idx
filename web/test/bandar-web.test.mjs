@@ -313,7 +313,7 @@ test("in a year the calendar does not cover, a day without trades at IPOT or on 
     // session behind, and that the calendar does not cover the year.
     const notes = scanNotes(JSON.parse(env.kv.get("bandar_scan")), "2027-12-30", ["BBCA"], now);
     assert.deepEqual(notes.warnings, [
-      "2028-01-03 had no trades at IPOT nor on the quote board, so it was not scanned",
+      "2028-01-03 had no trades at IPOT or on the quote board, so it was not scanned",
       "the bundled holiday list does not cover 2028; the scan tells that year's closures from IPOT and the quote board",
     ]);
     // The same page while the board shows trades that day: IPOT has not published.
@@ -350,7 +350,7 @@ test("every closure after the shown session stays on record, however many there 
   });
   const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2028-03-06T16:50:00+07:00"));
   assert.equal(out.data.to, "2028-02-25");
-  for (const d of closed) assert.ok(out.warnings.includes(`${d} had no trades at IPOT nor on the quote board, so it was not scanned`), `${d}: ${out.warnings.join("\n")}`);
+  for (const d of closed) assert.ok(out.warnings.includes(`${d} had no trades at IPOT or on the quote board, so it was not scanned`), `${d}: ${out.warnings.join("\n")}`);
   assert.ok(!out.warnings.some((w) => w.includes("sessions behind")), out.warnings.join("\n"));
 });
 
@@ -501,7 +501,7 @@ test("a stock IPOT has not published is read again, not stored without its lists
     let st = await scanStatus(env);
     assert.deepEqual([st.phase, st.complete, st.failed, st.pending.map((p) => p.symbol)], ["running", "2026-11-06", [], ["TLKM"]]);
     const shown = await bandarScreen(env, null, null, "1d", null, null, null, null, at("17:05"));
-    assert.ok(shown.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again at 17:10 WIB"), shown.warnings);
+    assert.ok(shown.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads it again at 17:10 WIB"), shown.warnings);
     // Not before ten minutes; then once more, still without lists.
     calls.length = 0;
     assert.equal((await bandarScanStep(env, { now: at("17:05") })).idle, true);
@@ -612,7 +612,7 @@ test("a stock IPOT has not published is read again less often as the wait grows,
   assert.equal((await scanStatus(env)).last.done_at, "2026-11-06T10:00:00.000Z", "a read that finds the stock still unpublished files nothing");
   const out = await bandarScreen(env, null, null, "1d", null, null, null, null, new Date(clock));
   assert.equal(out.fetched_at, "2026-11-06T10:00:00Z");
-  assert.ok(out.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads them again at 21:00 WIB"), out.warnings.join("\n"));
+  assert.ok(out.warnings.includes("IPOT has not published 2026-11-06 for 1 of the 2 stocks yet; the scan reads it again at 21:00 WIB"), out.warnings.join("\n"));
 });
 
 test("a stock IPOT fails for hours is read once IPOT is back", async () => {
@@ -647,7 +647,7 @@ test("a stock that fails is tried again 10, 30, 60 and 120 minutes after its pas
     // The first pass is over: the session is filed and shown, TLKM counted as failed for now.
     assert.deepEqual([st.retry, st.retry_due, st.failed, st.complete, st.last.failed, st.last.retrying], [["TLKM"], at("10:10").toISOString(), [], "2026-10-16", ["TLKM"], 1]);
     const out = await bandarScreen(env, null, null, "1w", null, null, null, null, at("10:05"));
-    assert.deepEqual(out.warnings, ["1 of 2 scanned stocks had no broker summary; the scan tries 1 of them again at 10:10 WIB"]);
+    assert.deepEqual(out.warnings, ["1 of 2 scanned stocks had no broker summary; the scan tries it again at 10:10 WIB"]);
     for (clock = at("10:01").getTime(); clock <= Date.parse("2026-10-18T12:00:00+07:00"); clock += 60e3) await bandarScanStep(env, { now: new Date(clock) });
   });
   assert.deepEqual(tlkm, ["10-17 10:00", "10-17 10:10", "10-17 10:40", "10-17 11:40", "10-17 13:40", "10-17 17:40", "10-17 21:40", "10-18 01:40", "10-18 05:40"]);
@@ -710,7 +710,7 @@ test("a finished session keeps its numbers while the next one waits, and the war
   // BBCA's pages of 10-19 and 10-20 show totals without lists: IPOT has not published those sessions.
   const fetchFn = async (u, init) => (/code=BBCA&start=10\/(19|20)\/2026&end=10\/(19|20)\/2026/.test(String(u)) ? new Response(page("brokersummary_bbca_20261106_insession.html")) : recorded(u, init));
   const screen = (now) => bandarScreen(env, null, null, "1w", null, null, null, null, now);
-  const waiting = (d, since = "16:46 WIB") => `the scan of ${d} is waiting for IPOT to publish that session's broker lists (checked 1 time since ${since}); showing 2026-10-16`;
+  const waiting = (d, since = "16:46 WIB") => `the scan of ${d} is waiting for IPOT to publish that session's broker lists (checked once, at ${since}); showing 2026-10-16`;
   await withFetch(fetchFn, async () => {
     await scanAll(env, new Date("2026-10-17T03:00:00Z")); // Saturday 10:00 WIB
     // Monday 16:46 WIB: the scan of 10-19 starts and waits for IPOT.
@@ -834,7 +834,7 @@ test("a forced rescan of the shown session never takes its record or its numbers
     let out = await screen(env, monday);
     assert.deepEqual([out.data.to, out.data.scanned], ["2026-10-16", 2]);
     assert.equal((await bandarBroker(env, "YP", "1w", null, monday)).data.to, "2026-10-16");
-    // A forced probe that finds no trades at IPOT nor on a later board does not close a session the scan read.
+    // A forced probe that finds no trades at IPOT or on a later board does not close a session the scan read.
     env = await scanned();
     env.kv.set("board", board("2026-10-15", unix("2026-10-18T07:00:00+07:00")));
     mode = "empty";
