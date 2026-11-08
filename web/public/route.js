@@ -125,8 +125,11 @@ export const WEB_SWITCHES = ["all", "asc", "company-only", "daily", "desc", "ret
  * values that are the page's own anyway, as foreign --source ipot); `rename` a
  * flag the page writes otherwise; `pos` the flags whose value is a positional
  * word here, in that order; `join` the flags given twice that the page takes
- * comma-separated; `cliName` a flag of the page's that the CLI spells otherwise.
- * Every other flag is the page's too, under the same name.
+ * comma-separated; `cliName` a flag of the page's that the CLI spells otherwise;
+ * `cliDefault` a CLI default the page has no twin for, so a line in the CLI's
+ * words that leaves the flag out gets its notice too (stocks foreign reads
+ * idx.co.id unless --source ipot). Every other flag is the page's too, under the
+ * same name.
  */
 export const SPEC = {
   history: { short: { p: "period", i: "interval", n: "limit" } },
@@ -140,7 +143,7 @@ export const SPEC = {
   news: { short: { s: "source", n: "limit" }, cli: ["source"] },
   sentiment: { short: { s: "source", n: "limit" }, cli: ["source", "limit"] },
   list: { short: { s: "search" }, cli: ["board"] },
-  foreign: { short: { n: "days" }, cli: ["source"], keep: { source: ["ipot"] } },
+  foreign: { short: { n: "days" }, cli: ["source"], keep: { source: ["ipot"] }, cliDefault: { source: "idx" } },
   market: { short: { n: "top" }, cli: ["top", "min-mcap", "index", "universe"] },
   members: { short: { s: "search" } },
   astro: { short: { d: "date" }, switch: ["backtest"] },
@@ -163,6 +166,7 @@ const FLAG_WHY = {
   provider: say("Terminal web memilih sumber tiap perintah sendiri dan menyebutnya di kepala hasil.", "The web terminal picks each command's source itself and names it in the result's head."),
   stockbit: say("Stockbit memakai sesi akun Anda sendiri, jadi hanya berjalan di CLI dan server MCP.", "Stockbit runs on your own account session, so it works in the CLI and the MCP server only."),
   "foreign source": say("Terminal web membaca IPOT, dalam rupiah di semua papan; idx.co.id menolak permintaan dari server situs ini, jadi --source idx hanya ada di CLI dan MCP.", "The web terminal reads IPOT, in rupiah across all boards; idx.co.id refuses requests from this site's host, so --source idx runs in the CLI and MCP only."),
+  "foreign source default": say("Di CLI, stocks foreign membaca idx.co.id kecuali diberi --source ipot: jumlah lembar di papan reguler. idx.co.id menolak permintaan dari server situs ini, jadi terminal web membaca IPOT, dalam rupiah di semua papan.", "In the CLI, stocks foreign reads idx.co.id unless --source ipot is given: share counts on the regular board. idx.co.id refuses requests from this site's host, so the web terminal reads IPOT, in rupiah across all boards."),
   universe: say("--universe membaca berkas CSV di komputer Anda.", "--universe reads a CSV file on your machine."),
   "news source": say("Terminal web membaca umpan Kontan dan CNBC Indonesia sekaligus.", "The web terminal reads the Kontan and CNBC Indonesia feeds together."),
   "sentiment source": say("Terminal web membaca umpan Kontan dan CNBC Indonesia sekaligus.", "The web terminal reads the Kontan and CNBC Indonesia feeds together."),
@@ -457,11 +461,12 @@ function toolLine(ctx, name, args, typedTools) {
   if (!tool) return web(ctx, ["tools", name, ...args]);
   const path = cliPath(tool);
   // The tool's CLI command with the words after the name: never the typed line itself.
-  if (args.length) return dispatch({ ...ctx, rewrite: true }, [...path.split(" "), ...args]);
+  // `tool`: the tool runs here as its web command, so the CLI's defaults (cliDefault) do not apply.
+  if (args.length) return dispatch({ ...ctx, rewrite: true, tool: true }, [...path.split(" "), ...args]);
   if (!tool.web) return mcpNotice(ctx, path, tokenize(tool.cli).slice(1 + path.split(" ").length), tool);
   if (typedTools && !ctx.fromCli && !ctx.found.length) return { kind: "web", line: ctx.typed, note: null };
   // The tool's web example is read as a line of its own, so -o csv or --provider still gets its notice.
-  return dispatch({ ...ctx, rewrite: true }, tokenize(tool.web));
+  return dispatch({ ...ctx, rewrite: true, tool: true }, tokenize(tool.web));
 }
 
 /** A command the page runs: the CLI's flags in the page's words, or a notice for the ones it has no twin for. */
@@ -494,6 +499,13 @@ function webCommand(ctx, cmd, prefix, args, { group = false } = {}) {
     flags.push({ name, value: x.value });
   }
   for (const k of spec.pos || []) if (typeof asPos[k] === "string") pos.push(asPos[k]);
+  // A line in the CLI's words that leaves out a flag whose CLI default the page lacks means that default.
+  let why = null;
+  for (const [name, value] of group && !ctx.tool ? Object.entries(spec.cliDefault || {}) : []) {
+    if (items.some((x) => (x.short ? own(spec.short, x.name) : x.name) === name)) continue;
+    unsupported.push(`--${name} ${value}`);
+    why = own(FLAG_WHY, `${cmd} ${name} default`) || null;
+  }
   const words = [...prefix, ...pos, ...flags.flatMap((f) => (f.value === true ? [`--${f.name}`] : [`--${f.name}`, String(f.value)]))];
   if (ctx.help) return web(ctx, ["help", cmd.split(" ")[0]]);
   const cli = cliForm(cmd, spec, pos, flags, cliOnly);
@@ -507,8 +519,8 @@ function webCommand(ctx, cmd, prefix, args, { group = false } = {}) {
     return flagNotice(ctx, null, [ctx.badProvider.raw.join(" ")], stockbit ? FLAG_WHY.stockbit : FLAG_WHY.provider, cli, [without(ctx, words, ctx.badProvider.raw[0])]);
   }
   if (unsupported.length) {
-    const why = unsupported.map((f) => flagWhy(cmd, f.split(" ")[0].slice(2))).find(Boolean) || null;
-    return flagNotice(ctx, cmd, unsupported, why, cli, [without(ctx, words, unsupported.map((f) => f.split(" ")[0]).join(", "))]);
+    const reason = why || unsupported.map((f) => flagWhy(cmd, f.split(" ")[0].slice(2))).find(Boolean) || null;
+    return flagNotice(ctx, cmd, unsupported, reason, cli, [without(ctx, words, unsupported.map((f) => f.split(" ")[0]).join(", "))]);
   }
   if (!cliShaped && !changed && !ctx.rewrite) return { kind: "web", line: ctx.typed, note: null };
   return web(ctx, words);

@@ -305,8 +305,10 @@ test("lines in the CLI's words run as the page's own, and say what they ran as",
     ["idx stocks news BBCA -n 40 --company-only", "news BBCA --limit 40 --company-only"],
     ["news BBCA -n 5", "news BBCA --limit 5"],
     ["idx stocks list -s bank", "list --search bank"],
-    ["idx stocks foreign BBCA -n 10", "foreign BBCA --days 10"],
     ["idx stocks foreign BBCA --source ipot", "foreign BBCA"],
+    ["idx stocks foreign BBCA --source ipot -n 10", "foreign BBCA --days 10"],
+    // The tool's own name runs the page's foreign, whatever the CLI's default.
+    ["idx_foreign TLKM", "foreign TLKM"],
     ["idx stocks actions ENRG --since 2025-01-01", "actions ENRG --since 2025-01-01"],
     ["idx broker BBCA -d 2026-10-16", "broker BBCA --date 2026-10-16"],
     ["idx bandar detect BBCA -p 1m --daily", "bandar detect BBCA --period 1m --daily"],
@@ -371,6 +373,8 @@ test("every MCP tool's CLI example runs here as its web command, or reaches its 
   for (const tool of TOOLS) {
     const r = routeLine(tool.cli);
     if (!tool.web) { assert.equal(r.kind, "cli-mcp", tool.tool); continue; }
+    // idx stocks foreign reads idx.co.id by default: its notice offers the tool's web command.
+    if (tool.tool === "idx_foreign") { assert.equal(r.kind, "flag"); assert.deepEqual(r.near.map((n) => n.line), [tool.web]); continue; }
     assert.equal(r.kind, "web", tool.tool);
     const ran = tokenize(r.line), web = tokenize(tool.web);
     assert.equal(ran[0], web[0], `${tool.tool}: ${r.line} runs ${tool.web}`);
@@ -411,6 +415,10 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     ["idx --provider stockbit stocks quote BBCA", null, ["--provider stockbit"], ["quote BBCA"], "idx --provider stockbit stocks quote BBCA"],
     ["idx --provider yahoo stocks fundamental BBCA", null, ["--provider yahoo"], ["fundamental BBCA"], "idx --provider yahoo stocks fundamental BBCA"],
     ["idx stocks foreign BBCA --source idx", "foreign", ["--source idx"], ["foreign BBCA"], "idx stocks foreign BBCA --source idx"],
+    // --source idx is the CLI's default, so leaving it out is the same CLI command.
+    ["idx stocks foreign BBCA", "foreign", ["--source idx"], ["foreign BBCA"], "idx stocks foreign BBCA"],
+    ["stocks foreign BBCA -n 10", "foreign", ["--source idx"], ["foreign BBCA --days 10"], "idx stocks foreign BBCA --days 10"],
+    ["idx -o json stocks foreign BBCA", "foreign", ["--source idx"], ["json foreign BBCA"], "idx stocks foreign BBCA"],
     // The CLI line puts the flags the page lacks after the ones it runs.
     ["idx stocks news TLKM --source kontan --limit 40", "news", ["--source"], ["news TLKM --limit 40"], "idx stocks news TLKM --limit 40 --source kontan"],
     ["idx stocks sentiment BBRI -n 5", "sentiment", ["--limit"], ["sentiment BBRI"], "idx stocks sentiment BBRI -n 5"],
@@ -439,6 +447,10 @@ test("a CLI flag the page has no twin for gets a notice that says what to type h
     if (r.why) bilingual(r.why, `${line} why`);
   }
   for (const line of ["idx -o csv stocks quote BBCA", "idx --provider stockbit stocks quote BBCA", "idx stocks foreign BBCA --source idx", "idx stocks news TLKM --source kontan", "idx ownership graph BBRI --dot"]) assert.ok(routeLine(line).why, line);
+  // Left out, the CLI's default says so: what the CLI reads, and what the page reads instead.
+  assert.match(routeLine("idx stocks foreign BBCA").why.en, /^In the CLI, stocks foreign reads idx\.co\.id unless --source ipot/);
+  assert.match(routeLine("idx stocks foreign BBCA").why.id, /^Di CLI, stocks foreign membaca idx\.co\.id kecuali diberi --source ipot/);
+  assert.equal(routeLine("idx stocks foreign BBCA --source idx").why.en, routeLine("stocks foreign BBCA --source idx").why.en);
 });
 
 test("every CLI flag the page has no twin for says why, in both languages", () => {
@@ -461,7 +473,8 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
   const top = variants("mod.rs", "Command");
   assert.deepEqual(top, ["stocks", "ownership", "market", "broker", "bandar", "stockbit", "watch", "config", "cache", "mcp", "schema", "completions", "version"]);
   for (const sub of variants("stocks.rs", "StocksCmd")) {
-    const r = routeLine(`stocks ${sub} BBCA`);
+    // stocks foreign reads idx.co.id unless told --source ipot, the page's source.
+    const r = routeLine(`stocks ${sub} BBCA${sub === "foreign" ? " --source ipot" : ""}`);
     assert.equal(r.kind, "web", sub);
     assert.equal(tokenize(r.line)[0], sub, sub);
     assert.ok(COMMANDS.includes(sub), `stocks ${sub} is the terminal's ${sub}`);
