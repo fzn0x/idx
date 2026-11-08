@@ -119,6 +119,15 @@ Every successful command wraps its payload:
 | `warnings` | string[] | Non-fatal notes. Omitted when empty. |
 | `data` | object or array | The payload, see below. |
 
+An answer built from several responses (a brief's sections, several
+tickers, a range read one session at a time) carries all of them: `cached`
+is true only when every response came from the cache, `stale` when any was,
+and `fetched_at` is the oldest one's fetch time (a screen's per-company
+fundamentals count toward `cached` and `stale` only). So `cached: false`
+with a `fetched_at` from before the call means some parts were fetched for
+it and the others came from the cache; the web terminal labels such an
+answer partly cached.
+
 ## `idx.quotes.v1` (`stocks quote`)
 
 `data` is an array of quote objects, one per symbol the source knew. Symbols
