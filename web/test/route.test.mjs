@@ -356,6 +356,18 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
   for (const cmd of ["watch", "config", "cache", "mcp", "schema", "completions", "version"]) assert.equal(routeLine(cmd).kind, "cli", cmd);
 });
 
+test("the router and the terminal share one tokenizer, one alias list and the same switches", () => {
+  assert.match(terminal, /^import \{ routeLine, tokenize, ALIASES, INSTALL, AGENT \} from "\/route\.js";$/m);
+  assert.doesNotMatch(terminal, /^function tokenize|^const ALIASES/m);
+  const bools = terminal.match(/^const BOOL_FLAGS = new Set\((\[.*\])\);$/m)?.[1];
+  assert.deepEqual(JSON.parse(bools), WEB_SWITCHES);
+  // The old English-only card is gone; tools idx_<cli-only tool> shows the notice too.
+  assert.doesNotMatch(terminal, /cliOnly\(/);
+  assert.match(terminal, /node: R\.notice\(routeLine\(tool\.tool\)\)/);
+  assert.deepEqual(tokenize(`ownership entity "Dwimuria Investama" 'a b'`), ["ownership", "entity", "Dwimuria Investama", "a b"]);
+  assert.equal(byName("idx_quote").web, "quote BBCA");
+});
+
 test("words that name an object's own properties are words, not lookups", () => {
   for (const w of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
     for (const line of [w, `market ${w}`, `ownership ${w}`, `bandar ${w}`, `own ${w}`, `quote ${w}`]) {
