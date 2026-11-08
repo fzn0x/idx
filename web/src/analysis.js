@@ -561,6 +561,31 @@ export function rangePosition(price, low, high) {
   return price != null && low != null && high != null && high > low ? ((price - low) / (high - low)) * 100 : null;
 }
 
+/** A screen row (idx.screen.v1) from a board quote: analysis::screen::row_from_quote. */
+export function rowFromQuote(q, nameHint = null) {
+  return {
+    symbol: q.symbol, name: q.name || nameHint || null, price: q.price, change_pct: q.change_pct, market_cap: q.market_cap,
+    pe_trailing: q.pe_trailing, pe_forward: q.pe_forward, price_to_book: q.price_to_book, dividend_yield_pct: q.dividend_yield_pct,
+    eps_ttm: q.eps_ttm, avg_volume_3m: q.avg_volume_3m, week52_high: q.week52_high, week52_low: q.week52_low,
+    range_52w_pct: rangePosition(q.price, q.week52_low, q.week52_high),
+    return_1w_pct: null, return_1m_pct: null, return_3m_pct: null, return_6m_pct: null, return_ytd_pct: null, return_1y_pct: null,
+    fundamentals_checked: false,
+    sector: null, industry: null, roe_pct: null, roa_pct: null, net_margin_pct: null, operating_margin_pct: null, debt_to_equity: null,
+    revenue_growth_pct: null, earnings_growth_pct: null, peg: null, price_to_sales: null,
+  };
+}
+
+/** Joins a company's fundamentals into its screen row: analysis::screen::apply_fundamentals. */
+export function applyFundamentals(r, f) {
+  Object.assign(r, {
+    fundamentals_checked: true, sector: f.sector, industry: f.industry, roe_pct: f.profitability.roe_pct, roa_pct: f.profitability.roa_pct,
+    net_margin_pct: f.profitability.net_margin_pct, operating_margin_pct: f.profitability.operating_margin_pct, debt_to_equity: f.health.debt_to_equity,
+    revenue_growth_pct: f.growth.revenue_growth_pct, earnings_growth_pct: f.growth.earnings_growth_pct, peg: f.valuation.peg, price_to_sales: f.valuation.price_to_sales,
+  });
+  r.pe_trailing ??= f.valuation.pe_trailing; r.price_to_book ??= f.valuation.price_to_book; r.dividend_yield_pct ??= f.dividend.yield_pct;
+  return r;
+}
+
 export function parseNumber(s) {
   let t = String(s).trim().replace(/%$/, "").trim().replace(/[_,]/g, "");
   if (!t) return null;
