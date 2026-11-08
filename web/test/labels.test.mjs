@@ -38,3 +38,48 @@ test("the brief's valuation key point says the verdict in the CLI's words (servi
     assert.equal(f.verdict.label, label, "the JSON keeps the label");
   }
 });
+
+// ---- the terminal's views: public/terminal.js is a browser module (it
+// imports /app.js and reads the DOM), so these tests lift what they need out
+// of its source and run it with stand-ins for app.js.
+
+const src = readFileSync(join(root, "web", "public", "terminal.js"), "utf8");
+const lift = (re, what) => { const m = src.match(re)?.[0]; assert.ok(m, `${what} found in terminal.js`); return m; };
+// A top-level `const NAME = ...;` of terminal.js, evaluated.
+const constant = (name) => new Function(`${lift(new RegExp(`^const ${name} = .*;$`, "m"), name)}\nreturn ${name};`)();
+// One of R's views, from `  name(arg) {` to its closing `  },`.
+const view = (name, arg) => lift(new RegExp(`^ {2}${name}\\(${arg}\\) \\{[\\s\\S]*?^ {2}\\},$`, "m"), `R.${name}`);
+const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [...children], append(...c) { this.children.push(...c); } });
+const text = (v) => (v == null ? "n/a" : String(v));
+const fmt = { wib: (s) => `${s} WIB`, price: text, ratio: text, compact: text, pct: text };
+const deps = {
+  document: { createDocumentFragment: () => el("fragment") }, el, fmt, NA: "n/a", kv: () => el("dl"), pct: text, x: text,
+  table: (cols, rows) => ({ tag: "table", cols, rows }), wrapScroll: (t) => t, newsTable: () => el("table"),
+  mixedCurrency: an.mixedCurrency, mixedRatio: (f, v) => text(v), inStatementCurrency: (f, v, s) => s,
+};
+const views = (...names) => new Function(...Object.keys(deps), "VERDICT_WORDS", `return {\n${names.map(([n, a]) => view(n, a)).join("\n")}\n};`)(...Object.values(deps), constant("VERDICT_WORDS"));
+const find = (node, ok) => {
+  if (ok(node)) return node;
+  for (const c of node.children || []) { const hit = typeof c === "object" && find(c, ok); if (hit) return hit; }
+  return null;
+};
+const fundamentals = (label) => {
+  const nulls = { market_cap: null, enterprise_value: null, pe_trailing: null, pe_forward: null, peg: null, price_to_book: null, price_to_sales: null, ev_to_ebitda: null };
+  return {
+    symbol: "BBCA", name: null, sector: null, industry: null, price: null, week52_low: null, week52_high: null, beta: null, currency: "IDR", financial_currency: null,
+    valuation: nulls, profitability: {}, health: {}, growth: {}, dividend: {}, per_share: {}, analyst: { recommendation: null, target_mean: null }, sources: ["yahoo"],
+    verdict: { label, score: 0, reasons: [], inputs_available: 3 },
+  };
+};
+
+test("the terminal keeps the CLI's verdict words", () => {
+  assert.deepEqual(constant("VERDICT_WORDS"), VERDICT_CLI);
+});
+
+test("the fundamentals view says the verdict in the CLI's words (table_reports::verdict_cell)", () => {
+  const R = views(["fundamentals", "f"]);
+  for (const [label, words] of Object.entries(VERDICT_CLI)) {
+    const pill = find(R.fundamentals(fundamentals(label)), (n) => n.tag === "span" && n.attrs?.class?.startsWith("pill"));
+    assert.equal(pill?.attrs.text, words, label);
+  }
+});

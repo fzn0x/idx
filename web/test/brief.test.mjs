@@ -41,7 +41,10 @@ test("the verdict line under the brief's key points agrees with the input count"
   const document = { createDocumentFragment: () => el("fragment") };
   const text = (v) => (v == null ? "n/a" : String(v));
   const fmt = { wib: (s) => `${s} WIB`, price: text, ratio: text, compact: text, pct: text };
-  const deps = { document, el, fmt, NA: "n/a", kv: () => el("dl"), pct: text, x: text, mixedCurrency: an.mixedCurrency, mixedRatio: (f, v) => text(v), inStatementCurrency: (f, v, s) => s, newsTable: () => el("table") };
+  const words = src.match(/^const VERDICT_WORDS = .*;$/m)?.[0];
+  assert.ok(words, "VERDICT_WORDS found in terminal.js");
+  const VERDICT_WORDS = new Function(`${words}\nreturn VERDICT_WORDS;`)();
+  const deps = { document, el, fmt, NA: "n/a", kv: () => el("dl"), pct: text, x: text, mixedCurrency: an.mixedCurrency, mixedRatio: (f, v) => text(v), inStatementCurrency: (f, v, s) => s, newsTable: () => el("table"), VERDICT_WORDS };
   const R = new Function(...Object.keys(deps), `const R = {\n${fundamentals}\n${body}\n};\nreturn R;`)(...Object.values(deps));
   // Only the trailing P/E, as in the Rust test too_little_data.
   const f = y.parseFundamentals(JSON.parse(readFileSync(join(root, "tests", "fixtures", "yahoo", "quote_summary_fundamentals_bbca.json"), "utf8")).quoteSummary.result[0], "BBCA");
