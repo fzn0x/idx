@@ -2940,6 +2940,14 @@ fn screen_passes_over_pb_and_ps_that_mix_currencies() {
         .stdout(predicate::str::contains(
             "The table marks such a P/B with *",
         ));
+    // Both shapes publish the statements' currency.
+    for name in ["screen", "quotes"] {
+        idx(&sb.cache, &sb.config)
+            .args(["schema", name])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("financial_currency"));
+    }
 }
 
 #[test]
