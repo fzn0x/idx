@@ -2130,7 +2130,7 @@ mod tests {
     #[tokio::test]
     async fn a_session_ipot_cannot_hold_yet_is_not_found() {
         use crate::model::BrokerSource;
-        let (f, be, _d) = fetcher(ipot_ranking(FixtureBackend::new(), TOP_BROKERS));
+        let (f, be, dir) = fetcher(ipot_ranking(FixtureBackend::new(), TOP_BROKERS));
         let ipot = |date, now| {
             market_brokers_from(
                 &f,
@@ -2157,8 +2157,24 @@ mod tests {
         }
         assert_eq!(be.call_count(), 0);
 
-        // Monday night IPOT still holds Friday: Monday is not there yet.
-        let err = ipot(d(2026, 11, 9), wib_at("2026-11-09T19:30:00"))
+        // Monday night both of IPOT's pages still show Friday. A date page
+        // naming a session older than Monday's dates nothing on its own.
+        let monday_night = wib_at("2026-11-09T19:30:00");
+        let err = ipot(d(2026, 11, 9), monday_night).await.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert!(err.to_string().contains("so it cannot be dated"), "{err}");
+        // Once Friday's ranking has been accepted, on Sunday, the same pair
+        // is Friday's: Monday is not there yet.
+        let live = Arc::new(Fetcher::new(
+            Arc::new(ipot_ranking(FixtureBackend::new(), TOP_BROKERS)),
+            Cache::new(dir.path()),
+            CacheMode::Bypass,
+        ));
+        let ipot_live = |date, now| {
+            market_brokers_from(&live, BrokerSource::Ipot, date, 0, BrokerSort::Value, now)
+        };
+        ipot_live(None, sunday()).await.unwrap();
+        let err = ipot_live(Some(d(2026, 11, 9)), monday_night)
             .await
             .unwrap_err();
         assert_eq!(err.exit_code(), 4);

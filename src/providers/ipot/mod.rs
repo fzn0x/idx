@@ -559,10 +559,15 @@ fn read_at(f: &Fetched, now: DateTime<Utc>) -> DateTime<Utc> {
 /// and fails. So does a ranking with trades dated a session that had not
 /// opened then (before 08:58), or one without trades dated a session that
 /// had ended, both of which mean the pages rolled over at different times,
-/// and a date that is not a trading day. A ranking with trades that is
-/// accepted is remembered with its date ([`topbroker::digest`]), and the
-/// same ranking dated another session later fails as well: the date page
-/// has rolled over and the ranking has not.
+/// and a date that is not a trading day. Outside those hours both pages are
+/// taken to have rolled over to the latest session that had ended when they
+/// were read (how long they take has not been measured), so a ranking with
+/// trades dated an older session fails too: its date page may lag a ranking
+/// that has rolled over. Only the very pair accepted before for that session
+/// passes. A ranking with trades that is accepted is remembered with its
+/// date ([`topbroker::digest`]), and the same ranking dated another session
+/// later fails as well: the date page has rolled over and the ranking has
+/// not. A ranking refused is never remembered.
 pub async fn top_brokers(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,
@@ -654,7 +659,8 @@ pub async fn top_brokers(
     if traded {
         let digest = topbroker::digest(&data);
         let cache = fetcher.cache();
-        if let Some(seen) = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED) {
+        let seen = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED);
+        if let Some(seen) = &seen {
             if seen.digest == digest && seen.date != date {
                 return Err(IdxError::provider(
                     NAME,
@@ -664,6 +670,20 @@ pub async fn top_brokers(
                     ),
                 ));
             }
+        }
+        // Outside the refused hours both pages are taken to have rolled over
+        // to the latest session that had ended. A date page naming an older
+        // one may lag a ranking that has: only the very pair accepted before
+        // is that older session's.
+        let latest = holidays::latest_session(read);
+        let accepted = seen.is_some_and(|s| s.digest == digest && s.date == date);
+        if date < latest && !accepted {
+            return Err(IdxError::provider(
+                NAME,
+                format!(
+                    "the broker ranking read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+                ),
+            ));
         }
         if let Err(e) = cache.put_json(ACCEPTED_KEY, &Accepted { date, digest }) {
             tracing::warn!(error = %e, "could not write cache");
@@ -1425,9 +1445,18 @@ mod tests {
             err.to_string(),
             "ipot: the broker ranking was read at 10:00 WIB on 2026-11-06, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
         );
-        // After the busy hours, and on a weekday holiday: dated.
-        for after in ["2026-11-06T19:00:00", "2026-12-24T10:00:00"] {
-            let (f, _be, _d) = fetcher(ranking_pages());
+        // After the busy hours, and on a weekday holiday (cuti bersama, the
+        // day after the session of 2026-12-23): dated.
+        let wednesday = STATISTIC.replacen("2026-11-06", "2026-12-23", 2);
+        for (after, statistic) in [
+            ("2026-11-06T19:00:00", STATISTIC),
+            ("2026-12-24T10:00:00", wednesday.as_str()),
+        ] {
+            let (f, _be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, TOP)
+                    .route(SESSION_ENDPOINT, 200, statistic),
+            );
             let s = top_brokers(&f, at(after)).await.unwrap();
             assert_eq!(s.warnings.len(), 1, "{after}: only the fold");
         }
@@ -1645,6 +1674,94 @@ mod tests {
         assert_eq!(s.data.date, d(2026, 11, 9));
         let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
         assert_eq!(seen.date, d(2026, 11, 9));
+    }
+
+    /// Both pages read live on every call, on the cache in `dir`, which
+    /// keeps the ranking accepted last between calls.
+    fn live(dir: &std::path::Path, top: &str, statistic: &str) -> Arc<Fetcher> {
+        Arc::new(Fetcher::new(
+            Arc::new(
+                FixtureBackend::new()
+                    .route(TOP_BROKERS_ENDPOINT, 200, top)
+                    .route(SESSION_ENDPOINT, 200, statistic),
+            ),
+            Cache::new(dir),
+            CacheMode::Bypass,
+        ))
+    }
+
+    /// BBCA's statistics page with its Today row on `day`.
+    fn named(day: &str) -> String {
+        STATISTIC.replacen("2026-11-06", day, 2)
+    }
+
+    #[tokio::test]
+    async fn a_date_page_behind_the_latest_session_does_not_date_new_figures() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path());
+        let monday = TOP.replacen(">2.79 T<", ">2.80 T<", 1);
+        let tuesday = TOP.replacen(">2.79 T<", ">2.81 T<", 1);
+        let tuesday_night = at("2026-11-10T19:30:00");
+        // Monday night both pages are on Monday: accepted and remembered.
+        let s = top_brokers(
+            &live(dir.path(), &monday, &named("2026-11-09")),
+            at("2026-11-09T19:30:00"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+
+        // Tuesday night the ranking has new figures while the date page
+        // still names Monday, a session older than Tuesday's, which had
+        // ended: the figures may be Tuesday's, so they get no date, and
+        // nothing is remembered.
+        let err = top_brokers(
+            &live(dir.path(), &tuesday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: the broker ranking read at 19:30 WIB on 2026-11-10 is dated 2026-11-09, yet the session of 2026-11-10 had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+        );
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 9), "not written for a refused pair");
+
+        // Both pages still on Monday: the very pair accepted for Monday.
+        let s = top_brokers(
+            &live(dir.path(), &monday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 9));
+
+        // Once the date page names Tuesday, the right pair is accepted, that
+        // night and the next morning.
+        for when in ["2026-11-10T20:30:00", "2026-11-11T07:00:00"] {
+            let s = top_brokers(&live(dir.path(), &tuesday, &named("2026-11-10")), at(when))
+                .await
+                .unwrap();
+            assert_eq!(s.data.date, d(2026, 11, 10), "{when}");
+        }
+        let seen: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        assert_eq!(seen.date, d(2026, 11, 10));
+
+        // On a cache that remembers nothing, an older session's date is not
+        // believed either.
+        let fresh = tempfile::tempdir().unwrap();
+        let err = top_brokers(
+            &live(fresh.path(), &monday, &named("2026-11-09")),
+            tuesday_night,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("so it cannot be dated"), "{err}");
+        assert!(Cache::new(fresh.path())
+            .get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED)
+            .is_none());
     }
 
     #[tokio::test]
