@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 
 import * as an from "../src/analysis.js";
 import * as y from "../src/yahoo.js";
-import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint } from "../src/api.js";
+import { parseRss, matchName, parseSymbols, marketIsOpen, valuationKeyPoint, newsKeyPoint } from "../src/api.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const fixture = (p) => readFileSync(join(root, "tests", "fixtures", p), "utf8");
@@ -502,6 +502,13 @@ test("sentiment lexicon", () => {
   const r = an.aggregateSentiment("BBCA", null, items, 2);
   assert.equal(r.label, "positive");
   assert.equal(r.headlines.length, 2);
+});
+
+test("brief news key point agrees with the headline count (service::news_key_point)", () => {
+  const s = (company_matches, sentiment, score) => ({ company_matches, sentiment, score, headlines: [] });
+  assert.equal(newsKeyPoint(s(0, "no_coverage", 0)), "News: no current headline mentions the company");
+  assert.equal(newsKeyPoint(s(1, "positive", 0.5)), "News: 1 current headline mentions the company, lexicon sentiment positive (+0.50)");
+  assert.equal(newsKeyPoint(s(2, "negative", -0.25)), "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)");
 });
 
 test("rss parse and name matching", () => {

@@ -1463,16 +1463,25 @@ export async function brief(env, symbolRaw) {
   if (d) key_points.push(d.ttm_yield_pct != null ? `Dividends: TTM yield ${d.ttm_yield_pct.toFixed(2)}% over ${d.ttm_payments} payment${d.ttm_payments === 1 ? "" : "s"}, ${d.consecutive_years} consecutive years` : d.dividends.length ? "Dividends: none in the last twelve months" : "Dividends: none on record");
   const own = o ? { as_of: o.as_of, listed_pct: o.listed_pct, foreign_pct: o.holders.filter((h) => h.local_foreign === "A").reduce((s, h) => s + h.pct, 0), holders_listed: o.holders.length, top_holders: o.holders.slice(0, 5) } : null;
   if (own) key_points.push(`Ownership (${own.as_of}): ${own.holders_listed} holders above 1% hold ${own.listed_pct.toFixed(1)}%, foreign ${own.foreign_pct.toFixed(1)}%${own.top_holders[0] ? `; largest ${own.top_holders[0].holder} ${own.top_holders[0].pct.toFixed(1)}%` : ""}`);
-  if (n) key_points.push(n.company_matches ? `News: ${n.company_matches} current headline${n.company_matches === 1 ? "" : "s"} mention the company, lexicon sentiment ${rep.label} (${rep.score >= 0 ? "+" : ""}${rep.score.toFixed(2)})` : "News: no current headline mentions the company");
+  const newsSummary = n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null;
+  if (newsSummary) key_points.push(newsKeyPoint(newsSummary));
   const data = {
     symbol, name: q?.name || f?.name || t?.name || NAME_BY_SYMBOL.get(symbol) || null, generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), key_points,
     quote: q, fundamentals: f, technical: t, returns: r,
     dividends: d ? { ttm_total: d.ttm_total, ttm_payments: d.ttm_payments, ttm_yield_pct: d.ttm_yield_pct, consecutive_years: d.consecutive_years, last: d.last, payments_on_record: d.dividends.length } : null,
     ownership: own,
-    news: n ? { company_matches: n.company_matches, sentiment: rep.label, score: rep.score, headlines: n.items.slice(0, 5) } : null,
+    news: newsSummary,
     sections_failed: failed,
   };
   return envelope("idx.brief.v1", data, { cached: cachedAll, stale, warnings });
+}
+
+// The brief's "News" key point from its news section; the verb follows the
+// count, "1 current headline mentions", "2 current headlines mention"
+// (service::news_key_point in the CLI).
+export function newsKeyPoint(s) {
+  if (!s.company_matches) return "News: no current headline mentions the company";
+  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
 }
 
 // ---- GitHub repository (the Star button) -------------------------------
