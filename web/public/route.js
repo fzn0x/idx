@@ -214,6 +214,10 @@ const SCHEMA_CMD = {
   "ownership-concentration": "ownership concentration", "ownership-graph": "ownership graph BBCA",
 };
 
+/** An IDX ticker as typed (BBCA, bbca, BBCA.JK), and a day (2026-10-19). */
+const TICKER = /^[A-Za-z]{4}(\.JK)?$/i;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 /** Subcommand words of the CLI-only commands (watch list, config init, resolve undo), never tickers. */
 const SUBWORDS = new Set(["add", "remove", "rm", "list", "clear", "returns", "init", "set", "get", "path", "stats", "setup", "candidates", "merge", "map", "undo"]);
 
@@ -221,7 +225,7 @@ const SUBWORDS = new Set(["add", "remove", "rm", "list", "clear", "returns", "in
 function picks(items) {
   const pos = items.filter((x) => x.pos != null && !SUBWORDS.has(x.pos.toLowerCase())).map((x) => x.pos);
   const flagged = items.filter((x) => (x.name === "symbol" || x.name === "s") && typeof x.value === "string").map((x) => x.value);
-  const syms = [...flagged, ...pos].flatMap((w) => w.split(",")).filter((w) => /^[A-Za-z]{4}(\.JK)?$/i.test(w)).map((w) => w.toUpperCase().replace(/\.JK$/, ""));
+  const syms = [...flagged, ...pos].flatMap((w) => w.split(",")).filter((w) => TICKER.test(w)).map((w) => w.toUpperCase().replace(/\.JK$/, ""));
   const code = pos.find((w) => /^[A-Za-z]{2}$/.test(w));
   const name = pos.find((w) => !/^[A-Za-z]{4}$/.test(w) && /[A-Za-z]{3}/.test(w));
   return { sym: syms[0] || "BBCA", syms, code: code ? code.toUpperCase() : null, name: name || "salim" };
@@ -229,18 +233,25 @@ function picks(items) {
 
 // ---- what runs only in the CLI and the MCP server, or only in the CLI -----------------
 
+/** The exchange calendar's --type names (CalendarCategory in src/model/calendar.rs), aliases, all and default. */
+export const CALENDAR_TYPES = new Set(["dividend", "rights", "bonus", "split", "warrant", "rups", "public-expose", "public_expose", "expose", "buyback", "listing", "bond", "other", "all", "default"]);
+/** Stockbit's --kind names (CorporateEventKind in src/model/corporate.rs), aliases and all. */
+export const STOCKBIT_KINDS = new Set(["dividend", "stock_dividend", "stock-dividend", "bonus", "rights", "rights_issue", "rights-issue", "warrant", "warrants", "split", "stock_split", "stock-split", "reverse_split", "reverse-split", "rups", "meeting", "public_expose", "public-expose", "expose", "ipo", "tender_offer", "tender-offer", "tender", "all"]);
+
 /**
  * CLI commands behind an MCP tool with web: null, by their CLI path. `takes`, how
  * the command takes the words typed after it: "none" (a ticker typed only shapes
- * the near commands), "one" positional, "many", or "symbol" (one, as --symbol).
- * `needs`: the CLI requires that positional, so a line without one takes the near
- * commands' ticker. `switch`: its flags that take no value.
+ * the near commands), "one" positional, "many", or "symbol" (a ticker as --symbol,
+ * a date as --date). `needs`: the CLI requires that positional, so a line without
+ * one takes the near commands' ticker. `kinds`: the words that name a type of
+ * event, which go to that flag and never to the tickers. `switch`: its flags that
+ * take no value.
  */
 export const MCP_ONLY = {
   "market foreign": { tool: "idx_market_foreign", takes: "none", near: (a) => [N.foreign(a.sym), N.foreignScreen()] },
   "market brokers": { tool: "idx_market_brokers", takes: "none", near: (a) => (a.code && !a.syms.length ? [N.bandarBroker(a.code), N.broker(a.sym)] : [N.broker(a.sym), N.bandarBroker(a.code || "YP")]).concat(N.members()) },
   "market indices": { tool: "idx_indices", takes: "many", near: () => [N.market(), N.ihsg()] },
-  "market calendar": { tool: "idx_calendar", takes: "symbol", near: (a) => [N.actions(a.sym), N.holidays()] },
+  "market calendar": { tool: "idx_calendar", takes: "symbol", kinds: { flag: "type", short: "t", words: CALENDAR_TYPES }, near: (a) => [N.actions(a.sym), N.holidays()] },
   "ownership composition": { tool: "idx_ownership_composition", takes: "one", needs: true, near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
   "ownership institutions": { tool: "idx_ownership_institutions", takes: "one", needs: true, near: (a) => [N.holders(a.sym)] },
   "ownership sync": { tool: "idx_ownership_snapshot", takes: "none", switch: ["force"], near: () => [N.releases()] },
@@ -248,8 +259,8 @@ export const MCP_ONLY = {
   "stockbit orderbook": { tool: "idx_orderbook", takes: "one", needs: true, near: (a) => [N.quote(a.sym), N.intraday(a.sym)] },
   "stockbit status": { tool: "idx_stockbit_status", takes: "none" },
   "stockbit login": { tool: "idx_stockbit_login", takes: "none", switch: ["manual", "page", "no-browser", "force"] },
-  "stockbit actions": { tool: "idx_stockbit_actions", takes: "one", needs: true, near: (a) => [N.actions(a.sym)] },
-  "stockbit calendar": { tool: "idx_stockbit_actions", takes: "none", near: (a) => [N.actions(a.sym), N.holidays()] },
+  "stockbit actions": { tool: "idx_stockbit_actions", takes: "one", needs: true, kinds: { flag: "kind", short: "k", words: STOCKBIT_KINDS }, near: (a) => [N.actions(a.sym)] },
+  "stockbit calendar": { tool: "idx_stockbit_actions", takes: "none", kinds: { flag: "kind", short: "k", words: STOCKBIT_KINDS }, near: (a) => [N.actions(a.sym), N.holidays()] },
   "stockbit movements": { tool: "idx_stockbit_movements", takes: "one", near: (a) => [N.holders(a.sym)] },
 };
 
@@ -523,21 +534,36 @@ function cliLines(ctx, words) {
  * positional the line lacks.
  */
 function cliArgs(items, { takes, needs }, sym) {
-  const hasSymbol = items.some((x) => x.name === "symbol" || x.name === "s");
-  let given = 0;
+  const typed = (...names) => items.some((x) => names.includes(x.name));
+  // --date stands for one day, so it goes only where no other range was typed.
+  let given = 0, dated = typed("date", "d", "from", "to", "days");
   const out = items.flatMap((x) => {
     if (x.pos == null) return x.raw;
+    if (takes === "symbol") {
+      if (DAY.test(x.pos) && !dated) { dated = true; return ["--date", x.pos]; }
+      if (!TICKER.test(x.pos) || given++ || typed("symbol", "s")) return [];
+      return ["--symbol", x.pos];
+    }
     if (takes === "none" || (takes !== "many" && given)) return [];
     given++;
-    if (takes === "symbol") return hasSymbol ? [] : ["--symbol", x.pos];
     return x.raw;
   });
   return needs && !given ? [sym, ...out] : out;
 }
 
+/** The words that name a type of event (calendar dividend rups) as that one flag, with its typed value first. */
+function kindWords(items, kinds) {
+  const isKind = (x) => kinds && x.pos != null && kinds.words.has(x.pos.toLowerCase());
+  const words = items.filter(isKind).map((x) => x.pos.toLowerCase());
+  if (!words.length) return items;
+  const typed = items.find((x) => x.name === kinds.flag || x.name === kinds.short);
+  const value = [...(typeof typed?.value === "string" ? [typed.value] : []), ...words].join(",");
+  return [...items.filter((x) => x !== typed && !isKind(x)), { name: kinds.flag, value, raw: [`--${kinds.flag}`, value] }];
+}
+
 function mcpNotice(ctx, path, args, tool = byName(MCP_ONLY[path].tool)) {
   const entry = MCP_ONLY[path] || {};
-  const items = scan(args, new Set(entry.switch || []));
+  const items = kindWords(scan(args, new Set(entry.switch || [])), entry.kinds);
   const a = picks(items);
   return {
     kind: "cli-mcp", path, tool: tool.tool,

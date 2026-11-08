@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { routeLine } from "../public/route.js";
+import { routeLine, CALENDAR_TYPES, STOCKBIT_KINDS } from "../public/route.js";
 import { TOOLS } from "../public/tools.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -374,11 +374,28 @@ const MCP_LINES = [
   ...TOOLS.filter((t) => !t.web).flatMap((t) => [t.cli, t.tool, `tools ${t.tool}`, `json ${t.cli.replace(/^idx /, "")}`, `${t.cli.split(" ").filter((w) => /^[a-z]+$/.test(w)).join(" ")} -o json`]),
   "orderbook", "orderbook BBCA", "orderbook TLKM BBRI", "stockbit orderbook", "stockbit orderbook -d 20", "stockbit actions", "stockbit actions BBCA --kind dividend",
   "composition", "ownership composition", "ownership composition --as-of 2026-09-30", "institutions", "ownership institutions", "indices", "indices LQ45 IDX30",
-  "calendar BBCA", "market calendar --type rups --days 30", "stockbit calendar --kind dividend --days 30", "movements", "movements BBCA --action sell",
+  "calendar", "calendar BBCA", "calendar dividend", "calendar rups", "market calendar rups BBCA", "calendar 2026-10-19", "calendar 2026-10-19 --from 2026-10-01",
+  "market calendar --type rups --days 30", "stockbit calendar dividend", "stockbit calendar --kind dividend --days 30", "stockbit actions BBCA dividend",
+  "stockbit actions rups -k ipo", "movements", "movements BBCA --action sell",
   "brokers", "brokers CC", "market foreign TLKM", "market foreign --date 2026-10-16 -n 20", "ownership sync --force", "ownership status", "stockbit",
   "stockbit status", "stockbit login --page", "stockbit login --timeout 600", "idx --offline stockbit status", "market brokers --top 20 --sort frequency",
 ];
 
 test("a notice for what runs only in the CLI and MCP gives a CLI line the CLI takes", () => {
   assert.ok(parseAll(MCP_LINES) > 100);
+});
+
+test("the calendar words a notice reads are the CLI's types and kinds", () => {
+  // A ValueEnum's names: each variant in kebab case or its #[value(name)], with its aliases.
+  const names = (file, name) => {
+    const toks = lex(read("src", "model", file));
+    const at = toks.findIndex((t, i) => t.v === "enum" && toks[i + 1]?.v === name);
+    return variantsOf(toks.slice(at + 3, closing(toks, at + 2))).flatMap((v) => {
+      const value = v.attrs.filter((a) => a.startsWith("#[value")).join(" ");
+      return [strings(value, "name")[0] || kebab(v.name), ...strings(value, "alias")];
+    });
+  };
+  // parse_list in each file also takes all, and the calendar default.
+  assert.deepEqual([...CALENDAR_TYPES].sort(), [...names("calendar.rs", "CalendarCategory"), "all", "default"].sort());
+  assert.deepEqual([...STOCKBIT_KINDS].sort(), [...names("corporate.rs", "CorporateEventKind"), "all"].sort());
 });
