@@ -1345,9 +1345,9 @@ pub async fn market_brokers_from(
                 (Err(IdxError::Network(m)), None) => {
                     format!("idx.co.id could not be reached ({m})")
                 }
-                (Err(IdxError::OfflineMiss(_)), None) => {
-                    "offline, nothing usable from idx.co.id is cached for it".to_string()
-                }
+                (Err(IdxError::OfflineMiss(_)), None) => format!(
+                    "offline, and no usable copy of idx.co.id's broker summary for {want} is cached"
+                ),
                 (Err(other), None) => format!("idx.co.id failed ({other})"),
                 (Ok(_), None) => "idx.co.id has not answered it".to_string(),
             };
@@ -2796,7 +2796,7 @@ mod tests {
         assert!(s.stale);
         assert_eq!(
             s.warnings[0],
-            "offline, nothing usable from idx.co.id is cached for it, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+            "offline, and no usable copy of idx.co.id's broker summary for 2026-11-06 is cached, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
     }
 
@@ -2950,7 +2950,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             s.warnings[0],
-            "offline, nothing usable from idx.co.id is cached for it, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+            "offline, and no usable copy of idx.co.id's broker summary for 2026-11-06 is cached, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
         // A Saturday read that Saturday has no session to miss, even offline.
         Cache::new(dir.path())
