@@ -267,9 +267,10 @@ async fn ask(
 }
 
 /// One day's summary at `path`. An empty list is a day without trading,
-/// except in a copy served in place of a failed fetch: cached before the
-/// summary was out, it answers nothing, and the failure stands as with
-/// nothing cached.
+/// except in a copy that may predate the summary. One cached on or before
+/// the day it describes lasts [`TTL_TODAY`], as today's does, not
+/// [`TTL_CLOSED`]; one served in place of a failed fetch answers nothing,
+/// and the failure stands as with nothing cached.
 async fn day<T>(
     fetcher: &Arc<Fetcher>,
     path: &str,
@@ -277,8 +278,16 @@ async fn day<T>(
     today: NaiveDate,
     parse: fn(&str) -> Result<Vec<T>>,
 ) -> Result<Sourced<Vec<T>>> {
-    let (f, failure) = ask(fetcher, path, day_ttl(date, today)).await?;
-    let rows = parse(&f.body)?;
+    let (mut f, mut failure) = ask(fetcher, path, day_ttl(date, today)).await?;
+    let mut rows = parse(&f.body)?;
+    let fetched_on = f
+        .fetched_at
+        .with_timezone(&crate::model::wib())
+        .date_naive();
+    if rows.is_empty() && date < today && f.cached && !f.stale && fetched_on <= date {
+        (f, failure) = ask(fetcher, path, TTL_TODAY).await?;
+        rows = parse(&f.body)?;
+    }
     if let Some(failure) = failure.filter(|_| rows.is_empty()) {
         return Err(failure.error("is empty"));
     }
@@ -694,6 +703,55 @@ mod tests {
         let err = stock_summary(&f, today, today).await.unwrap_err();
         assert_eq!((err.code(), err.exit_code()), ("network", 3));
         assert!(err.to_string().ends_with(" WIB is empty"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_day_cached_before_it_was_over_is_asked_again() {
+        // Cache ages run on the real clock: dates from today, in WIB.
+        let wib = crate::model::wib();
+        let today = chrono::Utc::now().with_timezone(&wib).date_naive();
+        let days_ago = |n| today - chrono::Days::new(n);
+        let at_ten = |day: NaiveDate| {
+            day.and_hms_opt(10, 0, 0)
+                .unwrap()
+                .and_local_timezone(wib)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let (fresh, closed, refused) = (days_ago(2), days_ago(3), days_ago(4));
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route(&format!("date={}", ymd(fresh)), 200, BROKERS)
+                .route(&format!("date={}", ymd(refused)), 403, BLOCKED),
+        );
+        // Cached at 10:00 on the day itself, before the summary was out.
+        for day in [fresh, refused] {
+            f.cache()
+                .put_at(&broker_url(&ymd(day)), 200, NO_TRADING, at_ten(day))
+                .unwrap();
+        }
+        // Cached the day after: a day without trading.
+        f.cache()
+            .put_at(
+                &broker_url(&ymd(closed)),
+                200,
+                NO_TRADING,
+                at_ten(days_ago(2)),
+            )
+            .unwrap();
+
+        // Not kept for 30 days like a closed day: asked again.
+        let s = broker_summary(&f, fresh, today).await.unwrap();
+        assert_eq!(s.data.len(), 88);
+        assert!(!s.cached);
+        assert_eq!(be.call_count(), 1);
+        let s = broker_summary(&f, closed, today).await.unwrap();
+        assert!(s.data.is_empty() && s.cached && !s.stale);
+        assert_eq!(be.call_count(), 1, "a day without trading stays cached");
+        // Refused: the empty copy answers nothing.
+        let err = broker_summary(&f, refused, today).await.unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(err.to_string().contains(" 10:00 WIB is empty. "), "{err}");
     }
 
     #[tokio::test]

@@ -154,6 +154,11 @@ a TTL applies immediately.
   With nothing cached the error is `blocked` (exit 3) and says what to do;
   under `--no-cache` it says the cache was skipped and that `--offline`
   serves a copy if there is one.
+- idx.co.id's day summaries (stock, broker, index) are kept for 30 days once
+  the session is over, and for 15 minutes on the day itself. An empty one
+  cached on or before its own day, before the summary was out, keeps the 15
+  minutes on later days too, so it is asked again instead of passing for a
+  day without trading.
 - Network error text and warnings never include a URL's query string, and
   cache keys never hold a session token, so the Yahoo crumb and the MSN key
   stay out of every message; `-vv` debug logging still prints full request
