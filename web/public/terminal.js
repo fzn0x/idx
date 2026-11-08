@@ -709,7 +709,7 @@ const R = {
       frag.append(el("div", { class: "cmdline" }, p.cli.flatMap((line, i) => [el("p", { class: "lbl" }, [labels[i], copyButton(line)]), el("pre", { text: line })])));
     }
     const agent = p.kind === "cli-mcp" || p.agent;
-    frag.append(el("p", { class: "warn" }, [
+    frag.append(el("p", { class: "warn install" }, [
       t("Pasang CLI: ", "Install the CLI: "), el("code", { text: INSTALL }),
       ...(agent ? [t("; untuk agen, tanpa memasang: ", "; for an agent, without installing: "), el("code", { text: AGENT })] : []),
       t("; cara lain di ", "; other ways in "), el("a", { href: "/docs/#install", hreflang: "en", text: t("panduan (bahasa Inggris)", "the guide") }), ".",
