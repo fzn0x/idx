@@ -49,6 +49,7 @@ use super::Sourced;
 
 pub mod actions;
 pub mod parse;
+pub mod topbroker;
 
 pub const NAME: &str = "ipot";
 const ENDPOINT: &str = "https://www.indopremier.com/module/saham/include/data-brokersummary.php";

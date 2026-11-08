@@ -32,7 +32,7 @@ pub struct Parsed {
     pub warrants_rights: Vec<WarrantRight>,
 }
 
-fn decode(s: &str) -> String {
+pub(super) fn decode(s: &str) -> String {
     s.replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
