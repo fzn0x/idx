@@ -200,7 +200,8 @@ pub fn verdict(f: &Fundamentals) -> Verdict {
     }
 }
 
-/// One-paragraph summary for the table footer.
+/// One-paragraph summary for the table footer. The noun follows the count:
+/// "1 input", "8 inputs".
 pub fn summary_line(f: &Fundamentals) -> String {
     let Some(v) = &f.verdict else {
         return String::new();
@@ -212,8 +213,10 @@ pub fn summary_line(f: &Fundamentals) -> String {
         VerdictLabel::InsufficientData => "Not enough data for a reading",
     };
     format!(
-        "{head} (score {:+}, {} inputs). Heuristic from public ratios, not investment advice.",
-        v.score, v.inputs_available
+        "{head} (score {:+}, {} input{}). Heuristic from public ratios, not investment advice.",
+        v.score,
+        v.inputs_available,
+        if v.inputs_available == 1 { "" } else { "s" }
     )
 }
 
@@ -256,6 +259,24 @@ mod tests {
         let v = verdict(&f);
         assert_eq!(v.label, VerdictLabel::InsufficientData);
         assert_eq!(v.inputs_available, 1);
+    }
+
+    #[test]
+    fn summary_line_agrees_with_the_input_count() {
+        let mut f = base();
+        f.valuation.pe_trailing = Some(12.9);
+        f.verdict = Some(verdict(&f));
+        assert_eq!(
+            summary_line(&f),
+            "Not enough data for a reading (score +1, 1 input). Heuristic from public ratios, not investment advice."
+        );
+        // A net margin between 5% and 20% counts without moving the score.
+        f.profitability.net_margin_pct = Some(10.0);
+        f.verdict = Some(verdict(&f));
+        assert_eq!(
+            summary_line(&f),
+            "Not enough data for a reading (score +1, 2 inputs). Heuristic from public ratios, not investment advice."
+        );
     }
 
     #[test]

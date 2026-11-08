@@ -557,13 +557,15 @@ impl Sections {
 
 /// The brief's "Valuation verdict" key point, `None` without a verdict. A P/B
 /// over statements in another currency is not a ratio, so it is left out.
+/// The noun follows the count, as in the fundamentals footer: "1 input".
 fn valuation_key_point(f: &Fundamentals) -> Option<String> {
     let v = f.verdict.as_ref()?;
     Some(format!(
-        "Valuation verdict: {} (score {:+}, {} inputs){}",
+        "Valuation verdict: {} (score {:+}, {} input{}){}",
         v.label.as_str(),
         v.score,
         v.inputs_available,
+        if v.inputs_available == 1 { "" } else { "s" },
         match (
             f.valuation.pe_trailing,
             f.valuation.price_to_book.filter(|_| !f.mixed_currency()),
@@ -2021,6 +2023,25 @@ mod tests {
         assert!(k.contains(", P/B "), "same currency keeps P/B: {k}");
         itmg.verdict = None;
         assert_eq!(valuation_key_point(&itmg), None);
+    }
+
+    #[test]
+    fn valuation_key_point_agrees_with_the_input_count() {
+        // Only the trailing P/E, as in fundamental's too_little_data.
+        let mut f = Fundamentals::empty(Symbol::parse("BBCA").unwrap(), "t");
+        f.valuation.pe_trailing = Some(12.9);
+        f.verdict = Some(analysis::fundamental::verdict(&f));
+        assert_eq!(
+            valuation_key_point(&f).as_deref(),
+            Some("Valuation verdict: insufficient data (score +1, 1 input); P/E 12.9")
+        );
+        // A net margin between 5% and 20% counts without moving the score.
+        f.profitability.net_margin_pct = Some(10.0);
+        f.verdict = Some(analysis::fundamental::verdict(&f));
+        assert_eq!(
+            valuation_key_point(&f).as_deref(),
+            Some("Valuation verdict: insufficient data (score +1, 2 inputs); P/E 12.9")
+        );
     }
 
     #[test]
