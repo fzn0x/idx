@@ -308,6 +308,34 @@ test("a stock IPOT has not published is read again, not stored without its lists
   });
 });
 
+test("a stock that fails is tried again 10, then 30 minutes after its pass, then counts as failed", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const calls = [];
+  const recorded = recordedFetch(calls);
+  const tlkm = [];
+  // IPOT is busy for TLKM (503 is not retried within a request).
+  const fetchFn = async (u, init) => (String(u).includes("code=TLKM") ? (tlkm.push(String(u)), new Response("busy", { status: 503 })) : recorded(u, init));
+  const at = (hm) => new Date(`2026-10-17T${hm}:00+07:00`);
+  await withFetch(fetchFn, async () => {
+    const r = await bandarScanStep(env, { now: at("10:00") });
+    assert.deepEqual([r.read, r.errors, r.done], [2, { http_503: 1 }, false]);
+    let st = await scanStatus(env);
+    assert.deepEqual([st.retry, st.retry_due, st.failed, st.complete], [["TLKM"], at("10:10").toISOString(), [], null]);
+    assert.equal((await bandarScanStep(env, { now: at("10:05") })).idle, true);
+    assert.equal(tlkm.length, 1, "no retry within the pass's minute or before it is due");
+    await bandarScanStep(env, { now: at("10:10") });
+    st = await scanStatus(env);
+    assert.deepEqual([tlkm.length, st.pass, st.retry_due], [2, 1, at("10:40").toISOString()]);
+    assert.equal((await bandarScanStep(env, { now: at("10:39") })).idle, true);
+    const last = await bandarScanStep(env, { now: at("10:40") });
+    assert.equal(last.done, true);
+    st = await scanStatus(env);
+    assert.deepEqual([tlkm.length, st.failed, st.errors, st.complete], [3, ["TLKM"], { http_503: 1 }, "2026-10-16"]);
+    assert.deepEqual([st.last_errors[0].symbol, st.last_errors[0].kind, st.last_errors[0].error], ["TLKM", "http_503", "HTTP 503"]);
+  });
+});
+
 test("the state production held on 2026-11-08 heals: 2026-11-06 is probed again and scanned", async () => {
   const env = memoryDb();
   // Written at 16:45:39 WIB on 2026-11-06, when IPOT had not published that session's lists.

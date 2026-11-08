@@ -55,6 +55,15 @@ const LATE_MIN = 21 * 60;
 const PROBE_RETRY_MIN = 5;
 /** Minutes before stocks whose session IPOT had not published are read again, until the next session's 16:45 WIB. */
 const PENDING_GAP_MIN = 10;
+/**
+ * Minutes after a pass ends before the stocks that failed in it are tried
+ * again: two more passes, then a failure counts. A source that fails a
+ * stock tends to fail its neighbours too (2026-10-30: 72 of 100), so an
+ * immediate retry fails the same way.
+ */
+const RETRY_GAPS_MIN = [10, 30];
+/** Failures the state keeps word for word, newest first. */
+const ERRORS_KEPT = 5;
 const DAY_MS = 24 * 3600e3;
 const NAMES = new Map(UNIVERSE.map(([s, n]) => [s, n]));
 
@@ -138,7 +147,7 @@ function upgrade(st) {
   if (st.holiday) return { ...base, phase: "closed", holiday: true };
   if (st.done) {
     const symbols = [...new Set(st.symbols || [])], failed = st.failed || [];
-    return { ...base, phase: "done", symbols, quotes: {}, queue: [], retry: [], retried: true, failed, stored: symbols.length - failed.length, checked: st.checked || 0, started_at: st.started_at ?? null, done_at: st.done_at ?? null };
+    return { ...base, phase: "done", symbols, quotes: {}, queue: [], retry: [], pass: RETRY_GAPS_MIN.length, failed, errors: {}, stored: symbols.length - failed.length, checked: st.checked || 0, started_at: st.started_at ?? null, done_at: st.done_at ?? null };
   }
   // A pass in progress starts over.
   return { ...base, phase: "new" };
@@ -147,7 +156,7 @@ function upgrade(st) {
 const fresh = (session, prev) => ({ v: 2, session, phase: "new", complete: prev?.complete ?? null });
 
 /** Stocks of the first pass the scan has got to. */
-const attempted = (st) => (st.symbols?.length ?? 0) - (st.retried ? 0 : (st.queue?.length ?? st.symbols?.length ?? 0));
+const attempted = (st) => (st.symbols?.length ?? 0) - (st.pass ? 0 : (st.queue?.length ?? st.symbols?.length ?? 0));
 
 async function kvGet(env, k) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = ?1").bind(k).first();
@@ -237,7 +246,7 @@ async function probe(st, now, fetchPage) {
   st.probe_error = null;
   const verdict = probeVerdict(page, st.board_traded);
   if (verdict === "published") {
-    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retried: false, failed: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
+    Object.assign(st, { phase: "running", published_at: at, started_at: at, next_probe_at: null, queue: [...st.symbols], retry: [], retry_due: null, pass: 0, failed: [], errors: {}, last_errors: [], pending: [], pending_since: {}, pending_due: null, stored: 0, checked: 0 });
     // A week of these shows when IPOT publishes a session.
     console.log("bandar published", JSON.stringify({ session: st.session, published_at: at, last_unpublished_at: st.last_unpublished_at ?? null, probes: st.probes }));
   } else if (verdict === "closed") {
@@ -252,17 +261,33 @@ async function probe(st, now, fetchPage) {
   return verdict;
 }
 
-/** No stock is left to read in this pass or a retry pass; pending ones may wait. */
-const restDone = (st) => !st.queue.length && (!st.retry.length || st.retried);
+/** No stock is left to read in this pass or a later retry pass; pending ones may wait. */
+const restDone = (st) => !st.queue.length && !st.retry.length;
 
-/** Refills an empty queue: the retry pass, else the pending stocks once they are due. */
+/** A failure's kind, for the counts the logs and the status keep. Pure, tested. */
+export function errorKind(e) {
+  const m = String(e?.message ?? e);
+  const http = m.match(/\bHTTP (\d{3})\b/);
+  if (http) return `http_${http[1]}`;
+  if (/no answer within/.test(m)) return "timeout";
+  if (/no table/.test(m)) return "page";
+  return "other";
+}
+
+/** Marks the end of a pass that left failures: their next pass is due RETRY_GAPS_MIN later. */
+function passEnded(st, now) {
+  if (!st.queue.length && st.retry.length && st.pass < RETRY_GAPS_MIN.length) st.retry_due ??= after(now, RETRY_GAPS_MIN[st.pass]);
+}
+
+/** Refills an empty queue: the next retry pass once it is due, else the pending stocks once they are due. */
 function refill(st, now) {
   if (st.queue.length) return;
-  if (st.retry.length && !st.retried) {
-    // One more pass over the stocks that failed.
+  passEnded(st, now);
+  if (st.retry.length && now.getTime() >= Date.parse(st.retry_due)) {
     st.queue = st.retry;
     st.retry = [];
-    st.retried = true;
+    st.retry_due = null;
+    st.pass++;
   } else if (st.pending?.length && now.getTime() >= Date.parse(st.pending_due)) {
     st.queue = st.pending;
     st.pending = [];
@@ -270,11 +295,27 @@ function refill(st, now) {
   }
 }
 
-/** Up to PER_TICK stocks off the queue into `rows`, while the budget and the minute last; returns how many it read. */
+/** A stock's failure: kept for the next pass while one is left, else final. */
+function failure(st, symbol, kind, e, at, seen) {
+  seen[kind] = (seen[kind] || 0) + 1;
+  st.last_errors = [{ symbol, kind, error: short(e), at }, ...(st.last_errors || [])].slice(0, ERRORS_KEPT);
+  if (kind !== "invalid" && st.pass < RETRY_GAPS_MIN.length) return void st.retry.push(symbol);
+  st.failed.push(symbol);
+  st.errors[kind] = (st.errors[kind] || 0) + 1;
+}
+
+/**
+ * Up to PER_TICK stocks off the queue into `rows`, while the budget and the
+ * minute last. Returns how many it read and the kinds of the failures among
+ * them.
+ */
 async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   const today = hol.wibDate(now), at = now.toISOString();
   st.pending ??= [];
   st.pending_since ??= {};
+  st.pass ??= 0;
+  st.errors ??= {};
+  const seen = {};
   let read = 0;
   while (read < PER_TICK) {
     refill(st, now);
@@ -288,14 +329,14 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
       // The budget ran out under it: it stays first in line.
       if (isBudgetError(e)) break;
       st.queue.shift();
-      (st.retried ? st.failed : st.retry).push(symbol);
       read++;
+      failure(st, symbol, errorKind(e), e, at, seen);
       continue;
     }
     st.queue.shift();
     read++;
     if (r.invalid) {
-      st.failed.push(symbol);
+      failure(st, symbol, "invalid", "a code IPOT does not know", at, seen);
       continue;
     }
     if (r.pending) {
@@ -310,7 +351,8 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
     st.stored++;
     if (r.rows[0]?.v.summary.buyers.length) st.checked++;
   }
-  return read;
+  passEnded(st, now);
+  return { read, errors: seen };
 }
 
 /**
@@ -350,7 +392,9 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   const rows = [];
   let prune = false;
   if (st.phase === "running" && stocks) {
-    out.read = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
+    const { read, errors } = await readStocks(st, rows, { now, b, fetchPage, fetchChart });
+    out.read = read;
+    if (Object.keys(errors).length) out.errors = errors;
     changed ||= out.read > 0;
   }
   if (st.phase === "running" && restDone(st)) {
@@ -416,6 +460,7 @@ export async function scanStatus(env) {
     phase: st.phase, probes: st.probes || 0, probe_errors: st.probe_errors || 0, probe_error: st.probe_error ?? null,
     first_probe_at: st.first_probe_at ?? null, next_probe_at: st.next_probe_at ?? null, published_at: st.published_at ?? null,
     pending: (st.pending || []).map((symbol) => ({ symbol, since: st.pending_since?.[symbol] ?? null })), pending_due: st.pending_due ?? null,
+    retry: st.retry || [], retry_due: st.retry_due ?? null, pass: st.pass ?? 0, errors: st.errors || {}, last_errors: st.last_errors || [],
     ranked_from: st.ranked_from ?? null,
   };
 }
