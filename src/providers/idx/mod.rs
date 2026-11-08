@@ -340,25 +340,26 @@ pub async fn index_summary(
     day(fetcher, &path, date, today, parse::index_summary).await
 }
 
-/// The latest `days` sessions of one stock, newest first. An unknown code
-/// is `NotFound`.
+/// The latest `days` sessions of one stock, newest first, with the
+/// [`Failure`] a cached copy stands in for: only the caller knows whether
+/// the copy reaches the sessions it needs. An unknown code is `NotFound`.
 pub async fn trading_history(
     fetcher: &Arc<Fetcher>,
     symbol: &Symbol,
     days: usize,
-) -> Result<Sourced<Vec<StockDay>>> {
+) -> Result<(Sourced<Vec<StockDay>>, Option<Failure>)> {
     let path = format!(
         "ListedCompany/GetTradingInfoSS?code={}&start=0&length={days}",
         symbol.as_str()
     );
-    let f = get(fetcher, &path, TTL_HISTORY).await?;
+    let (f, failure) = ask(fetcher, &path, TTL_HISTORY).await?;
     let rows = parse::trading_history(&f.body)?;
     if rows.is_empty() {
         return Err(IdxError::NotFound(format!(
             "idx.co.id has no trading history for {symbol}"
         )));
     }
-    Ok(sourced(rows, &f))
+    Ok((sourced(rows, &f), failure))
 }
 
 /// Which slice of the calendar to ask for.

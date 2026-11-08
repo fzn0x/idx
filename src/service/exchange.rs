@@ -604,7 +604,7 @@ pub async fn foreign_flow(
             (sessions + 2).min(FOREIGN_MAX_DAYS)
         }
     };
-    let s = idx::trading_history(fetcher, symbol, length)
+    let (s, failure) = idx::trading_history(fetcher, symbol, length)
         .await
         .map_err(with_ipot_hint)?;
     let stock_name = s.data.iter().find_map(|r| r.stock_name.clone());
@@ -613,6 +613,12 @@ pub async fn foreign_flow(
     list.dedup_by_key(|d| d.date);
     if let ForeignRange::Dates { from, to } = range {
         list.retain(|d| d.date >= from && d.date <= to);
+        // A copy served for a failed fetch may stop before the range.
+        if let Some(failure) = failure.filter(|_| list.is_empty()) {
+            return Err(with_ipot_hint(
+                failure.error(&format!("has no session of {symbol} from {from} to {to}")),
+            ));
+        }
         if list.is_empty() {
             return Err(IdxError::NotFound(format!(
                 "idx.co.id has no sessions for {symbol} from {from} to {to}"
@@ -1420,6 +1426,42 @@ mod tests {
                 .ends_with("with idx bandar screen --period 1d --sort fnet"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_history_whose_copy_misses_the_range_is_no_empty_range() {
+        // 19 Oct after the close: BBCA's history was cached two hours ago,
+        // its newest session the 16th; idx.co.id now refuses.
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let url = |length: usize| {
+            format!("https://www.idx.co.id/primary/ListedCompany/GetTradingInfoSS?code=BBCA&start=0&length={length}")
+        };
+        let two_hours_ago = chrono::Utc::now() - chrono::Duration::seconds(7200);
+        for length in [3, 5] {
+            f.cache()
+                .put_at(&url(length), 200, HISTORY, two_hours_ago)
+                .unwrap();
+        }
+        let sym = Symbol::parse("BBCA").unwrap();
+        let today = d(2026, 10, 19);
+        let range = |from| ForeignRange::Dates { from, to: today };
+        // The 19th is not in the copy: the refusal, not "no sessions".
+        let err = foreign_flow(&f, &[], &sym, range(today), today)
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(" WIB has no session of BBCA from 2026-10-19 to 2026-10-19. "),
+            "{msg}"
+        );
+        assert!(msg.ends_with(IPOT_SOURCE_ADVICE.cli), "{msg}");
+        // A range the copy reaches is served from it, marked stale.
+        let s = foreign_flow(&f, &[], &sym, range(d(2026, 10, 15)), today)
+            .await
+            .unwrap();
+        assert!(s.stale && s.warnings.len() == 1, "{:?}", s.warnings);
+        assert_eq!((s.data.from, s.data.to), (d(2026, 10, 15), d(2026, 10, 16)));
     }
 
     #[test]

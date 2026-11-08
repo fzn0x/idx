@@ -149,7 +149,8 @@ a TTL applies immediately.
   never cached.
   An empty copy of a day's stock, broker or index summary does not stand in
   for a failed fetch, as it may be from before the summary was out: the
-  error stands and names the copy.
+  error stands and names the copy. So does a copy of a stock's history
+  without a session in the `stocks foreign --from/--to` range.
   With nothing cached the error is `blocked` (exit 3) and says what to do;
   under `--no-cache` it says the cache was skipped and that `--offline`
   serves a copy if there is one.
