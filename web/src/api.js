@@ -1041,7 +1041,8 @@ async function bandarOne(env, s, q) {
     else {
       sum = await brokerRange(env, s, bd.periodStart(period, latest.data.to), latest.data.to, investor, mboard, today);
       sum.warnings.push(...latest.warnings);
-      sum.cached &&= latest.cached;
+      // The latest session's page is part of the answer (r.absorb(&latest) in service::bandar_one).
+      sum.cached &&= latest.cached; sum.stale ||= latest.stale; sum.fetched_at = Math.min(sum.fetched_at, latest.fetched_at);
     }
   }
   await withValueTraded(env, sum, investor, mboard, today);
@@ -1067,6 +1068,9 @@ async function bandarOne(env, s, q) {
     try {
       const r = await bandarSessions(env, s, d.from, d.to, investor, mboard, today);
       rep.daily = bd.daily(r.value, top);
+      // So are its sessions, as the CLI absorbs each one.
+      sum.cached &&= r.cached; sum.stale ||= r.stale; sum.fetched_at = Math.min(sum.fetched_at, r.fetched_at);
+      if (r.warning && !warnings.includes(r.warning)) warnings.push(r.warning);
     } catch (e) {
       warnings.push(`${s}: the daily series failed (${e.message})`);
     }
