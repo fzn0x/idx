@@ -2045,6 +2045,36 @@ mod tests {
     }
 
     #[test]
+    fn valuation_key_point_says_the_label_in_words() {
+        // The JSON keeps the label; the key point says VerdictLabel::as_str.
+        // web/test/labels.test.mjs pins the same table for the JS port.
+        use crate::model::{Verdict, VerdictLabel};
+        let mut f = Fundamentals::empty(Symbol::parse("BBCA").unwrap(), "t");
+        for (label, json, words) in [
+            (VerdictLabel::Undervalued, "undervalued", "undervalued"),
+            (VerdictLabel::Fair, "fair", "fairly valued"),
+            (VerdictLabel::Overvalued, "overvalued", "overvalued"),
+            (
+                VerdictLabel::InsufficientData,
+                "insufficient_data",
+                "insufficient data",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(label).unwrap(), json);
+            f.verdict = Some(Verdict {
+                label,
+                score: 0,
+                reasons: vec![],
+                inputs_available: 3,
+            });
+            assert_eq!(
+                valuation_key_point(&f).unwrap(),
+                format!("Valuation verdict: {words} (score +0, 3 inputs)")
+            );
+        }
+    }
+
+    #[test]
     fn match_names_and_items() {
         assert_eq!(match_name("PT Bank Central Asia Tbk"), "Bank Central Asia");
         assert_eq!(
@@ -2163,6 +2193,31 @@ mod tests {
             news_key_point(&summary(2, SentimentLabel::Negative, -0.25)),
             "News: 2 current headlines mention the company, lexicon sentiment negative (-0.25)"
         );
+    }
+
+    #[test]
+    fn news_key_point_says_the_sentiment_in_words() {
+        // The JSON keeps the label; the key point says SentimentLabel::as_str.
+        // web/test/labels.test.mjs pins the same table for the JS port.
+        use crate::model::SentimentLabel;
+        for (sentiment, json, words) in [
+            (SentimentLabel::Positive, "positive", "positive"),
+            (SentimentLabel::Negative, "negative", "negative"),
+            (SentimentLabel::Neutral, "neutral", "neutral"),
+            (SentimentLabel::NoCoverage, "no_coverage", "no coverage"),
+        ] {
+            assert_eq!(serde_json::to_value(sentiment).unwrap(), json);
+            let s = NewsSummary {
+                company_matches: 1,
+                sentiment,
+                score: 0.0,
+                headlines: vec![],
+            };
+            assert_eq!(
+                news_key_point(&s),
+                format!("News: 1 current headline mentions the company, lexicon sentiment {words} (+0.00)")
+            );
+        }
     }
 
     #[test]

@@ -1415,12 +1415,13 @@ export async function ownershipGraph(env, rootRaw, depth = 2, minPct = 0, maxNod
 
 // The brief's "Valuation verdict" key point, null without a verdict. A P/B
 // over statements in another currency is not a ratio, so it is left out (as
-// service::valuation_key_point does in the CLI). The noun follows the count:
-// "1 input", "8 inputs".
+// service::valuation_key_point does in the CLI). The label is said in the
+// CLI's words ("fairly valued", "insufficient data"), and the noun follows the
+// count: "1 input", "8 inputs".
 export function valuationKeyPoint(f) {
   if (!f?.verdict) return null;
   const v = f.verdict, pe = f.valuation.pe_trailing, pb = an.mixedCurrency(f) ? null : f.valuation.price_to_book;
-  return `Valuation verdict: ${v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} input${v.inputs_available === 1 ? "" : "s"})${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
+  return `Valuation verdict: ${an.VERDICT_WORDS[v.label] ?? v.label} (score ${v.score >= 0 ? "+" : ""}${v.score}, ${v.inputs_available} input${v.inputs_available === 1 ? "" : "s"})${pe != null ? `; P/E ${pe.toFixed(1)}` : ""}${pb != null ? `, P/B ${pb.toFixed(2)}` : ""}`;
 }
 
 export async function brief(env, symbolRaw) {
@@ -1483,11 +1484,11 @@ export function dividendsKeyPoint(d) {
 }
 
 // The brief's "News" key point from its news section; the verb follows the
-// count, "1 current headline mentions", "2 current headlines mention"
-// (service::news_key_point in the CLI).
+// count, "1 current headline mentions", "2 current headlines mention", and the
+// sentiment is said in the CLI's words (service::news_key_point in the CLI).
 export function newsKeyPoint(s) {
   if (!s.company_matches) return "News: no current headline mentions the company";
-  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
+  return `News: ${s.company_matches} current ${s.company_matches === 1 ? "headline mentions" : "headlines mention"} the company, lexicon sentiment ${an.SENTIMENT_WORDS[s.sentiment] ?? s.sentiment} (${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)})`;
 }
 
 // The brief's "Ownership" key point from its ownership section; noun and verb

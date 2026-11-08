@@ -159,11 +159,11 @@ test("brief valuation key point agrees with the input count (service::valuation_
   const f = y.parseFundamentals(JSON.parse(fixture("yahoo/quote_summary_fundamentals_bbca.json")).quoteSummary.result[0], "BBCA");
   for (const group of ["valuation", "profitability", "health", "growth", "dividend", "analyst"]) for (const k of Object.keys(f[group])) if (!(group === "valuation" && k === "pe_trailing")) f[group][k] = null;
   f.verdict = an.verdict(f);
-  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient_data (score +1, 1 input); P/E 12.9");
+  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient data (score +1, 1 input); P/E 12.9");
   // A net margin between 5% and 20% counts without moving the score.
   f.profitability.net_margin_pct = 10;
   f.verdict = an.verdict(f);
-  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient_data (score +1, 2 inputs); P/E 12.9");
+  assert.equal(valuationKeyPoint(f), "Valuation verdict: insufficient data (score +1, 2 inputs); P/E 12.9");
 });
 
 // ---- growth, valuation and risk lenses: same fixtures and figures as the

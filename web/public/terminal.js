@@ -148,6 +148,11 @@ const newsTable = (items) => wrapScroll(table([
 const mixedCurrency = (f) => !!(f.currency && f.financial_currency) && f.currency.toUpperCase() !== f.financial_currency.toUpperCase();
 const mixedRatio = (f, v) => (v != null && mixedCurrency(f) ? `${fmt.ratio(v)}*` : fmt.ratio(v));
 const inStatementCurrency = (f, v, s) => (v != null && mixedCurrency(f) ? `${s} ${f.financial_currency}` : s);
+// The words the CLI prints for each verdict label (VerdictLabel::as_str,
+// web/src/analysis.js VERDICT_WORDS); the JSON keeps the label itself.
+const VERDICT_WORDS = { undervalued: "undervalued", fair: "fairly valued", overvalued: "overvalued", insufficient_data: "insufficient data" };
+// The same for each sentiment label (SentimentLabel::as_str, SENTIMENT_WORDS).
+const SENTIMENT_WORDS = { positive: "positive", negative: "negative", neutral: "neutral", no_coverage: "no coverage" };
 
 // The note under a screen whose table marks a P/B, worded as the CLI's
 // (src/output/table_news.rs): the marked companies in table order, grouped
@@ -287,7 +292,7 @@ const R = {
     if (f.verdict) {
       const vv = f.verdict;
       const cls = vv.label === "undervalued" ? "up" : vv.label === "overvalued" ? "dn" : "";
-      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: vv.label.replace("_", " ") }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} input${vv.inputs_available === 1 ? "" : "s"} · heuristic from public ratios, not investment advice`]));
+      frag.append(el("p", { class: "prose", style: "margin-top:.75rem" }, [el("span", { class: `pill ${cls}`, text: VERDICT_WORDS[vv.label] ?? vv.label }), ` score ${vv.score > 0 ? "+" : ""}${vv.score}, ${vv.inputs_available} input${vv.inputs_available === 1 ? "" : "s"} · heuristic from public ratios, not investment advice`]));
       frag.append(el("ul", { class: "reasons" }, vv.reasons.map((r) => el("li", { text: r }))));
     }
     frag.append(el("p", { class: "warn", text: `Sources: ${f.sources.join(", ")}` }));
@@ -378,7 +383,7 @@ const R = {
       ["Price", (f) => fmt.price(f.price)], ["Market cap", (f) => fmt.compact(f.valuation.market_cap)], ["P/E (ttm)", (f) => fmt.ratio(f.valuation.pe_trailing)], ["P/E (fwd)", (f) => fmt.ratio(f.valuation.pe_forward)],
       ["P/B", (f) => mixedRatio(f, f.valuation.price_to_book)], ["EV/EBITDA", (f) => mixedRatio(f, f.valuation.ev_to_ebitda)], ["ROE", (f) => pct(f.profitability.roe_pct)], ["Net margin", (f) => pct(f.profitability.net_margin_pct)],
       ["Debt/equity", (f) => x(f.health.debt_to_equity)], ["Rev growth", (f) => fmt.pct(f.growth.revenue_growth_pct)], ["Div yield", (f) => pct(f.dividend.yield_pct)], ["Target (mean)", (f) => fmt.price(f.analyst.target_mean)],
-      ["Verdict", (f) => f.verdict?.label.replace("_", " ") || NA],
+      ["Verdict", (f) => (f.verdict ? VERDICT_WORDS[f.verdict.label] ?? f.verdict.label : NA)],
     ];
     const t = wrapScroll(table(cols, rowsDef.map(([label, fn]) => ({ label, vals: list.map(fn) }))));
     const mixed = list.filter(mixedCurrency).map((f) => `${f.symbol} (statements in ${f.financial_currency}, price in ${f.currency})`);
@@ -493,7 +498,7 @@ const R = {
     if (b.technical) { frag.append(el("h3", { class: "stmt-title", text: "Technical" })); frag.append(R.technical(b.technical)); }
     if (b.returns) { frag.append(el("h3", { class: "stmt-title", text: "Returns" })); frag.append(R.returns([b.returns])); }
     if (b.ownership) { frag.append(el("h3", { class: "stmt-title", text: `Holders above 1 % as of ${b.ownership.as_of} · ${b.ownership.holders_listed} listed = ${pct(b.ownership.listed_pct)} · foreign ${pct(b.ownership.foreign_pct)}` })); frag.append(wrapScroll(table([{ h: "Holder", k: "holder", l: true, cls: "sym" }, { h: "Type", k: "investor_type", l: true }, { h: "L/A", k: "local_foreign", l: true }, { h: "%", f: (r) => pct(r.pct) }], b.ownership.top_holders))); }
-    if (b.news?.headlines?.length) { frag.append(el("h3", { class: "stmt-title", text: `Headlines · ${b.news.company_matches} ${b.news.company_matches === 1 ? "mentions" : "mention"} the company · sentiment ${b.news.sentiment}` })); frag.append(newsTable(b.news.headlines)); }
+    if (b.news?.headlines?.length) { frag.append(el("h3", { class: "stmt-title", text: `Headlines · ${b.news.company_matches} ${b.news.company_matches === 1 ? "mentions" : "mention"} the company · sentiment ${SENTIMENT_WORDS[b.news.sentiment] ?? b.news.sentiment}` })); frag.append(newsTable(b.news.headlines)); }
     if (b.sections_failed.length) frag.append(el("p", { class: "warn", text: `Missing sections: ${b.sections_failed.join(", ")} (see warnings above).` }));
     frag.append(el("p", { class: "warn", text: "Verdicts, signals and sentiment are transparent rule scores, not investment advice." }));
     return frag;
