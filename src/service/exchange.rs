@@ -964,15 +964,38 @@ fn member_ranking(
     }
 }
 
+/// `true` when `s`, idx.co.id's broker summary of `day`, does not show that
+/// the trading day had no session: it has no rows and was read on `day`
+/// itself (a copy keeps when it was fetched; an answer read now is read
+/// `today`), when idx.co.id may not have published the session yet. Only
+/// for a session that has ended by `ended`.
+fn read_unpublished(
+    s: &Sourced<Vec<idx::BrokerDay>>,
+    day: NaiveDate,
+    today: NaiveDate,
+    ended: NaiveDate,
+) -> bool {
+    let read = if s.cached {
+        s.fetched_at
+            .with_timezone(&crate::model::wib())
+            .date_naive()
+    } else {
+        today
+    };
+    s.data.is_empty() && day <= ended && holidays::is_trading_day(day) && read <= day
+}
+
 /// idx.co.id's broker summary of `day` as [`market_brokers`] walks to it.
 /// Before idx.co.id publishes a session its summary is an empty list, so a
-/// copy read on `day` itself without rows does not show that a trading day
-/// had no session. Once that session has ended (`ended`), such a copy is read
-/// again: the cache keeps a past day's summary for a closed session's 30
-/// days, so it is asked for with today's short lifetime instead. A copy
-/// served because it could not be read again (the live fetch failed, or
-/// offline) is an error rather than a day without trading: the walk does
-/// not skip a session it could not read.
+/// summary read on `day` itself without rows does not show that a trading
+/// day had no session ([`read_unpublished`]). Once that session has ended
+/// (`ended`), such a copy is read again: the cache keeps a past day's
+/// summary for a closed session's 30 days, so it is asked for with today's
+/// short lifetime instead. An empty answer read so is returned for the walk
+/// to tell from a day without a session. A copy served because it could
+/// not be read again (the live fetch failed, or offline) is an error rather
+/// than a day without trading: the walk does not skip a session it could
+/// not read.
 async fn broker_day(
     fetcher: &Arc<Fetcher>,
     day: NaiveDate,
@@ -980,12 +1003,7 @@ async fn broker_day(
     ended: NaiveDate,
 ) -> Result<Sourced<Vec<idx::BrokerDay>>> {
     let read = |s: &Sourced<Vec<idx::BrokerDay>>| s.fetched_at.with_timezone(&crate::model::wib());
-    let early = |s: &Sourced<Vec<idx::BrokerDay>>| {
-        s.data.is_empty()
-            && day <= ended
-            && holidays::is_trading_day(day)
-            && read(s).date_naive() <= day
-    };
+    let early = |s: &Sourced<Vec<idx::BrokerDay>>| read_unpublished(s, day, today, ended);
     let mut s = idx::broker_summary(fetcher, day, today).await?;
     if early(&s) && s.cached && !s.stale && day < today {
         s = idx::broker_summary(fetcher, day, day).await?;
@@ -1033,9 +1051,10 @@ pub async fn market_brokers(
 /// `date` the walk back starts there: before the close the day's own
 /// summary is not asked for, and a refusal of that request cannot hide the
 /// session before it. A session that could not be read is not skipped
-/// either (see [`broker_day`]). A `date` without a session (a weekend or a
-/// listed holiday) is not found without a request, whatever a copy of it
-/// or idx.co.id would say.
+/// either (see [`broker_day`]), and one idx.co.id has not published yet is
+/// named: a walk past it says so, and a `date` of it is not found as such.
+/// A `date` without a session (a weekend or a listed holiday) is not found
+/// without a request, whatever a copy of it or idx.co.id would say.
 async fn members_until(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -1044,39 +1063,106 @@ async fn members_until(
     today: NaiveDate,
     ended: NaiveDate,
 ) -> Result<Sourced<BrokerRanking>> {
+    let (walked, unpublished) = idx_walk(fetcher, date, top, sort, today, ended).await;
+    idx_answer(walked, date, unpublished, None)
+}
+
+/// idx.co.id's walk for [`members_until`]: the ranking, or the error that
+/// ended the walk, and the session it found unpublished on the way (see
+/// [`read_unpublished`]), if any.
+async fn idx_walk(
+    fetcher: &Arc<Fetcher>,
+    date: Option<NaiveDate>,
+    top: usize,
+    sort: BrokerSort,
+    today: NaiveDate,
+    ended: NaiveDate,
+) -> (Result<Sourced<BrokerRanking>>, Option<NaiveDate>) {
     if let Some(d) = date.filter(|d| *d <= today && !holidays::is_trading_day(*d)) {
-        return Err(IdxError::NotFound(format!(
-            "no trading data: {}",
-            closed_reason(d)
-        )));
+        let none = IdxError::NotFound(format!("no trading data: {}", closed_reason(d)));
+        return (Err(none), None);
     }
     let from = match date {
         Some(_) => today,
         None => ended,
     };
-    let (day, mut s) = session(date, from, |d| broker_day(fetcher, d, today, ended)).await?;
-    let mut rows: Vec<BrokerDayRow> = std::mem::take(&mut s.data)
-        .into_iter()
-        .map(|r| BrokerDayRow {
-            rank: 0,
-            code: r.code.trim().to_ascii_uppercase(),
-            name: r
-                .name
-                .map(|n| n.trim().to_string())
-                .filter(|n| !n.is_empty()),
-            volume: r.volume,
-            value: r.value,
-            frequency: r.frequency,
-            value_share_pct: None,
-            buy_value: None,
-            sell_value: None,
-            net_value: None,
-            kind: None,
-        })
-        .collect();
-    // Members with the same figure rank by code.
-    rows.sort_by(|a, b| a.code.cmp(&b.code));
-    Ok(s.map(|_| member_ranking(day, rows, sort, top, false)))
+    let unpublished = std::sync::Mutex::new(None);
+    let walked = session(date, from, |d| {
+        let unpublished = &unpublished;
+        async move {
+            let s = broker_day(fetcher, d, today, ended).await?;
+            if read_unpublished(&s, d, today, ended) {
+                unpublished.lock().expect("not poisoned").get_or_insert(d);
+            }
+            Ok(s)
+        }
+    })
+    .await;
+    let unpublished = unpublished.into_inner().expect("not poisoned");
+    let ranking = walked.map(|(day, mut s)| {
+        let mut rows: Vec<BrokerDayRow> = std::mem::take(&mut s.data)
+            .into_iter()
+            .map(|r| BrokerDayRow {
+                rank: 0,
+                code: r.code.trim().to_ascii_uppercase(),
+                name: r
+                    .name
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+                volume: r.volume,
+                value: r.value,
+                frequency: r.frequency,
+                value_share_pct: None,
+                buy_value: None,
+                sell_value: None,
+                net_value: None,
+                kind: None,
+            })
+            .collect();
+        // Members with the same figure rank by code.
+        rows.sort_by(|a, b| a.code.cmp(&b.code));
+        s.map(|_| member_ranking(day, rows, sort, top, false))
+    });
+    (ranking, unpublished)
+}
+
+/// idx.co.id's answer from [`idx_walk`], naming the session `unpublished`
+/// when there is one: a walk past it to the session before says so in a
+/// warning, a `date` of it is not found as unpublished, and an error that
+/// ended the walk after it says it was passed. `note`, when given (why
+/// IPOT could not stand in), follows.
+fn idx_answer(
+    walked: Result<Sourced<BrokerRanking>>,
+    date: Option<NaiveDate>,
+    unpublished: Option<NaiveDate>,
+    note: Option<&str>,
+) -> Result<Sourced<BrokerRanking>> {
+    let after = note.map(|n| format!("; {n}")).unwrap_or_default();
+    let Some(u) = unpublished else {
+        return walked.map_err(|e| match note {
+            Some(n) => with_note(e, n),
+            None => e,
+        });
+    };
+    match walked {
+        Ok(mut s) => {
+            let shown = s.data.date;
+            s.warnings.insert(
+                0,
+                format!(
+                    "idx.co.id has not published {u} yet; showing the session before, {shown}{after}"
+                ),
+            );
+            Ok(s)
+        }
+        Err(IdxError::NotFound(_)) if date == Some(u) => Err(IdxError::NotFound(format!(
+            "idx.co.id has not published its broker summary for {u} yet{after}"
+        ))),
+        Err(e) => Err(with_note(
+            e,
+            &format!("idx.co.id has not published {u} yet{after}"),
+        )),
+    }
 }
 
 /// IPOT's ranking as [`market_brokers`] gives idx.co.id's: members without
@@ -1197,12 +1283,12 @@ fn with_note(e: IdxError, note: &str) -> IdxError {
 
 /// The member ranking from `source`. `auto` asks idx.co.id and, when it
 /// refuses (code `blocked`), cannot be reached (`network`), fails
-/// (`provider`) or, offline, has no copy (`offline_miss`), answers from
-/// IPOT with a warning saying so, if IPOT holds the session asked for:
-/// `date`, or with none the latest session that has ended. When IPOT
-/// cannot stand in (another session, such as an old copy served offline or
-/// after a failed fetch, or a failure), idx.co.id's error stands with
-/// IPOT's reason after it.
+/// (`provider`), offline has no copy (`offline_miss`), or has not
+/// published the session yet, answers from IPOT with a warning saying so,
+/// if IPOT holds the session asked for: `date`, or with none the latest
+/// session that has ended. When IPOT cannot stand in (another session, such
+/// as an old copy served offline or after a failed fetch, or a failure),
+/// idx.co.id's answer stands with IPOT's reason after it.
 pub async fn market_brokers_from(
     fetcher: &Arc<Fetcher>,
     source: crate::model::BrokerSource,
@@ -1219,43 +1305,61 @@ pub async fn market_brokers_from(
         BrokerSource::Idx => members_until(fetcher, date, top, sort, today, ended).await,
         BrokerSource::Ipot => market_brokers_ipot(fetcher, date, top, sort, now).await,
         BrokerSource::Auto => {
-            let refused = match members_until(fetcher, date, top, sort, today, ended).await {
-                Err(
-                    e @ (IdxError::Blocked { .. }
+            let (walked, unpublished) = idx_walk(fetcher, date, top, sort, today, ended).await;
+            // The session asked for: with no date, the latest that ended,
+            // where idx.co.id's walk begins. IPOT stands in for it when
+            // idx.co.id refused, could not be reached, failed or, offline,
+            // had no copy, or has not published it yet.
+            let want = date.unwrap_or(ended);
+            let unpublished = unpublished.filter(|u| *u == want);
+            let failed = matches!(
+                walked,
+                Err(IdxError::Blocked { .. }
                     | IdxError::Provider { .. }
                     | IdxError::Network(_)
-                    | IdxError::OfflineMiss(_)),
-                ) => e,
-                answered => return answered,
-            };
+                    | IdxError::OfflineMiss(_))
+            );
+            if !failed && unpublished.is_none() {
+                return idx_answer(walked, date, None, None);
+            }
             // IPOT is asked now, after idx.co.id's requests (and retries):
             // its pages are judged by this clock, not the call's.
             let asked = now + (chrono::Utc::now() - entered);
             let s = match ipot::top_brokers(fetcher, asked).await {
                 Ok(s) => s,
-                Err(e) => return Err(with_note(refused, &format!("IPOT could not stand in: {e}"))),
+                Err(e) => {
+                    let note = format!("IPOT could not stand in: {e}");
+                    return idx_answer(walked, date, unpublished, Some(&note));
+                }
             };
             let held = s.data.date;
-            // The session asked for: with no date, the latest that ended,
-            // where idx.co.id's walk begins. A copy of an older one is not
-            // the latest session.
-            if held != date.unwrap_or(ended) {
-                return Err(with_note(refused, &ipot_holds_only(&s)));
+            // A copy of an older session is not the one asked for.
+            if held != want {
+                return idx_answer(walked, date, unpublished, Some(&ipot_holds_only(&s)));
             }
-            let why = match &refused {
-                IdxError::Blocked { refusal, .. } => {
+            let why = match (&walked, unpublished) {
+                (_, Some(u)) => format!("idx.co.id has not published {u} yet"),
+                (Err(IdxError::Blocked { refusal, .. }), None) => {
                     format!("idx.co.id answered with {}", refusal.noun())
                 }
-                IdxError::Network(m) => format!("idx.co.id could not be reached ({m})"),
-                IdxError::OfflineMiss(_) => {
+                (Err(IdxError::Network(m)), None) => {
+                    format!("idx.co.id could not be reached ({m})")
+                }
+                (Err(IdxError::OfflineMiss(_)), None) => {
                     "offline, nothing usable from idx.co.id is cached for it".to_string()
                 }
-                other => format!("idx.co.id failed ({other})"),
+                (Err(other), None) => format!("idx.co.id failed ({other})"),
+                (Ok(_), None) => "idx.co.id has not answered it".to_string(),
             };
             // A copy of an older session than the latest is no latest session.
             let copy = copy_read_at(&s).filter(|_| held < ended);
-            let mut s = ipot_member_ranking(s, top, sort)
-                .map_err(|e| with_note(refused, &format!("IPOT could not stand in: {e}")))?;
+            let mut s = match ipot_member_ranking(s, top, sort) {
+                Ok(s) => s,
+                Err(e) => {
+                    let note = format!("IPOT could not stand in: {e}");
+                    return idx_answer(walked, date, unpublished, Some(&note));
+                }
+            };
             let whose = match copy {
                 Some(read) => format!("for {held}, from its copy read at {read}"),
                 None => format!("for its latest session, {held}"),
@@ -2337,6 +2441,81 @@ mod tests {
         assert!(
             err.to_string().contains(
                 "; IPOT could not stand in: ipot: the broker ranking was read at 08:58 WIB on 2026-11-09, in a trading day's hours"
+            ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_idx_co_id_has_not_published_is_not_a_day_without_one() {
+        use crate::model::BrokerSource;
+        // Friday 19:30: idx.co.id answers Friday's summary with no rows, as
+        // it does until it publishes the session; Thursday's is out.
+        let night = wib_at("2026-11-06T19:30:00");
+        let idx_co_id = || {
+            FixtureBackend::new()
+                .route("GetBrokerSummary?date=20261106", 200, NO_TRADING)
+                .route("GetBrokerSummary?date=20261105", 200, BROKERS)
+        };
+        // Each call on its own cache: a copy stored here would carry the
+        // wall clock's day, not this one's.
+        let brokers = |be: FixtureBackend, source, date| async move {
+            let (f, be, _d) = fetcher(be);
+            let got = market_brokers_from(&f, source, date, 5, BrokerSort::Value, night).await;
+            (got, be.calls_matching("indopremier"))
+        };
+        // Source idx: the session before, saying why.
+        let (got, ipot) = brokers(idx_co_id(), BrokerSource::Idx, None).await;
+        let s = got.unwrap();
+        assert_eq!((s.provider, s.data.date), ("idx", d(2026, 11, 5)));
+        assert_eq!(
+            s.warnings,
+            ["idx.co.id has not published 2026-11-06 yet; showing the session before, 2026-11-05"]
+        );
+        assert_eq!(ipot, 0);
+        let (got, _) = brokers(idx_co_id(), BrokerSource::Idx, Some(d(2026, 11, 6))).await;
+        let err = got.unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("not_found", 4));
+        assert_eq!(
+            err.to_string(),
+            "not found: idx.co.id has not published its broker summary for 2026-11-06 yet"
+        );
+
+        // auto: IPOT, which holds Friday, stands in for it.
+        for date in [None, Some(d(2026, 11, 6))] {
+            let be = ipot_ranking(idx_co_id(), TOP_BROKERS);
+            let s = brokers(be, BrokerSource::Auto, date).await.0.unwrap();
+            assert_eq!(
+                (s.provider, s.data.date),
+                ("ipot", d(2026, 11, 6)),
+                "{date:?}"
+            );
+            assert_eq!(
+                s.warnings[0],
+                "idx.co.id has not published 2026-11-06 yet, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+            );
+        }
+        // When IPOT cannot, idx.co.id's answer stands, with IPOT's reason.
+        let s = brokers(idx_co_id(), BrokerSource::Auto, None)
+            .await
+            .0
+            .unwrap();
+        assert_eq!((s.provider, s.data.date), ("idx", d(2026, 11, 5)));
+        assert!(
+            s.warnings[0].starts_with(
+                "idx.co.id has not published 2026-11-06 yet; showing the session before, 2026-11-05; IPOT could not stand in: network: fixture backend has no route for "
+            ),
+            "{:?}",
+            s.warnings
+        );
+        let err = brokers(idx_co_id(), BrokerSource::Auto, Some(d(2026, 11, 6)))
+            .await
+            .0
+            .unwrap_err();
+        assert_eq!(err.code(), "not_found");
+        assert!(
+            err.to_string().starts_with(
+                "not found: idx.co.id has not published its broker summary for 2026-11-06 yet; IPOT could not stand in: "
             ),
             "{err}"
         );
