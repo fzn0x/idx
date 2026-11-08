@@ -2041,7 +2041,8 @@ mod tests {
             s.warnings[0],
             "idx.co.id answered with a Cloudflare challenge, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
-        assert_eq!(be.calls_matching("GetBrokerSummary?date=20261106"), 1);
+        // Asked first (how often a challenge is asked again is idx's own).
+        assert!(be.calls_matching("GetBrokerSummary?date=20261106") > 0);
         assert_eq!(auto(Some(d(2026, 11, 6))).await.unwrap().provider, "ipot");
 
         // Another session: idx.co.id's refusal stands, saying why.
