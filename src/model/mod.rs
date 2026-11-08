@@ -50,7 +50,8 @@ pub use bandar::{
 };
 pub use brief::{Brief, DividendSummary, NewsSummary, OwnershipSummary};
 pub use broker::{
-    BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, BrokerSummarySource,
+    BrokerBoard, BrokerFlow, BrokerInvestor, BrokerKind, BrokerSummary, BrokerSummaryChoice,
+    BrokerSummarySource,
 };
 pub use calendar::{Calendar, CalendarCategory, CalendarEvent, Holiday, Holidays};
 pub use composition::{CompositionPoint, CompositionReport, CompositionType};

@@ -202,6 +202,30 @@ pub enum BrokerSummarySource {
     Stockbit,
 }
 
+/// Where `idx broker` reads its summaries.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerSummaryChoice {
+    /// Stockbit (every broker) when a working Stockbit session is stored,
+    /// otherwise IPOT (the top 10 per side).
+    Auto,
+    /// IPOT: the top 10 buyers and sellers, no login.
+    Ipot,
+    /// Stockbit: every broker on each side; needs `idx stockbit login`.
+    Stockbit,
+}
+
+impl std::str::FromStr for BrokerSummaryChoice {
+    type Err = IdxError;
+    fn from_str(s: &str) -> Result<Self> {
+        <BrokerSummaryChoice as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+            IdxError::Usage(format!("invalid source {s:?}; use auto, ipot or stockbit"))
+        })
+    }
+}
+
 impl BrokerSummarySource {
     pub fn as_str(&self) -> &'static str {
         match self {
