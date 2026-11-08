@@ -719,6 +719,32 @@ test("a 404 storm stays inside the budget and the stock it cut short stays next"
   });
 });
 
+test("a slow IPOT does not run a minute's scan into the next minute", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8)] }));
+  const now = new Date("2026-10-17T03:00:00Z");
+  const recorded = recordedFetch();
+  await withFetch(recorded, async () => { assert.equal((await bandarScanStep(env, { now, stocks: false })).probe, "published"); });
+  // IPOT answers each page in 4 s, Yahoo in 0.3 s; `ms` is the minute's clock.
+  let ms = 0;
+  const sent = [];
+  const slow = async (u, init) => { sent.push(ms); ms += String(u).includes("indopremier") ? 4000 : 300; return recorded(u, init); };
+  await withFetch(slow, async () => {
+    // A stock takes 32.3 s: a second one would end past the minute.
+    const r = await bandarScanStep(env, { now, budget: budget(44, { clock: () => ms }) });
+    assert.equal(r.read, 1);
+    // A minute whose other jobs took 30 s: its stock is cut short at 45 s and stays first in line.
+    sent.length = 0;
+    ms = 0;
+    const b = budget(44, { clock: () => ms });
+    ms = 30_000;
+    const cut = await bandarScanStep(env, { now, budget: b });
+    assert.equal(cut.read, 0);
+    assert.ok(Math.max(...sent) < 45_000, `no request from 45 s on: ${sent}`);
+    assert.equal((await scanStatus(env)).scanned, 1);
+  });
+});
+
 test("a stock the budget cuts short twice counts as failed instead of starting every minute", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));

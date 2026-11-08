@@ -19,7 +19,8 @@
 // rebuilt from single sessions (the range page counts the latest session
 // twice): the session before the scanned one and each period's rest, so a
 // stock costs 9 requests (a chart, four period pages, one more session, three
-// rests), inside the invocation's budget (src/budget.js).
+// rests), inside the invocation's budget (src/budget.js) and its first 45
+// seconds, so a minute ends before the next one reads the state.
 //
 // A stock whose session IPOT has not published yet is read again every 10
 // minutes; one that failed gets two more passes, 10 and 30 minutes after its
@@ -33,7 +34,7 @@ import * as ipot from "./ipot.js";
 import * as y from "./yahoo.js";
 import * as bd from "./bandar.js";
 import * as hol from "./holidays.js";
-import { budget, isBudgetError } from "./budget.js";
+import { budget, isBudgetError, BudgetError } from "./budget.js";
 import BROKERS from "./brokers.json" with { type: "json" };
 import UNIVERSE from "./universe.json" with { type: "json" };
 
@@ -45,8 +46,14 @@ const PER_TICK = 3;
  * rebuild walks past sessions without trades.
  */
 const STOCK_RESERVE = 12;
-/** ...and only this soon into the invocation, so a minute ends before the next one starts. */
+/** ...and only this soon into the invocation... */
 const TICK_MS = 40_000;
+/**
+ * ...and only when the slowest stock of the minute so far would end before
+ * this; no request of the scan goes out after it, so a minute ends (its last
+ * request has 10 s) before the next one reads the state.
+ */
+const DEADLINE_MS = 45_000;
 const KEEP_SESSIONS = 2;
 const STATE = "bandar_scan";
 /** Minutes after midnight WIB from which the scan looks at the day's session. */
@@ -408,16 +415,19 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
   st.pass ??= 0;
   st.errors ??= {};
   const seen = {};
-  let read = 0, cut = false;
+  let read = 0, cut = false, slowest = 0;
   while (read < PER_TICK) {
     refill(st, now);
     if (!st.queue.length) break;
-    if (b.left() < STOCK_RESERVE || b.elapsedMs() >= TICK_MS) break;
+    if (b.left() < STOCK_RESERVE || b.elapsedMs() >= TICK_MS || b.elapsedMs() + slowest > DEADLINE_MS) break;
     const symbol = st.queue[0];
+    const started = b.elapsedMs();
     let r;
     try {
       r = await scanSymbol(symbol, st.session, st.quotes?.[symbol] ?? null, { today, fetchPage, fetchChart });
+      slowest = Math.max(slowest, b.elapsedMs() - started);
     } catch (e) {
+      slowest = Math.max(slowest, b.elapsedMs() - started);
       if (isBudgetError(e)) {
         // The budget ran out under it: it stays first in line, once. A stock
         // that needs more than a minute's budget (IPOT answering 404 to most
@@ -468,8 +478,11 @@ async function readStocks(st, rows, { now, b, fetchPage, fetchChart }) {
  * starts a finished session over. `pauseMs` sets IPOT's 404 pauses (tests).
  */
 export async function bandarScanStep(env, { now = new Date(), force = false, budget: b = budget(), stocks = true, pauseMs } = {}) {
-  const fetchPage = (u) => ipot.fetchPage(u, { fetchFn: b.fetch, ...(pauseMs == null ? {} : { pauseMs }) });
-  const fetchChart = (s, period, interval) => y.fetchChart(s, period, interval, { fetchFn: b.fetch });
+  // Past the minute's deadline a request throws like a spent budget: the
+  // stock it cuts short stays first in line.
+  const fetchFn = (u, init) => (b.elapsedMs() >= DEADLINE_MS ? Promise.reject(new BudgetError(`the minute's ${DEADLINE_MS / 1000} s for the scan are spent`)) : b.fetch(u, init));
+  const fetchPage = (u) => ipot.fetchPage(u, { fetchFn, ...(pauseMs == null ? {} : { pauseMs }) });
+  const fetchChart = (s, period, interval) => y.fetchChart(s, period, interval, { fetchFn });
   const session = targetSession(now), at = now.toISOString();
   const stored = await kvGet(env, STATE);
   let st = upgrade(stored);
