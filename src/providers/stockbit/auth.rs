@@ -117,12 +117,48 @@ pub fn normalize_token(raw: &str) -> String {
 /// the signature — we only ever carry these, never issue them. `None` when the
 /// token is not a JWT or has no numeric `exp`.
 pub fn token_expiry(token: &str) -> Option<i64> {
+    claims(token)?.get("exp").and_then(|e| e.as_i64())
+}
+
+/// A JWT's claims (its middle segment, base64url JSON), without verifying the
+/// signature. `None` when the token is not a JWT.
+fn claims(token: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("exp").and_then(|e| e.as_i64())
+    match serde_json::from_slice(&bytes).ok()? {
+        serde_json::Value::Object(map) => Some(map),
+        _ => None,
+    }
+}
+
+/// What a stored token can still do at `now`, judged by its own `exp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenState {
+    /// No token is stored.
+    Missing,
+    /// A JWT whose `exp` is still ahead, or one without an `exp`: nothing in
+    /// it says it has expired, so Stockbit's answer decides.
+    Live,
+    /// A JWT whose `exp` has passed: Stockbit refuses it.
+    Expired,
+    /// Not a JWT, so not a token Stockbit issued: it cannot work.
+    NotJwt,
+}
+
+impl TokenState {
+    fn of(token: &str, now: i64) -> Self {
+        if token.trim().is_empty() {
+            TokenState::Missing
+        } else if claims(token).is_none() {
+            TokenState::NotJwt
+        } else if token_expiry(token).is_some_and(|exp| now >= exp) {
+            TokenState::Expired
+        } else {
+            TokenState::Live
+        }
+    }
 }
 
 /// A readable, non-secret summary of a token for `status` and logs: never the
@@ -153,6 +189,11 @@ impl TokenInfo {
 pub struct Status {
     /// `true` when a refresh token is present (whether or not it is still live).
     pub logged_in: bool,
+    /// `true` when idx can renew the access token: a refresh token is stored
+    /// and its `exp` has not passed (one without an `exp` counts as
+    /// unexpired; a token that is not a JWT, as unusable).
+    #[serde(default)]
+    pub renewable: bool,
     pub access: TokenInfo,
     pub refresh: TokenInfo,
     /// Absolute path of the session file.
@@ -374,6 +415,7 @@ impl SessionStore {
         let s = self.load();
         Status {
             logged_in: !s.refresh.trim().is_empty(),
+            renewable: TokenState::of(&s.refresh, now) == TokenState::Live,
             access: TokenInfo::of(&s.access, now),
             refresh: TokenInfo::of(&s.refresh, now),
             session_file: self.path.display().to_string(),
@@ -794,6 +836,52 @@ mod tests {
         assert_eq!(store.read_raw().unwrap(), br#"{"refresh":"x"}"#);
         store.restore_raw(None).unwrap();
         assert!(!dir.path().join("session.json").exists());
+    }
+
+    /// 2026-11-08 00:00 UTC, the "now" of the status tests.
+    const NOW: i64 = 1_794_096_000;
+    const DAY: i64 = 86_400;
+
+    /// A synthetic JWT, signed by nobody, carrying `claims`.
+    fn jwt(claims: &str) -> String {
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        format!("{}.{}.sig", b64(r#"{"alg":"none"}"#), b64(claims))
+    }
+
+    /// A synthetic JWT whose `exp` is `exp`.
+    fn expiring(exp: i64) -> String {
+        jwt(&format!(r#"{{"exp":{exp}}}"#))
+    }
+
+    /// The status of a stored session at `now`.
+    fn status_of(access: &str, refresh: &str, now: i64) -> Status {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("session.json"), None, None);
+        store
+            .save(&Session {
+                access: access.into(),
+                refresh: refresh.into(),
+            })
+            .unwrap();
+        store.status(now)
+    }
+
+    #[test]
+    fn renewable_needs_a_refresh_token_whose_exp_has_not_passed() {
+        let live = expiring(NOW + DAY);
+        for (refresh, renewable) in [
+            (expiring(NOW + 6 * DAY), true),
+            (expiring(NOW - 13 * DAY), false),
+            // `exp` is the first second Stockbit refuses the token.
+            (expiring(NOW), false),
+            // Nothing in a JWT without `exp` says it has expired.
+            (jwt(r#"{"sub":"1"}"#), true),
+            ("not-a-jwt".to_string(), false),
+            (String::new(), false),
+        ] {
+            let got = status_of(&live, &refresh, NOW);
+            assert_eq!(got.renewable, renewable, "{refresh:?}");
+        }
     }
 
     #[test]

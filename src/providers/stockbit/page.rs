@@ -576,6 +576,7 @@ mod tests {
         Accepted {
             status: Status {
                 logged_in: true,
+                renewable: true,
                 access: t.clone(),
                 refresh: t,
                 session_file: "s.json".into(),
