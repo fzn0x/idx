@@ -1,6 +1,6 @@
 {
   "name": "ihsg-mcp",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "MCP server for the Indonesian stock market (IDX / IHSG): quotes, fundamentals, technicals, broker flow, KSEI ownership and news as typed tools. `npx -y ihsg-mcp` runs `idx mcp`; the first run downloads the SHA-256 verified idx binary.",
   "license": "MIT",
   "homepage": "https://ihsg.midoriresearch.com",

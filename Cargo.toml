@@ -1,6 +1,6 @@
 [package]
 name = "ihsg-cli"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 rust-version = "1.89"
 description = "Indonesian stock market (IDX / IHSG) analysis: the `idx` CLI and MCP server for people and AI agents, free public data"

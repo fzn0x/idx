@@ -6,6 +6,68 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-13
+
+### Fixed
+
+- idx.co.id's Cloudflare challenge no longer fails a command at the first
+  try: a challenged request is asked again for up to 30 s, a refusal serves
+  the cached copy marked stale, an empty cached day no longer passes for a
+  day without trading, and the `blocked` error says what to do and names the
+  IPOT alternative, in CLI flags or MCP arguments (#103).
+- `market brokers`: when idx.co.id refuses `--source idx`, the error names
+  `--source ipot` (MCP `source: "ipot"`) where IPOT can answer, and `auto`
+  no longer waits out idx.co.id's 30 s of challenge retries when IPOT can
+  stand in (#113).
+- `stockbit status` and `idx_stockbit_status` say whether the stored session
+  can work: `logged_in` is false once both tokens have expired, with new
+  optional `renewable`, `expired` and `reason`, and `stockbit login` signs in
+  again instead of stopping as already signed in (#100).
+- `stocks screen` marks a P/B over statements in another currency (USD
+  reporters such as BSSR and GEMS) and names those companies; `pb` and `ps`
+  filters and sorts read such ratios as missing. Quotes gain an optional
+  `financial_currency`, screen rows `currency` and `financial_currency` (#108).
+- Counted text agrees with its count in the brief, `stocks news`, the
+  screen and other warnings ("1 current headline mentions the company")
+  (#107).
+- Web `bandar screen` and `bandar broker`: the scan waits for IPOT to publish
+  each session instead of marking it a holiday, tries failed stocks again for
+  hours, keeps the minute cron inside one subrequest budget, and its warnings
+  say which session is shown and why (#102).
+- Web terminal: offered commands in notices and the help table's usage lines
+  wrap only at spaces (#105, #112); an answer that mixes cached and fetched
+  parts reads "partly cached" instead of "live" (#106); verdict and sentiment
+  labels read as in the CLI ("fairly valued", "insufficient data") (#111);
+  the CSP allows Cloudflare's analytics beacon (#96).
+
+### Added
+
+- `broker --source auto|ipot|stockbit` and the MCP argument `source`: with a
+  working Stockbit session (`idx stockbit login`), every broker that bought
+  and sold, not only IPOT's top 10 per side; `auto` uses Stockbit when logged
+  in, otherwise IPOT with a note. `idx.broker.v1` gains optional
+  `buyer_count`, `seller_count`, `buyers_complete`, `sellers_complete` and
+  `source` (#115).
+- `market foreign --source idx|ipot` and the MCP argument `source`: the 100
+  most traded stocks ranked by foreign net in rupiah, with IPOT's market
+  totals, in the new schema `idx.market.foreign.value.v1`; the web terminal
+  runs it from the bandar scan (#116).
+- `market brokers --source auto|idx|ipot` and the MCP argument `source`:
+  IPOT's market-wide broker ranking of its latest session, which `auto` uses
+  when idx.co.id refuses, cannot be reached or fails; new optional
+  `buy_value`, `sell_value`, `net_value`, `kind` and `rounded` (#104).
+- Web terminal: CLI and MCP only commands explain why they do not run on the
+  page, with the CLI line, its JSON form and the install command, in the
+  page's language (#101).
+- Web terminal: `market brokers` (`brokers`) runs on the page from IPOT's
+  ranking, with the same envelope as `idx -o json market brokers --source
+  ipot` (#114).
+- `stockbit login --page` and the MCP page sign-in: once Stockbit accepts the
+  session, the tab that sent it raises an alert and every tab open on the
+  page turns to "Connected" with where to look next, the terminal or your
+  agent (#117).
+- README: install from npm as `ihsg-cli` (#95).
+
 ## [0.8.2] - 2026-11-07
 
 ### Fixed
