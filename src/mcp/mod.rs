@@ -40,7 +40,8 @@ use crate::output::json::{
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_INDICES,
-    SCHEMA_INSTRUMENTS, SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
+    SCHEMA_INSTRUMENTS, SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MARKET_FOREIGN_VALUE,
+    SCHEMA_MEMBERS,
 };
 use crate::output::json::{
     SCHEMA_ASTRO, SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN, SCHEMA_BROKER,
@@ -507,9 +508,12 @@ pub struct MarketForeignArgs {
     /// Rows per list (default 10; 0 for all).
     #[serde(default)]
     pub top: Option<u32>,
-    /// Ranking figure: "value" (net shares times close, default) or "shares".
+    /// Ranking figure: "value" (net shares times close, default) or "shares"; source ipot ranks by the foreign net in rupiah and takes "value" only.
     #[serde(default)]
     pub sort: Option<String>,
+    /// "idx" (default): idx.co.id, every stock in shares, returns idx.market.foreign.v1. "ipot": Indo Premier, the 100 most traded stocks in rupiah with the market's totals, returns idx.market.foreign.value.v1.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1202,7 +1206,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_market_foreign",
-        description = "Foreign net buying and selling across every IDX stock for one session from idx.co.id's daily stock summary (default: the latest published; weekends and holidays skipped): market totals of foreign buy, sell and net shares, then the top stocks foreigners net bought and net sold, each with close, change percent, foreign buy, sell, net shares and net shares times the close. Ranked by net shares times close (value, default; a rupiah scale, not the traded value) or by net shares. Returns the idx.market.foreign.v1 envelope."
+        description = "Foreign net buying and selling for one session. Default source idx: idx.co.id's daily stock summary, every IDX stock (default: the latest published; weekends and holidays skipped): market totals of foreign buy, sell and net shares, then the top stocks foreigners net bought and net sold, each with close, change percent, foreign buy, sell, net shares and net shares times the close; ranked by net shares times close (value, default; a rupiah scale, not the traded value) or by net shares; returns the idx.market.foreign.v1 envelope. With source=ipot the figures come from Indo Premier instead, in rupiah, for the latest session it has published broker summaries for: the 100 stocks most traded by value on the latest quotes (the idx_bandar_screen scan, one broker summary each, cached), not every stock, each with price, change percent, value traded and its foreign net across all boards (and as a percent of the value), plus the market's value traded and foreign buy, sell and net from IPOT's market statistics; returns the idx.market.foreign.value.v1 envelope and works where idx.co.id refuses the connection. Those totals carry no date of their own and are dated as IPOT's broker ranking is: read on a trading day from 08:58 to 19:00 WIB they cannot be, so market is null with a warning. With ipot, a date before its session is a usage error and a later one not_found; sort shares is idx.co.id's only. Figures of a million and more are abbreviated by IPOT (rounded=true)."
     )]
     async fn market_foreign(
         &self,
@@ -1210,17 +1214,39 @@ impl IdxServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         finish(
             async {
-                ok(
-                    SCHEMA_MARKET_FOREIGN,
-                    service::market_foreign(
-                        &self.fetcher,
-                        parse_date(&a.date)?,
-                        a.top.unwrap_or(10) as usize,
-                        parse_opt(&a.sort, crate::model::ForeignSort::Value)?,
-                        service::today_wib(),
-                    )
-                    .await?,
-                )
+                let date = parse_date(&a.date)?;
+                let top = a.top.unwrap_or(10) as usize;
+                let sort = parse_opt(&a.sort, crate::model::ForeignSort::Value)?;
+                match parse_opt(&a.source, ForeignSource::Idx)? {
+                    ForeignSource::Idx => ok(
+                        SCHEMA_MARKET_FOREIGN,
+                        service::market_foreign(
+                            &self.fetcher,
+                            date,
+                            top,
+                            sort,
+                            service::today_wib(),
+                        )
+                        .await?,
+                    ),
+                    ForeignSource::Ipot => {
+                        let mut list = universe::load(None)?;
+                        universe::extend_from_ownership(&mut list, &self.ownership_db);
+                        ok(
+                            SCHEMA_MARKET_FOREIGN_VALUE,
+                            service::market_foreign_ipot(
+                                self.provider.as_ref(),
+                                &self.fetcher,
+                                &list,
+                                date,
+                                top,
+                                sort,
+                                chrono::Utc::now(),
+                            )
+                            .await?,
+                        )
+                    }
+                }
             }
             .await,
         )
@@ -3131,6 +3157,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn market_foreign_takes_ipot_as_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(Fetcher::new(
+            Arc::new(crate::http::FixtureBackend::new()),
+            crate::cache::Cache::new(dir.path().join("cache")),
+            crate::http::CacheMode::Normal,
+        ));
+        let s = IdxServer::new(
+            Arc::new(Fake),
+            fetcher,
+            dir.path().join("ownership.sqlite"),
+            StockbitConfig::default(),
+        );
+        for (source, sort, date, says) in [
+            (
+                "ipot",
+                Some("shares"),
+                None,
+                "sort shares is idx.co.id's net shares (source idx)",
+            ),
+            (
+                "ipot",
+                None,
+                Some("2099-01-02"),
+                "2099-01-02 is in the future",
+            ),
+            ("rti", None, None, "invalid source \"rti\"; use idx or ipot"),
+        ] {
+            let v = json_of(
+                &s.market_foreign(Parameters(MarketForeignArgs {
+                    date: date.map(str::to_string),
+                    top: None,
+                    sort: sort.map(str::to_string),
+                    source: Some(source.into()),
+                }))
+                .await
+                .unwrap(),
+            );
+            assert_eq!(v["error"]["code"], "usage", "{v}");
+            assert!(
+                v["error"]["message"].as_str().unwrap().ends_with(says),
+                "{v}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn blocked_advice_names_tool_arguments_not_flags() {
         let dir = tempfile::tempdir().unwrap();
         let server = |mode| {
@@ -3155,6 +3228,7 @@ mod tests {
                 date: None,
                 top: None,
                 sort: None,
+                source: None,
             }))
             .await
             .unwrap(),
