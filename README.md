@@ -405,8 +405,10 @@ own arguments, and the nearest command the page has. A line pasted from the CLI,
 `idx stocks quote BBCA` or `idx -o json market overview`, runs as the page's own command.
 `quote` with one symbol also draws a price chart (1D, 5D,
 1M, 6M, YTD, 1Y, 5Y) with volume, the previous close and a crosshair readout.
-The web `bandar screen` reads a scan the Worker runs after each close over the
-session's 100 most traded stocks; the CLI scans live.
+The web `bandar screen` and `bandar broker` read a scan the Worker runs after
+each close, once IPOT publishes the session's broker lists, over the session's
+100 most traded stocks; their warnings say when an older session is shown. The
+CLI scans live.
 A Cloudflare Worker refreshes a D1 snapshot of the whole
 IDX board every minute in trading hours and serves `/api/*` with the exact JSON
 envelopes the CLI prints; everything else is fetched on demand and cached. The

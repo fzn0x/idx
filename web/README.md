@@ -37,7 +37,11 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `test/docs.test.mjs` fails until it does, and checks every page's tags,
   links and anchors, the llms.txt shape and that the exit codes agree with
   docs/json-output.md.
-- `src/worker.js` entry: host check, security headers, `/api/*`, cron.
+- `src/worker.js` entry: host check, security headers, `/api/*`, cron. Its
+  `scheduled()` returns `runCron` (`src/cron.js`): the board refresh and the
+  KSEI register sync, then a step of the bandar scan, inside one budget of 44
+  subrequests per invocation (`src/budget.js`: fetches, a GitHub release
+  download counting two, and D1 queries, below the Free plan's 50).
   `src/headers.js` holds the security headers (CSP, nosniff, frame and
   referrer policy); `public/_headers` gives the same set to the static assets,
   which the assets layer serves without running the Worker.
@@ -56,16 +60,26 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   flow from IPOT instead (`src/ipot.js`).
 - `src/bandar.js` the bandarmology rules (port of `src/analysis/bandar.rs`,
   the same reasons text pinned in both test suites); `src/bandar-scan.js` the
-  nightly scan behind `bandar screen`: from 16:45 WIB on a session day the
-  minute cron reads the session's 100 most traded stocks (by value, from the
-  quote board), four per minute, each over 1d, 1w, 1m and 3m plus its daily
-  candles, into the `bandar_scan` table (`migrations/0003_bandar.sql`, the
-  newest two sessions kept). A holiday is noticed by a probe and skipped; a
-  stock whose fetch failed is tried once more at the end of the pass.
-  `/api/bandar/status` shows the progress; a maintainer can force a step with
-  `/api/refresh?token=…&what=bandar`. `/api/bandar` itself is live like
-  `/api/broker`: up to 5 tickers, `daily` for one ticker and at most 23
-  sessions.
+  scan behind `bandar screen` and `bandar broker`. From 16:45 WIB on a
+  trading day of the bundled calendar the minute cron ranks the session's 100
+  most traded stocks (by value, quotes dated that session) and probes the
+  first one's one-day IPOT page. IPOT shows a closed session's totals without
+  its broker lists until it publishes them, so the scan waits and probes
+  again, every 10 minutes until 21:00 WIB and every 30 after; only a page
+  without trades on a day the quote board shows none either closes the
+  session. Then it reads three stocks a minute, each over 1d, 1w, 1m and 3m
+  plus its daily candles, into the `bandar_scan` table
+  (`migrations/0003_bandar.sql`; the newest two sessions and the one shown
+  are kept), rows and state in one D1 batch written over the state's
+  revision. A stock whose session IPOT has not published is read again every
+  10 minutes; one that failed gets two more passes, 10 and 30 minutes later.
+  At the next session's 16:45 the session is filed with what it got, and it
+  is shown once it holds half its stocks or more than the one shown; the
+  screen's and the broker's warnings say which session they show and why.
+  `/api/bandar/status` shows the progress and the last record; a maintainer
+  can force a step with `/api/refresh?token=…&what=bandar`. `/api/bandar`
+  itself is live like `/api/broker`: up to 5 tickers, `daily` for one
+  ticker and at most 23 sessions.
 - `public/chart.js` the price chart under a single-symbol `quote`: ranges 1D
   to 5Y from `/api/history`, closes over volume, a dashed previous close on
   1D, a crosshair readout (pointer, touch or arrow keys). Its layout
@@ -90,7 +104,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 - `public/tools.js` the MCP tools with their CLI and web commands: the
   terminal's `tools` command and help buttons and the landing page's Daftar
   Perintah table use it; `test/tools.test.mjs` checks it against docs/mcp.md.
-  `bandar/broker` reads the nightly scan; `instruments` and `members` serve the
+  `bandar/broker` reads the bandar scan; `instruments` and `members` serve the
   bundled lists.
 - `migrations/` D1 schema. `test/` runs with `node --test web/test/*.mjs`.
 - Search and sharing: canonical, Open Graph and Twitter tags on every page,

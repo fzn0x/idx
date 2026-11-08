@@ -482,6 +482,17 @@ there, else `null`) and `net_value` (buy minus sell, in both lists, when both
 sides are visible). Only the top 10 per side are published, so a broker below
 tenth place in a stock is absent; nothing is estimated for it.
 
+The web terminal answers `bandar screen` and `bandar broker` from the Worker's
+scan of the last session instead of scanning live: from 16:45 WIB after each
+close it waits for IPOT to publish the session's broker lists, then reads the
+100 most traded stocks. The shapes are the same. When the newest trading
+session is not the one shown, `warnings` say which one is shown and why (the
+newer scan is waiting for IPOT, running, ended without IPOT publishing the
+session, read too few stocks, or starts at 16:45 WIB) and how many sessions
+behind it is; they also count the shown session's stocks without a broker
+summary or not published by IPOT. `fetched_at` is when the shown session's
+scan ended.
+
 ## `idx.actions.v1` (`stocks actions`)
 
 An object, from IPOT: `symbol`, `name`, `since` (the source's filter;

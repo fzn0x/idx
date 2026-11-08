@@ -7,7 +7,9 @@
 //   pass through the Worker, which names the charset of the Markdown and text
 //   files and lets any origin read them.
 // - `/api/*` answers with the same JSON envelopes as `idx -o json`, backed by
-//   a D1 snapshot that `scheduled()` refreshes every minute in trading hours.
+//   a D1 snapshot that `scheduled()` refreshes every minute in trading hours;
+//   the same cron loads the KSEI register and runs the bandar scan after each
+//   close (src/cron.js).
 // - Domain-only: any Host other than PUBLIC_HOST gets a 404, so even an
 //   accidental workers.dev or preview route exposes nothing.
 
