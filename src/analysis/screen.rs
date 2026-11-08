@@ -447,6 +447,8 @@ pub fn row_from_quote(q: &Quote, name_hint: Option<&str>) -> ScreenRow {
     ScreenRow {
         symbol: q.symbol.clone(),
         name: q.name.clone().or_else(|| name_hint.map(str::to_string)),
+        currency: q.currency.clone(),
+        financial_currency: q.financial_currency.clone(),
         price: q.price,
         change_pct: q.change_pct,
         market_cap: q.market_cap,
@@ -490,6 +492,11 @@ pub fn apply_returns(row: &mut ScreenRow, r: &MarketReturns) {
     row.return_1y_pct = r.y1;
 }
 
+/// Joins a company's fundamentals into its row. P/B and P/S divide the price
+/// by statement figures, so they come from one set of statements, as in
+/// `Fundamentals::fill_from`: a report whose statement currency (or, when it
+/// names none, its price's) is not the row's `financial_currency` fills
+/// neither, nor that currency.
 pub fn apply_fundamentals(row: &mut ScreenRow, f: &Fundamentals) {
     row.fundamentals_checked = true;
     row.sector = f.sector.clone();
@@ -502,12 +509,24 @@ pub fn apply_fundamentals(row: &mut ScreenRow, f: &Fundamentals) {
     row.revenue_growth_pct = f.growth.revenue_growth_pct;
     row.earnings_growth_pct = f.growth.earnings_growth_pct;
     row.peg = f.valuation.peg;
-    row.price_to_sales = f.valuation.price_to_sales;
+    let foreign = match (row.financial_currency.as_deref(), f.statement_currency()) {
+        (Some(ours), Some(theirs)) => !ours.eq_ignore_ascii_case(theirs),
+        _ => false,
+    };
+    if !foreign {
+        row.price_to_sales = f.valuation.price_to_sales;
+        if row.price_to_book.is_none() {
+            row.price_to_book = f.valuation.price_to_book;
+        }
+        if row.financial_currency.is_none() {
+            row.financial_currency = f.financial_currency.clone();
+        }
+    }
+    if row.currency.is_none() {
+        row.currency = f.currency.clone();
+    }
     if row.pe_trailing.is_none() {
         row.pe_trailing = f.valuation.pe_trailing;
-    }
-    if row.price_to_book.is_none() {
-        row.price_to_book = f.valuation.price_to_book;
     }
     if row.dividend_yield_pct.is_none() {
         row.dividend_yield_pct = f.dividend.yield_pct;
@@ -704,5 +723,94 @@ mod tests {
         let err = ScreenPreset::from_str("nope").unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("52w-low"), "{err}");
+    }
+
+    /// A quote row as Yahoo's v7 sends it: IDR price, statements in `statements`.
+    fn reporting_in(sym: &str, statements: Option<&str>, pb: Option<f64>) -> ScreenRow {
+        let mut q = Quote::empty(Symbol::parse(sym).unwrap(), "yahoo:quote");
+        q.currency = Some("IDR".into());
+        q.financial_currency = statements.map(str::to_string);
+        q.price_to_book = pb;
+        row_from_quote(&q, None)
+    }
+
+    /// A fundamentals report with its currencies and book and sales multiples.
+    fn report(currency: &str, statements: Option<&str>, pb: f64, ps: f64) -> Fundamentals {
+        let mut f = Fundamentals::empty(Symbol::parse("ITMG").unwrap(), "t");
+        f.currency = Some(currency.into());
+        f.financial_currency = statements.map(str::to_string);
+        f.valuation.price_to_book = Some(pb);
+        f.valuation.price_to_sales = Some(ps);
+        f.profitability.roe_pct = Some(11.12);
+        f
+    }
+
+    #[test]
+    fn rows_carry_the_price_and_statement_currencies() {
+        // BSSR on 2026-11-06: the IDR price over a USD book value.
+        let bssr = reporting_in("BSSR", Some("USD"), Some(48921.57));
+        assert_eq!(bssr.currency.as_deref(), Some("IDR"));
+        assert_eq!(bssr.financial_currency.as_deref(), Some("USD"));
+        assert!(bssr.mixed_currency());
+        assert!(!reporting_in("BBCA", Some("idr"), Some(2.25)).mixed_currency());
+        assert!(
+            !reporting_in("BSSR", None, Some(48921.57)).mixed_currency(),
+            "statement currency unknown"
+        );
+        let mut r = bssr.clone();
+        r.currency = None;
+        assert!(!r.mixed_currency(), "price currency unknown");
+    }
+
+    #[test]
+    fn fundamentals_fill_the_currencies_from_one_set_of_statements() {
+        // ITMG's Yahoo report: USD statements, P/B 14103.308, P/S 13807.103.
+        let yahoo = report("IDR", Some("USD"), 14103.308, 13807.103);
+
+        // A quote that names no statement currency (and has no P/B, as MSN's):
+        // the report fills both currencies and both multiples.
+        let mut q = Quote::empty(Symbol::parse("ITMG").unwrap(), "msn:quotes");
+        q.price = Some(24475.0);
+        let mut r = row_from_quote(&q, None);
+        apply_fundamentals(&mut r, &yahoo);
+        assert_eq!(r.currency.as_deref(), Some("IDR"));
+        assert_eq!(r.financial_currency.as_deref(), Some("USD"));
+        assert_eq!(
+            (r.price_to_book, r.price_to_sales),
+            (Some(14103.308), Some(13807.103))
+        );
+        assert!(r.mixed_currency());
+
+        // Yahoo's quote over the same statements keeps its own P/B.
+        let mut r = reporting_in("ITMG", Some("USD"), Some(14204.875));
+        apply_fundamentals(&mut r, &yahoo);
+        assert_eq!(
+            (r.price_to_book, r.price_to_sales),
+            (Some(14204.875), Some(13807.103))
+        );
+
+        // A report that names no statement currency (MSN) reads as reporting
+        // in its price's, as in Fundamentals::fill_from: it fills neither
+        // multiple into a row over USD statements, and keeps the row's currency.
+        let msn = report("IDR", None, 0.86, 0.84);
+        let mut r = reporting_in("ITMG", Some("USD"), None);
+        apply_fundamentals(&mut r, &msn);
+        assert_eq!((r.price_to_book, r.price_to_sales), (None, None));
+        assert_eq!(r.financial_currency.as_deref(), Some("USD"));
+        assert_eq!(r.roe_pct, Some(11.12), "ratios within the statements stay");
+        assert!(r.fundamentals_checked);
+
+        // Over IDR statements it fills both, and names no currency it was not given.
+        let mut r = reporting_in("BBCA", Some("IDR"), None);
+        apply_fundamentals(&mut r, &msn);
+        assert_eq!(
+            (r.price_to_book, r.price_to_sales),
+            (Some(0.86), Some(0.84))
+        );
+        assert_eq!(r.financial_currency.as_deref(), Some("IDR"));
+        let mut r = reporting_in("BBCA", None, None);
+        apply_fundamentals(&mut r, &msn);
+        assert_eq!(r.price_to_sales, Some(0.84));
+        assert_eq!(r.financial_currency, None);
     }
 }

@@ -290,6 +290,15 @@ shows its last session, with a warning naming the date.
 `fundamentals_capped` and `total_matches` describe the funnel, so a reader can
 tell a genuine "no match" from a capped fundamentals pass.
 
+`rows[].currency` and `rows[].financial_currency` (optional) are the price's
+currency and the statements' when the source names them: Yahoo's `currency`
+and `financialCurrency` from the quote, else from the fundamentals, as under
+`idx.quotes.v1` and `idx.fundamentals.v1`. A row's `price_to_book` and
+`price_to_sales` are both in `financial_currency` terms: a fundamentals report
+over statements in another currency fills neither (under `auto`, an MSN report
+for a company whose quote names USD statements, since MSN names no statement
+currency).
+
 Filters apply to the values as published. `price_to_book` comes from the quote
 and is negative for a company whose shareholders' equity is below zero, so
 `pb<1` matches those too; add `pb>0` (`pb>0,pb<1`) to keep only companies

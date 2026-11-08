@@ -389,18 +389,26 @@ impl Fundamentals {
     /// e.g. a coal miner or an airline that reports in USD while its shares
     /// trade in IDR.
     pub fn mixed_currency(&self) -> bool {
-        match (&self.currency, &self.financial_currency) {
-            (Some(price), Some(statements)) => !price.eq_ignore_ascii_case(statements),
-            _ => false,
-        }
+        currencies_differ(self.currency.as_deref(), self.financial_currency.as_deref())
     }
 
     /// The statement currency, or the price's when the source names none.
-    /// Only `fill_from` uses it, to keep one record's amounts in one unit.
-    fn statement_currency(&self) -> Option<&str> {
+    /// `fill_from` and the screener's join use it, to keep one record's
+    /// amounts in one unit.
+    pub(crate) fn statement_currency(&self) -> Option<&str> {
         self.financial_currency
             .as_deref()
             .or(self.currency.as_deref())
+    }
+}
+
+/// Whether the statements are in another currency than the price, both known
+/// (case ignored): the test behind [`Fundamentals::mixed_currency`] and
+/// `ScreenRow::mixed_currency`.
+pub fn currencies_differ(price: Option<&str>, statements: Option<&str>) -> bool {
+    match (price, statements) {
+        (Some(price), Some(statements)) => !price.eq_ignore_ascii_case(statements),
+        _ => false,
     }
 }
 
