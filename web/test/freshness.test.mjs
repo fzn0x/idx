@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 
 import * as hol from "../src/holidays.js";
 import * as y from "../src/yahoo.js";
-import { boardFreshness, envelope, history, market, marketIsOpen, quote, returns, screen } from "../src/api.js";
+import { boardFreshness, brief, envelope, history, market, marketIsOpen, quote, returns, screen } from "../src/api.js";
 import { redactUrls } from "../src/net.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -273,6 +273,37 @@ test("a screen on stale fundamentals is stale and names the failure once", async
     assert.equal(ok.stale, false);
     assert.ok(!("stale_reason" in ok));
     assert.ok(!(ok.warnings || []).some((w) => w.startsWith("fundamentals for")));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a brief is as old as its oldest section, as Sections::take makes it in the CLI", async () => {
+  const realFetch = globalThis.fetch;
+  const chart = fixture("yahoo/chart_bbca_1mo_1d.json");
+  // Yahoo's chart answers (technical, returns, dividends); the feeds and the rest are down.
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/v8/finance/chart/")) return new Response(chart, { status: 200 });
+    throw new TypeError(`fetch failed for ${url}`);
+  };
+  try {
+    const ts = Math.floor(Date.now() / 1000);
+    const week = ts - 7 * 86400;
+    const body = JSON.parse(fixture("yahoo/quote_summary_fundamentals_bbca.json")).quoteSummary.result[0];
+    const env = { DB: fullDb({
+      kv: { board: { v: JSON.stringify({ ts: ts - 60, quotes: BOARD_ROWS, index: null, warnings: [] }), updated_at: ts - 60 } },
+      // The fundamentals are a copy fetched a week ago that has not expired.
+      cache: { [`summary:BBCA:${y.FUNDAMENTAL_MODULES}`]: { v: JSON.stringify(body), expires_at: ts + 3600, fetched_at: week } },
+    }) };
+    const iso = (secs) => new Date(secs * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const first = await brief(env, "BBCA");
+    assert.ok(first.data.fundamentals && first.data.technical, "both sections read");
+    assert.equal(first.cached, false, "the candles were fetched for this brief");
+    assert.equal(first.fetched_at, iso(week), "the week-old fundamentals, not the time of the answer");
+    // Every section from the cache now: still the oldest one's time.
+    const again = await brief(env, "BBCA");
+    assert.equal(again.cached, true);
+    assert.equal(again.fetched_at, iso(week));
   } finally {
     globalThis.fetch = realFetch;
   }
