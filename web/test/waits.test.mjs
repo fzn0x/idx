@@ -27,6 +27,8 @@ test("bandar screen and broker read the scan of the last session, bandar itself 
   assert.match(waitFor("bandar", "BROKER").on, /scan of the last session/);
   assert.match(waitFor("bandar", "BBCA").on, /IPOT/);
   assert.match(waitFor("bandar", "BBCA").slow, /404/);
+  assert.match(waitFor("market", "foreign").on, /bandar scan of the last session, and IPOT's market statistics/);
+  assert.match(waitFor("market").on, /minute board/);
   assert.deepEqual(waitFor("holidays"), {});
   assert.deepEqual(waitFor("nope"), {});
 });

@@ -52,7 +52,13 @@
 //!   whether the ranking moves during a session, has not been measured: a
 //!   ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated
 //!   and is refused, and so is one whose date the other page contradicts
-//!   (see [`top_brokers`]).
+//!   (see [`latest_session`]).
+//!
+//! The market's summary of the session, recorded 2026-11-08, same module:
+//! `.../ma-marketstatistic.php` takes no parameters and sums up IPOT's
+//! latest session by board and by foreign investors' side (see
+//! `marketstat.rs`). It carries no date either: [`market_summary`] dates it
+//! as the ranking is dated, with its own copy of BBCA's statistics page.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,6 +73,7 @@ use crate::model::{BrokerBoard, BrokerInvestor, BrokerSummary, ForeignValueDay, 
 use super::Sourced;
 
 pub mod actions;
+pub mod marketstat;
 pub mod parse;
 pub mod topbroker;
 
@@ -81,6 +88,8 @@ const TOP_BROKERS_ENDPOINT: &str =
 /// The page that dates the ranking.
 const SESSION_ENDPOINT: &str =
     "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA";
+const MARKET_STATISTIC_ENDPOINT: &str =
+    "https://www.indopremier.com/module/saham/include/ma-marketstatistic.php";
 /// Seconds after midnight WIB, on a trading day, from before the
 /// pre-opening (08:45) until well after the close (16:15) when the ranking
 /// may change between two reads.
@@ -103,12 +112,47 @@ const ACCEPTED_KEY: &str = "ipot:ma-topbroker:accepted";
 /// Long past the next session: an older record has nothing to compare.
 const TTL_ACCEPTED: Duration = Duration::from_secs(30 * 24 * 3600);
 
-/// The ranking [`top_brokers`] last accepted, by its figures, and its date.
+/// The page [`latest_session`] last accepted, by its figures, and its date.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Accepted {
     date: NaiveDate,
     digest: String,
 }
+
+/// A page of IPOT's latest session that carries no date, which
+/// [`latest_session`] reads with the page that dates it.
+struct Undated {
+    url: &'static str,
+    /// The cache key of the date page read with it; `None` for its URL.
+    dated_key: Option<&'static str>,
+    /// The page in messages: `broker ranking`.
+    noun: &'static str,
+    /// Its short name in messages: `ranking`.
+    short: &'static str,
+    /// Where the page last accepted is remembered.
+    accepted_key: &'static str,
+}
+
+/// The market-wide broker ranking ([`top_brokers`]).
+const RANKING: Undated = Undated {
+    url: TOP_BROKERS_ENDPOINT,
+    dated_key: None,
+    noun: "broker ranking",
+    short: "ranking",
+    accepted_key: ACCEPTED_KEY,
+};
+
+/// The market's summary of the session ([`market_summary`]), with its own
+/// copy of the date page, so neither pair is broken by the other's read.
+const SUMMARY: Undated = Undated {
+    url: MARKET_STATISTIC_ENDPOINT,
+    dated_key: Some(
+        "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA#ma-marketstatistic",
+    ),
+    noun: "market summary",
+    short: "summary",
+    accepted_key: "ipot:ma-marketstatistic:accepted",
+};
 
 /// A range that ended before today no longer changes.
 const TTL_CLOSED: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -499,8 +543,9 @@ pub async fn corporate_actions(
     ))
 }
 
-/// How long a copy of the ranking (and of the page that dates it) is good
-/// for at `now`: five minutes on a trading day inside [`TOP_BROKERS_BUSY`];
+/// How long a copy of an undated page of the latest session (the ranking,
+/// and the page that dates it) is good for at `now`: five minutes on a
+/// trading day inside [`TOP_BROKERS_BUSY`];
 /// outside it six hours at most, and never a copy read before those hours
 /// last ended, so the settled figures are read once after them.
 pub fn top_brokers_ttl(now: DateTime<Utc>) -> Duration {
@@ -568,20 +613,20 @@ fn unusable(ranked: &Fetched, dated: &Fetched, why: String) -> IdxError {
     IdxError::provider(NAME, why)
 }
 
-/// `true` when copies of both pages read together outside [`UNDATED`] are
-/// cached, whatever their age, for the fetcher to serve: fresh, or in
-/// place of a read that fails. `--no-cache` reads no copy.
-fn cached_outside_hours(fetcher: &Fetcher) -> bool {
+/// `true` when copies of both pages of `p` read together outside
+/// [`UNDATED`] are cached, whatever their age, for the fetcher to serve:
+/// fresh, or in place of a read that fails. `--no-cache` reads no copy.
+fn cached_outside_hours(fetcher: &Fetcher, p: &Undated) -> bool {
     if fetcher.mode() != crate::http::CacheMode::Normal {
         return false;
     }
-    let read = |url: &str| {
+    let read = |key: &str| {
         fetcher
             .cache()
-            .get(url, Duration::ZERO)
+            .get(key, Duration::ZERO)
             .map(|h| h.stored.fetched_at)
     };
-    match (read(TOP_BROKERS_ENDPOINT), read(SESSION_ENDPOINT)) {
+    match (read(p.url), read(p.dated_key.unwrap_or(SESSION_ENDPOINT))) {
         (Some(a), Some(b)) => {
             !undated_at(a)
                 && !undated_at(b)
@@ -606,89 +651,131 @@ fn undated_at(t: DateTime<Utc>) -> bool {
 }
 
 /// Every broker's trading in IPOT's latest session, ranked by value, dated
-/// by BBCA's statistics page, with the brokers IPOT lists apart folded into
-/// the member they trade under (a warning names each). `now` decides the
-/// cache lifetime ([`top_brokers_ttl`]).
+/// by BBCA's statistics page as [`latest_session`] dates an undated page,
+/// with the brokers IPOT lists apart folded into the member they trade
+/// under (a warning names each). `now` decides the cache lifetime
+/// ([`top_brokers_ttl`]).
+pub async fn top_brokers(
+    fetcher: &Arc<Fetcher>,
+    now: DateTime<Utc>,
+) -> Result<Sourced<topbroker::Ranking>> {
+    let traded = |r: &topbroker::Ranking| r.brokers.iter().any(topbroker::TopBroker::traded);
+    let mut s = latest_session(
+        fetcher,
+        now,
+        &RANKING,
+        topbroker::ranking,
+        traded,
+        topbroker::digest,
+    )
+    .await?;
+    for f in topbroker::fold_listed_apart(&mut s.data) {
+        s.warnings.push(format!(
+            "{} ({}) is counted in {}, as idx.co.id counts it; IPOT lists it apart",
+            f.code, f.name, f.into
+        ));
+    }
+    Ok(s)
+}
+
+/// The market's trading in IPOT's latest session (`ma-marketstatistic.php`:
+/// the value traded and foreign investors' buying, selling and net), dated
+/// by BBCA's statistics page as [`latest_session`] dates an undated page.
+/// `now` decides the cache lifetime ([`top_brokers_ttl`]).
+pub async fn market_summary(
+    fetcher: &Arc<Fetcher>,
+    now: DateTime<Utc>,
+) -> Result<Sourced<marketstat::MarketSummary>> {
+    latest_session(
+        fetcher,
+        now,
+        &SUMMARY,
+        marketstat::summary,
+        marketstat::MarketSummary::traded,
+        marketstat::digest,
+    )
+    .await
+}
+
+/// The page `p` of IPOT's latest session, read by `read` for the session
+/// BBCA's statistics page names. `traded` says whether the page shows
+/// trades, `digest` fingerprints its figures. `now` decides the cache
+/// lifetime ([`top_brokers_ttl`]).
 ///
 /// The two pages count only as one read: when one comes from the network
 /// and the other from the cache, or two copies were read apart, both are
 /// read again. When they still differ (a fetch failed and an older copy
-/// stood in), the ranking cannot be dated and the call fails. The pair is
+/// stood in), the page cannot be dated and the call fails. The pair is
 /// judged by when it was read, not by when it is served (a copy can be
 /// served offline or after a failed fetch, days later); a page this call
 /// fetches counts as read when it came, `now` moved on by the wall time the
 /// call has taken since.
 ///
 /// A pair either page of which was read on a trading day between 08:58 and
-/// 19:00 WIB ([`UNDATED`]) cannot be dated and fails. So does a ranking with
+/// 19:00 WIB ([`UNDATED`]) cannot be dated and fails. So does a page with
 /// trades dated a session that had not opened then (before 08:58), or one
 /// without trades dated a session that had ended, both of which mean the
 /// pages rolled over at different times, and a date that is not a trading
 /// day. Outside those hours both pages are taken to have rolled over to the
 /// latest session that had ended when they were read (how long they take
-/// has not been measured), so a ranking with trades dated an older session
-/// fails too: its date page may lag a ranking that has rolled over. Only
-/// the very pair accepted before for that session passes. A ranking with
-/// trades that is accepted is remembered with its date
-/// ([`topbroker::digest`]), and the same ranking dated another session
-/// later fails as well: the date page has rolled over and the ranking has
-/// not. A ranking refused is never remembered. A refusal of a copy served
-/// in place of a failed fetch is that failure (`network`), and of one
-/// served offline an `offline_miss` ([`unusable`]).
+/// has not been measured), so a page with trades dated an older session
+/// fails too: its date page may lag a page that has rolled over. Only the
+/// very pair accepted before for that session passes. A page with trades
+/// that is accepted is remembered with its date (`digest`), and the same
+/// figures dated another session later fail as well: the date page has
+/// rolled over and the page has not. A page refused is never remembered. A
+/// refusal of a copy served in place of a failed fetch is that failure
+/// (`network`), and of one served offline an `offline_miss` ([`unusable`]).
 ///
 /// When `now` is in those hours IPOT is not asked at all unless a pair read
 /// outside them is cached, which can answer (fresh, or in place of a read
 /// that fails).
-pub async fn top_brokers(
+async fn latest_session<T>(
     fetcher: &Arc<Fetcher>,
     now: DateTime<Utc>,
-) -> Result<Sourced<topbroker::Ranking>> {
+    p: &Undated,
+    read: impl Fn(&str, NaiveDate) -> Result<T>,
+    traded: impl Fn(&T) -> bool,
+    digest: impl Fn(&T) -> String,
+) -> Result<Sourced<T>> {
     let started = Utc::now();
+    let (noun, short) = (p.noun, p.short);
     // A page read now, in those hours, cannot be dated: IPOT is asked only
     // when a pair read outside them is cached, which can answer, fresh or
     // in place of a read that fails. Offline nothing is asked anyway.
-    if !fetcher.is_offline() && undated_at(now) && !cached_outside_hours(fetcher) {
+    if !fetcher.is_offline() && undated_at(now) && !cached_outside_hours(fetcher, p) {
         let local = now.with_timezone(&crate::model::wib());
         let (day, clock) = (local.date_naive(), local.format("%H:%M"));
         return Err(IdxError::provider(
             NAME,
             format!(
-                "a broker ranking read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+                "a {noun} read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
             ),
         ));
     }
     let ttl = top_brokers_ttl(now);
-    let ranking = |ttl| {
-        page(
-            fetcher,
-            TOP_BROKERS_ENDPOINT,
-            ttl,
-            None,
-            "broker ranking",
-            &"the market",
-        )
-    };
+    let undated = |ttl| page(fetcher, p.url, ttl, None, noun, &"the market");
     let dating = |ttl| {
         page(
             fetcher,
             SESSION_ENDPOINT,
             ttl,
-            None,
+            p.dated_key,
             "session date",
             &"BBCA",
         )
     };
-    let mut ranked = ranking(ttl).await?;
+    let mut ranked = undated(ttl).await?;
     let mut dated = dating(if ranked.cached { ttl } else { Duration::ZERO }).await?;
     if !read_together(&ranked, &dated) {
-        ranked = ranking(Duration::ZERO).await?;
+        ranked = undated(Duration::ZERO).await?;
         dated = dating(Duration::ZERO).await?;
     }
     if !read_together(&ranked, &dated) {
         return Err(unusable(
             &ranked,
             &dated,
-            "the broker ranking and the page that dates it were read at different times, so the ranking has no date".into(),
+            format!("the {noun} and the page that dates it were read at different times, so the {short} has no date"),
         ));
     }
     let refuse = |why: String| unusable(&ranked, &dated, why);
@@ -700,80 +787,75 @@ pub async fn top_brokers(
     if undated_at(ranked_at) {
         let (day, clock) = (wib(ranked_at).date_naive(), wib(ranked_at).format("%H:%M"));
         return Err(refuse(format!(
-            "the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
+            "the {noun} was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when it and the page that dates it can be on different sessions (when they roll over has not been measured), so it cannot be dated"
         )));
     }
     if undated_at(dated_at) {
         let (day, clock) = (wib(dated_at).date_naive(), wib(dated_at).format("%H:%M"));
         return Err(refuse(format!(
-            "the page that dates the broker ranking was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the ranking cannot be dated"
+            "the page that dates the {noun} was read at {clock} WIB on {day}, in a trading day's hours (08:58 to 19:00 WIB), when the two pages can be on different sessions (when they roll over has not been measured), so the {short} cannot be dated"
         )));
     }
     // Both reads are outside those hours and a minute apart at most, so
     // either gives the same session below.
-    let read = ranked_at.min(dated_at);
-    let local = wib(read);
+    let read_on = ranked_at.min(dated_at);
+    let local = wib(read_on);
     let (day, clock) = (local.date_naive(), local.format("%H:%M"));
     let secs = local.time().num_seconds_from_midnight();
     let date = topbroker::session_date(&dated.body).ok_or_else(|| {
-        refuse("BBCA's statistics page has no Today row to date the broker ranking".into())
+        refuse(format!(
+            "BBCA's statistics page has no Today row to date the {noun}"
+        ))
     })?;
     if !holidays::is_trading_day(date) {
         return Err(refuse(format!(
-            "the page that dates the broker ranking names {date}, which is not a trading day"
+            "the page that dates the {noun} names {date}, which is not a trading day"
         )));
     }
-    let mut data = topbroker::ranking(&ranked.body, date)?;
-    let traded = data.brokers.iter().any(topbroker::TopBroker::traded);
+    let data = read(&ranked.body, date)?;
+    let traded = traded(&data);
     // A date whose session had not opened when the pages were read cannot
     // have trades, and one whose session had ended cannot be without them.
     let opened = date < day || date == day && secs >= FIRST_TRADES_SECS;
     if !opened && traded {
         return Err(refuse(format!(
-            "the broker ranking read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the ranking and its date disagree"
+            "the {noun} read at {clock} WIB on {day} is dated {date}, a session that had not opened then (trading starts at 08:58 WIB), yet it shows trades: the {short} and its date disagree"
         )));
     }
-    if !traded && date <= holidays::latest_session(read) {
+    if !traded && date <= holidays::latest_session(read_on) {
         return Err(refuse(format!(
-            "the broker ranking read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
+            "the {noun} read at {clock} WIB on {day} shows no trades, yet the page that dates it names {date}, a session that had ended then: the two pages are on different sessions"
         )));
     }
     if traded {
-        let digest = topbroker::digest(&data);
+        let digest = digest(&data);
         let cache = fetcher.cache();
-        let seen = cache.get_json::<Accepted>(ACCEPTED_KEY, TTL_ACCEPTED);
+        let seen = cache.get_json::<Accepted>(p.accepted_key, TTL_ACCEPTED);
         if let Some(seen) = &seen {
             if seen.digest == digest && seen.date != date {
                 return Err(refuse(format!(
-                    "the broker ranking is the one IPOT showed for {}, yet the page that dates it now names {date}: the ranking has not rolled over to that session",
+                    "the {noun} is the one IPOT showed for {}, yet the page that dates it now names {date}: the {short} has not rolled over to that session",
                     seen.date
                 )));
             }
         }
         // Outside the refused hours both pages are taken to have rolled over
         // to the latest session that had ended. A date page naming an older
-        // one may lag a ranking that has: only the very pair accepted before
-        // is that older session's.
-        let latest = holidays::latest_session(read);
+        // one may lag a page that has: only the very pair accepted before is
+        // that older session's.
+        let latest = holidays::latest_session(read_on);
         let accepted = seen.is_some_and(|s| s.digest == digest && s.date == date);
         if date < latest && !accepted {
             return Err(refuse(format!(
-                "the broker ranking read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the ranking may be that session's while the page that dates it has not rolled over, so it cannot be dated"
+                "the {noun} read at {clock} WIB on {day} is dated {date}, yet the session of {latest} had ended then: the {short} may be that session's while the page that dates it has not rolled over, so it cannot be dated"
             )));
         }
-        if let Err(e) = cache.put_json(ACCEPTED_KEY, &Accepted { date, digest }) {
+        if let Err(e) = cache.put_json(p.accepted_key, &Accepted { date, digest }) {
             tracing::warn!(error = %e, "could not write cache");
         }
     }
-    let folded = topbroker::fold_listed_apart(&mut data);
     let mut s = Sourced::from_fetched(data, NAME, &ranked);
     s.absorb(&Sourced::from_fetched((), NAME, &dated));
-    for f in folded {
-        s.warnings.push(format!(
-            "{} ({}) is counted in {}, as idx.co.id counts it; IPOT lists it apart",
-            f.code, f.name, f.into
-        ));
-    }
     Ok(s)
 }
 
@@ -1997,5 +2079,94 @@ mod tests {
             err.to_string(),
             "ipot: broker ranking for the market: HTTP 503"
         );
+    }
+
+    const SUMMARY_PAGE: &str =
+        include_str!("../../../tests/fixtures/ipot/marketstatistic_20261106.html");
+
+    fn summary_pages() -> FixtureBackend {
+        FixtureBackend::new()
+            .route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE)
+            .route(SESSION_ENDPOINT, 200, STATISTIC)
+    }
+
+    #[tokio::test]
+    async fn the_market_summary_is_dated_as_the_ranking_is() {
+        let (f, be, _d) = fetcher(summary_pages());
+        let sunday = at("2026-11-08T10:00:00");
+        let s = market_summary(&f, sunday).await.unwrap();
+        assert_eq!(s.provider, "ipot");
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        assert_eq!(s.data.foreign_net_value, Some(329_330_000_000.0));
+        assert!(s.data.rounded && s.warnings.is_empty());
+        assert_eq!(be.call_count(), 2);
+        assert!(market_summary(&f, sunday).await.unwrap().cached);
+        assert_eq!(be.call_count(), 2, "both pages from the cache");
+
+        // In a trading day's hours, with nothing read outside them cached,
+        // IPOT is not asked, and the message names the page.
+        let (f, be, _d) = fetcher(summary_pages());
+        let err = market_summary(&f, at("2026-11-09T10:00:00"))
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("provider", 3));
+        assert_eq!(
+            err.to_string(),
+            "ipot: a market summary read at 10:00 WIB on 2026-11-09, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"
+        );
+        assert_eq!(be.call_count(), 0);
+
+        // The same figures dated a later session have not rolled over.
+        let dir = tempfile::tempdir().unwrap();
+        let live = |statistic: &str| {
+            Arc::new(Fetcher::new(
+                Arc::new(
+                    FixtureBackend::new()
+                        .route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE)
+                        .route(SESSION_ENDPOINT, 200, statistic),
+                ),
+                Cache::new(dir.path()),
+                CacheMode::Bypass,
+            ))
+        };
+        market_summary(&live(STATISTIC), sunday).await.unwrap();
+        let err = market_summary(&live(&named("2026-11-09")), at("2026-11-09T19:30:00"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ipot: the market summary is the one IPOT showed for 2026-11-06, yet the page that dates it now names 2026-11-09: the summary has not rolled over to that session"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_summary_and_the_ranking_keep_their_pairs_apart() {
+        let (f, be, dir) =
+            fetcher(ranking_pages().route(MARKET_STATISTIC_ENDPOINT, 200, SUMMARY_PAGE));
+        let sunday = at("2026-11-08T10:00:00");
+        top_brokers(&f, sunday).await.unwrap();
+        market_summary(&f, sunday).await.unwrap();
+        // The summary reads its own copy of the date page.
+        assert_eq!(be.calls_matching("statistic.php?code=BBCA"), 2);
+        let cache = Cache::new(dir.path());
+        let ranking: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
+        let summary: Accepted = cache.get_json(SUMMARY.accepted_key, TTL_ACCEPTED).unwrap();
+        assert_ne!(ranking.digest, summary.digest);
+        // A ranking's date page read in trading hours leaves the summary's
+        // pair as it was: on Monday morning the summary's Sunday pair still
+        // answers, and the ranking has none.
+        cache
+            .put_fetched_at(SESSION_ENDPOINT, 200, STATISTIC, at("2026-11-06T10:00:00"))
+            .unwrap();
+        let failing = Arc::new(Fetcher::new(
+            Arc::new(FixtureBackend::new()),
+            Cache::new(dir.path()),
+            CacheMode::Normal,
+        ));
+        let monday = at("2026-11-09T10:00:00");
+        let s = market_summary(&failing, monday).await.unwrap();
+        assert_eq!(s.data.date, d(2026, 11, 6));
+        let err = top_brokers(&failing, monday).await.unwrap_err();
+        assert!(err.to_string().ends_with("so IPOT was not asked"), "{err}");
     }
 }

@@ -1,0 +1,172 @@
+
+<!--Market Statistic-->
+
+	<div id="maStatistik" style="max-width:320px">
+		
+		<div class="table-layout mb5">
+			<div class="col-xs-6">
+				
+				<!--<div id="JCIMaskingContainer"><div class="JCIMaskingPositive" style="height:40%"></div></div>-->
+				<div id="maChart" >
+					Chart will load here
+				</div>
+				<div class="table-layout fsize11 bdr-t bdr-b nm">
+					<div class="col-xs-3 bdr-l pl5 text-left">
+						09:00
+					</div>
+					<div class="col-xs-6 text-center">
+						SESSION 1
+					</div>
+					<div class="col-xs-3 bdr-r pr5 text-right" id="breakTrading">
+						11:30
+					</div>
+					<div class="col-xs-3 bdr-l pl5 text-left" id="startAfterbreakTrading">
+						13:30
+					</div>
+					<div class="col-xs-6 text-center">
+						SESSION 2
+					</div>
+					<div class="col-xs-3 bdr-r pr5 text-right">
+						16:00
+					</div>
+				</div>
+			</div>
+		</div>
+		
+		<table width="100%" border="0" cellspacing="0" cellpadding="0" class="noborder mb15 mt10 fsize12">
+			<tbody>
+				<tr>
+					<td rowspan="2" align="right"><span class="fsize18 text-up" id="closePrice">00,000</span></td>
+					<td align="left"><span class="pl10 text-up" id="changeValue">+00.00</span></td>
+					<td align="right">Prev</td>
+					<td align="right"><span class="text-stay" id="prevValue">0,000</span></td>
+					<td align="right">High</td>
+					<td align="right"><span class="text-up" id="highValue">0,000</span></td>
+				</tr>
+				<tr>
+					<td align="left"><span class="pl10 text-up" id="changePercentage">+0.70%</span></td>
+					<td align="right">Open</td>
+					<td align="right"><span class="text-down" id="openValue">0,000</span></td>
+					<td align="right">Low</td>
+					<td align="right"><span class="text-down" id="lowValue">0,000</span></td>
+				</tr>
+				<tr>
+					<td colspan="6" align="right"><hr class="mt5 mb5"></td>
+				</tr>
+				<tr>
+					<td colspan="6" align="center">
+											
+						<ul class="nav nav-section nav-justified">	
+							<li>
+								<span class="text-up" id="advValue">Adv 0,000</span>
+							</li>
+							<li>
+								<span class="text-down" id="decValue">Dec 0,000</span>
+							</li>	
+							<li>
+								<span class="text-stay" id="unchgValue">Unchg 0,000</span>
+							</li>
+							<li>
+								<span class="text-lot" id="untrdValue">Untrd 0,000</span>
+							</li>					
+						</ul>
+						
+					</td>
+				</tr>
+			</tbody>
+		</table>		
+		
+
+		<table width="100%" border="0" cellspacing="0" cellpadding="0" class="table table-condensed table-hover noborder nm fsize12">
+			<thead>
+				<tr>
+					<th align="left">Board</th>
+					<th align="right">Value</th>
+					<th align="right">Lot</th>
+					<th align="right">Freq</th>
+				</tr>
+			</thead>
+			
+			
+			<tbody>
+				<tr>
+					<td align="left">Regular</td>
+					<td align="right">7.83 T</td>
+					<td align="right">413.02 M</td>
+					<td align="right">1.10 M</td>
+				</tr>
+				<!--tr>
+					<td align="left">Crossing</td>
+					<td align="right">0000.0 B</td>
+					<td align="right">00.0 M</td>
+					<td align="right">000,000</td>
+				</tr-->
+				<tr>
+					<td align="left">Negotiated</td>
+					<td align="right">2.49 T</td>
+					<td align="right">60.86 M</td>
+					<td align="right">1,295</td>
+				</tr>
+				<tr>
+					<td align="left">Cash</td>
+					<td align="right">23.07 M</td>
+					<td align="right">510</td>
+					<td align="right">4</td>
+				</tr>				
+				<tr>
+					<td align="left">TOTAL</td>
+					<td align="right">10.32 T</td>
+					<td align="right">473.88 M</td>
+					<td align="right">1.10 M</td>
+				</tr>
+				<tr>
+					<td colspan="4" align="left"><hr class="mt5 mb5"></td>
+				</tr>
+			</tbody>			
+			<thead>
+				<tr>
+					<th align="left">Foreign</th>
+					<th align="right">Value</th>
+					<th align="right">Lot</th>
+					<th align="right">Freq</th>
+				</tr>
+			</thead>
+			<tbody>	
+				<tr>
+					<td align="left">F. Buy</td>
+					<td align="right">3.76 T</td>
+					<td align="right">121.98 M</td>
+					<td align="right">231,334</td>
+				</tr>
+				<tr>
+					<td align="left">F. Sell</td>
+					<td align="right">3.43 T</td>
+					<td align="right">165.65 M</td>
+					<td align="right">273,280</td>
+				</tr>
+				<tr>
+					<td align="left">F. TOTAL</td>
+					<td align="right">7.19 T</td>
+					<td align="right">287.63 M</td>
+					<td align="right">504,614</td>
+				</tr>
+				<tr>
+					<td align="left">F. NET</td>
+					<td align="right">329.33 B</td>
+					<td align="right">-43.67 M</td>
+					<td align="right">-41,946</td>
+				</tr>
+			</tbody>
+		</table>
+
+	</div>
+	
+
+
+
+ 
+ 
+<!-- =======================
+======SCRIPT MODULE=========
+============================-->
+<script src="../../../../module/saham/include/js/ma-marketstatistic.js"></script>

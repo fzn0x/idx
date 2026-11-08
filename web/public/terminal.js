@@ -42,7 +42,7 @@ const COMMANDS = [
   { name: "foreign", usage: "foreign <SYMBOL> [--days N | --from D --to D]", help: "foreign buying and selling per session in rupiah across all boards (IPOT): value, foreign share, totals and the net-buy/net-sell streak; 10 sessions by default, at most 20" },
   { name: "bandar", usage: "bandar <SYMBOLS> [--period 1d|1w|1m|3m] [--top 1|3|5|10] [--daily] [--date D | --from D --to D] | bandar screen [--preset P] [--filter F] [--period P] [--sort KEY] [--limit N] | bandar broker <CODE> [--period P] [--limit N]", help: "bandarmology: are the top brokers accumulating or distributing? screen presets: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: where one broker (YP, CC, ...) is a top-10 buyer or seller of the session's 100 most traded stocks" },
   { name: "actions", usage: "actions <SYMBOL> [--since YYYY-MM-DD]", help: "corporate actions (dividends, splits, bonus, rights with ratio and cum/ex/payment dates), RUPS, warrants and rights; upcoming included (IPOT)" },
-  { name: "market", usage: "market", help: "IHSG, breadth, gainers, losers, most traded" },
+  { name: "market", usage: "market | market foreign [--top N] [--date YYYY-MM-DD]", help: "IHSG, breadth, gainers, losers, most traded; market foreign: the session's 100 most traded stocks by their foreign net in rupiah (IPOT, the bandar scan), with the market's foreign totals, which cannot be dated on a trading day from 08:58 to 19:00 WIB (left out then); 10 rows a side by default, --top 0 for all" },
   { name: "holidays", usage: "holidays [YEAR] [--all] [--upcoming]", help: "IDX trading holidays, the year's trading days, whether today is a trading day and the next one" },
   { name: "astro", usage: "astro [DATE] [--days N] [--natal launch|base|none] [--backtest] [--period 1y|2y|5y|10y]", help: "IHSG astrology: planets, Moon phase, Mercury retrograde, weton and shio for a date (16:00 WIB), upcoming phases and ingresses, transits to IHSG's chart; --backtest tests them on IHSG's daily returns (5y by default). Traditional astrology, not a forecast" },
   { name: "list", usage: "list [--search TEXT]", help: "listed stocks: codes and names (bundled; the CLI adds boards, listing dates and shares from idx.co.id)" },
@@ -80,7 +80,7 @@ const HELP_ID = {
   foreign: "beli dan jual asing per sesi dalam rupiah di semua papan (IPOT): nilai, porsi asing, total dan rentetan beli bersih atau jual bersih; 10 sesi bila tanpa pilihan, paling banyak 20",
   bandar: "bandarmologi: apakah broker teratas sedang akumulasi atau distribusi? preset screen: big-accumulation, accumulation, distribution, big-distribution, quiet-accumulation, quiet-distribution, foreign-accumulation, below-bandar; broker: di saham mana satu broker (YP, CC, ...) masuk 10 pembeli atau penjual teratas dari 100 saham teramai sesi itu",
   actions: "aksi korporasi (dividen, pemecahan saham, bonus, rights dengan rasio dan tanggal cum/ex/pembayaran), RUPS, waran dan rights; termasuk yang akan datang (IPOT)",
-  market: "IHSG, jumlah saham naik dan turun, saham naik, saham turun, saham teramai",
+  market: "IHSG, jumlah saham naik dan turun, saham naik, saham turun, saham teramai; market foreign: 100 saham teramai sesi itu menurut beli bersih asing dalam rupiah (IPOT, pindaian bandar), dengan total asing pasar, yang tidak bisa diberi tanggal pada hari perdagangan pukul 08.58 sampai 19.00 WIB (saat itu tidak ditampilkan); 10 baris tiap sisi bila tanpa pilihan, --top 0 untuk semua",
   holidays: "hari libur bursa, jumlah hari perdagangan setahun, apakah hari ini hari perdagangan dan kapan yang berikutnya",
   astro: "astrologi IHSG: planet, fase Bulan, Merkurius retrograde, weton dan shio untuk satu tanggal (16.00 WIB), fase dan ingres mendatang, transit ke peta IHSG; --backtest mengujinya pada imbal hasil harian IHSG (5y bila tanpa pilihan). Astrologi tradisional, bukan ramalan",
   list: "saham tercatat: kode dan nama (bawaan; CLI menambah papan, tanggal pencatatan dan jumlah saham dari idx.co.id)",
@@ -644,6 +644,32 @@ const R = {
     frag.append(el("p", { class: "warn", text: `Each member's buying and selling together, as IPOT (Indo Premier) publishes them${net}; shares sum to 100% of all members' value, which is twice the market's.${r.rounded ? " IPOT abbreviates figures of a million and more to two decimals, so they and the totals carry that precision." : ""} The web terminal reads IPOT's latest session; the CLI also reads idx.co.id's summary of any session (--source idx).` }));
     return frag;
   },
+  // The rupiah ranking as the CLI prints idx.market.foreign.value.v1 (src/output/table_exchange.rs).
+  marketForeign(m) {
+    const frag = document.createDocumentFragment();
+    const signed = (v) => (v > 0 ? `+${fmt.compact(v)}` : fmt.compact(v));
+    frag.append(el("p", { class: "prose", html: `<b>Foreign flow</b> · ${m.date} · the ${m.scanned} most traded stocks (${m.checked} with trades) · rupiah (IPOT)` }));
+    const tot = m.market;
+    frag.append(el("p", { class: "prose", html: tot ? `Market · value ${fmt.compact(tot.value)} · foreign buy ${fmt.compact(tot.foreign_buy_value)} · sell ${fmt.compact(tot.foreign_sell_value)} · net <span class="${signClass(tot.foreign_net_value)}">${signed(tot.foreign_net_value)}</span>` : "Market · no totals for this session (see the warning)" }));
+    const side = (title, rows) => {
+      frag.append(el("h3", { class: "stmt-title", text: title }));
+      if (!rows.length) { frag.append(el("p", { class: "warn", text: "None." })); return; }
+      frag.append(wrapScroll(table([
+        { h: "#", f: (r) => rows.indexOf(r) + 1 },
+        { h: "Symbol", k: "symbol", l: true, cls: "sym" },
+        { h: "Name", f: (r) => r.name || NA, l: true, cls: "name" },
+        { h: "Price", f: (r) => fmt.price(r.price) },
+        { h: "%", f: (r) => fmt.pct(r.change_pct), cls: (r) => `num ${signClass(r.change_pct)}` },
+        { h: "Value", f: (r) => fmt.compact(r.value) },
+        { h: "Foreign net", f: (r) => signed(r.foreign_net_value), cls: (r) => `num ${signClass(r.foreign_net_value)}` },
+        { h: "Net %", f: (r) => (r.foreign_net_pct == null ? NA : `${fmt.num(r.foreign_net_pct, 1)}%`), cls: (r) => `num ${signClass(r.foreign_net_pct)}` },
+      ], rows)));
+    };
+    side("Foreign net buying", m.net_buy);
+    side("Foreign net selling", m.net_sell);
+    frag.append(el("p", { class: "warn", text: `Rupiah from IPOT (Indo Premier): each stock's foreign net is its broker summary's, across all boards, for the ${m.scanned} stocks most traded by value, not every stock; the market line is IPOT's market statistics.${m.rounded ? " The source abbreviates figures of a million and more, to one decimal per stock and two for the market." : ""} The CLI also reads idx.co.id's every stock in shares (--source idx).` }));
+    return frag;
+  },
   foreignFlow(fl) {
     const frag = document.createDocumentFragment();
     const signed = (v) => (v > 0 ? `+${fmt.compact(v)}` : fmt.compact(v));
@@ -1111,7 +1137,20 @@ async function runWeb(line) {
       }
       break;
     }
-    case "market": env = await ask("market"); await calendar; render = R.market; break;
+    case "market": {
+      if ((pos[0] || "").toLowerCase() === "foreign") {
+        // The ranking takes no ticker: one stock's foreign flow is foreign.
+        if (pos.length > 1) {
+          const w = pos[1].toUpperCase();
+          if (/^[A-Z]{4}$/.test(w)) throw usageError(t(`market foreign tidak menerima kode; foreign ${w} menampilkan beli dan jual asing satu saham per sesi`, `market foreign takes no code; foreign ${w} shows one stock's foreign buying and selling per session`));
+          throw usageLine("market foreign [--top N] [--date YYYY-MM-DD]");
+        }
+        env = await ask(`market/foreign?${qs({ date: opt.date, top: opt.top, sort: opt.sort, source: opt.source })}`);
+        render = R.marketForeign;
+        break;
+      }
+      env = await ask("market"); await calendar; render = R.market; break;
+    }
     case "list": env = await ask(`instruments?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.instruments; break;
     case "members": env = await ask(`members?${qs({ search: opt.search || pos.join(" ") || null })}`); render = R.members; break;
     case "tools": {
@@ -1213,6 +1252,7 @@ const WAITS_ID = {
   foreign: { on: `${IPOT_ID}, dua per sesi`, slow: IPOT_SLOW_ID },
   bandar: { on: `${IPOT_ID}, satu per sesi`, slow: IPOT_SLOW_ID },
   "bandar screen": { on: "pindaian bandar sesi terakhir" },
+  "market foreign": { on: "pindaian bandar sesi terakhir dan statistik pasar IPOT dengan statistik BBCA yang menanggalinya", slow: IPOT_SLOW_ID },
   "bandar broker": { on: "pindaian bandar sesi terakhir" },
   actions: { on: "aksi korporasi dari IPOT", slow: IPOT_SLOW_ID },
   market: { on: "papan harga per menit" },

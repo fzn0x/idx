@@ -4,10 +4,11 @@
 // rewritten into the page's: a leading idx goes, -o json becomes the json
 // prefix, the stocks group drops (stocks quote BBCA runs quote BBCA), market
 // overview, holidays, members, astro and brokers run as market, holidays,
-// members, astro and brokers, and the CLI's short flags and spellings become
-// the page's (stocks screen -f pe<10 runs screen pe<10). What the page cannot
-// run becomes a notice instead of an error, a usage line or another command's
-// output:
+// members, astro and brokers, market foreign runs as it is spelled (only a
+// line that starts with idx means the CLI's default source there), and the
+// CLI's short flags and spellings become the page's (stocks screen -f pe<10
+// runs screen pe<10). What the page cannot run becomes a notice instead of an
+// error, a usage line or another command's output:
 //
 //   cli-mcp  a command behind an MCP tool with web: null in tools.js
 //   cli      a CLI command with no MCP tool (watch, mcp, schema, config, ...)
@@ -120,6 +121,7 @@ export const CLI_FORM = {
   "ownership ticker": ["ownership ticker", "@"], "ownership entity": ["ownership entity", "@ "], "ownership search": ["ownership search", "@*"],
   "ownership cross-holders": ["ownership cross-holders"], "ownership concentration": ["ownership concentration", "@*"], "ownership graph": ["ownership graph", "@*"],
   "ownership changes": ["ownership changes", "--from", "--to", "--symbol"], "ownership foreign": ["ownership foreign", "@"], "ownership releases": ["ownership releases"],
+  "market foreign": ["market foreign"],
 };
 /** The page's command for each CLI path in CLI_FORM: stocks quote is quote, market overview is market. */
 const PAGE_CMD = Object.fromEntries(Object.entries(CLI_FORM).map(([cmd, [path]]) => [path, cmd]));
@@ -168,6 +170,8 @@ export const SPEC = {
   "ownership graph": { switch: ["holder", "dot"], cli: ["dot"] },
   "ownership changes": { short: { s: "symbol", n: "limit" }, pos: ["from", "to", "symbol"] },
   "ownership foreign": { short: { n: "limit" } },
+  // IPOT in rupiah is the page's own source, and its ranking is by that net (the CLI's --sort value).
+  "market foreign": { short: { d: "date", n: "top" }, cli: ["source", "sort"], keep: { source: ["ipot"], sort: ["value"] }, cliDefault: { source: "idx" } },
 };
 
 /** Why the page has no twin for a CLI flag, by "command flag", then by flag. */
@@ -191,14 +195,15 @@ const FLAG_WHY = {
   "sentiment limit": say("Terminal web menampilkan 10 judul berita terkuat, sama dengan bawaan CLI.", "The web terminal shows the 10 strongest headlines, the CLI's default."),
   "screen fundamentals": say("Terminal web mengambil data fundamental hanya bila filter atau urutannya memerlukannya; --fundamentals tetap mengambilnya untuk hasilnya.", "The web terminal fetches fundamentals only when a filter or the sort needs them; --fundamentals fetches them for the results anyway."),
   market: say("Panel market di terminal web memakai daftar tetap.", "The web terminal's market panel uses fixed lists."),
+  "market foreign source": say("Terminal web membaca IPOT: beli bersih asing dalam rupiah dari 100 saham teramai sesi itu, dengan total pasarnya; idx.co.id menolak permintaan dari server situs ini, jadi --source idx (setiap saham, dalam lembar) hanya ada di CLI dan MCP.", "The web terminal reads IPOT: the foreign net in rupiah of the session's 100 most traded stocks, with the market's totals; idx.co.id refuses requests from this site's host, so --source idx (every stock, in shares) runs in the CLI and MCP only."),
+  "market foreign source default": say("Di CLI, market foreign membaca idx.co.id kecuali diberi --source ipot: setiap saham dalam lembar. idx.co.id menolak permintaan dari server situs ini, jadi terminal web membaca IPOT: 100 saham teramai sesi itu, dalam rupiah.", "In the CLI, market foreign reads idx.co.id unless --source ipot is given: every stock in shares. idx.co.id refuses requests from this site's host, so the web terminal reads IPOT: the session's 100 most traded stocks, in rupiah."),
+  "market foreign sort": say("Terminal web mengurutkan beli bersih asing dalam rupiah dari IPOT; --sort shares mengurutkan lembar bersih idx.co.id, hanya di CLI dan MCP.", "The web terminal ranks IPOT's foreign net in rupiah; --sort shares ranks idx.co.id's net shares, in the CLI and MCP only."),
 };
 const flagWhy = (cmd, name) => own(FLAG_WHY, `${cmd} ${name}`) || own(FLAG_WHY, name) || own(FLAG_WHY, cmd) || null;
 
 // ---- near commands the page does run ------------------------------------------------
 
 const N = {
-  foreign: (s) => near(`foreign ${s}`, "beli dan jual asing satu saham per sesi, dari IPOT dalam rupiah", "one stock's foreign buying and selling per session, from IPOT in rupiah"),
-  foreignScreen: () => near("bandar screen --preset foreign-accumulation", "saham teramai yang diakumulasi broker teratas dengan beli bersih asing (pindaian bandar sesi terakhir)", "the most traded stocks the top brokers accumulate with foreign net buying (the bandar scan of the last session)"),
   broker: (s) => near(`broker ${s}`, "broker yang membeli dan menjual satu saham, 10 teratas tiap sisi (IPOT)", "the brokers that bought and sold one stock, top 10 per side (IPOT)"),
   bandarBroker: (c) => near(`bandar broker ${c}`, "di saham mana satu broker masuk 10 pembeli atau penjual teratas", "where one broker is a top-10 buyer or seller"),
   members: () => near("members", "kode dan nama anggota bursa", "the exchange members' codes and names"),
@@ -229,7 +234,7 @@ const SCHEMA_CMD = {
   "ownership-holders": "ownership ticker BBCA", "ownership-entity": 'ownership entity "Dwimuria Investama"', "ownership-changes": "ownership changes 2026-08-31 2026-09-30",
   "ownership-releases": "ownership releases", "ownership-foreign": "ownership foreign BBCA", "ownership-foreign-flow": "ownership foreign",
   "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders", "ownership-concentration": "ownership concentration",
-  "ownership-graph": "ownership graph BBCA",
+  "ownership-graph": "ownership graph BBCA", "market-foreign-value": "market foreign",
   // idx.co.id's foreign flow in shares (the page's foreign prints foreign-value), the other CLI-and-MCP-only commands, the local database, the error envelope.
   foreign: null, "market-foreign": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
   "stockbit-movements": null, "stockbit-status": null, watchlist: null, error: null, "ownership-import": null, "ownership-discover": null,
@@ -271,7 +276,6 @@ export const STOCKBIT_KINDS = new Set(["dividend", "stock_dividend", "stock-divi
  * take no value.
  */
 export const MCP_ONLY = {
-  "market foreign": { tool: "idx_market_foreign", takes: "none", near: (a) => [N.foreign(a.sym), N.foreignScreen()] },
   "market indices": { tool: "idx_indices", takes: "many", near: () => [N.market(), N.ihsg()] },
   "market calendar": { tool: "idx_calendar", takes: "symbol", kinds: { flag: "type", short: "t", words: CALENDAR_TYPES }, near: (a) => [N.actions(a.sym), N.holidays()] },
   "ownership composition": { tool: "idx_ownership_composition", takes: "one", needs: true, near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
@@ -437,7 +441,7 @@ function dispatch(ctx, words) {
   }
   if (name === "market") {
     const runs = own(PAGE_CMD, `market ${sub}`);
-    if (runs) return webCommand(ctx, runs, [runs], words.slice(2), { group: true });
+    if (runs) return webCommand(ctx, runs, runs.split(" "), words.slice(2), { group: true });
     if (own(MCP_ONLY, `market ${sub}`)) return mcpNotice(ctx, `market ${sub}`, words.slice(2));
     return webCommand(ctx, "market", [words[0]], words.slice(1));
   }
@@ -510,8 +514,10 @@ function webCommand(ctx, cmd, prefix, args, { group = false } = {}) {
   }
   for (const k of spec.pos || []) if (typeof asPos[k] === "string") pos.push(asPos[k]);
   // A line in the CLI's words that leaves out a flag whose CLI default the page lacks means that default.
+  // Where the page spells the command as the CLI does (market foreign), only a line that starts with idx is the CLI's.
   let why = null;
-  for (const [name, value] of group && !ctx.tool ? Object.entries(spec.cliDefault || {}) : []) {
+  const cliWords = group && !ctx.tool && (ctx.fromCli || own(CLI_FORM, cmd)?.[0] !== cmd);
+  for (const [name, value] of cliWords ? Object.entries(spec.cliDefault || {}) : []) {
     if (items.some((x) => (x.short ? own(spec.short, x.name) : x.name) === name)) continue;
     unsupported.push(`--${name} ${value}`);
     why = own(FLAG_WHY, `${cmd} ${name} default`) || null;

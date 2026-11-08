@@ -1381,3 +1381,89 @@ test("/api/bandar reads a range with its daily series", async () => {
     ]) await assert.rejects(bandar(env, ...bad), (e) => e.code === "usage", JSON.stringify(bad));
   });
 });
+
+// ---- market foreign: the scan's 1d rows and IPOT's market statistics ----------
+
+/** recordedFetch, with IPOT's market statistics and BBCA's statistics page naming `day`. */
+function withMarketStatistics(day, calls = [], base = recordedFetch(calls)) {
+  return async (u) => {
+    const url = String(u);
+    if (url.includes("ma-marketstatistic.php")) { calls.push(url); return new Response(page("marketstatistic_20261106.html"), { status: 200 }); }
+    if (url.includes("statistic.php?code=BBCA")) { calls.push(url); return new Response(page("statistic_bbca_20261106.html").replaceAll("2026-11-06", day), { status: 200 }); }
+    return base(u);
+  };
+}
+
+test("market foreign ranks the scan's stocks by their foreign net in rupiah, with IPOT's totals, as the CLI's --source ipot", async () => {
+  const { marketForeign } = await import("../src/api.js");
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8), quote("BRPT", 1210, 2e8), quote("ZZZZ", 50, 1e6)] }));
+  const saturday = new Date("2026-10-17T10:05:00+07:00");
+  const calls = [];
+  await withFetch(withMarketStatistics("2026-10-16", calls), async () => {
+    await assert.rejects(marketForeign(env, null, null, null, null, saturday), (e) => e.code === "not_found");
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    const out = await marketForeign(env, null, null, null, null, saturday);
+    assert.equal(out.schema, "idx.market.foreign.value.v1");
+    assert.equal(out.provider, "ipot");
+    const m = out.data;
+    // The shape of idx.market.foreign.value.v1, key for key (src/model/flow.rs).
+    assert.deepEqual(Object.keys(m), ["date", "scanned", "checked", "market", "net_buy", "net_sell", "rounded"]);
+    assert.deepEqual(Object.keys(m.market), ["value", "foreign_buy_value", "foreign_sell_value", "foreign_net_value"]);
+    assert.deepEqual(Object.keys(m.net_buy[0]), ["symbol", "name", "price", "change_pct", "value", "foreign_net_value", "foreign_net_pct"]);
+    assert.deepEqual([m.date, m.scanned, m.checked, m.rounded], ["2026-10-16", 4, 3, true]);
+    // As in service::market_foreign_ipot's test: BRPT bought 57.8 B net; BBCA sold 2.3 T, TLKM 90.2 B.
+    assert.deepEqual(m.net_buy.map((r) => [r.symbol, r.foreign_net_value]), [["BRPT", 57_800_000_000]]);
+    assert.deepEqual(m.net_sell.map((r) => r.symbol), ["BBCA", "TLKM"]);
+    const bbca = m.net_sell[0];
+    assert.equal(bbca.value, 6_600_000_000_000);
+    assert.ok(Math.abs(bbca.foreign_net_pct - (-2.3 / 6.6) * 100) < 1e-9);
+    assert.deepEqual(m.market, { value: 10_320_000_000_000, foreign_buy_value: 3_760_000_000_000, foreign_sell_value: 3_430_000_000_000, foreign_net_value: 329_330_000_000 });
+    assert.equal(out.cached, false, "the totals were read now");
+    assert.ok(out.warnings.includes("1 of 4 scanned stocks had no broker summary"), out.warnings.join("\n"));
+    assert.equal(calls.filter((u) => u.includes("statistic.php")).length, 2, "the totals and their date, read together");
+    // Again: the pair from D1, the whole answer cached.
+    const again = await marketForeign(env, null, "1", "value", "ipot", saturday);
+    assert.equal(again.cached, true);
+    assert.equal(calls.filter((u) => u.includes("statistic.php")).length, 2);
+    assert.deepEqual([again.data.net_buy.length, again.data.net_sell.length], [1, 1]);
+    // IPOT holds its latest session; sort shares and source idx are idx.co.id's.
+    for (const [args, code, says] of [
+      [["2026-10-15"], "usage", "source ipot shows the latest session IPOT has published, 2026-10-16, not 2026-10-15; source idx (idx.co.id) has the others"],
+      [["2026-10-17"], "not_found", "no trading data: 2026-10-17 is a Saturday"],
+      [["2026-10-18"], "usage", "2026-10-18 is in the future"],
+      [[null, null, "shares"], "usage", "source ipot ranks the foreign net in rupiah; sort shares is idx.co.id's net shares (source idx)"],
+      [[null, null, null, "idx"], "usage", /^idx\.co\.id refuses requests from this site's host, so the web terminal reads IPOT/],
+      [[null, "-1"], "usage", /^invalid top/],
+    ]) {
+      const full = [...args, null, null, null, null].slice(0, 4);
+      await assert.rejects(marketForeign(env, ...full, saturday), (e) => e.code === code && (says instanceof RegExp ? says.test(e.message) : e.message === says), JSON.stringify(args));
+    }
+    assert.equal((await marketForeign(env, "2026-10-16", null, null, null, saturday)).data.date, "2026-10-16");
+  });
+});
+
+test("market foreign without totals of the session: null, and a warning says why", async () => {
+  const { marketForeign } = await import("../src/api.js");
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("BRPT", 1210, 2e8)] }));
+  const calls = [];
+  await withFetch(withMarketStatistics("2026-10-16", calls), async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    // Monday morning, nothing read outside the hours kept: IPOT is not asked.
+    const monday = await marketForeign(env, null, null, null, null, new Date("2026-10-19T10:00:00+07:00"));
+    assert.equal(monday.data.market, null);
+    assert.ok(monday.warnings.includes("no market totals: ipot: a market summary read at 10:00 WIB on 2026-10-19, in a trading day's hours (08:58 to 19:00 WIB), cannot be dated, as it and the page that dates it can be on different sessions then (when they roll over has not been measured); no copy read outside those hours is cached, so IPOT was not asked"), monday.warnings.join("\n"));
+    assert.equal(calls.filter((u) => u.includes("statistic.php")).length, 0);
+    assert.ok(monday.data.net_sell.length > 0, "the stocks still answer");
+  });
+  // Totals dated another session than the scan's.
+  await withFetch(withMarketStatistics("2026-10-15"), async () => {
+    const env2 = memoryDb();
+    env2.kv.set("board", env.kv.get("board"));
+    await scanAll(env2, new Date("2026-10-17T03:00:00Z"));
+    const out = await marketForeign(env2, null, null, null, null, new Date("2026-10-17T10:05:00+07:00"));
+    assert.equal(out.data.market, null);
+    assert.ok(out.warnings.some((w) => w.startsWith("no market totals: ipot: the market summary read at 10:05 WIB on 2026-10-17 is dated 2026-10-15, yet the session of 2026-10-16 had ended then")), out.warnings.join("\n"));
+  });
+});

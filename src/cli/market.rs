@@ -5,11 +5,12 @@ use clap::Subcommand;
 
 use crate::error::Result;
 use crate::model::{
-    AstroPeriod, BrokerSort, BrokerSource, CalendarCategory, ForeignSort, NatalChoice, Symbol,
+    AstroPeriod, BrokerSort, BrokerSource, CalendarCategory, ForeignSort, ForeignSource,
+    NatalChoice, Symbol,
 };
 use crate::output::json::{
     SCHEMA_ASTRO, SCHEMA_CALENDAR, SCHEMA_HOLIDAYS, SCHEMA_INDICES, SCHEMA_MARKET,
-    SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MEMBERS,
+    SCHEMA_MARKET_BROKERS, SCHEMA_MARKET_FOREIGN, SCHEMA_MARKET_FOREIGN_VALUE, SCHEMA_MEMBERS,
 };
 use crate::output::table_exchange as tx;
 use crate::output::table_reports as reports;
@@ -50,9 +51,9 @@ pub enum MarketCmd {
         #[arg(long, short = 'd', value_name = "DATE")]
         date: Option<chrono::NaiveDate>,
     },
-    /// Foreign net buying and selling across every stock for one session (top foreign / top net).
+    /// Foreign net buying and selling for one session (top foreign / top net), in shares or in rupiah (--source ipot).
     #[command(
-        after_help = "Examples:\n  idx market foreign\n  idx market foreign --top 20 --date 2026-10-16\n  idx market foreign --sort shares\n  idx -o json market foreign | jq '.data.net_buy[0]'\n\nFrom idx.co.id's daily stock summary, latest session by default (weekends and holidays\nskipped). IDX publishes foreign trading in shares; lists are ranked by net shares × close\n(--sort value, a rupiah scale that is not the traded value) or by net shares."
+        after_help = "Examples:\n  idx market foreign\n  idx market foreign --top 20 --date 2026-10-16\n  idx market foreign --sort shares\n  idx market foreign --source ipot     # in rupiah: the 100 most traded stocks\n  idx -o json market foreign | jq '.data.net_buy[0]'\n\n--source idx (default): idx.co.id's daily stock summary, every stock, latest session by default\n(weekends and holidays skipped). IDX publishes foreign trading in shares; lists are ranked by net\nshares × close (--sort value, a rupiah scale that is not the traded value) or by net shares.\n\n--source ipot: Indo Premier, the latest session it has published broker summaries for, in its own\nshape (idx.market.foreign.value.v1): the 100 stocks most traded by value on the latest quotes, the\nbandar screen's scan, ranked by each one's foreign net in rupiah across all boards from its broker\nsummary, not every stock; with the market's value traded and foreign buying, selling and net from\nIPOT's market statistics. Those carry no date of their own and are dated like IPOT's broker ranking:\nread on a trading day from 08:58 to 19:00 WIB they cannot be, and the totals are left out with a\nwarning. A --date before that session is a usage error, a later one not found; --sort shares is\nidx.co.id's. IPOT abbreviates figures of a million and more (rounded: true)."
     )]
     Foreign {
         /// Trading day, YYYY-MM-DD. Default: the latest session.
@@ -64,6 +65,9 @@ pub enum MarketCmd {
         /// Ranking figure.
         #[arg(long, value_enum, default_value_t = ForeignSort::Value)]
         sort: ForeignSort,
+        /// Where the figures come from.
+        #[arg(long, value_enum, default_value_t = ForeignSource::Idx)]
+        source: ForeignSource,
     },
     /// Exchange members ranked by the day's value, volume or frequency (top brokers).
     #[command(
@@ -197,12 +201,39 @@ pub async fn run(ctx: &Context, cmd: MarketCmd) -> Result<()> {
             let result = service::indices(&ctx.fetcher, date, &codes, service::today_wib()).await?;
             emit(ctx, SCHEMA_INDICES, result, |d| tx::indices(d, ctx.color))
         }
-        MarketCmd::Foreign { date, top, sort } => {
+        MarketCmd::Foreign {
+            date,
+            top,
+            sort,
+            source: ForeignSource::Idx,
+        } => {
             let result =
                 service::market_foreign(&ctx.fetcher, date, top, sort, service::today_wib())
                     .await?;
             emit(ctx, SCHEMA_MARKET_FOREIGN, result, |d| {
                 tx::market_foreign(d, ctx.color)
+            })
+        }
+        MarketCmd::Foreign {
+            date,
+            top,
+            sort,
+            source: ForeignSource::Ipot,
+        } => {
+            let mut list = universe::load(None)?;
+            universe::extend_from_ownership(&mut list, &ctx.settings.ownership_db);
+            let result = service::market_foreign_ipot(
+                ctx.provider.as_ref(),
+                &ctx.fetcher,
+                &list,
+                date,
+                top,
+                sort,
+                chrono::Utc::now(),
+            )
+            .await?;
+            emit(ctx, SCHEMA_MARKET_FOREIGN_VALUE, result, |d| {
+                tx::market_foreign_value(d, ctx.color)
             })
         }
         MarketCmd::Brokers {

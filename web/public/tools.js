@@ -34,7 +34,7 @@ export const TOOLS = [
   { tool: "idx_corporate_actions", cli: "idx stocks actions BBCA", web: "actions BBCA", what: "dividends, splits, bonus, rights, RUPS, warrants" },
   { tool: "idx_foreign", cli: "idx stocks foreign BBCA", web: "foreign BBCA", what: "foreign buying and selling per session (the web reads IPOT, in rupiah)" },
   { tool: "idx_instruments", cli: "idx stocks list --search bank", web: "list --search bank", what: "listed stocks (the web lists codes and names)" },
-  { tool: "idx_market_foreign", cli: "idx market foreign", web: null, what: "top foreign net buying and selling" },
+  { tool: "idx_market_foreign", cli: "idx market foreign", web: "market foreign", what: "top foreign net buying and selling (the web reads IPOT: the 100 most traded stocks, in rupiah)" },
   { tool: "idx_market_brokers", cli: "idx market brokers", web: "brokers", what: "exchange members ranked by the day's value (the web reads IPOT's latest session)" },
   { tool: "idx_indices", cli: "idx market indices", web: null, what: "every IDX index for one session" },
   { tool: "idx_calendar", cli: "idx market calendar", web: null, what: "dividend and rights dates, RUPS, public exposes" },
@@ -71,7 +71,6 @@ const STOCKBIT_REASON_ID = "Alat Stockbit membawa sesi akun Anda sendiri (diambi
 
 /** What each CLI-and-MCP-only tool gives, as the Indonesian landing page says it. */
 const WHAT_ID = {
-  idx_market_foreign: "beli dan jual bersih asing terbesar",
   idx_indices: "semua indeks bursa untuk satu sesi",
   idx_calendar: "tanggal dividen dan rights, RUPS, paparan publik",
   idx_ownership_composition: "saham lokal dan asing menurut jenis investor (arsip bulanan KSEI)",

@@ -903,19 +903,27 @@ export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourc
   return envelope("idx.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
-// ---- market brokers (IPOT) ---------------------------------------------
+// ---- IPOT's undated pages of its latest session -----------------------------
 
-/**
- * D1 rows: IPOT's ranking and the page that dates it, kept as one pair (cache
- * table), and the ranking last accepted, by its figures, with its date (kv),
- * as ipot::top_brokers keeps them in the CLI's cache.
- */
-const RANKING_KEY = "ipot:ma-topbroker";
-const ACCEPTED_KEY = "ipot:ma-topbroker:accepted";
 const network = (m) => new ApiError("network", m, 502, 3);
 
-/** Both pages read now, at once; each counts as read when it came, `at` (the call's clock) moved on by the wall time since `started`. */
-async function readRankingPair(at, started) {
+/**
+ * An undated page of IPOT's latest session as latestPage reads it through
+ * D1: its pair's row (cache table) and the record of the page last accepted,
+ * by its figures, with its date (kv), as the CLI's cache keeps them; where
+ * the page is read, and how its pair is made and dated.
+ */
+const RANKING_PAGE = {
+  key: "ipot:ma-topbroker", accepted: "ipot:ma-topbroker:accepted", url: ipot.TOP_BROKERS_ENDPOINT, what: "broker ranking",
+  kind: ipot.RANKING, pair: ipot.rankingPair, date: ipot.dateRanking,
+};
+const SUMMARY_PAGE = {
+  key: "ipot:ma-marketstatistic", accepted: "ipot:ma-marketstatistic:accepted", url: ipot.MARKET_STATISTIC_ENDPOINT, what: "market summary",
+  kind: ipot.MARKET_SUMMARY, pair: ipot.summaryPair, date: (pair, opts) => ipot.dateLatest(pair, ipot.MARKET_SUMMARY, opts),
+};
+
+/** Both pages of `page` read now, at once; each counts as read when it came, `at` (the call's clock) moved on by the wall time since `started`. */
+async function readPagePair(page, at, started) {
   const read = async (url, what, subject) => {
     try {
       const html = await ipot.fetchPage(url);
@@ -925,57 +933,64 @@ async function readRankingPair(at, started) {
       throw Object.assign(provider(`ipot: ${cause}`), { failure: cause });
     }
   };
-  const [ranked, dated] = await Promise.allSettled([read(ipot.TOP_BROKERS_ENDPOINT, "broker ranking", "the market"), read(ipot.SESSION_ENDPOINT, "session date", "BBCA")]);
-  for (const r of [ranked, dated]) if (r.status === "rejected") throw r.reason;
-  return ipot.rankingPair(ranked.value.html, dated.value.html, ranked.value.at, dated.value.at);
+  const [undated, dated] = await Promise.allSettled([read(page.url, page.what, "the market"), read(ipot.SESSION_ENDPOINT, "session date", "BBCA")]);
+  for (const r of [undated, dated]) if (r.status === "rejected") throw r.reason;
+  return page.pair(undated.value.html, dated.value.html, undated.value.at, dated.value.at);
 }
 
 /**
- * IPOT's ranking of its latest session with its date, like ipot::top_brokers,
- * through D1: a pair read together is good for ipot.topBrokersTtl(now) (five
- * minutes on a trading day from 08:30 to 19:00 WIB, up to six hours
- * otherwise, never a copy read before 19:00 that day). The pair is replaced
- * only when both pages were read again, so the copy that stands in for a
- * failed read is a pair read together (the CLI keeps each page apart and
- * refuses a fresh ranking beside an old date page). In a trading day's hours
- * (08:58 to 19:00 WIB) IPOT is not asked unless a pair read outside them is
- * kept, which can answer: fresh, or in place of a read that fails.
+ * The undated `page` of IPOT's latest session with its date, like
+ * ipot::latest_session, through D1: a pair read together is good for
+ * ipot.topBrokersTtl(now) (five minutes on a trading day from 08:30 to 19:00
+ * WIB, up to six hours otherwise, never a copy read before 19:00 that day).
+ * The pair is replaced only when both pages were read again, so the copy
+ * that stands in for a failed read is a pair read together (the CLI keeps
+ * each page apart and refuses a fresh page beside an old date page). In a
+ * trading day's hours (08:58 to 19:00 WIB) IPOT is not asked unless a pair
+ * read outside them is kept, which can answer: fresh, or in place of a read
+ * that fails. Returns what page.date made of the pair, the pair, whether it
+ * came from D1, and the failure a copy stood in for.
  */
-export async function topBrokers(env, now = new Date()) {
-  const started = Date.now(), at = Number(now);
-  const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(RANKING_KEY).first();
+async function latestPage(env, page, now) {
+  const started = Date.now(), at = Number(now), kind = page.kind;
+  const row = await env.DB.prepare("SELECT v, fetched_at, expires_at FROM cache WHERE k = ?1").bind(page.key).first();
   const copy = row ? JSON.parse(row.v) : null;
-  if (ipot.undatedAt(at) && !ipot.answersInHours(copy)) throw provider(`ipot: ${ipot.notAsked(at)}`);
+  if (ipot.undatedAt(at) && !ipot.answersInHours(copy, kind)) throw provider(`ipot: ${ipot.notAsked(at, kind)}`);
   const ttl = ipot.topBrokersTtl(at);
+  const readOn = (p) => Math.min(kind.at(p), p.dated_at);
   let pair = copy, cached = true, failure = null;
-  const fresh = copy && ipot.readTogether(copy) && at - Math.min(copy.ranked_at, copy.dated_at) < ttl * 1000;
+  const fresh = copy && ipot.readTogether(copy, kind) && at - readOn(copy) < ttl * 1000;
   if (!fresh) {
     try {
-      pair = await readRankingPair(at, started);
+      pair = await readPagePair(page, at, started);
       cached = false;
-      const fetched = Math.floor(Math.min(pair.ranked_at, pair.dated_at) / 1000);
+      const fetched = Math.floor(readOn(pair) / 1000);
       await env.DB.prepare("INSERT OR REPLACE INTO cache (k, v, expires_at, fetched_at) VALUES (?1, ?2, ?3, ?4)")
-        .bind(RANKING_KEY, JSON.stringify(pair), fetched + Math.ceil(ttl), fetched).run();
+        .bind(page.key, JSON.stringify(pair), fetched + Math.ceil(ttl), fetched).run();
     } catch (e) {
       if (!copy || !e.failure) throw e;
       failure = redactUrls(e.failure);
     }
   }
-  const seen = (await kvGet(env, ACCEPTED_KEY))?.value;
+  const seen = (await kvGet(env, page.accepted))?.value;
   const accepted = seen && at - seen.at < ipot.ACCEPTED_TTL_MS ? seen : null;
   let d;
   try {
-    d = await ipot.dateRanking(pair, { cached, failure, now: at, accepted });
+    d = await page.date(pair, { cached, failure, now: at, accepted });
   } catch (e) {
     if (e instanceof ipot.RankingError) throw e.code === "network" ? network(e.message) : provider(e.message);
     throw e;
   }
-  if (d.accept) await kvPut(env, ACCEPTED_KEY, { ...d.accept, at });
-  return {
-    date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure,
-    fetched_at: new Date(Math.min(pair.ranked_at, pair.dated_at)),
-    warnings: failure ? [`live fetch failed (${failure}); showing cached copy`, ...d.warnings] : d.warnings,
-  };
+  if (d.accept) await kvPut(env, page.accepted, { ...d.accept, at });
+  return { d, cached, failure, fetched_at: new Date(readOn(pair)), notes: failure ? [`live fetch failed (${failure}); showing cached copy`] : [] };
+}
+
+// ---- market brokers (IPOT) ---------------------------------------------
+
+/** IPOT's ranking of its latest session with its date, like ipot::top_brokers (latestPage). */
+export async function topBrokers(env, now = new Date()) {
+  const { d, cached, failure, fetched_at, notes } = await latestPage(env, RANKING_PAGE, now);
+  return { date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure, fetched_at, warnings: [...notes, ...d.warnings] };
 }
 
 const BROKER_SORTS = ["value", "volume", "frequency"];
@@ -1322,6 +1337,86 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new 
     bought: limit > 0 ? bought.slice(0, limit) : bought, sold: limit > 0 ? sold.slice(0, limit) : sold,
   };
   return envelope("idx.bandar.broker.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings });
+}
+
+// ---- market foreign (bandar scan + IPOT's market statistics) -------------
+
+/** IPOT's market statistics of its latest session with their date, like ipot::market_summary (latestPage). */
+export async function marketSummary(env, now = new Date()) {
+  const { d, cached, failure, fetched_at, notes } = await latestPage(env, SUMMARY_PAGE, now);
+  return { date: d.date, summary: d.page, cached, stale: !!failure, fetched_at, warnings: notes };
+}
+
+/** Rows `market foreign` shows per side by default, like the CLI's --top. */
+const MARKET_FOREIGN_TOP = 10;
+
+/** One scanned stock as service::foreign_value_row gives it: the 1d row's value traded and foreign net, its price and move. */
+function foreignValueRow(r) {
+  const s = r.summary, value = s.total_value ?? null, net = s.foreign_net_value ?? null;
+  return {
+    symbol: r.symbol, name: s.name ?? null, price: r.price ?? null, change_pct: r.chg ?? null, value,
+    foreign_net_value: net, foreign_net_pct: net != null && value > 0 ? (net / value) * 100 : null,
+  };
+}
+
+/**
+ * /api/market/foreign: `idx market foreign --source ipot`
+ * (idx.market.foreign.value.v1) over the bandar scan's 1d rows in D1 (the
+ * session's 100 most traded stocks, src/bandar-scan.js), ranked by each one's
+ * foreign net in rupiah from its broker summary, with the market's totals
+ * from IPOT's market statistics when they can be dated to that session
+ * (marketSummary), else null with a warning. The scan's own notes say which
+ * session is shown and why. idx.co.id refuses this host, so `idx` is not
+ * offered, nor its sort by net shares.
+ */
+export async function marketForeign(env, dateRaw, topRaw, sortRaw, sourceRaw, now = new Date()) {
+  const source = String(sourceRaw ?? "").trim().toLowerCase() || "ipot";
+  if (source === "idx") throw usage("idx.co.id refuses requests from this site's host, so the web terminal reads IPOT (source ipot): the foreign net in rupiah of the session's 100 most traded stocks; the CLI and MCP also read idx.co.id's, every stock in shares");
+  if (source !== "ipot") throw usage(`invalid source "${sourceRaw}"; the web terminal reads ipot`);
+  const sort = String(sortRaw ?? "").trim().toLowerCase() || "value";
+  if (sort === "shares") throw usage("source ipot ranks the foreign net in rupiah; sort shares is idx.co.id's net shares (source idx)");
+  if (sort !== "value") throw usage(`invalid sort "${sortRaw}"; use value or shares`);
+  const top = topRaw == null || topRaw === "" ? MARKET_FOREIGN_TOP : Number(topRaw);
+  if (!Number.isInteger(top) || top < 0) throw usage(`invalid top "${topRaw}"; give a number of rows per side, 0 for all`);
+  const date = isoDate(dateRaw, "date");
+  if (date) {
+    if (date > hol.wibDate(now)) throw usage(`${date} is in the future`);
+    if (!hol.isTradingDay(date)) throw notFound(`no trading data: ${hol.closedReason(date)}`);
+  }
+  const scan = await scanRows(env, "1d");
+  if (!scan.session) throw noScanYet(scan.state, now);
+  const end = scan.session;
+  if (date && date < end) throw usage(`source ipot shows the latest session IPOT has published, ${end}, not ${date}; source idx (idx.co.id) has the others`);
+  if (date && date > end) throw notFound(`the bandar scan has not read ${date} yet: it shows ${end}`);
+  const notes = scanNotes(scan.state, end, scan.rows.map((r) => r.symbol), now);
+  const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
+  let rounded = traded.some((r) => r.summary.rounded);
+  const rows = traded.map(foreignValueRow);
+  const net = (r) => r.foreign_net_value ?? 0;
+  const buy = rows.filter((r) => net(r) > 0).sort((a, b) => net(b) - net(a));
+  const sell = rows.filter((r) => net(r) < 0).sort((a, b) => net(a) - net(b));
+  const warnings = [...notes.warnings];
+  let market = null, cachedAll = true, stale = false, fetched = new Date(notes.fetched_at);
+  try {
+    const m = await marketSummary(env, now);
+    if (m.date === end) {
+      const s = m.summary;
+      market = { value: s.value, foreign_buy_value: s.foreign_buy_value, foreign_sell_value: s.foreign_sell_value, foreign_net_value: s.foreign_net_value };
+      rounded ||= s.rounded;
+      cachedAll = m.cached;
+      stale = m.stale;
+      if (m.fetched_at < fetched) fetched = m.fetched_at;
+      warnings.push(...m.warnings);
+    } else warnings.push(`no market totals: IPOT's market summary is for ${m.date}, not ${end}`);
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    warnings.push(`no market totals: ${e.message}`);
+  }
+  const data = {
+    date: end, scanned: notes.scanned, checked: traded.length, market,
+    net_buy: top > 0 ? buy.slice(0, top) : buy, net_sell: top > 0 ? sell.slice(0, top) : sell, rounded,
+  };
+  return envelope("idx.market.foreign.value.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
 // ---- directories (bundled) ---------------------------------------------
@@ -1706,6 +1801,7 @@ export async function route(env, url) {
     case "/bandar/screen": return bandarScreen(env, q.get("preset"), q.get("filter"), q.get("period"), q.get("top"), q.get("sort"), q.get("asc"), q.get("limit"));
     case "/bandar/status": return envelope("idx.bandar.scan.v1", await scanStatus(env), { provider: ipot.NAME, cached: true });
     case "/bandar/broker": return bandarBroker(env, q.get("code"), q.get("period"), q.get("limit"));
+    case "/market/foreign": return marketForeign(env, q.get("date"), q.get("top"), q.get("sort"), q.get("source"));
     case "/actions": return actions(env, q.get("symbol"), q.get("since"));
     case "/holidays": return holidays(q.get("year"), q.get("all"), q.get("upcoming"));
     case "/astro": return astro(env, q.get("date"), q.get("days"), q.get("natal"), q.get("backtest"), q.get("period"));

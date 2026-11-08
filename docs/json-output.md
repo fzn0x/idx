@@ -76,7 +76,7 @@ already documents.
 | `idx.stockbit.actions.v1` | `data.actions[]` |
 | `idx.stockbit.movements.v1` | `data.movements[]` |
 | `idx.profile.v1`, `idx.fundamentals.v1`, `idx.growth.v1`, `idx.valuation.v1`, `idx.risk.v1`, `idx.technical.v1`, `idx.brief.v1`, `idx.sentiment.v1`, `idx.ownership.snapshot.v1` | `data` on one line (a single record) |
-| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1`, `idx.ownership.graph.v1`, `idx.ownership.composition.v1`, `idx.ownership.snapshot-sync.v1`, `idx.ownership.status.v1`, `idx.astro.v1` | `data` on one line (several peer lists kept together) |
+| `idx.earnings.v1`, `idx.actions.v1`, `idx.market.v1`, `idx.market.foreign.v1`, `idx.market.foreign.value.v1`, `idx.bandar.broker.v1`, `idx.orderbook.v1`, `idx.ownership.graph.v1`, `idx.ownership.composition.v1`, `idx.ownership.snapshot-sync.v1`, `idx.ownership.status.v1`, `idx.astro.v1` | `data` on one line (several peer lists kept together) |
 
 ```sh
 idx -o jsonl stocks history BBCA --period 1mo | jq -c '{time, close}'
@@ -596,6 +596,40 @@ An object for one session: `date`, `stocks`, the market sums `foreign_buy`,
 `sort` (`value` | `shares`), and `net_buy[]` / `net_sell[]` (largest first):
 `symbol`, `name`, `close`, `change`, `change_pct`, `volume`, `value`,
 `foreign_buy`, `foreign_sell`, `foreign_net`, `foreign_net_value_at_close`.
+
+## `idx.market.foreign.value.v1` (`market foreign --source ipot`)
+
+The same question from Indo Premier, in rupiah, in a shape of its own: never
+mixed with `idx.market.foreign.v1`, whose figures are idx.co.id's shares.
+An object for one session: `date`, `scanned` (the stocks read: the 100 most
+traded by value on the latest quotes, the bandar screen's scan, not every
+stock), `checked` (those with a broker summary that had trades), `market`,
+`net_buy[]` / `net_sell[]` (largest first) and `rounded`. Each row:
+`symbol`, `name`, `price`, `change_pct` (from the previous session's close),
+`value` (traded on all boards, IDR), `foreign_net_value` (the broker
+summary's `F. NVal`, all boards, as published) and `foreign_net_pct` (of
+`value`, computed). `market` is IPOT's market statistics for the session:
+`value` (its `TOTAL`: regular, negotiated and cash), `foreign_buy_value`,
+`foreign_sell_value` and `foreign_net_value`, as published; IPOT does not say
+which boards its foreign figures cover. `provider` is `ipot`.
+
+The session is the latest one IPOT has published broker summaries for (the
+bandar screen's `1d`); a `--date` before it is a usage error and a later one
+`not_found`, and `--sort shares` (idx.co.id's net shares) a usage error. The
+market statistics page carries no date and is dated as IPOT's broker ranking
+is (see `idx.market.brokers.v1` below), with its own copy of BBCA's
+statistics page: when it cannot be dated, or is another session's than the
+stocks', `market` is `null` and a warning says why, so on a trading day from
+08:58 to 19:00 WIB it is `null` unless a copy read outside those hours can
+answer. Figures of a million and more are abbreviated, to one decimal on
+the broker summaries and two on the market statistics (`rounded: true`).
+
+The web terminal's `market foreign` (`/api/market/foreign`) answers with
+this shape from the nightly bandar scan's `1d` rows in D1 (the session's
+100 most traded stocks) and IPOT's market statistics, read and dated as its
+broker ranking is there. idx.co.id refuses the site's Cloudflare Worker, so
+`source=idx` and `sort=shares` are `usage` errors; the scan's warnings say
+which session is shown when it is not the latest.
 
 ## `idx.market.brokers.v1` (`market brokers`)
 
@@ -1361,7 +1395,7 @@ where one helps:
 | --- | --- | --- |
 | 1 | `internal`, `io` | unexpected failure |
 | 2 | `usage` | bad flags or symbol |
-| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused the request with a challenge or a block page. For idx.co.id's data a challenged request is retried for 30 s first (`market brokers` under `auto`, where IPOT could answer, asks idx.co.id once and lets IPOT stand in, and retries only if IPOT cannot), and a cached copy, when there is one, is served marked stale instead of the error. A challenge usually passes within a minute: retry then, and from another network if it keeps refusing. A block page can last longer: retry later, or from another network if it persists. Data centres, VPNs and CI runners are refused more often. The message names any other source for the same question (`--source ipot` for a stock's foreign flow, `idx bandar screen --period 1d --sort fnet` for the latest session's foreign net per stock, `market brokers --source ipot` for the member ranking of IPOT's latest session when that is the session asked for); for the ownership register, the GitHub mirror |
+| 3 | `network`, `provider`, `blocked` | network failure or the source returned an error; `blocked`: the source's bot protection (Cloudflare) refused the request with a challenge or a block page. For idx.co.id's data a challenged request is retried for 30 s first (`market brokers` under `auto`, where IPOT could answer, asks idx.co.id once and lets IPOT stand in, and retries only if IPOT cannot), and a cached copy, when there is one, is served marked stale instead of the error. A challenge usually passes within a minute: retry then, and from another network if it keeps refusing. A block page can last longer: retry later, or from another network if it persists. Data centres, VPNs and CI runners are refused more often. The message names any other source for the same question (`--source ipot` for a stock's foreign flow and for the latest session's foreign net of the most traded stocks, `market brokers --source ipot` for the member ranking of IPOT's latest session when that is the session asked for); for the ownership register, the GitHub mirror |
 | 4 | `not_found` | symbol or record does not exist |
 | 5 | `offline_miss` | `--offline` and nothing cached |
 | 6 | `config`, `unsupported` | bad config file or env value; or the selected provider cannot serve this command (`--provider auto` can) |

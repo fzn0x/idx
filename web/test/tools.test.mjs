@@ -28,7 +28,7 @@ test("the tool list matches docs/mcp.md", () => {
 });
 
 test("only the idx.co.id, KSEI composition, local-database, Stockbit and unchecked-source tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_market_foreign", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
   // A tool with its own reason gives it; the rest share CLI_ONLY_REASON, the Stockbit one or the unchecked-source one.
   for (const t of TOOLS.filter((x) => x.why)) assert.ok(!t.web && t.why.length > 40, t.tool);
   assert.match(byName("idx_ownership_snapshot").why, /own machine/);
@@ -37,6 +37,8 @@ test("only the idx.co.id, KSEI composition, local-database, Stockbit and uncheck
   assert.equal(cliOnlyReason(byName("idx_calendar")), CLI_ONLY_REASON);
   // Top brokers run here from IPOT's ranking, which this host can read.
   assert.equal(byName("idx_market_brokers").web, "brokers");
+  // So does the market's foreign flow, from IPOT in rupiah for the most traded stocks.
+  assert.equal(byName("idx_market_foreign").web, "market foreign");
   assert.match(cliOnlyReason(byName("idx_orderbook")), /^The Stockbit tools carry your own account session/);
   assert.match(cliOnlyReason(byName("idx_stockbit_login")), /^The Stockbit tools/);
   assert.match(cliOnlyReason(byName("idx_stockbit_movements")), /^The Stockbit tools/);

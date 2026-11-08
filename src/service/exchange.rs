@@ -19,8 +19,9 @@ use crate::model::{
 };
 use crate::model::{CorporateActions, Symbol};
 use crate::model::{
-    ForeignDay, ForeignFlow, ForeignRow, ForeignSort, ForeignTotals, ForeignValueDay,
-    ForeignValueFlow, ForeignValueTotals, MarketForeign,
+    ForeignDay, ForeignFlow, ForeignMarketValue, ForeignRow, ForeignSort, ForeignTotals,
+    ForeignValueDay, ForeignValueFlow, ForeignValueRow, ForeignValueTotals, MarketForeign,
+    MarketForeignValue,
 };
 use crate::providers::idx::{self, CalendarRange, StockDay};
 use crate::providers::ipot;
@@ -486,10 +487,10 @@ pub const IPOT_SOURCE_ADVICE: crate::error::Advice = crate::error::Advice {
 };
 
 /// When idx.co.id refuses the market's foreign flow: the latest session's
-/// foreign net per stock from Indo Premier's broker summaries.
-pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
-    cli: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx bandar screen --period 1d --sort fnet",
-    mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
+/// foreign net in rupiah of the most traded stocks, from Indo Premier.
+pub const MARKET_FOREIGN_IPOT_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks",
+    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's foreign net in rupiah of the 100 most traded stocks",
 };
 
 /// When idx.co.id refuses the member ranking of a session IPOT could hold:
@@ -883,6 +884,8 @@ fn foreign_row(r: &StockDay) -> Option<ForeignRow> {
 
 /// Foreign net buying and selling across every stock for one session
 /// (default: the latest published), the `top` largest each way (0 = all).
+/// When idx.co.id refuses, the error names `--source ipot` for the latest
+/// session, which is the one IPOT holds.
 pub async fn market_foreign(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -890,9 +893,17 @@ pub async fn market_foreign(
     sort: ForeignSort,
     today: NaiveDate,
 ) -> Result<Sourced<MarketForeign>> {
+    // IPOT holds its latest session only (market_foreign_ipot).
+    let ipot_holds = date.is_none_or(|d| d == holidays::last_trading_day(today));
     let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today))
         .await
-        .map_err(|e| with_alternative(e, BANDAR_FNET_ADVICE))?;
+        .map_err(|e| {
+            if ipot_holds {
+                with_alternative(e, MARKET_FOREIGN_IPOT_ADVICE)
+            } else {
+                e
+            }
+        })?;
     let rows: Vec<ForeignRow> = std::mem::take(&mut s.data)
         .iter()
         .filter_map(foreign_row)
@@ -938,6 +949,188 @@ pub async fn market_foreign(
         net_sell: sell,
     };
     Ok(s.map(|_| out))
+}
+
+/// One stock's row for [`market_foreign_ipot`] from its broker summary of
+/// the session: the value traded and the foreign net as published, the
+/// price and move from its quote when that is the session's.
+fn foreign_value_row(
+    s: &crate::model::BrokerSummary,
+    quote: Option<&crate::model::Quote>,
+    session: NaiveDate,
+) -> ForeignValueRow {
+    let live = quote.filter(|q| q.market_time.is_some_and(|t| t.date_naive() == session));
+    let price = live.and_then(|q| q.price);
+    ForeignValueRow {
+        symbol: s.symbol.clone(),
+        name: s.name.clone(),
+        price,
+        change_pct: crate::analysis::bandar::change_pct(live.and_then(|q| q.previous_close), price),
+        value: s.total_value,
+        foreign_net_value: s.foreign_net_value,
+        foreign_net_pct: match (s.foreign_net_value, s.total_value) {
+            (Some(n), Some(v)) if v > 0.0 => Some(n / v * 100.0),
+            _ => None,
+        },
+    }
+}
+
+/// Foreign net buying and selling in rupiah for the latest session IPOT
+/// has published, among the most traded stocks: the bandar screen's scan
+/// ([`super::BANDAR_SCAN_DEFAULT`] stocks by value on the latest quotes, one
+/// broker summary each, cached with the screen's), ranked by each one's
+/// foreign net (the summary's `F. NVal`, all boards), the `top` largest each
+/// way (0 = all). The market's totals come from IPOT's market statistics
+/// ([`ipot::market_summary`], dated as its broker ranking is); when they
+/// cannot be dated, or are another session's, they are `null` and a warning
+/// says why. A stock without a quote of the session gets its close and move
+/// from its daily candles (one history request per row shown).
+///
+/// IPOT holds no session but its latest here, so a `date` before the one
+/// found is a usage error and a later one not found; one in the future, a
+/// day without a session, and `sort` shares (idx.co.id's net shares) are
+/// refused without a request.
+pub async fn market_foreign_ipot(
+    p: &dyn crate::providers::Provider,
+    fetcher: &Arc<Fetcher>,
+    universe: &[Issuer],
+    date: Option<NaiveDate>,
+    top: usize,
+    sort: ForeignSort,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Sourced<MarketForeignValue>> {
+    let entered = chrono::Utc::now();
+    let today = now.with_timezone(&crate::model::wib()).date_naive();
+    if sort == ForeignSort::Shares {
+        return Err(IdxError::Usage(
+            "source ipot ranks the foreign net in rupiah; sort shares is idx.co.id's net shares (source idx)".into(),
+        ));
+    }
+    if let Some(d) = date {
+        if d > today {
+            return Err(IdxError::Usage(format!("{d} is in the future")));
+        }
+        if !holidays::is_trading_day(d) {
+            return Err(IdxError::NotFound(format!(
+                "no trading data: {}",
+                closed_reason(d)
+            )));
+        }
+    }
+    let (candidates, mut out) =
+        super::scan_candidates(p, universe, &[], super::BANDAR_SCAN_DEFAULT).await?;
+    let quotes = std::mem::take(&mut out.data);
+    out.warnings.retain(|w| !w.contains("returned no quote"));
+    let end = super::scan_end(fetcher, &candidates, today).await?;
+    match date {
+        Some(d) if d < end => {
+            return Err(IdxError::Usage(format!(
+                "source ipot shows the latest session IPOT has published, {end}, not {d}; source idx (idx.co.id) has the others"
+            )))
+        }
+        Some(d) if d > end => {
+            return Err(IdxError::NotFound(format!(
+                "IPOT has not published the broker summaries of {d} yet: its latest session with them is {end}"
+            )))
+        }
+        _ => {}
+    }
+    let fetched = super::scan_summaries(fetcher, &candidates, end, end, today, true).await;
+    let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
+    let (mut failed, mut checked, mut rounded) = (0usize, 0usize, false);
+    let mut rows: Vec<ForeignValueRow> = Vec::new();
+    for (sym, r) in fetched {
+        match r {
+            Ok(mut s) if !s.data.is_empty() => {
+                out.absorb(&s);
+                checked += 1;
+                rounded |= s.data.rounded;
+                s.data.name = universe
+                    .iter()
+                    .find(|i| i.symbol == sym)
+                    .and_then(|i| i.name.clone())
+                    .or_else(|| quote_of(&sym).and_then(|x| x.name.clone()));
+                rows.push(foreign_value_row(&s.data, quote_of(&sym), end));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(symbol = %sym, error = %e, "no broker summary");
+                failed += 1;
+            }
+        }
+    }
+    let net = |r: &ForeignValueRow| r.foreign_net_value.unwrap_or(0.0);
+    let mut buy: Vec<ForeignValueRow> = rows.iter().filter(|r| net(r) > 0.0).cloned().collect();
+    buy.sort_by(|a, b| {
+        net(b)
+            .partial_cmp(&net(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut sell: Vec<ForeignValueRow> = rows.iter().filter(|r| net(r) < 0.0).cloned().collect();
+    sell.sort_by(|a, b| {
+        net(a)
+            .partial_cmp(&net(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if top > 0 {
+        buy.truncate(top);
+        sell.truncate(top);
+    }
+    // The close and move of a row shown whose quote is not the session's.
+    for r in buy.iter_mut().chain(sell.iter_mut()) {
+        if r.change_pct.is_some() {
+            continue;
+        }
+        match super::price_move(p, &r.symbol, end, end, quote_of(&r.symbol), today).await {
+            Ok((price, chg)) => {
+                r.price = price.or(r.price);
+                r.change_pct = chg;
+            }
+            Err(e) => tracing::debug!(symbol = %r.symbol, error = %e, "no price move"),
+        }
+    }
+    if failed > 0 {
+        out.warnings.push(format!(
+            "{failed} of {} scanned tickers had no broker summary",
+            candidates.len()
+        ));
+    }
+    // IPOT is asked now, after the scan: its pages are judged by this clock.
+    let asked = now + (chrono::Utc::now() - entered);
+    let market = match ipot::market_summary(fetcher, asked).await {
+        Ok(m) if m.data.date == end => {
+            out.absorb(&m);
+            rounded |= m.data.rounded;
+            Some(ForeignMarketValue {
+                value: m.data.value,
+                foreign_buy_value: m.data.foreign_buy_value,
+                foreign_sell_value: m.data.foreign_sell_value,
+                foreign_net_value: m.data.foreign_net_value,
+            })
+        }
+        Ok(m) => {
+            out.warnings.push(format!(
+                "no market totals: IPOT's market summary is for {}, not {end}",
+                m.data.date
+            ));
+            None
+        }
+        Err(e) => {
+            out.warnings.push(format!("no market totals: {e}"));
+            None
+        }
+    };
+    let mut out = out.map(|_| MarketForeignValue {
+        date: end,
+        scanned: candidates.len(),
+        checked,
+        market,
+        net_buy: buy,
+        net_sell: sell,
+        rounded,
+    });
+    out.provider = ipot::NAME;
+    Ok(out)
 }
 
 /// The ranking of one session's `rows`: totals over all of them, each
@@ -1843,16 +2036,28 @@ mod tests {
             ),
             "{err}"
         );
-        // The market's foreign flow: the bandar screen's foreign net.
+        // The market's foreign flow: IPOT's, in rupiah, for the most traded.
         let err = market_foreign(&f, None, 10, ForeignSort::Value, d(2026, 10, 16))
             .await
             .unwrap_err();
         assert_eq!(err.code(), "blocked");
         assert!(
             err.to_string()
-                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+                .ends_with("; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{err}"
         );
+        // IPOT holds its latest session only: an earlier one gets no advice.
+        let err = market_foreign(
+            &f,
+            Some(d(2026, 10, 14)),
+            10,
+            ForeignSort::Value,
+            d(2026, 10, 16),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(!err.to_string().contains("--source ipot"), "{err}");
     }
 
     #[tokio::test]
@@ -1909,7 +2114,7 @@ mod tests {
         assert_eq!(err.code(), "blocked");
         assert!(
             err.to_string()
-                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+                .ends_with("; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{err}"
         );
     }
@@ -3455,5 +3660,307 @@ mod tests {
         let fr = |x: &BrokerDayRow| x.frequency.unwrap();
         assert!(all.data.brokers.windows(2).all(|w| fr(&w[0]) >= fr(&w[1])));
         assert_eq!(all.data.brokers.last().unwrap().rank, 88);
+    }
+}
+
+#[cfg(test)]
+mod foreign_ipot_tests {
+    use super::*;
+    use crate::cache::Cache;
+    use crate::http::{CacheMode, FixtureBackend};
+    use crate::model::{Candle, History, Interval, Period, Quote};
+    use crate::providers::Provider;
+    use async_trait::async_trait;
+    use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+
+    const BBCA: &str = include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261016.html");
+    const BRPT: &str = include_str!("../../tests/fixtures/ipot/brokersummary_brpt_20261016.html");
+    const TLKM: &str = include_str!("../../tests/fixtures/ipot/brokersummary_tlkm_20261016.html");
+    const SUMMARY: &str = include_str!("../../tests/fixtures/ipot/marketstatistic_20261106.html");
+    const STATISTIC: &str = include_str!("../../tests/fixtures/ipot/statistic_bbca_20261106.html");
+
+    fn d(m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, m, day).unwrap()
+    }
+
+    fn wib(day: NaiveDate, h: u32, mi: u32) -> DateTime<FixedOffset> {
+        crate::model::wib()
+            .from_local_datetime(&day.and_hms_opt(h, mi, 0).unwrap())
+            .unwrap()
+    }
+
+    fn at(day: NaiveDate, h: u32, mi: u32) -> DateTime<Utc> {
+        wib(day, h, mi).with_timezone(&Utc)
+    }
+
+    /// Quotes of Friday 16 Oct's close, TLKM's undated (its move comes from
+    /// the candles); daily closes to the 15th.
+    struct Board;
+
+    #[async_trait]
+    impl Provider for Board {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+        async fn quotes(&self, syms: &[Symbol]) -> Result<Sourced<Vec<Quote>>> {
+            let list = syms
+                .iter()
+                .map(|s| {
+                    let mut q = Quote::empty(s.clone(), "fake");
+                    q.price = Some(5_200.0);
+                    q.previous_close = Some(5_125.0);
+                    q.volume = Some(1_000_000);
+                    if s.as_str() != "TLKM" {
+                        q.market_time = Some(wib(d(10, 16), 16, 14));
+                    }
+                    q
+                })
+                .collect();
+            Ok(Sourced::fresh(list, "fake"))
+        }
+        async fn history(&self, s: &Symbol, p: Period, i: Interval) -> Result<Sourced<History>> {
+            let candles: Vec<Candle> = [
+                (d(10, 14), 3_000.0),
+                (d(10, 15), 3_100.0),
+                (d(10, 16), 3_131.0),
+            ]
+            .iter()
+            .map(|(day, c)| Candle {
+                time: wib(*day, 9, 0),
+                open: *c,
+                high: *c,
+                low: *c,
+                close: *c,
+                adj_close: None,
+                volume: 1,
+            })
+            .collect();
+            Ok(Sourced::fresh(
+                History {
+                    symbol: s.clone(),
+                    name: None,
+                    currency: None,
+                    period: p,
+                    interval: i,
+                    summary: History::summarise(&candles),
+                    candles,
+                },
+                "fake",
+            ))
+        }
+        async fn fundamentals(&self, _: &Symbol) -> Result<Sourced<crate::model::Fundamentals>> {
+            unimplemented!()
+        }
+    }
+
+    fn universe(codes: &[&str]) -> Vec<Issuer> {
+        codes
+            .iter()
+            .map(|c| Issuer {
+                symbol: Symbol::parse(c).unwrap(),
+                name: (*c == "BBCA").then(|| "Bank Central Asia Tbk.".to_string()),
+            })
+            .collect()
+    }
+
+    /// The session of 16 Oct for three stocks (ZZZZ fails), and IPOT's
+    /// market statistics with BBCA's statistics page naming `day`.
+    fn pages(day: &str) -> FixtureBackend {
+        FixtureBackend::new()
+            .route("code=BBCA&start=10/16/2026&end=10/16/2026", 200, BBCA)
+            .route("code=BRPT&start=10/16/2026&end=10/16/2026", 200, BRPT)
+            .route("code=TLKM&start=10/16/2026&end=10/16/2026", 200, TLKM)
+            .route("ma-marketstatistic.php", 200, SUMMARY)
+            .route(
+                "statistic.php?code=BBCA",
+                200,
+                &STATISTIC.replacen("2026-11-06", day, 2),
+            )
+    }
+
+    fn fetcher(be: FixtureBackend) -> (Arc<Fetcher>, Arc<FixtureBackend>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let be = Arc::new(be);
+        let f = Arc::new(Fetcher::new(
+            be.clone(),
+            Cache::new(dir.path()),
+            CacheMode::Normal,
+        ));
+        (f, be, dir)
+    }
+
+    #[tokio::test]
+    async fn the_most_traded_stocks_by_their_foreign_net_in_rupiah_with_the_market() {
+        let (f, _be, _d) = fetcher(pages("2026-10-16"));
+        let list = universe(&["BBCA", "BRPT", "TLKM", "ZZZZ"]);
+        let saturday = at(d(10, 17), 10, 0);
+        let s = market_foreign_ipot(&Board, &f, &list, None, 10, ForeignSort::Value, saturday)
+            .await
+            .unwrap();
+        assert_eq!(s.provider, "ipot");
+        let m = &s.data;
+        assert_eq!(m.date, d(10, 16));
+        assert_eq!((m.scanned, m.checked), (4, 3));
+        // BRPT bought 57.8 B net; BBCA sold 2.3 T, TLKM 90.2 B.
+        let buy: Vec<_> = m
+            .net_buy
+            .iter()
+            .map(|r| (r.symbol.as_str(), r.foreign_net_value))
+            .collect();
+        assert_eq!(buy, [("BRPT", Some(57_800_000_000.0))]);
+        let sell: Vec<_> = m.net_sell.iter().map(|r| r.symbol.as_str()).collect();
+        assert_eq!(sell, ["BBCA", "TLKM"]);
+        let bbca = &m.net_sell[0];
+        assert_eq!(bbca.name.as_deref(), Some("Bank Central Asia Tbk."));
+        assert_eq!(
+            (bbca.value, bbca.price),
+            (Some(6_600_000_000_000.0), Some(5_200.0))
+        );
+        let pct = bbca.foreign_net_pct.unwrap();
+        assert!((pct - -2.3 / 6.6 * 100.0).abs() < 1e-9, "{pct}");
+        assert!((bbca.change_pct.unwrap() - (5_200.0 / 5_125.0 - 1.0) * 100.0).abs() < 1e-9);
+        // TLKM's quote is not the session's: its close and move come from the candles.
+        let tlkm = &m.net_sell[1];
+        assert_eq!(tlkm.price, Some(3_131.0));
+        assert!(
+            (tlkm.change_pct.unwrap() - 1.0).abs() < 1e-9,
+            "{:?}",
+            tlkm.change_pct
+        );
+        let market = m.market.as_ref().unwrap();
+        assert_eq!(market.foreign_net_value, Some(329_330_000_000.0));
+        assert_eq!(market.value, Some(10_320_000_000_000.0));
+        assert!(m.rounded);
+        assert_eq!(
+            s.warnings,
+            ["1 of 4 scanned tickers had no broker summary"],
+            "{:?}",
+            s.warnings
+        );
+
+        // One row per side.
+        let s = market_foreign_ipot(&Board, &f, &list, None, 1, ForeignSort::Value, saturday)
+            .await
+            .unwrap();
+        assert_eq!((s.data.net_buy.len(), s.data.net_sell.len()), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn totals_that_cannot_be_the_sessions_are_null_with_a_warning() {
+        let list = universe(&["BBCA", "BRPT"]);
+        // Read in a trading day's hours, with nothing read outside them
+        // cached: the totals are not asked for, the stocks still answer.
+        let trading =
+            include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html");
+        let (f, be, _d) = fetcher(
+            pages("2026-10-16")
+                .route("code=BBCA&start=10/19/2026&end=10/19/2026", 200, trading)
+                .route("code=BRPT&start=10/19/2026&end=10/19/2026", 200, trading),
+        );
+        let monday = at(d(10, 19), 10, 0);
+        let s = market_foreign_ipot(&Board, &f, &list, None, 10, ForeignSort::Value, monday)
+            .await
+            .unwrap();
+        assert_eq!(s.data.date, d(10, 16));
+        assert!(s.data.market.is_none());
+        assert_eq!(be.calls_matching("statistic.php"), 0);
+        assert!(
+            s.warnings.iter().any(|w| w.starts_with("no market totals: ipot: a market summary read at 10:00 WIB on 2026-10-19, in a trading day's hours")),
+            "{:?}",
+            s.warnings
+        );
+        // Friday evening the totals are Friday's, while IPOT has not
+        // published Friday's broker lists yet: the stocks are Thursday's.
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("ma-marketstatistic.php", 200, SUMMARY)
+                .route(
+                    "statistic.php?code=BBCA",
+                    200,
+                    &STATISTIC.replacen("2026-11-06", "2026-10-16", 2),
+                )
+                .route(
+                    "code=BBCA&start=10/16/2026&end=10/16/2026",
+                    200,
+                    include_str!(
+                        "../../tests/fixtures/ipot/brokersummary_bbca_20261106_insession.html"
+                    ),
+                )
+                .route(
+                    "code=BBCA&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../../tests/fixtures/ipot/brokersummary_bbca_20261015.html"),
+                )
+                .route(
+                    "code=BRPT&start=10/15/2026&end=10/15/2026",
+                    200,
+                    include_str!("../../tests/fixtures/ipot/brokersummary_brpt_20261015.html"),
+                ),
+        );
+        let friday_night = at(d(10, 16), 19, 30);
+        let s = market_foreign_ipot(
+            &Board,
+            &f,
+            &list,
+            None,
+            10,
+            ForeignSort::Value,
+            friday_night,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(10, 15));
+        assert!(s.data.market.is_none());
+        assert!(
+            s.warnings.iter().any(|w| w
+                == "no market totals: IPOT's market summary is for 2026-10-16, not 2026-10-15"),
+            "{:?}",
+            s.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn source_ipot_holds_only_the_latest_session_and_its_rupiah() {
+        let list = universe(&["BBCA"]);
+        let saturday = at(d(10, 17), 10, 0);
+        let (f, be, _d) = fetcher(pages("2026-10-16"));
+        for (date, sort, code, says) in [
+            (None, ForeignSort::Shares, 2, "source ipot ranks the foreign net in rupiah; sort shares is idx.co.id's net shares (source idx)"),
+            (Some(d(10, 18)), ForeignSort::Value, 2, "2026-10-18 is in the future"),
+            (Some(d(10, 17)), ForeignSort::Value, 4, "no trading data: 2026-10-17 is a Saturday"),
+        ] {
+            let err = market_foreign_ipot(&Board, &f, &list, date, 10, sort, saturday).await.unwrap_err();
+            assert_eq!(err.exit_code(), code, "{err}");
+            assert!(err.to_string().ends_with(says), "{err}");
+        }
+        assert_eq!(be.call_count(), 0, "refused without a request");
+        let err = market_foreign_ipot(
+            &Board,
+            &f,
+            &list,
+            Some(d(10, 15)),
+            10,
+            ForeignSort::Value,
+            saturday,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        assert!(
+            err.to_string().ends_with("source ipot shows the latest session IPOT has published, 2026-10-16, not 2026-10-15; source idx (idx.co.id) has the others"),
+            "{err}"
+        );
+        let s = market_foreign_ipot(
+            &Board,
+            &f,
+            &list,
+            Some(d(10, 16)),
+            10,
+            ForeignSort::Value,
+            saturday,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.data.date, d(10, 16));
     }
 }

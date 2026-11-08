@@ -202,7 +202,7 @@ idx_ownership_ticker|entity|search|rankings|graph|changes|foreign|releases|compo
 
     /// Print the JSON Schema for a JSON output shape (run without a name to list them).
     Schema {
-        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-brokers | indices | calendar | holidays | astro | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
+        /// quotes | history | profile | fundamentals | growth | valuation | risk | compare | financials | earnings | technical | screen | news | sentiment | insights | actions | foreign | instruments | market-foreign | market-foreign-value | market-brokers | indices | calendar | holidays | astro | members | broker | bandar | bandar-screen | bandar-broker | ownership-* | stockbit-actions | stockbit-movements | stockbit-status | error | quote | candle
         name: Option<String>,
     },
 

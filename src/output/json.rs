@@ -14,7 +14,9 @@ use crate::model::{
     OrderBook, Performance, Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport,
     SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, ValuationLens, Watchlist,
 };
-use crate::model::{BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign};
+use crate::model::{
+    BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign, MarketForeignValue,
+};
 use crate::model::{
     ConcentrationReport, CrossHoldersReport, GraphReport, Resolution, ResolutionReport,
     ResolveCandidates, SearchReport,
@@ -91,6 +93,7 @@ pub const SCHEMA_ACTIONS: &str = "idx.actions.v1";
 pub const SCHEMA_FOREIGN: &str = "idx.foreign.v1";
 pub const SCHEMA_FOREIGN_VALUE: &str = "idx.foreign.value.v1";
 pub const SCHEMA_MARKET_FOREIGN: &str = "idx.market.foreign.v1";
+pub const SCHEMA_MARKET_FOREIGN_VALUE: &str = "idx.market.foreign.value.v1";
 pub const SCHEMA_MARKET_BROKERS: &str = "idx.market.brokers.v1";
 pub const SCHEMA_TECHNICAL: &str = "idx.technical.v1";
 pub const SCHEMA_ORDERBOOK: &str = "idx.orderbook.v1";
@@ -155,6 +158,7 @@ pub type ActionsEnvelope = Envelope<CorporateActions>;
 pub type ForeignEnvelope = Envelope<ForeignFlow>;
 pub type ForeignValueEnvelope = Envelope<ForeignValueFlow>;
 pub type MarketForeignEnvelope = Envelope<MarketForeign>;
+pub type MarketForeignValueEnvelope = Envelope<MarketForeignValue>;
 pub type MarketBrokersEnvelope = Envelope<BrokerRanking>;
 pub type TechnicalEnvelope = Envelope<Technical>;
 pub type OrderBookEnvelope = Envelope<OrderBook>;
@@ -251,6 +255,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "foreign",
         "foreign-value",
         "market-foreign",
+        "market-foreign-value",
         "market-brokers",
         "technical",
         "orderbook",
@@ -319,6 +324,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "foreign" => schemars::schema_for!(ForeignEnvelope),
         "foreign-value" => schemars::schema_for!(ForeignValueEnvelope),
         "market-foreign" => schemars::schema_for!(MarketForeignEnvelope),
+        "market-foreign-value" => schemars::schema_for!(MarketForeignValueEnvelope),
         "market-brokers" => schemars::schema_for!(MarketBrokersEnvelope),
         "technical" => schemars::schema_for!(TechnicalEnvelope),
         "orderbook" => schemars::schema_for!(OrderBookEnvelope),

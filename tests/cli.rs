@@ -1685,6 +1685,64 @@ fn foreign_commands_read_the_exchange_summaries() {
 }
 
 #[test]
+fn market_foreign_from_ipot_is_a_shape_of_its_own() {
+    let sb = sandbox();
+    idx(&sb.cache, &sb.config)
+        .args(["market", "foreign", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--source ipot"))
+        .stdout(predicate::str::contains(
+            "the 100 stocks most traded by value",
+        ));
+    // idx.co.id's sort is its own, IPOT holds no session to come, and a
+    // source idx does not know is clap's.
+    for (args, says) in [
+        (
+            vec!["market", "foreign", "--source", "ipot", "--sort", "shares"],
+            "sort shares is idx.co.id's net shares (source idx)",
+        ),
+        (
+            vec![
+                "market",
+                "foreign",
+                "--source",
+                "ipot",
+                "--date",
+                "2099-01-02",
+            ],
+            "2099-01-02 is in the future",
+        ),
+        (
+            vec!["market", "foreign", "--source", "rti"],
+            "invalid value 'rti'",
+        ),
+    ] {
+        idx(&sb.cache, &sb.config)
+            .args(&args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(says));
+    }
+    // Offline with nothing cached: no quotes to pick the stocks from.
+    idx(&sb.cache, &sb.config)
+        .args(["market", "foreign", "--source", "ipot"])
+        .assert()
+        .code(5);
+    let out = idx(&sb.cache, &sb.config)
+        .args(["schema", "market-foreign-value"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let schema = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        schema.contains("foreign_net_pct") && schema.contains("scanned"),
+        "{schema}"
+    );
+    assert!(!schema.contains("foreign_net_value_at_close"), "{schema}");
+}
+
+#[test]
 fn market_brokers_from_ipot_or_idx_co_id() {
     let sb = sandbox();
     // IPOT's pages as read on Saturday: a ranking read now could fall in
