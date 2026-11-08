@@ -399,9 +399,11 @@ big-accumulation`, `bandar broker YP`, `actions BBCA`, `foreign BBCA` (foreign
 flow from IPOT in rupiah, up to 20 sessions), `holidays --upcoming`, `astro`,
 `list --search bank`, `members`, `risk TLKM` (also `growth` and `valuation`), `brokers`
 (`market brokers` from IPOT's ranking of its latest session, with each member's class and
-net), and `tools` (every MCP tool as a button). The idx.co.id
-commands (market-wide foreign flow, the calendar, indices, and `market brokers --source
-idx`) are CLI and MCP only, because idx.co.id refuses requests from Cloudflare Workers; so,
+net), `market foreign` (`market foreign --source ipot`: the session's 100 most traded
+stocks by their foreign net in rupiah, from the nightly bandar scan, with IPOT's market
+totals), and `tools` (every MCP tool as a button). The idx.co.id
+commands (market-wide foreign flow in shares, the calendar, indices, and `market brokers
+--source idx`) are CLI and MCP only, because idx.co.id refuses requests from Cloudflare Workers; so,
 for now, is `ownership institutions`, until MSN is checked from the Worker. Typed into the terminal,
 any of these, and the CLI-only commands (`watch`, `mcp`, `ownership import`, ...), answer
 with a notice instead of an error: where the command runs and why, its CLI line with your

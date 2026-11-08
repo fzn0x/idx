@@ -624,6 +624,13 @@ stocks', `market` is `null` and a warning says why, so on a trading day from
 answer. Figures of a million and more are abbreviated, to one decimal on
 the broker summaries and two on the market statistics (`rounded: true`).
 
+The web terminal's `market foreign` (`/api/market/foreign`) answers with
+this shape from the nightly bandar scan's `1d` rows in D1 (the session's
+100 most traded stocks) and IPOT's market statistics, read and dated as its
+broker ranking is there. idx.co.id refuses the site's Cloudflare Worker, so
+`source=idx` and `sort=shares` are `usage` errors; the scan's warnings say
+which session is shown when it is not the latest.
+
 ## `idx.market.brokers.v1` (`market brokers`)
 
 An object for one session: `date`, `members` (with trades), `total_volume`,
