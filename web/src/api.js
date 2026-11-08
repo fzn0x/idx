@@ -1243,7 +1243,8 @@ async function ownershipNotes(env, dates) {
   const notes = [];
   const legacy = rows.filter((r) => r.lines == null).map((r) => r.as_of);
   if (legacy.length) notes.push(`the web copy of ${legacy.join(", ")} predates idx 0.8.2, which sums a holder's accounts; it reloads once the mirror is rebuilt`);
-  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} row${r.other_date_rows === 1 ? "" : "s"} dated otherwise; they are not part of the ${r.as_of} holdings`);
+  // Noun and verb follow the count, as in the CLI's ingest::other_date_note.
+  for (const r of rows) if (r.other_date_rows > 0) notes.push(`the ${r.as_of} file also lists ${r.other_date_rows} ${r.other_date_rows === 1 ? "row dated otherwise; it is" : "rows dated otherwise; they are"} not part of the ${r.as_of} holdings`);
   return notes;
 }
 async function controllerReported(env, date) {
