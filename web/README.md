@@ -51,15 +51,25 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   works under the CSP (no inline scripts or handlers, styles only from this
   site and Google Fonts).
 - `src/api.js` endpoints returning the CLI's JSON envelopes; D1-backed cache.
-- `src/ipot.js` the IPOT broker summary and corporate actions (port of
-  `src/providers/ipot`, names from `src/brokers.json`, generated from
-  `data/brokers.csv`).
+- `src/ipot.js` the IPOT broker summary, corporate actions and market-wide
+  broker ranking (port of `src/providers/ipot`, names from
+  `src/brokers.json`, generated from `data/brokers.csv`).
 - `src/holidays.js` the trading holidays (port of `src/holidays.rs`;
   `src/holidays.json` is `data/holidays.csv`, kept equal by a test).
-  The idx.co.id commands (market-wide foreign flow, market brokers, calendar
-  and indices) stay CLI and MCP only: idx.co.id refuses
-  requests from Cloudflare Workers. The web `foreign` reads a stock's foreign
-  flow from IPOT instead (`src/ipot.js`).
+  The idx.co.id commands (market-wide foreign flow, calendar and indices)
+  stay CLI and MCP only: idx.co.id refuses requests from Cloudflare Workers.
+  The web `foreign` reads a stock's foreign flow from IPOT instead
+  (`src/ipot.js`), and the web `brokers` (`/api/market/brokers`) IPOT's
+  ranking of its latest session, as `idx market brokers --source ipot` does:
+  `ma-topbroker.php` and BBCA's `statistic.php`, which dates it, are read as
+  one pair, kept in D1 (`cache` row `ipot:ma-topbroker`) five minutes on a
+  trading day from 08:30 to 19:00 WIB and up to six hours otherwise (never a
+  copy read before 19:00 that day), and replaced only when both were read
+  again, so a copy that stands in for a failed read is a pair read together.
+  The ranking last accepted, by its figures, is kept in `kv` for 30 days. On
+  a trading day from 08:58 to 19:00 WIB a ranking cannot be dated, so it
+  answers the CLI's provider error, and IPOT is not asked unless a pair read
+  outside those hours is kept.
 - `src/bandar.js` the bandarmology rules (port of `src/analysis/bandar.rs`,
   the same reasons text pinned in both test suites); `src/bandar-scan.js` the
   scan behind `bandar screen` and `bandar broker`. From 16:45 WIB on a trading
@@ -112,7 +122,7 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
 - Endpoints under `/api`: `market`, `quote`, `history`, `intraday`, `profile`,
   `fundamental`, `earnings`, `financials`, `dividends`, `returns`, `technical`,
   `brief`, `compare`, `screen` (`preset`, `returns`), `news`, `sentiment`,
-  `insights`, `broker`, `bandar`,
+  `insights`, `broker`, `market/brokers`, `bandar`,
   `bandar/screen`, `bandar/status`, `bandar/broker`, `actions`, `holidays`,
   `instruments`, `members`, `ownership/ticker`,
   `ownership/entity`, `ownership/changes`, `ownership/foreign`,
