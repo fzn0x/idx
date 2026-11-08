@@ -478,12 +478,24 @@ fn stock_only(symbol: &Symbol) -> Result<()> {
     Ok(())
 }
 
-/// idx.co.id refused the request: point at the source that answers the same
-/// question in rupiah from anywhere.
-fn with_ipot_hint(e: IdxError) -> IdxError {
-    const HINT: &str = "; or ask for source ipot (Indo Premier: rupiah across all boards)";
+/// When idx.co.id refuses: the same question from Indo Premier, which
+/// answers from anywhere, for at most [`FOREIGN_IPOT_MAX_SESSIONS`].
+pub const IPOT_SOURCE_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or add --source ipot for Indo Premier's figures in rupiah (at most 60 sessions)",
+    mcp: "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah (at most 60 sessions)",
+};
+
+/// When idx.co.id refuses the market's foreign flow: the latest session's
+/// foreign net per stock from Indo Premier's broker summaries.
+pub const BANDAR_FNET_ADVICE: crate::error::Advice = crate::error::Advice {
+    cli: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx bandar screen --period 1d --sort fnet",
+    mcp: "; or rank the most traded stocks by the latest session's foreign net in rupiah (Indo Premier) with idx_bandar_screen, period \"1d\" and sort \"fnet\"",
+};
+
+/// idx.co.id refused the request and nothing was cached: add what else
+/// answers the question. A Cloudflare refusal keeps its JSON code `blocked`.
+fn with_alternative(e: IdxError, advice: crate::error::Advice) -> IdxError {
     match e {
-        // A Cloudflare refusal keeps its JSON code `blocked`.
         IdxError::Blocked {
             provider,
             refusal,
@@ -491,18 +503,16 @@ fn with_ipot_hint(e: IdxError) -> IdxError {
         } if provider == idx::NAME => IdxError::Blocked {
             provider,
             refusal,
-            message: format!("{message}{HINT}"),
+            message: format!("{message}{}", advice.cli),
         },
-        IdxError::Provider { provider, message }
-            if provider == idx::NAME && message.starts_with(idx::BLOCKED_HINT) =>
-        {
-            IdxError::Provider {
-                provider,
-                message: format!("{message}{HINT}"),
-            }
-        }
         other => other,
     }
+}
+
+/// idx.co.id refused the request: point at the source that answers the same
+/// question in rupiah from anywhere.
+fn with_ipot_hint(e: IdxError) -> IdxError {
+    with_alternative(e, IPOT_SOURCE_ADVICE)
 }
 
 /// `+1` net buying, `-1` net selling, `0` flat or unknown.
@@ -594,7 +604,7 @@ pub async fn foreign_flow(
             (sessions + 2).min(FOREIGN_MAX_DAYS)
         }
     };
-    let s = idx::trading_history(fetcher, symbol, length)
+    let (s, failure) = idx::trading_history(fetcher, symbol, length)
         .await
         .map_err(with_ipot_hint)?;
     let stock_name = s.data.iter().find_map(|r| r.stock_name.clone());
@@ -603,6 +613,12 @@ pub async fn foreign_flow(
     list.dedup_by_key(|d| d.date);
     if let ForeignRange::Dates { from, to } = range {
         list.retain(|d| d.date >= from && d.date <= to);
+        // A copy served for a failed fetch may stop before the range.
+        if let Some(failure) = failure.filter(|_| list.is_empty()) {
+            return Err(with_ipot_hint(
+                failure.error(&format!("has no session of {symbol} from {from} to {to}")),
+            ));
+        }
         if list.is_empty() {
             return Err(IdxError::NotFound(format!(
                 "idx.co.id has no sessions for {symbol} from {from} to {to}"
@@ -865,7 +881,9 @@ pub async fn market_foreign(
     sort: ForeignSort,
     today: NaiveDate,
 ) -> Result<Sourced<MarketForeign>> {
-    let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today)).await?;
+    let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today))
+        .await
+        .map_err(|e| with_alternative(e, BANDAR_FNET_ADVICE))?;
     let rows: Vec<ForeignRow> = std::mem::take(&mut s.data)
         .iter()
         .filter_map(foreign_row)
@@ -1321,7 +1339,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_blocked_idx_co_id_points_at_ipot() {
-        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let (f, _be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetTradingInfoSS", 403, "no")
+                .route("GetStockSummary", 403, "no"),
+        );
         let sym = Symbol::parse("BBCA").unwrap();
         let err = foreign_flow(&f, &[], &sym, ForeignRange::Latest(5), d(2026, 10, 18))
             .await
@@ -1329,7 +1351,117 @@ mod tests {
         assert_eq!(err.exit_code(), 3);
         assert_eq!(err.code(), "blocked");
         assert!(err.to_string().contains("Cloudflare"), "{err}");
-        assert!(err.to_string().contains("source ipot"), "{err}");
+        assert!(
+            err.to_string().ends_with(
+                "; or add --source ipot for Indo Premier's figures in rupiah (at most 60 sessions)"
+            ),
+            "{err}"
+        );
+        // The market's foreign flow: the bandar screen's foreign net.
+        let err = market_foreign(&f, None, 10, ForeignSort::Value, d(2026, 10, 16))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string()
+                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_ipot_advice_names_the_sessions_it_covers() {
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let sym = Symbol::parse("BBCA").unwrap();
+        // More sessions than source ipot takes: the advice says how many it does.
+        let err = foreign_flow(&f, &[], &sym, ForeignRange::Latest(120), d(2026, 10, 18))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        let limit = format!("at most {FOREIGN_IPOT_MAX_SESSIONS} sessions");
+        assert!(err.to_string().contains(&limit), "{err}");
+        assert!(IPOT_SOURCE_ADVICE.mcp.contains(&limit));
+    }
+
+    #[tokio::test]
+    async fn a_refused_day_with_an_empty_copy_is_not_a_day_without_trading() {
+        // 16 Oct after the close: today's summaries were cached empty two
+        // hours ago, before they were out; the 15th's are cached; idx.co.id
+        // now refuses today's.
+        let (f, be, _d) = fetcher(
+            FixtureBackend::new()
+                .route("GetBrokerSummary?date=20261016", 403, "no")
+                .route("GetStockSummary?date=20261016", 403, "no"),
+        );
+        let url = |endpoint: &str, date: &str| {
+            format!("https://www.idx.co.id/primary/TradingSummary/{endpoint}?date={date}&start=0&length=9999")
+        };
+        let two_hours_ago = chrono::Utc::now() - chrono::Duration::seconds(7200);
+        for endpoint in ["GetBrokerSummary", "GetStockSummary"] {
+            f.cache()
+                .put_at(&url(endpoint, "20261016"), 200, NO_TRADING, two_hours_ago)
+                .unwrap();
+        }
+        f.cache()
+            .put(&url("GetBrokerSummary", "20261015"), 200, BROKERS)
+            .unwrap();
+        let today = d(2026, 10, 16);
+        // Not the 15th as if the 16th had no session, nor not_found for the
+        // 16th: the refusal, as with nothing cached.
+        for date in [None, Some(today)] {
+            let err = market_brokers(&f, date, 5, BrokerSort::Value, today)
+                .await
+                .unwrap_err();
+            assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+            assert!(err.to_string().contains(" WIB is empty. "), "{err}");
+        }
+        assert_eq!(be.calls_matching("date=20261015"), 0);
+        // The market's foreign flow too, with its alternative.
+        let err = market_foreign(&f, None, 10, ForeignSort::Value, today)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(
+            err.to_string()
+                .ends_with("with idx bandar screen --period 1d --sort fnet"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_history_whose_copy_misses_the_range_is_no_empty_range() {
+        // 19 Oct after the close: BBCA's history was cached two hours ago,
+        // its newest session the 16th; idx.co.id now refuses.
+        let (f, _be, _d) = fetcher(FixtureBackend::new().route("GetTradingInfoSS", 403, "no"));
+        let url = |length: usize| {
+            format!("https://www.idx.co.id/primary/ListedCompany/GetTradingInfoSS?code=BBCA&start=0&length={length}")
+        };
+        let two_hours_ago = chrono::Utc::now() - chrono::Duration::seconds(7200);
+        for length in [3, 5] {
+            f.cache()
+                .put_at(&url(length), 200, HISTORY, two_hours_ago)
+                .unwrap();
+        }
+        let sym = Symbol::parse("BBCA").unwrap();
+        let today = d(2026, 10, 19);
+        let range = |from| ForeignRange::Dates { from, to: today };
+        // The 19th is not in the copy: the refusal, not "no sessions".
+        let err = foreign_flow(&f, &[], &sym, range(today), today)
+            .await
+            .unwrap_err();
+        assert_eq!((err.code(), err.exit_code()), ("blocked", 3), "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(" WIB has no session of BBCA from 2026-10-19 to 2026-10-19. "),
+            "{msg}"
+        );
+        assert!(msg.ends_with(IPOT_SOURCE_ADVICE.cli), "{msg}");
+        // A range the copy reaches is served from it, marked stale.
+        let s = foreign_flow(&f, &[], &sym, range(d(2026, 10, 15)), today)
+            .await
+            .unwrap();
+        assert!(s.stale && s.warnings.len() == 1, "{:?}", s.warnings);
+        assert_eq!((s.data.from, s.data.to), (d(2026, 10, 15), d(2026, 10, 16)));
     }
 
     #[test]

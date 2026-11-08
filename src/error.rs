@@ -7,7 +7,7 @@
 //! | 0    | success                                   |
 //! | 1    | internal / unexpected error               |
 //! | 2    | usage error (bad flags, bad symbol)       |
-//! | 3    | network or provider failure (JSON code `network`, `provider`, or `blocked` when the source's bot protection refused this network) |
+//! | 3    | network or provider failure (JSON code `network`, `provider`, or `blocked` when the source's bot protection refused the request) |
 //! | 4    | symbol or record not found                |
 //! | 5    | `--offline` and nothing usable in cache   |
 //! | 6    | configuration error                       |
@@ -27,11 +27,11 @@ pub enum IdxError {
         provider: &'static str,
         message: String,
     },
-    /// The source's bot protection (Cloudflare) refused this client: a
-    /// challenge only a browser can pass, or a block page. Nothing is wrong
-    /// with the request; a later run, another network, a mirror or a manual
-    /// download can work. Exit 3 like any network failure, JSON code
-    /// `blocked`.
+    /// The source's bot protection (Cloudflare) refused the request: a
+    /// challenge only a browser can pass, though it often lifts within a
+    /// minute, or a block page. Nothing is wrong with the request; a later
+    /// run, another network, a mirror or a manual download can work. Exit 3
+    /// like any network failure, JSON code `blocked`.
     #[error("{provider}: {message}")]
     Blocked {
         provider: &'static str,
@@ -140,6 +140,15 @@ impl From<reqwest::Error> for IdxError {
 }
 
 pub type Result<T, E = IdxError> = std::result::Result<T, E>;
+
+/// Advice inside an error message, worded for each face: the CLI, whose
+/// reader passes flags, and an MCP caller, who passes tool arguments
+/// instead. Messages carry the CLI wording; the MCP server swaps in its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Advice {
+    pub cli: &'static str,
+    pub mcp: &'static str,
+}
 
 #[cfg(test)]
 mod tests {

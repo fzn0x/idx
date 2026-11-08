@@ -452,8 +452,15 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
 
 `code` values and their meaning are listed in json-output.md. `blocked`
 (exit 3) means the source's bot protection (Cloudflare, idx.co.id) refused
-this network: retry later, rely on cached data, or for the ownership register
-let the GitHub mirror serve it.
+the request. For idx.co.id's data a challenged request is already retried
+for 30 s, and a cached copy, when there is one, is served instead of the
+error. It usually passes within a minute: call the tool again then. If it
+keeps refusing, the server's network is likely refused (data centres, VPNs
+and CI runners are refused more often), which only the user can change. Or
+take the alternative the message names. Over MCP that advice is a tool
+argument, not a CLI flag (`idx_foreign` with `source: "ipot"`,
+`idx_bandar_screen` with `period: "1d"` and `sort: "fnet"`). For the
+ownership register, let the GitHub mirror serve it.
 
 ## Behaviour notes
 
@@ -461,10 +468,10 @@ let the GitHub mirror serve it.
   carries only protocol frames.
 - Responses are cached exactly like the CLI, so an agent calling
   `idx_quote` twice within the quote TTL hits the network once.
-- A cached copy older than its TTL is served when the source fails (or the
-  server runs with `--offline`): the envelope then has `stale: true`,
-  `stale_reason` (`fetch_failed` or `offline`) and, after a failure, a warning
-  naming it.
+- A cached copy older than its TTL is served when the source fails or
+  refuses the request (or the server runs with `--offline`): the envelope
+  then has `stale: true`, `stale_reason` (`fetch_failed` or `offline`) and,
+  after a failure, a warning naming it.
 - The server exits cleanly when the client closes stdin.
 - Verdicts and signals are heuristics; the tool descriptions and the server
   instructions say so, and so should any agent that repeats them.

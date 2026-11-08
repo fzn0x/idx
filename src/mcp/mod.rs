@@ -69,12 +69,16 @@ Every tool returns the same JSON envelope as the `idx -o json` CLI:
 {schema, provider, fetched_at, cached, stale, stale_reason?, warnings?, data}. Fields the
 source did not return are null; nothing is estimated. Prices are delayed as published.
 stale=true means a cached copy older than its TTL was served: stale_reason is offline
-(the server runs with --offline) or fetch_failed (the source failed; a warning names
-the failure).
+(the server runs with --offline) or fetch_failed (the source failed or refused the
+request; a warning names the failure).
 Errors return isError=true with {error:{code,message}, exit_code}; code not_found
 means the ticker is unknown, offline_miss means --offline with nothing cached, blocked
-means the source's bot protection (Cloudflare, idx.co.id) refused this network: retry
-later, rely on cached data or, for the ownership register, the GitHub mirror.
+means the source's bot protection (Cloudflare, idx.co.id) refused the request; for
+idx.co.id's data a challenged request is already retried for 30 s and a cached copy,
+when there is one, is served instead. It usually passes within a minute: call again
+then. If it keeps refusing, the server's network is likely refused (data centres, VPNs
+and CI runners are refused more often): tell the user. Or take the alternative the
+message names; for the ownership register, the GitHub mirror.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.
@@ -732,17 +736,37 @@ fn parse_date(v: &Option<String>) -> Result<Option<chrono::NaiveDate>> {
     }
 }
 
+/// Advice that messages word for the CLI, naming flags an agent cannot pass;
+/// every error and warning a tool returns carries the MCP wording instead.
+const MCP_ADVICE: &[crate::error::Advice] = &[
+    crate::providers::idx::NO_CACHE,
+    service::IPOT_SOURCE_ADVICE,
+    service::BANDAR_FNET_ADVICE,
+];
+
+/// `text` with its CLI advice in MCP wording.
+fn for_mcp(text: &str) -> String {
+    MCP_ADVICE
+        .iter()
+        .fold(text.to_string(), |t, a| t.replace(a.cli, a.mcp))
+}
+
 fn ok<T: serde::Serialize>(schema: &str, s: Sourced<T>) -> Result<CallToolResult> {
-    let env = Envelope::from_sourced(schema, s);
+    let mut env = Envelope::from_sourced(schema, s);
+    for w in &mut env.warnings {
+        *w = for_mcp(w);
+    }
     Ok(CallToolResult::success(vec![ContentBlock::text(
         json::to_pretty(&env)?,
     )]))
 }
 
-/// Tool-level failure: the agent sees the same error object the CLI prints.
+/// Tool-level failure: the agent sees the same error object the CLI prints,
+/// its advice worded for a tool call.
 fn fail(e: IdxError) -> CallToolResult {
-    let env = ErrorEnvelope::from(&e);
-    let text = serde_json::to_string_pretty(&env).unwrap_or_else(|_| e.to_string());
+    let mut env = ErrorEnvelope::from(&e);
+    env.error.message = for_mcp(&env.error.message);
+    let text = serde_json::to_string_pretty(&env).unwrap_or_else(|_| for_mcp(&e.to_string()));
     CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
@@ -3089,10 +3113,73 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text(&r)).unwrap();
         assert_eq!(v["error"]["code"], "blocked", "{v}");
         assert_eq!(v["exit_code"], 3);
-        assert!(v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Cloudflare challenge"));
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("Cloudflare challenge"), "{msg}");
+        // Advice an agent can act on: a tool argument, not the CLI's flag.
+        assert!(
+            msg.ends_with(
+                "; or call the tool again with source \"ipot\" for Indo Premier's figures in rupiah (at most 60 sessions)"
+            ),
+            "{msg}"
+        );
+        assert!(!msg.contains("--"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn blocked_advice_names_tool_arguments_not_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = |mode| {
+            let backend = crate::http::FixtureBackend::new()
+                .route("GetStockSummary", 403, "")
+                .route("GetSecuritiesStock", 403, "");
+            let fetcher = Arc::new(Fetcher::new(
+                Arc::new(backend),
+                crate::cache::Cache::new(dir.path().join("cache")),
+                mode,
+            ));
+            IdxServer::new(
+                Arc::new(Fake),
+                fetcher,
+                dir.path().join("ownership.sqlite"),
+                StockbitConfig::default(),
+            )
+        };
+        let s = server(crate::http::CacheMode::Normal);
+        let v = json_of(
+            &s.market_foreign(Parameters(MarketForeignArgs {
+                date: None,
+                top: None,
+                sort: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["error"]["code"], "blocked", "{v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.ends_with("with idx_bandar_screen, period \"1d\" and sort \"fnet\""),
+            "{msg}"
+        );
+        assert!(!msg.contains("--"), "{msg}");
+
+        // Warnings too: a server run with --no-cache says so, and leaves
+        // out the CLI's --offline.
+        let s = server(crate::http::CacheMode::Bypass);
+        let v = json_of(
+            &s.instruments(Parameters(InstrumentsArgs {
+                board: None,
+                search: Some("BBCA".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["provider"], "bundled", "{v}");
+        let w = v["warnings"][0].as_str().unwrap();
+        assert!(
+            w.contains(", and the server runs with --no-cache, which skips the cache. "),
+            "{w}"
+        );
+        assert!(!w.contains("--offline"), "{w}");
     }
 
     #[tokio::test]

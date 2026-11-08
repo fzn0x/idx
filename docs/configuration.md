@@ -142,6 +142,27 @@ a TTL applies immediately.
   failure (`live fetch failed (...); showing cached copy`). Table mode prints
   the warnings and `warning: showing stale cached data from <fetch time> WIB`
   to stderr.
+- idx.co.id's bot protection (Cloudflare) refusing a request counts as such a
+  failure. A challenged request is asked again after 5, 10 and 15 s (four
+  tries, at most 30 s of waiting per request; the loading line shows
+  `www.idx.co.id retry 1`); one met by a block page is not. A refusal is
+  never cached. For a minute after a challenge lasts through every pause,
+  the next idx.co.id requests (from any command or MCP call on the same
+  cache, `--no-cache` aside) are asked once, so a command that makes several
+  meets the refusal or its cached copies at once instead of waiting 30 s
+  for each.
+  An empty copy of a day's stock, broker or index summary does not stand in
+  for a failed fetch, as it may be from before the summary was out: the
+  error stands and names the copy. So does a copy of a stock's history
+  without a session in the `stocks foreign --from/--to` range.
+  With nothing cached the error is `blocked` (exit 3) and says what to do;
+  under `--no-cache` it says the cache was skipped and that `--offline`
+  serves a copy if there is one.
+- idx.co.id's day summaries (stock, broker, index) are kept for 30 days once
+  the session is over, and for 15 minutes on the day itself. An empty one
+  cached on or before its own day, before the summary was out, keeps the 15
+  minutes on later days too, so it is asked again instead of passing for a
+  day without trading.
 - Network error text and warnings never include a URL's query string, and
   cache keys never hold a session token, so the Yahoo crumb and the MSN key
   stay out of every message; `-vv` debug logging still prints full request
