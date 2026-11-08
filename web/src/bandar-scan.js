@@ -682,6 +682,11 @@ export function scanProgress(st, shown = null, now = new Date()) {
   if (st?.phase === "new") return `the scan of ${st.session} has not started yet${tail}`;
   if (st?.phase === "waiting") {
     const n = (st.probes || 0) + (st.probe_errors || 0);
+    if (!st.probes && st.probe_errors) {
+      // Without one answer the scan cannot say IPOT has not published the session (the record's "unreachable").
+      const failed = n === 1 ? `the check at ${clock(st.first_probe_at, now)} failed: ${st.probe_error}` : `${n} checks failed since ${clock(st.first_probe_at, now)}, the last: ${st.probe_error}`;
+      return `IPOT has not answered the scan of ${st.session} (${failed})${tail}`;
+    }
     const checked = () => (n === 1 ? `checked once, at ${clock(st.first_probe_at, now)}` : `checked ${n} times since ${clock(st.first_probe_at, now)}`);
     const since = st.first_probe_at ? ` (${checked()}${st.probe_error ? `; the last check failed: ${st.probe_error}` : ""})` : "";
     return `the scan of ${st.session} is waiting for IPOT to publish that session's broker lists${since}${tail}`;

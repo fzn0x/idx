@@ -740,6 +740,29 @@ test("a finished session keeps its numbers while the next one waits, and the war
   });
 });
 
+test("while IPOT has answered none of the scan's checks, the warnings say so, not that the scan waits for IPOT to publish", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
+  let down = false;
+  const fetchFn = async (u, init) => (down && String(u).includes("indopremier") ? new Response("bad gateway", { status: 502 }) : recorded(u, init));
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    // From Monday 16:45 WIB IPOT answers 502 to every probe of 10-19.
+    down = true;
+    for (const hm of ["16:45", "16:50", "17:00"]) await bandarScanStep(env, { now: new Date(`2026-10-19T${hm}:00+07:00`), stocks: false });
+  });
+  const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-19T17:05:00+07:00"));
+  assert.deepEqual(out.warnings, ["IPOT has not answered the scan of 2026-10-19 (3 checks failed since 16:45 WIB, the last: HTTP 502); showing 2026-10-16"]);
+  // With no session shown yet, the not_found message says the same of its one check so far.
+  const first = memoryDb();
+  first.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8)] }));
+  await withFetch(async () => new Response("bad gateway", { status: 502 }), async () => { await bandarScanStep(first, { now: new Date("2026-10-19T16:45:00+07:00"), stocks: false }); });
+  const e = await bandarScreen(first, null, null, "1w", null, null, null, null, new Date("2026-10-19T16:50:00+07:00")).then(() => null, (err) => err);
+  assert.equal(e?.code, "not_found");
+  assert.ok(e.message.startsWith("no session of the bandar scan has finished yet: IPOT has not answered the scan of 2026-10-19 (the check at 16:45 WIB failed: HTTP 502). "), e.message);
+});
+
 test("a session IPOT never answered for is filed as unreachable, not as unpublished", async () => {
   const env = memoryDb();
   env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
