@@ -1150,7 +1150,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_market_brokers",
-        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses the connection or fails, from IPOT's ranking of its latest session, with a warning; the envelope's provider says which answered. source=ipot asks IPOT directly: its latest session only (another date is a usage error), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures of a million and more abbreviated to two decimals (rounded=true); those fields are null from idx.co.id. For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
+        description = "Top brokers: every IDX exchange member's trading for one session (default: the latest published), ranked by value (default), volume or frequency, each with code, member name, value (IDR), volume (shares), frequency and its share of all members' value. A member's buying and selling count together, so all members' value is twice the market's. By default (source auto) the ranking comes from idx.co.id's daily broker summary, and when idx.co.id refuses the connection or fails, from IPOT's ranking of its latest session, with a warning; the envelope's provider says which answered. source=ipot asks IPOT directly: its latest session only (another date is a usage error), with each broker's value bought, sold and net and its class (local, foreign, state_owned), figures of a million and more abbreviated to two decimals (rounded=true); those fields are null from idx.co.id. IPOT's ranking read on a trading day from 08:58 to 19:00 WIB cannot be dated and is refused (a provider error; under auto, idx.co.id's error then stands). For which stocks one broker traded use idx_bandar_broker; for one stock's brokers idx_broker. Returns the idx.market.brokers.v1 envelope."
     )]
     async fn market_brokers(
         &self,
@@ -3193,26 +3193,34 @@ mod tests {
     #[tokio::test]
     async fn market_brokers_tool_takes_a_source_and_stands_in_for_idx_co_id() {
         let dir = tempfile::tempdir().unwrap();
-        let backend = crate::http::FixtureBackend::new()
-            .route_with_headers(
-                "GetBrokerSummary",
-                403,
-                include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html"),
-                &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
-            )
-            .route(
-                "ma-topbroker.php",
-                200,
+        let backend = crate::http::FixtureBackend::new().route_with_headers(
+            "GetBrokerSummary",
+            403,
+            include_str!("../../tests/fixtures/idx/cloudflare_challenge_synthetic.html"),
+            &[("cf-mitigated", "challenge"), ("server", "cloudflare")],
+        );
+        // IPOT's pages as read on Saturday, served because IPOT has no route
+        // here: a ranking read now could fall in trading hours, which IPOT's
+        // ranking cannot be dated in.
+        let cache = crate::cache::Cache::new(dir.path().join("cache"));
+        let saturday = chrono::DateTime::parse_from_rfc3339("2026-11-07T10:00:00+07:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for (url, page) in [
+            (
+                "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
                 include_str!("../../tests/fixtures/ipot/topbroker_20261106.html"),
-            )
-            .route(
-                "statistic.php?code=BBCA",
-                200,
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
                 include_str!("../../tests/fixtures/ipot/statistic_bbca_20261106.html"),
-            );
+            ),
+        ] {
+            cache.put_fetched_at(url, 200, page, saturday).unwrap();
+        }
         let fetcher = Arc::new(Fetcher::new(
             Arc::new(backend),
-            crate::cache::Cache::new(dir.path().join("cache")),
+            cache,
             crate::http::CacheMode::Normal,
         ));
         let s = IdxServer::new(

@@ -1687,16 +1687,31 @@ fn foreign_commands_read_the_exchange_summaries() {
 #[test]
 fn market_brokers_from_ipot_or_idx_co_id() {
     let sb = sandbox();
-    seed(
-        &sb.cache,
-        "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
-        "ipot/topbroker_20261106.html",
-    );
-    seed(
-        &sb.cache,
-        "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
-        "ipot/statistic_bbca_20261106.html",
-    );
+    // IPOT's pages as read on Saturday: a ranking read now could fall in
+    // trading hours, which IPOT's ranking cannot be dated in.
+    let saturday = chrono::DateTime::parse_from_rfc3339("2026-11-07T10:00:00+07:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for (url, fixture) in [
+        (
+            "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+            "ipot/topbroker_20261106.html",
+        ),
+        (
+            "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+            "ipot/statistic_bbca_20261106.html",
+        ),
+    ] {
+        let body = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(fixture),
+        )
+        .unwrap();
+        idx::cache::Cache::new(&sb.cache)
+            .put_at(url, 200, &body, saturday)
+            .unwrap();
+    }
     seed(
         &sb.cache,
         "https://www.idx.co.id/primary/TradingSummary/GetBrokerSummary?date=20261016&start=0&length=9999",
