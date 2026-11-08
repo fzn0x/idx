@@ -1221,7 +1221,7 @@ pub async fn market_brokers_from(
                 }
                 IdxError::Network(m) => format!("idx.co.id could not be reached ({m})"),
                 IdxError::OfflineMiss(_) => {
-                    "idx.co.id's broker summary is not cached (offline)".to_string()
+                    "offline, nothing usable from idx.co.id is cached for it".to_string()
                 }
                 other => format!("idx.co.id failed ({other})"),
             };
@@ -2311,7 +2311,7 @@ mod tests {
         assert!(s.stale);
         assert_eq!(
             s.warnings[0],
-            "idx.co.id's broker summary is not cached (offline), so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
+            "offline, nothing usable from idx.co.id is cached for it, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
     }
 
@@ -2438,6 +2438,34 @@ mod tests {
                 "the broker summary for 2026-11-06 is cached only as read at 11:00 WIB that day"
             ),
             "{err}"
+        );
+        // With IPOT's pages cached that evening, auto answers from them.
+        let cache = Cache::new(dir.path());
+        for (url, page) in [
+            (
+                "https://www.indopremier.com/module/saham/include/ma-topbroker.php",
+                TOP_BROKERS,
+            ),
+            (
+                "https://www.indopremier.com/module/saham/include/statistic.php?code=BBCA",
+                BBCA_STATISTIC,
+            ),
+        ] {
+            cache.put_fetched_at(url, 200, page, night).unwrap();
+        }
+        let s = market_brokers_from(
+            &offline,
+            BrokerSource::Auto,
+            None,
+            5,
+            BrokerSort::Value,
+            night,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            s.warnings[0],
+            "offline, nothing usable from idx.co.id is cached for it, so the ranking is IPOT's (Indo Premier) for its latest session, 2026-11-06"
         );
         // A Saturday read that Saturday has no session to miss, even offline.
         Cache::new(dir.path())
