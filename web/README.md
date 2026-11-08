@@ -10,6 +10,14 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   dark themes. The two home pages share one structure: change both together, and
   `test/tools.test.mjs` and `test/seo.test.mjs` check their command tables,
   language links and search tags.
+- `public/route.js` reads a typed line before `public/terminal.js` runs it: the
+  terminal's own lines pass through untouched; a line in the CLI's words (`idx
+  stocks quote BBCA`, `idx -o json market overview`, the CLI's short flags) runs
+  as the page's own, with a note saying so; and what the page cannot run (an MCP
+  tool with `web: null`, a CLI-only command such as `watch`, a CLI flag without a
+  twin here) answers with a notice: the CLI line in the user's words, the reason
+  in the page's language, the install lines and the page's nearest commands.
+  `test/route.test.mjs` checks it against the CLI's command tree in `src/cli/`.
 - Docs: `scripts/docs.mjs` builds `/docs/` (README.md), `/docs/<page>` (one
   per `docs/*.md`), the same pages as Markdown at `/docs/<page>.md` with
   absolute links, `/llms.txt` (llmstxt.org index) and `/llms-full.txt` (every
@@ -39,8 +47,8 @@ Cloudflare Worker behind **https://ihsg.midoriresearch.com**.
   `data/brokers.csv`).
 - `src/holidays.js` the trading holidays (port of `src/holidays.rs`;
   `src/holidays.json` is `data/holidays.csv`, kept equal by a test).
-  The idx.co.id commands (market-wide foreign flow, market brokers, calendar,
-  indices, stock list, members) stay CLI and MCP only: idx.co.id refuses
+  The idx.co.id commands (market-wide foreign flow, market brokers, calendar
+  and indices) stay CLI and MCP only: idx.co.id refuses
   requests from Cloudflare Workers. The web `foreign` reads a stock's foreign
   flow from IPOT instead (`src/ipot.js`).
 - `src/bandar.js` the bandarmology rules (port of `src/analysis/bandar.rs`,
