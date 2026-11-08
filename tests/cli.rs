@@ -2900,12 +2900,45 @@ fn screen_passes_over_pb_and_ps_that_mix_currencies() {
     assert_eq!(symbols(&v), ["BBCA", "GEMS", "ITMG"]);
     assert_eq!(v["data"]["rows"][2]["price_to_sales"], 13807.103);
 
+    // The table marks each such P/B and names the companies, as compare does.
+    let table = String::from_utf8(run(&[
+        "stocks",
+        "screen",
+        "-f",
+        "pe<10,div>5,mcap>5T",
+        "--sort",
+        "div",
+    ]))
+    .unwrap();
+    for pb in [
+        "48,921.57*",
+        "47,202.80*",
+        "18,769.23*",
+        "16,431.10*",
+        "14,204.88*",
+    ] {
+        assert!(table.contains(pb), "{pb}: {table}");
+    }
+    assert!(
+        table.contains(
+            "* P/B divides the price by statement figures in another currency, so it is not \
+             comparable: BSSR, GEMS, ESSA, UNIC, ITMG (statements in USD, price in IDR). Filters \
+             and sorts on pb and ps read such P/B and P/S as missing.\n"
+        ),
+        "{table}"
+    );
+    let table = String::from_utf8(run(&["stocks", "screen", "-f", "pb>0"])).unwrap();
+    assert!(table.contains("2.25") && !table.contains('*'), "{table}");
+
     idx(&sb.cache, &sb.config)
         .args(["stocks", "screen", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "pb and ps filters and sorts read them as missing",
+        ))
+        .stdout(predicate::str::contains(
+            "The table marks such a P/B with *",
         ));
 }
 

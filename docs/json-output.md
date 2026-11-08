@@ -314,7 +314,8 @@ and `ps` read them as missing: no `pb` or `ps` clause matches the row, low or
 high, and a `pb` or `ps` sort puts it last, as for a row without the value.
 Through 0.8.2 they were compared as published, so such a row passed `pb>3`
 and led `--sort pb`. P/E, EPS and the dividend yield are in the price's terms
-and filter as before.
+and filter as before. The table marks such a P/B with `*` and names those
+companies under it.
 
 Added in 0.8.2, all optional:
 
