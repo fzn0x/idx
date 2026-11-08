@@ -14,6 +14,10 @@ import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus, scanNot
 import { budget } from "../src/budget.js";
 import worker from "../src/worker.js";
 
+// The scan logs each session's publication for the Worker's logs; these tests read the state instead.
+const log = console.log;
+console.log = (...a) => { if (!String(a[0]).startsWith("bandar published")) log(...a); };
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const page = (f) => readFileSync(join(root, "tests", "fixtures", "ipot", f), "utf8");
 const CHART = readFileSync(join(root, "tests", "fixtures", "yahoo", "chart_bbca_1mo_1d.json"), "utf8");
