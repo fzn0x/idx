@@ -907,8 +907,12 @@ function codeList(words, last = t(" dan ", " and ")) {
 /** A sentence with its `backticked` words set as code. */
 const inlineCode = (s) => String(s).split("`").map((part, i) => (i % 2 ? el("code", { text: part }) : part));
 
-/** A command line as its words, each kept whole (styles.css): it wraps at its spaces, never inside a word (foreign-accumulation, 2026-08-31). */
-const commandWords = (line) => line.split(" ").flatMap((w, i) => [...(i ? [" "] : []), el("span", { class: "word", text: w })]);
+/**
+ * A command line as its words, each kept whole (styles.css): it wraps at its spaces, never inside a word (foreign-accumulation,
+ * 2026-08-31). A word over 40 characters (only a typed one: route.js's own are at most 20) stays plain text and may break at its
+ * hyphens, as before: kept whole, a word that long can widen the table past its sheet at a desktop's narrowest two columns.
+ */
+const commandWords = (line) => line.split(" ").flatMap((w, i) => [...(i ? [" "] : []), w.length > 40 ? w : el("span", { class: "word", text: w })]);
 
 /** The commands a notice offers instead, each a link that runs here, beside what it gives (help's table). */
 function nearTable(list) {
