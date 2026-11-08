@@ -224,24 +224,27 @@ const says = (r) => JSON.stringify([r.stored, r.checked, [...r.failed].sort(), r
  * session's record (none for a session kept from before these records). The
  * shown session's record is kept however many came after it. A forced
  * rescan files nothing over the session's earlier scan until it has stored
- * as many stocks: that scan's rows are still in D1.
+ * as many stocks: that scan's rows are still in D1. Returns whether it filed
+ * `run`.
  */
 function keep(st, run) {
   const prior = st.runs?.find((r) => r.session === run.session && r.scanned);
-  if (prior && (!run.scanned || run.stored < prior.stored)) return;
+  if (prior && (!run.scanned || run.stored < prior.stored)) return false;
   const shown = st.runs?.find((r) => r.session === st.complete);
   if (run.scanned && run.stored > 0 && st.complete !== run.session && (!st.complete || run.stored * 2 >= run.of || run.stored > (shown?.stored ?? 0))) st.complete = run.session;
   run.promoted = st.complete === run.session;
   const needed = (r) => r.session === st.complete || (r.reason === "closed" && st.complete != null && r.session > st.complete);
   st.runs = [run, ...(st.runs || []).filter((r) => r.session !== run.session)].filter((r, i) => i < RUNS_KEPT || needed(r));
   st.done_at = run.done_at;
+  return true;
 }
 
 /**
  * The target moved to the next session: files what `st`'s session got. A
  * scan cut short counts the stocks still waiting for a retry as failed and
  * those IPOT had not published as unpublished. Returns whether it filed a
- * scan with rows, so old sessions are pruned.
+ * scan with rows (keep() files no forced rescan that stored fewer than the
+ * session's earlier scan), so old sessions are pruned.
  */
 function cutoff(st, at) {
   if (st.phase === "waiting") {
@@ -257,8 +260,7 @@ function cutoff(st, at) {
     st.errors[kind] = (st.errors[kind] || 0) + 1;
   }
   st.retry = [];
-  keep(st, runOf(st, at));
-  return true;
+  return keep(st, runOf(st, at));
 }
 
 /** Stocks of the first pass the scan has got to. */
@@ -611,14 +613,12 @@ export async function bandarScanStep(env, { now = new Date(), force = false, bud
   // holds enough, though stocks may still come from the retry rounds and
   // IPOT's late lists. It is filed again only when it says something new, so
   // a read that finds the stocks still failing or unpublished neither moves
-  // its time nor prunes.
+  // its time nor prunes; nor does a minute of a forced rescan that keep()
+  // does not file yet.
   if (st.phase === "running" && !st.queue.length) {
     if (settled(st)) st.phase = "done";
     const run = runOf(st, at), filed = (st.runs || []).find((r) => r.session === session && r.scanned);
-    if (!filed || says(filed) !== says(run)) {
-      keep(st, run);
-      changed = prune = true;
-    }
+    if ((!filed || says(filed) !== says(run)) && keep(st, run)) changed = prune = true;
     changed ||= st.phase === "done";
   }
   if (!changed) return { ...out, idle: true, phase: st.phase };

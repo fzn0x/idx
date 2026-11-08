@@ -830,6 +830,30 @@ test("a forced rescan of the shown session never takes its record or its numbers
   });
 });
 
+test("a forced rescan that has stored fewer stocks than the first scan writes nothing while its stocks wait", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
+  let busy = false;
+  const fetchFn = async (u, init) => (busy && String(u).includes("code=TLKM") ? new Response("busy", { status: 503 }) : recorded(u, init));
+  const sun = Date.parse("2026-10-18T10:00:00+07:00");
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T10:00:00+07:00"));
+    // A maintainer forces a rescan on Sunday and IPOT fails TLKM this time: its first pass stores one stock of two.
+    busy = true;
+    await bandarScanStep(env, { now: new Date(sun), force: true });
+    const written = env.kv.get("bandar_scan");
+    // Until TLKM's retry round at 10:10 WIB a minute has nothing to read or file.
+    for (let m = 1; m < 10; m++) assert.equal((await bandarScanStep(env, { now: new Date(sun + m * 60e3) })).idle, true, `10:0${m} WIB`);
+    assert.equal(env.kv.get("bandar_scan"), written, "the state stays as the forced step wrote it");
+    // The round reads TLKM, which fails again: that minute saves.
+    assert.equal((await bandarScanStep(env, { now: new Date(sun + 10 * 60e3) })).read, 1);
+    assert.notEqual(env.kv.get("bandar_scan"), written);
+  });
+  const st = await scanStatus(env);
+  assert.deepEqual([st.complete, st.last.session, st.last.stored], ["2026-10-16", "2026-10-16", 2], "the first scan's record stands");
+});
+
 test("a cron minute that runs late does not take the scan back to the session before", async () => {
   const env = memoryDb();
   const board = (d) => env.kv.set("board", JSON.stringify({ ts: unix(`${d}T16:45:00+07:00`), quotes: [quote("BBCA", 5100, 2e8, `${d}T16:14:58+07:00`), quote("TLKM", 2690, 1e8, `${d}T16:14:58+07:00`)] }));
