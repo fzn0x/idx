@@ -8,7 +8,8 @@
 // broker summary of the first, then of the second and third in turn. IPOT
 // publishes a closed session's broker lists some time after the close and
 // shows the totals without them until then, so the scan waits and probes
-// again, every 10 minutes until 21:00 WIB and every 30 after; only a page
+// again, every 10 minutes until 21:00 WIB, every 30 after and every hour once
+// a day has passed (a probe that failed sooner, backing off); only a page
 // without trades, on a day the quote board (refreshed after that session)
 // shows no trade either, closes the session unscanned. Then PER_TICK stocks a
 // minute: for each, the IPOT broker summary over 1d, 1w, 1m and 3m ending on
@@ -63,9 +64,9 @@ const READY_MIN = 16 * 60 + 45;
 /**
  * Minutes between probes while IPOT has not published the session: until
  * 21:00 WIB of the session's day, after that, and once a day of probes has
- * passed (each of those logs an error: IPOT may have changed its page). The
- * stocks IPOT has not published once the scan reads are read again on the
- * same schedule, the day counted from when it started reading.
+ * passed (each of those logs an error: IPOT may have changed its page).
+ * Stocks IPOT has not published when the scan reads them are read again on
+ * the same schedule, the day counted from when the scan started reading.
  */
 const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
 const LATE_MIN = 21 * 60;
