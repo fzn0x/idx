@@ -454,11 +454,13 @@ envelope. Failures set `isError: true` and the text is the CLI error object:
 (exit 3) means the source's bot protection (Cloudflare, idx.co.id) refused
 the request. For idx.co.id's data a challenged request is already retried
 for 30 s, and a cached copy, when there is one, is served instead of the
-error. It usually passes within a minute: call the tool again then, or take
-the alternative the message names. Over MCP that advice is a tool argument,
-not a CLI flag (`idx_foreign` with `source: "ipot"`, `idx_bandar_screen`
-with `period: "1d"` and `sort: "fnet"`). For the ownership register, let the
-GitHub mirror serve it.
+error. It usually passes within a minute: call the tool again then. If it
+keeps refusing, the server's network is likely refused (data centres, VPNs
+and CI runners are refused more often), which only the user can change. Or
+take the alternative the message names. Over MCP that advice is a tool
+argument, not a CLI flag (`idx_foreign` with `source: "ipot"`,
+`idx_bandar_screen` with `period: "1d"` and `sort: "fnet"`). For the
+ownership register, let the GitHub mirror serve it.
 
 ## Behaviour notes
 

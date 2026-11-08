@@ -76,8 +76,9 @@ means the ticker is unknown, offline_miss means --offline with nothing cached, b
 means the source's bot protection (Cloudflare, idx.co.id) refused the request; for
 idx.co.id's data a challenged request is already retried for 30 s and a cached copy,
 when there is one, is served instead. It usually passes within a minute: call again
-then, or take the alternative the message names; for the ownership register, the
-GitHub mirror.
+then. If it keeps refusing, the server's network is likely refused (data centres, VPNs
+and CI runners are refused more often): tell the user. Or take the alternative the
+message names; for the ownership register, the GitHub mirror.
 idx_broker shows which brokers bought and sold a ticker (IPOT broker summary);
 idx_bandar reads it as bandarmology (are the top brokers accumulating or distributing?)
 and idx_bandar_screen finds the most traded stocks they accumulate or distribute.

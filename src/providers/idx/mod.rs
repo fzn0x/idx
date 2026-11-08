@@ -73,9 +73,11 @@ const CHALLENGE_PAUSES: [Duration; 3] = if cfg!(test) {
     ]
 };
 
-/// What to do when a challenge stays and nothing is cached. Like every hint
-/// here it ends without a full stop: callers append `; ...`.
-pub const BLOCKED_HINT: &str = "idx.co.id's bot protection refused the request, which usually passes within a minute: retry then";
+/// What to do when a challenge stays and nothing is cached. Most pass
+/// within a minute, but some networks are challenged on every request.
+/// Like every hint here it ends without a full stop: callers append
+/// `; ...`.
+pub const BLOCKED_HINT: &str = "idx.co.id's bot protection refused the request, which usually passes within a minute: retry then, and from another network if it keeps refusing (data centres, VPNs and CI runners are refused more often)";
 /// The same for a block page, which can last longer.
 pub const BLOCK_PAGE_HINT: &str = "idx.co.id's bot protection refused the request; a block page can last longer than a challenge: retry later, or from another network if it persists (data centres, VPNs and CI runners are refused more often)";
 /// Why no cached copy stood in under `--no-cache`.
@@ -540,7 +542,7 @@ mod tests {
         assert_eq!((err.code(), err.exit_code()), ("blocked", 3));
         assert_eq!(
             err.to_string(),
-            "idx: idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge) on 4 tries over 0 s, and nothing is cached for it. idx.co.id's bot protection refused the request, which usually passes within a minute: retry then"
+            "idx: idx.co.id answered with a Cloudflare challenge (HTTP 403, cf-mitigated: challenge) on 4 tries over 0 s, and nothing is cached for it. idx.co.id's bot protection refused the request, which usually passes within a minute: retry then, and from another network if it keeps refusing (data centres, VPNs and CI runners are refused more often)"
         );
         let msg = index_summary(&f, d(2026, 10, 16), d(2026, 10, 18))
             .await
