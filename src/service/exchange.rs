@@ -884,6 +884,8 @@ fn foreign_row(r: &StockDay) -> Option<ForeignRow> {
 
 /// Foreign net buying and selling across every stock for one session
 /// (default: the latest published), the `top` largest each way (0 = all).
+/// When idx.co.id refuses, the error names `--source ipot` for the latest
+/// session, which is the one IPOT holds.
 pub async fn market_foreign(
     fetcher: &Arc<Fetcher>,
     date: Option<NaiveDate>,
@@ -891,9 +893,17 @@ pub async fn market_foreign(
     sort: ForeignSort,
     today: NaiveDate,
 ) -> Result<Sourced<MarketForeign>> {
+    // IPOT holds its latest session only (market_foreign_ipot).
+    let ipot_holds = date.is_none_or(|d| d == holidays::last_trading_day(today));
     let (day, mut s) = session(date, today, |d| idx::stock_summary(fetcher, d, today))
         .await
-        .map_err(|e| with_alternative(e, MARKET_FOREIGN_IPOT_ADVICE))?;
+        .map_err(|e| {
+            if ipot_holds {
+                with_alternative(e, MARKET_FOREIGN_IPOT_ADVICE)
+            } else {
+                e
+            }
+        })?;
     let rows: Vec<ForeignRow> = std::mem::take(&mut s.data)
         .iter()
         .filter_map(foreign_row)
@@ -2036,6 +2046,18 @@ mod tests {
                 .ends_with("; or add --source ipot for Indo Premier's foreign net in rupiah of the 100 most traded stocks"),
             "{err}"
         );
+        // IPOT holds its latest session only: an earlier one gets no advice.
+        let err = market_foreign(
+            &f,
+            Some(d(2026, 10, 14)),
+            10,
+            ForeignSort::Value,
+            d(2026, 10, 16),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "blocked");
+        assert!(!err.to_string().contains("--source ipot"), "{err}");
     }
 
     #[tokio::test]
