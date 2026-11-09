@@ -2251,7 +2251,11 @@ impl IdxServer {
                 if use_page {
                     let progress = page::start_in_background(
                         sb.clone(),
-                        page::PageOptions { port, timeout },
+                        page::PageOptions {
+                            port,
+                            timeout,
+                            return_to: page::ReturnTo::Agent,
+                        },
                         &env,
                     )
                     .await?;

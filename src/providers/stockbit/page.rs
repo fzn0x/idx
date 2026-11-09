@@ -60,7 +60,41 @@ pub struct PageOptions {
     /// `None`: [`DEFAULT_PORT`], else any free port. `Some(0)`: any free port.
     pub port: Option<u16>,
     pub timeout: Duration,
+    /// Where the page sends the user once the session is stored.
+    pub return_to: ReturnTo,
 }
+
+/// Who opened the page, so that once a session is stored it can say where
+/// to look next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnTo {
+    /// `idx stockbit login --page`, which prints the session's status.
+    Terminal,
+    /// The MCP tool `idx_stockbit_login`, run by an agent.
+    Agent,
+}
+
+impl ReturnTo {
+    /// The sentence the page and its alert show after a sign-in.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            ReturnTo::Terminal => {
+                "Go back to the terminal where you ran idx stockbit login: it shows the session's status."
+            }
+            ReturnTo::Agent => {
+                "Go back to your agent: idx_stockbit_status now shows the session as signed in."
+            }
+        }
+    }
+}
+
+/// How long one wait for the sign-in (`GET <path>/wait`) is held open before
+/// it answers "not yet" and the page asks again.
+const WAIT_MAX: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(25)
+};
 
 /// `5 minutes`, `90 seconds`, `1 minute`.
 pub fn span(d: Duration) -> String {
@@ -109,6 +143,7 @@ pub struct PageServer {
     pub url: String,
     pub port: u16,
     pub timeout: Duration,
+    return_to: ReturnTo,
 }
 
 /// Binds 127.0.0.1: `--port N` exactly, else [`DEFAULT_PORT`], else any
@@ -136,6 +171,7 @@ pub async fn bind(opts: PageOptions) -> Result<PageServer> {
         secret,
         port,
         timeout: opts.timeout,
+        return_to: opts.return_to,
     })
 }
 
@@ -147,15 +183,18 @@ pub struct PageState {
     done: watch::Sender<bool>,
     /// How long the page listens, in words.
     span: String,
+    /// Where the page sends the user after a sign-in.
+    return_to: ReturnTo,
 }
 
 impl PageState {
-    pub fn new(accept: AcceptFn, timeout: Duration) -> Arc<Self> {
+    pub fn new(accept: AcceptFn, timeout: Duration, return_to: ReturnTo) -> Arc<Self> {
         Arc::new(PageState {
             accept,
             accepted: Mutex::new(None),
             done: watch::channel(false).0,
             span: span(timeout),
+            return_to,
         })
     }
 
@@ -178,10 +217,11 @@ impl PageServer {
             secret,
             url,
             timeout,
+            return_to,
             ..
         } = self;
         let accept: AcceptFn = Arc::new(move |v| Box::pin(accept(v)));
-        let state = PageState::new(accept, timeout);
+        let state = PageState::new(accept, timeout, return_to);
         let app = router(&secret, state.clone());
         let stop = state.clone();
         let shutdown = async move {
@@ -215,11 +255,13 @@ impl PageServer {
     }
 }
 
-/// The page's routes: `GET` and `POST` on `/login/<secret>`, 404 elsewhere.
+/// The page's routes: `GET` and `POST` on `/login/<secret>`, `GET` on
+/// `/login/<secret>/wait`, 404 elsewhere.
 pub fn router(secret: &str, state: Arc<PageState>) -> Router {
     let path = format!("/login/{secret}");
     Router::new()
         .route(&path, get(page).post(paste))
+        .route(&format!("{path}/wait"), get(wait_for_sign_in))
         .fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(middleware::from_fn(guard))
@@ -278,7 +320,9 @@ async fn guard(req: Request, next: Next) -> Response {
 }
 
 async fn page(State(st): State<Arc<PageState>>) -> Response {
-    let html = PAGE.replace("__SPAN__", &st.span);
+    let html = PAGE
+        .replace("__SPAN__", &st.span)
+        .replace("__BACK__", st.return_to.sentence());
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         Body::from(html),
@@ -305,11 +349,28 @@ async fn paste(State(st): State<Arc<PageState>>, body: String) -> Response {
             st.done.send_replace(true);
             answer(
                 true,
-                "Connected. Close the private window without signing out (signing out there could end idx's session too).",
+                &format!(
+                    "Connected. {} Then close the private window without signing out (signing out there could end idx's session too).",
+                    st.return_to.sentence()
+                ),
             )
         }
         Err(e) => answer(false, &IdxError::from(e).to_string()),
     }
+}
+
+/// Holds a request until a session is accepted, from this tab or another
+/// (the bookmark opens a new one), or [`WAIT_MAX`] passes: `{"connected":
+/// true}` or `false`, and the page asks again. So the tab the user started
+/// from says it is done too.
+async fn wait_for_sign_in(State(st): State<Arc<PageState>>) -> Response {
+    let _ = tokio::time::timeout(WAIT_MAX, st.accepted()).await;
+    let connected = *st.done.borrow();
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({ "connected": connected }).to_string(),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +521,7 @@ textarea{width:100%;min-height:80px;margin:8px 0;border:1px solid var(--line);bo
 code{font:13px ui-monospace,Menlo,Consolas,monospace;background:var(--code);border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
 #status{margin:16px 0 0;font-weight:600;min-height:1.6em}
 #status.ok{color:var(--ok)}#status.err{color:var(--err)}#status.wait{color:var(--muted)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 #done{display:none}
 footer{margin-top:20px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
 </style>
@@ -490,7 +552,9 @@ footer{margin-top:20px;padding-top:14px;border-top:1px solid var(--line);color:v
 </section>
 <section id="done">
 <h1>Connected</h1>
-<p>Stockbit accepted the session and idx stored it. Close the private window without signing out: signing out there could end idx's session too.</p>
+<p>Stockbit accepted the session and idx stored it.</p>
+<p><strong>__BACK__</strong></p>
+<p>Then close the private window without signing out: signing out there could end idx's session too. You can close this tab.</p>
 </section>
 <p id="status" role="status" aria-live="polite"></p>
 <footer>idx stores only the two tokens Stockbit issues, in a file only you can read, and never sees your password. This page stops listening after __SPAN__.</footer>
@@ -510,28 +574,47 @@ footer{margin-top:20px;padding-top:14px;border-top:1px solid var(--line);color:v
     e.preventDefault();
     show("Drag this button to your bookmarks bar, then click the bookmark on the stockbit.com tab.", "");
   });
-  var busy = false;
+  var busy = false, done = false;
+  var back = "__BACK__";
+  // The sign-in is over: this tab shows it, and the tab that sent the
+  // session also raises an alert, so the user knows to go back.
+  function connected(fromHere, message) {
+    if (done) return;
+    done = true;
+    document.getElementById("steps").style.display = "none";
+    document.getElementById("done").style.display = "block";
+    document.title = "Connected: Stockbit for idx";
+    // The Connected section says it on screen; the status line still tells a screen reader.
+    show(message || "Connected. " + back, "ok sr");
+    if (fromHere) alert("Connected: idx stored your Stockbit session.\n\n" + back + "\n\nThen close the private window without signing out.");
+  }
   function send(value) {
     value = (value || "").trim();
     if (!value) { show("Paste the cookie value first.", "err"); return; }
-    if (busy) return;
+    if (busy || done) return;
     busy = true;
     show("Checking the session with Stockbit...", "wait");
     fetch(location.pathname, { method: "POST", headers: { "Content-Type": "text/plain" }, body: value })
       .then(function (r) { return r.json().catch(function () { return { ok: false, message: "HTTP " + r.status }; }); })
       .then(function (j) {
         busy = false;
-        if (j.ok) {
-          document.getElementById("steps").style.display = "none";
-          document.getElementById("done").style.display = "block";
-          show(j.message, "ok");
-        } else {
-          show(j.message, "err");
-        }
+        if (j.ok) connected(true, j.message);
+        else show(j.message, "err");
       })
       .catch(function () {
         busy = false;
-        show("idx is no longer listening (the page timed out or the sign-in finished). Run idx stockbit login --page again.", "err");
+        if (!done) show("idx is no longer listening (the page timed out or the sign-in finished). Run idx stockbit login --page again.", "err");
+      });
+  }
+  // Another tab may send the session (the bookmark opens a new one): ask idx
+  // until it says a session was accepted, so this tab says so too.
+  function watchSignIn() {
+    if (done) return;
+    fetch(location.pathname + "/wait")
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j.connected) connected(false); else watchSignIn(); })
+      .catch(function () {
+        if (!done) show("idx is no longer listening (the page timed out or the sign-in finished). Check the terminal, or run idx stockbit login --page again.", "err");
       });
   }
   document.getElementById("connect").addEventListener("click", function () {
@@ -551,6 +634,8 @@ footer{margin-top:20px;padding-top:14px;border-top:1px solid var(--line);color:v
     history.replaceState(null, "", location.pathname);
     try { v = decodeURIComponent(v); } catch (e) {}
     send(v);
+  } else {
+    watchSignIn();
   }
 })();
 </script>
@@ -604,7 +689,7 @@ mod tests {
                 }
             })
         });
-        let st = PageState::new(accept, Duration::from_secs(300));
+        let st = PageState::new(accept, Duration::from_secs(300), ReturnTo::Terminal);
         (router(SECRET, st.clone()), st, calls)
     }
 
@@ -773,6 +858,7 @@ mod tests {
         let server = bind(PageOptions {
             port: Some(0),
             timeout: Duration::from_millis(150),
+            return_to: ReturnTo::Terminal,
         })
         .await
         .unwrap();
@@ -795,6 +881,7 @@ mod tests {
         let server = bind(PageOptions {
             port: Some(0),
             timeout: Duration::from_secs(20),
+            return_to: ReturnTo::Terminal,
         })
         .await
         .unwrap();
@@ -854,6 +941,7 @@ mod tests {
         let opts = PageOptions {
             port: Some(0),
             timeout: Duration::from_millis(400),
+            return_to: ReturnTo::Agent,
         };
         let first = start_in_background(sb.clone(), opts, &ssh).await.unwrap();
         assert_eq!(
@@ -893,6 +981,7 @@ mod tests {
         let e = bind(PageOptions {
             port: Some(port),
             timeout: Duration::from_secs(1),
+            return_to: ReturnTo::Terminal,
         })
         .await
         .err()
@@ -942,5 +1031,121 @@ mod tests {
         let e = env(&[("SSH_TTY", "/dev/pts/1")]);
         assert_eq!(ssh_forward(1, &e), "ssh -N -L 1:127.0.0.1:1 you@this-host");
         assert!(over_ssh(&e));
+    }
+
+    /// The test app's page, for a given caller.
+    fn app_for(return_to: ReturnTo) -> (Router, Arc<PageState>) {
+        let accept: AcceptFn = Arc::new(|v: String| {
+            Box::pin(async move {
+                if v == "good" {
+                    Ok(accepted())
+                } else {
+                    Err(AcceptError::Refused("HTTP 401".into()))
+                }
+            })
+        });
+        let st = PageState::new(accept, Duration::from_secs(300), return_to);
+        (router(SECRET, st.clone()), st)
+    }
+
+    fn post_good() -> Request {
+        req(
+            "POST",
+            &path(),
+            "127.0.0.1:7878",
+            Some("http://127.0.0.1:7878"),
+            "good",
+        )
+    }
+
+    #[tokio::test]
+    async fn after_a_sign_in_the_page_says_where_to_look() {
+        for (return_to, words) in [
+            (
+                ReturnTo::Terminal,
+                "Go back to the terminal where you ran idx stockbit login",
+            ),
+            (
+                ReturnTo::Agent,
+                "Go back to your agent: idx_stockbit_status",
+            ),
+        ] {
+            let (app, _st) = app_for(return_to);
+            let html = text(
+                app.clone()
+                    .oneshot(req("GET", &path(), "127.0.0.1:7878", None, ""))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            // In the Connected section and in the script that raises the
+            // alert in the tab that sent the session.
+            assert_eq!(html.matches(words).count(), 2, "{return_to:?}");
+            assert!(html.contains("alert(\"Connected: idx stored your Stockbit session."));
+            assert!(!html.contains("__BACK__"));
+            assert!(!html.contains('\u{2014}'), "no em dash");
+            let j: serde_json::Value =
+                serde_json::from_str(&text(app.oneshot(post_good()).await.unwrap()).await).unwrap();
+            assert_eq!(j["ok"], true);
+            let message = j["message"].as_str().unwrap();
+            assert!(message.starts_with("Connected. "), "{message}");
+            assert!(message.contains(words), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_waiting_tab_learns_that_another_tab_signed_in() {
+        let (app, st) = app_for(ReturnTo::Terminal);
+        let wait = || {
+            req(
+                "GET",
+                &format!("{}/wait", path()),
+                "127.0.0.1:7878",
+                None,
+                "",
+            )
+        };
+        // Nothing sent yet: the wait answers "not yet" after WAIT_MAX.
+        let j: serde_json::Value =
+            serde_json::from_str(&text(app.clone().oneshot(wait()).await.unwrap()).await).unwrap();
+        assert_eq!(j["connected"], false);
+        // A wait held open while the bookmark's tab sends the session answers
+        // as soon as it is accepted.
+        let held = tokio::spawn(app.clone().oneshot(wait()));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let res = app.clone().oneshot(post_good()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = tokio::time::timeout(Duration::from_millis(150), held)
+            .await
+            .expect("the held wait answers at once")
+            .unwrap()
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+        assert_eq!(j["connected"], true);
+        assert!(st.accepted.lock().await.is_some());
+        // The wait sits behind the same secret and Host check as the page.
+        let res = app
+            .clone()
+            .oneshot(req(
+                "GET",
+                "/login/0123456789abcdef0123456789abcdee/wait",
+                "127.0.0.1:7878",
+                None,
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let res = app
+            .oneshot(req(
+                "GET",
+                &format!("{}/wait", path()),
+                "evil.test",
+                None,
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 }

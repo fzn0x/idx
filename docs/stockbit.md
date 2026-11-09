@@ -70,8 +70,12 @@ page:
    clipboard button).
 
 The page posts only that value to idx, which checks it with Stockbit and
-answers on the page. Close the private window afterwards **without signing
-out**. The page answers only on its secret path, only to a loopback `Host`, and
+answers on the page. Once the session is stored, the tab that sent it raises
+an alert, and every tab still open on the page (the one you started from too)
+turns to "Connected" with where to look next: the terminal where you ran
+`idx stockbit login`, which prints the session's status, or, when the MCP
+server opened the page, your agent. Close the private window afterwards
+**without signing out**. The page answers only on its secret path, only to a loopback `Host`, and
 takes a POST only from a loopback origin; it keeps no copy, sets `no-store`,
 `no-referrer` and a CSP that allows nothing outside the page, accepts one
 session and stops (or after `--timeout`, 300 seconds by default). Port 7878 is
