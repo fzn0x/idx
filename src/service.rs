@@ -20,7 +20,8 @@ use crate::model::{
     BrokerInvestor, BrokerStockRow, BrokerSummary, BrokerSummaryChoice, DividendHistory,
     DividendSummary, Earnings, EarningsFilter, Fundamentals, History, Interval, Intraday,
     MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary, OwnershipSummary, Performance,
-    Period, Quote, ScreenReport, ScreenRow, SentimentReport, StaleReason, Symbol, Technical,
+    Period, Quote, Rotation, RotationInterval, RotationMethod, ScreenReport, ScreenRow,
+    SentimentReport, StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
@@ -528,6 +529,106 @@ pub async fn returns(
     }
     result.warnings.extend(warnings);
     Ok(result)
+}
+
+/// Where each symbol sits on a relative rotation graph against `benchmark`
+/// (`analysis::rotation`), from five years of daily candles: the history
+/// `returns` reads, so the two share the cache. Fails when the benchmark
+/// cannot be read. A symbol that fails is left out with a warning, one whose
+/// history is too short keeps its row with `null` values and a warning; the
+/// call fails only when every symbol fails.
+pub async fn rotation(
+    p: &dyn Provider,
+    symbols: &[Symbol],
+    benchmark: &Symbol,
+    interval: RotationInterval,
+    window: usize,
+    tail: usize,
+) -> Result<Sourced<Rotation>> {
+    use analysis::rotation as rot;
+    let (results, bench) = futures::join!(
+        stream::iter(symbols.to_vec())
+            .map(|s| async move { p.history(&s, Period::Y5, Interval::Day1).await })
+            .buffered(8)
+            .collect::<Vec<_>>(),
+        p.history(benchmark, Period::Y5, Interval::Day1)
+    );
+    let bench = bench.map_err(|e| match e {
+        IdxError::NotFound(_) => IdxError::NotFound(format!("no data for benchmark {benchmark}")),
+        other => other,
+    })?;
+    let bench_closes = analysis::returns::series(&bench.data.candles);
+    let bench_last = bench_closes.last().map(|x| x.0);
+    let mut out = bench.map(|h| (h.symbol, h.name));
+    let mut rows = Vec::new();
+    let mut warnings = Vec::new();
+    let mut ahead = Vec::new();
+    let mut first_err: Option<IdxError> = None;
+    for (sym, r) in symbols.iter().zip(results) {
+        let h = match r {
+            Ok(h) => h,
+            Err(e) => {
+                warnings.push(match &e {
+                    IdxError::NotFound(_) => format!("no data for {sym}"),
+                    other => format!("{sym}: {other}"),
+                });
+                first_err.get_or_insert(e);
+                continue;
+            }
+        };
+        out.absorb(&h);
+        let closes = analysis::returns::series(&h.data.candles);
+        if let (Some(own), Some(b)) = (closes.last().map(|x| x.0), bench_last) {
+            if own > b {
+                ahead.push(sym.to_string());
+            }
+        }
+        let reading = rot::analyse(&closes, &bench_closes, interval, window, tail);
+        let (bar, n) = (interval.bar(), reading.observations);
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        if reading.tail.is_empty() {
+            warnings.push(format!(
+                "{sym}: {n} {bar}{} shared with {benchmark}; a point needs {}",
+                plural(n),
+                rot::bars_needed(window, 1)
+            ));
+        } else if reading.tail.len() < tail {
+            warnings.push(format!(
+                "{sym}: {} of {tail} tail points ({n} {bar}{} shared with {benchmark}; {} for a full tail)",
+                reading.tail.len(),
+                plural(n),
+                rot::bars_needed(window, tail)
+            ));
+        }
+        rows.push(rot::row(
+            h.data.symbol.clone(),
+            h.data.name.clone(),
+            reading,
+        ));
+    }
+    if rows.is_empty() {
+        return Err(first_err.unwrap_or_else(|| IdxError::NotFound("no data".into())));
+    }
+    if let (false, Some(b)) = (ahead.is_empty(), bench_last) {
+        warnings.push(format!(
+            "{benchmark}'s latest bar is {b}; the newer close of {} waits for it",
+            ahead.join(", ")
+        ));
+    }
+    out.warnings.extend(warnings);
+    Ok(out.map(|(benchmark, benchmark_name)| Rotation {
+        benchmark,
+        benchmark_name,
+        interval,
+        method: RotationMethod {
+            approximation: true,
+            window,
+            tail,
+            centre: rot::CENTRE,
+            formula: rot::FORMULA.to_string(),
+        },
+        rows,
+    }))
 }
 
 /// Collects brief sections: merges provenance, records failures.

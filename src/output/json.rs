@@ -11,8 +11,9 @@ use crate::model::{
     Earnings, EntityReport, Financials, ForeignFlowReport, ForeignReport, Fundamentals, GrowthLens,
     History, HolderMovements, HoldersReport, Holidays, ImportReport, IndexBoard, Insights,
     InstitutionalOwnership, InstrumentList, Intraday, MarketOverview, MemberList, NewsReport,
-    OrderBook, Performance, Profile, Quote, Release, RiskLens, ScreenReport, SentimentReport,
-    SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical, ValuationLens, Watchlist,
+    OrderBook, Performance, Profile, Quote, Release, RiskLens, Rotation, ScreenReport,
+    SentimentReport, SnapshotManifest, StaleReason, StatusReport, SyncReport, Technical,
+    ValuationLens, Watchlist,
 };
 use crate::model::{
     BrokerActivity, BrokerRanking, ForeignFlow, ForeignValueFlow, MarketForeign, MarketForeignValue,
@@ -76,6 +77,7 @@ pub const SCHEMA_FINANCIALS: &str = "idx.financials.v1";
 pub const SCHEMA_EARNINGS: &str = "idx.earnings.v1";
 pub const SCHEMA_DIVIDENDS: &str = "idx.dividends.v1";
 pub const SCHEMA_RETURNS: &str = "idx.returns.v1";
+pub const SCHEMA_ROTATION: &str = "idx.rotation.v1";
 pub const SCHEMA_MARKET: &str = "idx.market.v1";
 pub const SCHEMA_BRIEF: &str = "idx.brief.v1";
 pub const SCHEMA_BROKER: &str = "idx.broker.v1";
@@ -141,6 +143,7 @@ pub type FinancialsEnvelope = Envelope<Financials>;
 pub type EarningsEnvelope = Envelope<Earnings>;
 pub type DividendsEnvelope = Envelope<DividendHistory>;
 pub type ReturnsEnvelope = Envelope<Vec<Performance>>;
+pub type RotationEnvelope = Envelope<Rotation>;
 pub type MarketEnvelope = Envelope<MarketOverview>;
 pub type BriefEnvelope = Envelope<Brief>;
 pub type BrokerEnvelope = Envelope<Vec<BrokerSummary>>;
@@ -238,6 +241,7 @@ pub fn schema_names() -> &'static [&'static str] {
         "earnings",
         "dividends",
         "returns",
+        "rotation",
         "market",
         "brief",
         "broker",
@@ -307,6 +311,7 @@ pub fn schema_for(name: &str) -> Result<serde_json::Value> {
         "earnings" => schemars::schema_for!(EarningsEnvelope),
         "dividends" => schemars::schema_for!(DividendsEnvelope),
         "returns" => schemars::schema_for!(ReturnsEnvelope),
+        "rotation" => schemars::schema_for!(RotationEnvelope),
         "market" => schemars::schema_for!(MarketEnvelope),
         "brief" => schemars::schema_for!(BriefEnvelope),
         "broker" => schemars::schema_for!(BrokerEnvelope),

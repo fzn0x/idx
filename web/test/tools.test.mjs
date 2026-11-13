@@ -16,7 +16,7 @@ const read = (...p) => readFileSync(join(root, ...p), "utf8");
 
 test("the tool list matches docs/mcp.md", () => {
   const documented = [...read("docs", "mcp.md").matchAll(/^\| `(idx_[a-z_]+)` \|/gm)].map((m) => m[1]);
-  assert.equal(documented.length, 47);
+  assert.equal(documented.length, 48);
   assert.deepEqual(TOOLS.map((t) => t.tool).sort(), [...documented].sort());
   assert.equal(new Set(TOOLS.map((t) => t.tool)).size, TOOLS.length);
   for (const t of TOOLS) {
@@ -27,8 +27,11 @@ test("the tool list matches docs/mcp.md", () => {
   assert.equal(byName("nope"), undefined);
 });
 
-test("only the idx.co.id, KSEI composition, local-database, Stockbit and unchecked-source tools are CLI-only, and every web command exists in the terminal", () => {
-  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
+test("only the idx.co.id, KSEI composition, local-database, Stockbit, unchecked-source and not-yet-drawn tools are CLI-only, and every web command exists in the terminal", () => {
+  assert.deepEqual(TOOLS.filter((t) => !t.web).map((t) => t.tool).sort(), ["idx_calendar", "idx_indices", "idx_orderbook", "idx_ownership_composition", "idx_ownership_institutions", "idx_ownership_snapshot", "idx_rotation", "idx_stockbit_actions", "idx_stockbit_login", "idx_stockbit_movements", "idx_stockbit_status"]);
+  // The rotation graph waits for a scatter chart on the page.
+  assert.match(cliOnlyReason(byName("idx_rotation"), "en"), /scatter chart/);
+  assert.match(cliOnlyReason(byName("idx_rotation"), "id"), /diagram sebar/);
   // A tool with its own reason gives it; the rest share CLI_ONLY_REASON, the Stockbit one or the unchecked-source one.
   for (const t of TOOLS.filter((x) => x.why)) assert.ok(!t.web && t.why.length > 40, t.tool);
   assert.match(byName("idx_ownership_snapshot").why, /own machine/);
@@ -85,7 +88,7 @@ test("the landing page lists every tool with its commands", () => {
     if (t.web) assert.ok(web.includes(`href="/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /hanya CLI dan MCP/, tool);
   }
-  assert.match(html, /idx mcp · 47 alat/);
+  assert.match(html, /idx mcp · 48 alat/);
   // The English page carries the same rows, linking to the English terminal.
   const en = read("web", "public", "en", "index.html");
   const enStart = en.indexOf('aria-labelledby="cmd-h"');
@@ -96,7 +99,7 @@ test("the landing page lists every tool with its commands", () => {
     if (t.web) assert.ok(web.includes(`href="/en/terminal?cmd=${encodeURIComponent(t.web)}"`), tool);
     else assert.match(web, /CLI and MCP only/, tool);
   }
-  assert.match(en, /idx mcp · 47 tools/);
+  assert.match(en, /idx mcp · 48 tools/);
 });
 
 test("/api/instruments and /api/members serve the bundled lists", () => {

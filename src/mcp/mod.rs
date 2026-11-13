@@ -26,7 +26,8 @@ use crate::http::Fetcher;
 use crate::model::{
     AstroPeriod, BandarPeriod, BrokerBoard, BrokerInvestor, BrokerSummaryChoice, ConcentrationSort,
     CorporateEventKind, EarningsFilter, ForeignSource, HolderOrigin, Interval, Lens,
-    MovementFilter, MovementSource, NatalChoice, Period, StatementPeriod, Symbol, IDX_EXCHANGE,
+    MovementFilter, MovementSource, NatalChoice, Period, RotationInterval, StatementPeriod, Symbol,
+    IDX_EXCHANGE,
 };
 use crate::output::json::{
     self, Envelope, ErrorEnvelope, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
@@ -36,7 +37,7 @@ use crate::output::json::{
     SCHEMA_OWNERSHIP_FOREIGN_FLOW, SCHEMA_OWNERSHIP_GRAPH, SCHEMA_OWNERSHIP_HOLDERS,
     SCHEMA_OWNERSHIP_INSTITUTIONS, SCHEMA_OWNERSHIP_RELEASES, SCHEMA_OWNERSHIP_SEARCH,
     SCHEMA_OWNERSHIP_SNAPSHOT_SYNC, SCHEMA_OWNERSHIP_STATUS, SCHEMA_PROFILE, SCHEMA_QUOTES,
-    SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_TECHNICAL, SCHEMA_VALUATION,
+    SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_ROTATION, SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_CALENDAR, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_INDICES,
@@ -584,6 +585,24 @@ pub struct ReturnsArgs {
     /// Index for excess returns: "^JKSE" (IHSG, default), "^JKLQ45", or "none" to skip it.
     #[serde(default)]
     pub benchmark: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RotationArgs {
+    /// One or more tickers, comma or space separated, e.g. "BBCA,BBRI,TLKM". A bare code is IDX; index codes keep their caret ("^JKLQ45"); another Yahoo Finance market's ticker takes its suffix, e.g. "D05.SI".
+    pub symbols: String,
+    /// What the symbols are measured against: "^JKSE" (IHSG, default), "^JKLQ45", or any ticker.
+    #[serde(default)]
+    pub benchmark: Option<String>,
+    /// "1wk" (each week's last session, default) or "1d" (every session).
+    #[serde(default)]
+    pub interval: Option<String>,
+    /// Bars in each rolling mean and standard deviation, 3 to 100 (default 14).
+    #[serde(default)]
+    pub window: Option<u32>,
+    /// Points of each symbol's recent path to keep, 1 to 52 (default 10).
+    #[serde(default)]
+    pub tail: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1397,6 +1416,60 @@ impl IdxServer {
                 ok(
                     SCHEMA_RETURNS,
                     service::returns(self.provider.as_ref(), &symbols, bench.as_ref()).await?,
+                )
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        name = "idx_rotation",
+        description = "Relative rotation graph (RRG) for one or more tickers against a benchmark (IHSG ^JKSE by default), computed by idx from five years of daily closes: each symbol's RS-Ratio (relative strength, normalised around 100) and RS-Momentum (its rate of change, normalised around 100), the quadrant they put it in (leading: both >= 100; weakening: ratio >= 100, momentum < 100; lagging: both < 100; improving: ratio < 100, momentum >= 100), the change over the tail and the tail itself (the recent path, oldest first). An open approximation of the JdK RS-Ratio and RS-Momentum, whose formulas are proprietary: values differ from StockCharts and Optuma; method.formula states them. Axes are in standard deviations, not percent. Weekly bars by default (each week's last session); a first point needs 2 x window bars, so a short history leaves a row's values null with a warning. Rotation usually runs clockwise: improving, leading, weakening, lagging. Returns the idx.rotation.v1 envelope (rows in the order requested)."
+    )]
+    async fn rotation(
+        &self,
+        Parameters(a): Parameters<RotationArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        finish(
+            async {
+                let symbols = Symbol::parse_list_on([a.symbols.as_str()], IDX_EXCHANGE)?;
+                let bench = match a.benchmark.as_deref().map(str::trim) {
+                    None | Some("") => Symbol::parse("^JKSE")?,
+                    Some(s) => Symbol::parse_on(s, IDX_EXCHANGE)?,
+                };
+                let interval = match a.interval.as_deref().map(str::trim) {
+                    None | Some("") => RotationInterval::Week,
+                    Some(s) => {
+                        <RotationInterval as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+                            IdxError::Usage(format!("interval must be 1wk or 1d, not {s:?}"))
+                        })?
+                    }
+                };
+                let window = a
+                    .window
+                    .unwrap_or(crate::analysis::rotation::DEFAULT_WINDOW as u32);
+                if !(3..=100).contains(&window) {
+                    return Err(IdxError::Usage(format!(
+                        "window must be 3 to 100, not {window}"
+                    )));
+                }
+                let tail = a
+                    .tail
+                    .unwrap_or(crate::analysis::rotation::DEFAULT_TAIL as u32);
+                if !(1..=52).contains(&tail) {
+                    return Err(IdxError::Usage(format!("tail must be 1 to 52, not {tail}")));
+                }
+                ok(
+                    SCHEMA_ROTATION,
+                    service::rotation(
+                        self.provider.as_ref(),
+                        &symbols,
+                        &bench,
+                        interval,
+                        window as usize,
+                        tail as usize,
+                    )
+                    .await?,
                 )
             }
             .await,
@@ -2558,7 +2631,7 @@ mod tests {
         let mut names = s.tool_names();
         names.sort();
         // The count `idx mcp setup` prints (clients::tool_count reads the router).
-        assert_eq!(names.len(), 47);
+        assert_eq!(names.len(), 48);
         assert_eq!(
             names,
             [
@@ -2602,6 +2675,7 @@ mod tests {
                 "idx_profile",
                 "idx_quote",
                 "idx_returns",
+                "idx_rotation",
                 "idx_screen",
                 "idx_sentiment",
                 "idx_stockbit_actions",

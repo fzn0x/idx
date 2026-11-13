@@ -5995,3 +5995,198 @@ fn market_astro_backtest_reads_the_jkse_history() {
         ))
         .stdout(predicate::str::contains("Bonferroni needs p < 0.001852 at 5%: none pass."));
 }
+
+/// The five-year daily chart `stocks returns` and `stocks rotation` read.
+fn chart_5y(symbol: &str) -> String {
+    format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=5y&interval=1d&includePrePost=false")
+}
+
+/// The recorded one-year charts, served for the five-year requests.
+fn seed_rotation(cache: &std::path::Path) {
+    for (sym, file) in [
+        ("^JKSE", "jkse"),
+        ("BBCA.JK", "bbca"),
+        ("TLKM.JK", "tlkm"),
+        ("GIAA.JK", "giaa"),
+        ("ITMG.JK", "itmg"),
+    ] {
+        seed(
+            cache,
+            &chart_5y(sym),
+            &format!("yahoo/chart_{file}_1y_1d.json"),
+        );
+    }
+}
+
+#[test]
+fn stocks_rotation_places_each_symbol_in_its_quadrant() {
+    let sb = sandbox();
+    seed_rotation(&sb.cache);
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o", "json", "stocks", "rotation", "BBCA", "TLKM", "GIAA", "ITMG",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "idx.rotation.v1");
+    assert_eq!(v["provider"], "yahoo");
+    let d = &v["data"];
+    assert_eq!(d["benchmark"], "^JKSE");
+    assert_eq!(d["interval"], "1wk");
+    assert_eq!(d["method"]["approximation"], true);
+    assert_eq!(d["method"]["window"], 14);
+    assert_eq!(d["method"]["tail"], 10);
+    assert_eq!(d["method"]["centre"], 100.0);
+    let rows = d["rows"].as_array().unwrap();
+    let got: Vec<(&str, &str, f64, f64)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r["symbol"].as_str().unwrap(),
+                r["quadrant"].as_str().unwrap(),
+                r["rs_ratio"].as_f64().unwrap(),
+                r["rs_momentum"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("BBCA", "leading", 100.63, 100.63),
+            ("TLKM", "lagging", 99.33, 99.5),
+            ("GIAA", "improving", 98.86, 100.06),
+            ("ITMG", "weakening", 101.76, 98.66),
+        ]
+    );
+    for r in rows {
+        assert_eq!(r["as_of"], "2026-11-04");
+        let tail = r["tail"].as_array().unwrap();
+        assert_eq!(tail.len(), 10);
+        assert_eq!(tail[9]["date"], "2026-11-04");
+        assert_eq!(tail[9]["quadrant"], r["quadrant"]);
+        let change = r["rs_ratio_change"].as_f64().unwrap();
+        let first = tail[0]["rs_ratio"].as_f64().unwrap();
+        assert!((r["rs_ratio"].as_f64().unwrap() - first - change).abs() < 0.011);
+    }
+    // ^JKSE's daily bar lags the shares' by a session; the warning says so.
+    let warnings = v["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("^JKSE's latest bar is 2026-11-04")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn stocks_rotation_table_draws_the_quadrants() {
+    let sb = sandbox();
+    seed_rotation(&sb.cache);
+    let out = idx(&sb.cache, &sb.config)
+        .args(["stocks", "rrg", "BBCA,TLKM,GIAA,ITMG"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let table = String::from_utf8(out.stdout).unwrap();
+
+    for want in [
+        "Relative rotation vs ^JKSE",
+        "weekly, window 14, tail 10 · as of 2026-11-04",
+        "Open approximation of the JdK RS-Ratio and RS-Momentum",
+        "improving: GIAA",
+        "leading: BBCA",
+        "lagging: TLKM",
+        "weakening: ITMG",
+        "RS-Ratio >= 100",
+        "standard deviations around 100",
+    ] {
+        assert!(table.contains(want), "missing {want:?} in\n{table}");
+    }
+}
+
+#[test]
+fn stocks_rotation_options_lines_and_failures() {
+    let sb = sandbox();
+    seed_rotation(&sb.cache);
+    // Daily bars, a longer window, a shorter tail; one JSONL line per symbol.
+    let out = idx(&sb.cache, &sb.config)
+        .args([
+            "-o",
+            "jsonl",
+            "stocks",
+            "rotation",
+            "BBCA",
+            "TLKM",
+            "--interval",
+            "1d",
+            "--window",
+            "20",
+            "--tail",
+            "5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["symbol"], "BBCA");
+    assert_eq!(lines[0]["tail"].as_array().unwrap().len(), 5);
+    assert!(
+        lines[0]["observations"].as_u64().unwrap() > 200,
+        "sessions, not weeks"
+    );
+    // A symbol that cannot be read is a warning; the others stay.
+    let out = idx(&sb.cache, &sb.config)
+        .args(["-o", "json", "stocks", "rotation", "BBCA", "ZZZZ"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["rows"].as_array().unwrap().len(), 1);
+    assert!(v["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().starts_with("ZZZZ")));
+    // No benchmark history, no graph (offline here: exit 5).
+    idx(&sb.cache, &sb.config)
+        .args(["stocks", "rotation", "BBCA", "--benchmark", "^JKLQ45"])
+        .assert()
+        .code(5);
+    // The window needs a spread; the tail at least a point.
+    for bad in [["--window", "2"], ["--tail", "0"], ["--interval", "1mo"]] {
+        idx(&sb.cache, &sb.config)
+            .args(["stocks", "rotation", "BBCA"])
+            .args(bad)
+            .assert()
+            .code(2);
+    }
+    idx(&sb.cache, &sb.config)
+        .args(["schema", "rotation"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rs_momentum"));
+}

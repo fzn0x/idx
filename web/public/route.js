@@ -237,7 +237,7 @@ const SCHEMA_CMD = {
   "ownership-search": "ownership search salim", "ownership-cross-holders": "ownership cross-holders", "ownership-concentration": "ownership concentration",
   "ownership-graph": "ownership graph BBCA", "market-foreign-value": "market foreign",
   // idx.co.id's foreign flow in shares (the page's foreign prints foreign-value), the other CLI-and-MCP-only commands, the local database, the error envelope.
-  foreign: null, "market-foreign": null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
+  foreign: null, "market-foreign": null, rotation: null, indices: null, calendar: null, orderbook: null, "stockbit-actions": null,
   "stockbit-movements": null, "stockbit-status": null, watchlist: null, error: null, "ownership-import": null, "ownership-discover": null,
   "ownership-resolve-candidates": null, "ownership-resolution": null, "ownership-resolutions": null, "ownership-composition": null,
   "ownership-snapshot-sync": null, "ownership-status": null, "ownership-snapshot": null, "ownership-institutions": null,
@@ -278,6 +278,7 @@ export const STOCKBIT_KINDS = new Set(["dividend", "stock_dividend", "stock-divi
  */
 export const MCP_ONLY = {
   "market indices": { tool: "idx_indices", takes: "many", near: () => [N.market(), N.ihsg()] },
+  "stocks rotation": { tool: "idx_rotation", takes: "many", needs: true, near: (a) => { const l = a.syms.length ? a.syms : ["BBCA", "BBRI", "TLKM"]; return [N.returns(l), l.length === 1 ? N.quote(l[0]) : N.quotes(l)]; } },
   "market calendar": { tool: "idx_calendar", takes: "symbol", kinds: { flag: "type", short: "t", words: CALENDAR_TYPES }, near: (a) => [N.actions(a.sym), N.holidays()] },
   "ownership composition": { tool: "idx_ownership_composition", takes: "one", needs: true, near: (a) => [N.ownForeign(a.sym), N.holders(a.sym)] },
   "ownership institutions": { tool: "idx_ownership_institutions", takes: "one", needs: true, near: (a) => [N.holders(a.sym)] },
@@ -292,7 +293,7 @@ export const MCP_ONLY = {
 };
 
 /** Words typed alone that can only mean one of those. */
-export const BARE = { orderbook: "stockbit orderbook", indices: "market indices", calendar: "market calendar", composition: "ownership composition", institutions: "ownership institutions", movements: "stockbit movements" };
+export const BARE = { rotation: "stocks rotation", rrg: "stocks rotation", orderbook: "stockbit orderbook", indices: "market indices", calendar: "market calendar", composition: "ownership composition", institutions: "ownership institutions", movements: "stockbit movements" };
 
 /**
  * The words of a CLI-only line the CLI needs: with no subcommand typed, `alone`
@@ -435,6 +436,9 @@ function dispatch(ctx, words) {
   const sub = (words[1] || "").toLowerCase();
   if (name === "stocks") {
     if (!sub) return web(ctx, ["help"]);
+    // stocks rrg is stocks rotation (clap's visible alias).
+    const mcp = `stocks ${sub === "rrg" ? "rotation" : sub}`;
+    if (own(MCP_ONLY, mcp)) return mcpNotice(ctx, mcp, words.slice(2));
     const runs = own(PAGE_CMD, `stocks ${sub}`);
     // Any other word after stocks starts a line of its own: stocks market foreign is market foreign.
     if (!runs) return dispatch({ ...ctx, rewrite: true }, words.slice(1));
