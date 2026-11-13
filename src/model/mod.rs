@@ -32,6 +32,7 @@ pub mod ownership;
 pub mod ownership_analytics;
 pub mod ownership_sync;
 pub mod returns;
+pub mod rotation;
 pub mod screen;
 pub mod technical;
 pub mod watchlist;
@@ -101,6 +102,9 @@ pub use ownership_sync::{
     StatusReport, SyncAction, SyncNeeded, SyncReport,
 };
 pub use returns::{BenchmarkReturns, DayMove, Drawdown, Performance, ReturnWindows};
+pub use rotation::{
+    Quadrant, Rotation, RotationInterval, RotationMethod, RotationPoint, RotationRow,
+};
 pub use screen::{MarketReturns, ScreenReport, ScreenRow};
 pub use technical::{
     Bollinger, Levels, Macd, MovingAverages, Signal, SignalLabel, Technical, Trend, VolumeStats,
