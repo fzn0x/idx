@@ -21,7 +21,7 @@ test("the news headings agree with their counts (table_news::news)", () => {
     const items = [...Array.from({ length: company }, (_, i) => item("company", i)), ...Array.from({ length: market }, (_, i) => item("market", i))];
     const n = { symbol: "BBCA", matched_name: "Bank Central Asia", sources: ["kontan/investasi"], scanned: 60, company_matches: company, company_only: false, items };
     const out = news(n).children;
-    return [out.find((c) => c.tag === "p")?.attrs.text, out.find((c) => c.tag === "h3")?.attrs.text];
+    return [out.find((c) => c.tag === "p")?.attrs.words, out.find((c) => c.tag === "h3")?.attrs.text];
   };
   assert.deepEqual(headings(1, 1), ["1 of 60 scanned headlines mentions BBCA or Bank Central Asia · kontan/investasi", "Market context · 1 headline"]);
   assert.deepEqual(headings(2, 2), ["2 of 60 scanned headlines mention BBCA or Bank Central Asia · kontan/investasi", "Market context · 2 headlines"]);

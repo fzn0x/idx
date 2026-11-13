@@ -57,7 +57,7 @@ function liftNear() {
   const table = (cols, rows) => ({ cells: rows.map((row) => cols.map((c) => c.f(row))), classList: { add() {} } });
   return new Function("el", "table", "wrapScroll", "here", "t", `${words}\n${near}\nreturn { commandWords, nearTable };`)(el, table, (x) => x, (p) => p, (id) => id);
 }
-const text = (n) => (typeof n === "string" ? n : n.attrs.text ?? n.children.map(text).join(""));
+const text = (n) => (typeof n === "string" ? n : n.attrs.text ?? n.attrs.words ?? n.children.map(text).join(""));
 
 test("an offered command wraps only between its words, and its link runs the whole line", () => {
   const { nearTable } = liftNear();
@@ -144,6 +144,53 @@ test("help's usage lines wrap only between their words, as a notice's offered co
   assert.ok(one("earnings").includes("<span.word>[--reported|--estimates]"));
   // help for an alias shows its command's row the same way.
   assert.deepEqual(one("f"), COMMANDS.find((c) => c.name === "fundamental").usage.split(" ").map((w) => `<span.word>${w}`));
+  // The description beside it is prose set through keepWords (app.js), so its --flags and preset names stay whole too.
+  const helpCol = (which) => {
+    const tb = renderHelp(which).children.find((c) => c.tag === "table");
+    const col = tb.cols.findIndex((c) => c.cls === "help");
+    return tb.cells.map((row) => row[col]);
+  };
+  helpCol().forEach((cell, i) => assert.equal(cell.attrs.words, COMMANDS[i].help, COMMANDS[i].name));
+});
+
+const appSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "public", "app.js"), "utf8");
+
+test("prose keeps each hyphenated word whole: it wraps at spaces, never after a --flag's or a preset's hyphen (#121)", () => {
+  const body = appSrc.match(/^export function keepWords\(s\) \{[\s\S]*?^\}$/m)?.[0];
+  assert.ok(body, "keepWords found in app.js");
+  const el = (tag, attrs = {}, children = []) => ({ tag, attrs, children: [].concat(children) });
+  const keepWords = new Function("el", `${body.replace(/^export /, "")}\nreturn keepWords;`)(el);
+  const shown = (s) => keepWords(s).map((n) => (typeof n === "string" ? n : `<${n.attrs.class}>${n.attrs.text}`));
+  // The rows that broke on a phone (2026-11-08): help's "--" / "statement", "quiet-" / "accumulation", market foreign's
+  // footer "(--" / "source idx)", the heading's "brokers -" / "-top".
+  assert.deepEqual(shown("income statement, balance sheet, cash flow; --statement shows only those"),
+    ["income", " ", "statement,", " ", "balance", " ", "sheet,", " ", "cash", " ", "flow;", " ", "<whole>--statement", " ", "shows", " ", "only", " ", "those"]);
+  assert.deepEqual(shown("presets: quiet-accumulation, below-bandar"), ["presets:", " ", "<whole>quiet-accumulation,", " ", "<whole>below-bandar"]);
+  assert.deepEqual(shown("in shares (--source idx)."), ["in", " ", "shares", " ", "<whole>(--source", " ", "idx)."]);
+  assert.deepEqual(shown("idx market brokers --top 3"), ["idx", " ", "market", " ", "brokers", " ", "<whole>--top", " ", "3"]);
+  // The text is unchanged, spaces and line breaks included.
+  const s = "Showing 10 of 42 members;\n--top 0 for all.  Ex-dividend 2026-11-13";
+  assert.equal(keepWords(s).map((n) => (typeof n === "string" ? n : n.attrs.text)).join(""), s);
+  // A word over 40 characters stays plain, so it can still break at its hyphens rather than run off a phone's screen.
+  const long = "a-very-long-hyphenated-token-of-more-than-forty-chars";
+  assert.deepEqual(shown(long), [long]);
+  assert.deepEqual(keepWords(null), []);
+  assert.deepEqual(shown(""), []);
+});
+
+test("the terminal sets its prose, notes and errors through words, and heads each result with its line's words (#121)", () => {
+  // Every paragraph of prose, every note and every error: none sets plain text that would break after a hyphen.
+  assert.doesNotMatch(src, /class: "(warn|prose|err)", text:/);
+  assert.ok((src.match(/class: "warn", words:/g) || []).length > 50, "the notes go through words");
+  // The result's heading (the typed line, idx market brokers --top 3) and a notice's offered-command descriptions do too.
+  assert.match(src, /el\("span", \{ words: shownLine\(cmdLine\) \}\)/);
+  assert.match(src, /f: \(n\) => el\("span", \{ words: t\(n\.id, n\.en\) \}\), l: true, cls: "help"/);
+  // So do the welcome panel's example buttons ("--" / "sort div", "big-" / "accumulation" at 390 px).
+  assert.match(src, /SAMPLE\.map\(\(s\) => el\("button", \{ type: "button", words: s, onclick/);
+  // el() sets words through keepWords, and the stylesheet keeps a .whole span as one inline box.
+  assert.match(appSrc, /else if \(k === "words"\) n\.append\(\.\.\.keepWords\(v\)\);/);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "public", "styles.css"), "utf8");
+  assert.match(css, /^\.whole \{ display: inline-block; max-width: 100%;/m);
 });
 
 test("the screen marks a P/B over another currency's statements and names the companies as the CLI does", () => {
@@ -164,7 +211,7 @@ test("the screen marks a P/B over another currency's statements and names the co
     const page = render({ preset: null, filters: ["pe<10"], quoted: rows.length, universe: rows.length, matched_quote_level: rows.length, fundamentals_checked: 0, total_matches: rows.length, sort: "div", descending: true, rows, returns_source: null });
     const t = page.children.find((c) => c.tag === "table");
     const pb = t.cols.find((c) => c.h === "P/B");
-    return { pb: t.rows.map((r) => pb.f(r)), notes: page.children.filter((c) => c.tag === "p" && c.attrs.class === "warn").map((c) => c.attrs.text) };
+    return { pb: t.rows.map((r) => pb.f(r)), notes: page.children.filter((c) => c.tag === "p" && c.attrs.class === "warn").map((c) => c.attrs.words) };
   };
 
   // 2026-11-06: BSSR and GEMS report in USD, BBCA in IDR; PTRO has no P/B (the cases of src/output/table_news.rs).
@@ -197,14 +244,14 @@ test("brokers prints IPOT's member ranking with the CLI's columns, class and net
   assert.deepEqual(t.cols.map((c) => (c.f ? c.f(row) : row[c.k])), [3, "CC", "MANDIRI SEKURITAS", "BUMN", "1.88T", "9.11%", "-262.9B", "4.51B", "211.2K"]);
   assert.equal(t.cols.find((c) => c.h === "Net").cls(row), "num dn");
   assert.equal(page.children[0].attrs.html, "<b>Exchange members</b> · 2026-11-06 · 88 active · by value · all members' value 20.65T (both sides)");
-  const notes = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text);
+  const notes = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.words);
   assert.deepEqual(notes.slice(0, 1), ["Showing 1 of 88 members; --top 0 for all."]);
   assert.match(notes[1], /^Each member's buying and selling together, as IPOT \(Indo Premier\) publishes them, and its net \(bought minus sold; json brokers adds the value bought and sold\)/);
   assert.match(notes[1], /abbreviates figures of a million and more to two decimals/);
   // Rows without a side or a class (idx.co.id's shape) print without those columns, as the CLI does.
   const plain = render({ ...ranking, rounded: false, members: 1, brokers: [{ ...row, buy_value: null, sell_value: null, net_value: null, kind: null }] });
   assert.deepEqual(plain.children.find((c) => c.tag === "table").cols.map((c) => c.h), ["#", "Code", "Member", "Value", "Share", "Volume", "Frequency"]);
-  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text).join(" "), /abbreviates|its net/);
+  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.words).join(" "), /abbreviates|its net/);
 });
 
 test("market foreign prints the rupiah ranking with the CLI's columns and its market line", () => {
@@ -228,12 +275,12 @@ test("market foreign prints the rupiah ranking with the CLI's columns and its ma
   assert.deepEqual(t.cols.map((c) => c.h), ["#", "Symbol", "Name", "Price", "%", "Value", "Foreign net", "Net %"]);
   assert.deepEqual(t.cols.map((c) => (c.f ? c.f(row) : row[c.k])), [1, "BBCA", "BANK CENTRAL ASIA Tbk", "5,200", "+1.46%", "1T", "+219B", "21.9%"]);
   assert.equal(t.cols.find((c) => c.h === "Foreign net").cls(row), "num up");
-  const words = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text);
+  const words = page.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.words);
   assert.deepEqual(words.slice(0, 1), ["None."], "no net selling");
   assert.match(words[1], /^Rupiah from IPOT \(Indo Premier\): each stock's foreign net is its broker summary's, across all boards, for the 100 stocks most traded by value, not every stock/);
   assert.match(words[1], /two for the market/);
   // Without totals of the session, the line says so.
   const plain = render({ ...m, market: null, rounded: false });
   assert.equal(plain.children[1].attrs.html, "Market · no totals for this session (see the warning)");
-  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.text).join(" "), /abbreviates/);
+  assert.doesNotMatch(plain.children.filter((c) => c.attrs?.class === "warn").map((c) => c.attrs.words).join(" "), /abbreviates/);
 });

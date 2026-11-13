@@ -603,5 +603,5 @@ test("a result's heading reads like the CLI line, never idx idx_<tool>", () => {
   // A word that only starts with idx is still a command of the page.
   assert.equal(shownLine("idxfoo"), "idx idxfoo");
   // The terminal heads every result this way.
-  assert.match(terminal, /\[el\("span", \{ class: "no", text: String\(n\)\.padStart\(2, "0"\) \}\), shownLine\(cmdLine\)\]/);
+  assert.match(terminal, /\[el\("span", \{ class: "no", text: String\(n\)\.padStart\(2, "0"\) \}\), el\("span", \{ words: shownLine\(cmdLine\) \}\)\]/);
 });

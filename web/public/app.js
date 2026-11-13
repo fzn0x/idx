@@ -192,11 +192,23 @@ export function scrollCue(d, cue) {
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(check).observe(d);
 }
 
+/**
+ * Prose as its pieces, each word with a hyphen in it (a --flag, quiet-accumulation, 2026-11-13) kept whole in a span
+ * (styles.css .whole): the line wraps at its spaces, never after one of those hyphens. The text is unchanged. A word over
+ * 40 characters stays plain and may break at its hyphens, as before, rather than run off a phone's screen.
+ */
+export function keepWords(s) {
+  if (s == null) return [];
+  return String(s).split(/(\s+)/).filter((w) => w !== "").map((w) => (w.includes("-") && w.length <= 40 ? el("span", { class: "whole", text: w }) : w));
+}
+
+/** A DOM element: `text` sets its text, `words` sets it through keepWords() (prose that names flags), `html` its markup. */
 export function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") n.className = v;
     else if (k === "text") n.textContent = v;
+    else if (k === "words") n.append(...keepWords(v));
     else if (k === "html") n.innerHTML = v;
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v);
