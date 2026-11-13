@@ -8,6 +8,10 @@ on:
       tag:
         description: "Existing tag to (re)build, e.g. v0.1.0"
         required: true
+      npm_only:
+        description: "Only publish that tag's npm packages (its GitHub release and crates.io are done)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -19,6 +23,8 @@ env:
 jobs:
   build:
     name: ${{ matrix.target }}
+    # Skipped with it: the release and crates.io, which need it.
+    if: ${{ !inputs.npm_only }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -192,9 +198,11 @@ jobs:
     # Trusted Publishing for this workflow on each package. Trusted Publishing
     # can only be set up on a package that already exists, so a new package
     # is published once by hand (with 2FA) before this job takes it over.
+    # A dispatch with npm_only publishes an existing tag's packages alone,
+    # without rebuilding (and so changing) the release's binaries.
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    if: ${{ !cancelled() && vars.NPM_PUBLISH == 'true' && (inputs.npm_only || needs.release.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -221,6 +229,8 @@ jobs:
           name="$(node -p "require('./package.json').name")"
           ver="$(node -p "require('./package.json').version")"
           if npm view "$name@$ver" version >/dev/null 2>&1; then echo "$name $ver is already on npm"; exit 0; fi
-          npm publish --access public --provenance
+          # Verbose: npm logs a failed Trusted Publishing exchange only at
+          # this level, and then stops with a bare ENEEDAUTH (#124).
+          npm publish --access public --provenance --loglevel verbose
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
