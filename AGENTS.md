@@ -64,7 +64,9 @@ src/
                      bookmarklet or paste for the cookie) and the background page sign-in behind MCP
   analysis/          technical.rs (indicators + signal), fundamental.rs (verdict), screen.rs (filter DSL,
                      presets), sentiment.rs (lexicon), returns.rs (windows, CAGR, drawdown, volatility, beta
-                     against a benchmark on shared dates), lens.rs (growth, valuation and risk lenses),
+                     against a benchmark on shared dates), rotation.rs (relative rotation graph: weekly
+                     resampling, RS-Ratio and RS-Momentum, an open approximation of the JdK formulas),
+                     lens.rs (growth, valuation and risk lenses),
                      dividends.rs (totals, TTM yield, streak), bandar.rs (bandarmology: tiers, signal,
                      phase, screen filters and presets), intraday.rs (session bars, VWAP), stats.rs (Welch t,
                      Student t p-values), astro.rs (returns backtest by lunar phase, Mercury, pasaran, Sun
@@ -106,7 +108,7 @@ src/
                      http.rs streamable-HTTP transport (axum, bearer token); clients.rs the
                      per-agent registration recipes behind `idx mcp setup` (keep docs/mcp.md in step)
   model/             provider-agnostic domain types = the JSON contract (Quote, Candle, History, ...,
-                     dividends.rs, returns.rs, market.rs, brief.rs, watchlist.rs, institutions.rs, lenses.rs,
+                     dividends.rs, returns.rs, rotation.rs, market.rs, brief.rs, watchlist.rs, institutions.rs, lenses.rs,
                      intraday.rs, astro.rs)
   output/            table*.rs (comfy-table), json.rs (Envelope + JSON Schema), csv.rs (-o csv),
                      jsonl.rs (-o jsonl: which list each schema streams, ROWS), format.rs (numbers);
@@ -150,7 +152,7 @@ flake.nix            Nix flake (crane + rust-overlay, built from Cargo.lock): pa
 ```
 
 CLI groups: `stocks` (quote, history, intraday, profile, financials, earnings, dividends, returns,
-fundamental, growth, valuation, risk, technical, brief, compare, screen, news, sentiment, actions,
+rotation, fundamental, growth, valuation, risk, technical, brief, compare, screen, news, sentiment, actions,
 foreign, list),
 `market` (overview, indices, foreign, brokers, calendar, holidays, members, astro),
 `ownership` (import, ticker, entity, search, cross-holders, concentration, graph, resolve, changes, foreign,
