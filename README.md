@@ -137,6 +137,7 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stocks earnings <SYMBOL> [--annual\|--quarterly] [--reported\|--estimates]` | Quarterly EPS vs estimates with surprise, yearly and quarterly revenue/earnings, analyst consensus for this and next quarter and fiscal year, next earnings date; the flags keep only those rows in every format (`--history`/`--forecast` are aliases) |
 | `stocks dividends <SYMBOL>` | Every cash dividend (ex-date, split-adjusted amount) and split; yearly totals, TTM total and yield, payout streak |
 | `stocks returns <SYMBOLS> [--benchmark ^JKSE]` | 1w/1m/3m/6m/YTD/1y/3y/5y returns, CAGR, volatility, max drawdown, best/worst day, 52-week position, and excess over IHSG |
+| `stocks rotation <SYMBOLS> [--benchmark ^JKSE] [--interval 1wk\|1d] [--window 14] [--tail 10]` (alias `rrg`) | Relative rotation graph: each ticker's RS-Ratio, RS-Momentum and quadrant (leading, weakening, lagging, improving) against IHSG, with its recent path. An open approximation of the JdK formulas; see [Relative rotation](#relative-rotation) |
 | `stocks brief <SYMBOL>` | One page: quote, verdict, signal, returns vs IHSG, dividends, top holders, headlines, with plain-language key points |
 | `stocks fundamental <SYMBOL>` | P/E, P/B, PEG, EV/EBITDA, ROE, ROA, margins, leverage, growth, dividend, analyst targets, plus a plain-language verdict that lists every rule it applied (negative equity counts against a company; multiples that mix USD statements with an IDR price are marked and not scored) |
 | `stocks growth <SYMBOL>` | Growth lens: latest-quarter revenue and earnings growth, forward EPS against trailing, and revenue and net income across the annual statements (CAGR, how often revenue grew, a turn from profit to loss); every rule with its points, every skipped rule with the reason |
@@ -182,8 +183,8 @@ idx completions powershell | Out-String | Invoke-Expression
 | `stockbit movements [SYMBOL] [--from D --to D] [--holder ID] [--action A] [--source idx\|ksei] [--pages N]` | Insider and 5 % holder movements from your Stockbit session: IDX insider disclosures (with the trade price) and KSEI's 5 % holder changes (Stockbit's estimated price kept apart), shares exact and signed |
 | `watch [add\|rm\|list\|clear\|returns]` | Plain-text watchlist next to the config; `idx watch` quotes it |
 | `ownership releases\|discover [--family F --limit N]\|path` | Imported months, files published on idx.co.id and ksei.co.id (families `above1`, `above5`, `investor-type`, `classification`, `composition`, `all`, each marked `importable`), database path |
-| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 47 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_intraday`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_insights`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_astro`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_ownership_search`, `idx_ownership_rankings`, `idx_ownership_graph`, `idx_ownership_composition`, `idx_ownership_snapshot`, `idx_ownership_institutions`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login`, `idx_stockbit_actions`, `idx_stockbit_movements` |
-| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `intraday`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `insights`, `actions`, `foreign`, `foreign-value`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `astro`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `stockbit-*`, `watchlist`, `error`, ...) |
+| `mcp [--http ADDR --token T]` · `mcp setup <client>` | MCP server over stdio or streamable HTTP, and the registration recipe for 25 agent harnesses. 48 tools: `idx_brief`, `idx_market`, `idx_quote`, `idx_history`, `idx_intraday`, `idx_profile`, `idx_financials`, `idx_earnings`, `idx_dividends`, `idx_returns`, `idx_rotation`, `idx_fundamental`, `idx_technical`, `idx_compare`, `idx_screen`, `idx_news`, `idx_sentiment`, `idx_insights`, `idx_corporate_actions`, `idx_foreign`, `idx_instruments`, `idx_market_foreign`, `idx_market_brokers`, `idx_indices`, `idx_calendar`, `idx_holidays`, `idx_astro`, `idx_members`, `idx_broker`, `idx_bandar`, `idx_bandar_screen`, `idx_bandar_broker`, `idx_ownership_ticker`, `idx_ownership_entity`, `idx_ownership_changes`, `idx_ownership_foreign`, `idx_ownership_releases`, `idx_ownership_search`, `idx_ownership_rankings`, `idx_ownership_graph`, `idx_ownership_composition`, `idx_ownership_snapshot`, `idx_ownership_institutions`, `idx_orderbook`, `idx_stockbit_status`, `idx_stockbit_login`, `idx_stockbit_actions`, `idx_stockbit_movements` |
+| `schema [name]` | JSON Schema for every payload (`quotes`, `history`, `intraday`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`, `compare`, `financials`, `earnings`, `dividends`, `returns`, `rotation`, `market`, `brief`, `technical`, `screen`, `news`, `sentiment`, `insights`, `actions`, `foreign`, `foreign-value`, `instruments`, `market-foreign`, `market-brokers`, `indices`, `calendar`, `holidays`, `astro`, `members`, `broker`, `bandar`, `bandar-screen`, `bandar-broker`, `ownership-*`, `stockbit-*`, `watchlist`, `error`, ...) |
 | `config init\|set\|get\|path` | Config file management |
 | `cache stats\|clear\|path` | Response cache management |
 | `completions <shell>` | bash, zsh, fish, powershell, elvish |
@@ -202,7 +203,7 @@ Global flags work anywhere on the line:
 | `--no-color` | `NO_COLOR` | Plain tables |
 | `-v, -vv, -vvv` | `IDX_LOG` | Diagnostics on stderr, including every URL requested |
 | `-q, --quiet` | `IDX_QUIET=1` | stderr carries errors only: no warnings, notes or loading line. stdout is unchanged and `-o json` keeps `warnings` in the envelope |
-| | `IDX_EXCHANGE=SI` | Yahoo Finance suffix a bare ticker gets in `stocks quote`, `history`, `profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`, `technical`, `compare` and `watch` (default `JK`, IDX). An explicit suffix (`D05.SI`) always works there; every other command reads IDX tickers only |
+| | `IDX_EXCHANGE=SI` | Yahoo Finance suffix a bare ticker gets in `stocks quote`, `history`, `profile`, `financials`, `earnings`, `dividends`, `returns`, `rotation`, `fundamental`, `technical`, `compare` and `watch` (default `JK`, IDX). An explicit suffix (`D05.SI`) always works there; every other command reads IDX tickers only |
 | | `IDX_PROGRESS=never\|always` | The loading line on stderr (`⠹ 6s · waiting on investasi.kontan.co.id 6s`) shows on a terminal only; `never` hides it, `always` forces it |
 
 ## For scripts and agents
@@ -221,7 +222,7 @@ idx -q -o csv stocks quote BBCA BBRI > quotes.csv           # stderr: errors onl
   on stderr in both modes.
 - `-o auto` (or `IDX_OUTPUT=auto`) prints a table on a terminal and the JSON
   envelope when stdout is piped or captured.
-- `-` in a ticker list (`stocks quote|returns|compare`, `broker`, `bandar`,
+- `-` in a ticker list (`stocks quote|returns|rotation|compare`, `broker`, `bandar`,
   `watch add|rm`) reads tickers from stdin: plain text (spaces, commas or lines,
   `#` comments) or idx's own `-o json` / `-o jsonl` output.
 - The envelope records `provider`, `fetched_at`, `cached`, `stale`, `stale_reason` (`offline` or `fetch_failed`, only when stale) and `warnings`.
@@ -284,7 +285,7 @@ claude mcp add --scope user idx -- npx -y ihsg-mcp   # no idx install needed (No
 npx -y ihsg-mcp setup cursor                         # any client's recipe, in the npx form
 ```
 
-The server lists 47 tools with typed input schemas kept to the subset every
+The server lists 48 tools with typed input schemas kept to the subset every
 harness accepts (no nullable type arrays, no `format` or `default` keywords)
 and one-paragraph descriptions. `idx_brief` is the one-call starting point;
 `idx_fundamental` takes an optional `lens` (`growth`, `valuation` or `risk`)
@@ -292,6 +293,50 @@ for the focused readings of `stocks growth|valuation|risk`;
 each tool returns the same envelope as `-o json`, so an agent that learned the
 CLI already knows the tools. Failures come back as tool errors carrying
 `{error: {code, message}, exit_code}`.
+
+## Relative rotation
+
+`idx stocks rotation` (alias `rrg`, MCP `idx_rotation`) places each ticker on
+a relative rotation graph against a benchmark, IHSG (`^JKSE`) by default:
+
+```sh
+idx stocks rotation BBCA BBRI BMRI TLKM ASII
+idx stocks rotation BBCA TLKM --benchmark ^JKLQ45 --tail 5
+idx stocks rotation BBCA TLKM --interval 1d --window 20
+idx -o json stocks rotation BBCA GOTO | jq '.data.rows[] | {symbol, quadrant}'
+idx stocks rotation - < watchlist.txt
+```
+
+The x axis is RS-Ratio (is the stock beating the benchmark?), the y axis
+RS-Momentum (is that getting stronger?), both centred on 100. The quadrants:
+**leading** (both at or above 100), **weakening** (ratio above, momentum
+below), **lagging** (both below), **improving** (ratio below, momentum
+above). Stocks usually rotate clockwise through them. Each row carries its
+latest point, the change over the tail, and the tail itself (the recent
+path, oldest first); the table adds the four quadrants laid out as the graph
+draws them.
+
+idx computes it from five years of daily closes (the history `stocks
+returns` reads, so the two share the cache), on the dates the stock and the
+benchmark both have:
+
+- RS = 100 x close / benchmark close
+- RS-Ratio = 100 + (RS - mean) / standard deviation over the last `--window` bars
+- RS-Momentum = 100 + the same z-score of RS-Ratio's rate of change
+
+The original JdK RS-Ratio and RS-Momentum (RRG Research, shown by StockCharts
+and Optuma) are proprietary, so this is an open approximation and says so
+(`method.approximation`, `method.formula` in the JSON): its values will not
+match those charts. The axes are in standard deviations, not percent. Weekly
+bars (`--interval 1wk`, the default) are each week's last session, and the
+current week counts with its latest one. Defaults: window 14, tail 10. A
+first point needs 2 x window bars and a full tail 2 x window + tail - 1 (37
+weeks by default); a shorter history (a new listing) leaves the row's values
+`null` with a warning, never a fill. Yahoo has no history for the IDX sector
+indices, so a sector graph is not possible yet; index codes that do have one
+(`^JKLQ45`, `^JKII`) work as symbols or as the benchmark. The web terminal
+does not draw the graph yet: it runs in the CLI and the MCP server. Not
+investment advice.
 
 ## Bandarmology
 

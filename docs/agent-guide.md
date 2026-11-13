@@ -32,6 +32,10 @@ to the other.
 - The fundamentals verdict, the technical signal, news sentiment and the
   bandarmology readings are rule-based heuristics, and each lists the rules
   that fired. Repeat them as heuristics, not as advice.
+- `stocks rotation` (MCP `idx_rotation`) is an open approximation of the
+  JdK RS-Ratio and RS-Momentum (`method.approximation` is `true`): say so
+  when quoting it, and do not compare its values with StockCharts' RRG.
+  Its axes are standard deviations around 100, not percent.
 - Prices from the free sources are delayed as published.
 - `idx schema <name>` prints the JSON Schema of a payload;
   [json-output.md](json-output.md) documents every field.
@@ -60,6 +64,7 @@ idx -o json stocks fundamental BBCA | jq '.data.verdict'
 idx -o json stocks history TLKM --period 1y --interval 1wk | jq '.data.summary'
 idx -o json stocks screen -f 'pe<10,div>5,mcap>5T' --sort div
 idx -o json bandar detect BBRI --period 1m
+idx -o json stocks rotation BBCA BBRI BMRI TLKM | jq '.data.rows[] | {symbol, quadrant, rs_ratio, rs_momentum}'
 idx -o json ownership ticker BBCA       # after the import below
 ```
 

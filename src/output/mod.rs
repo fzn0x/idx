@@ -33,6 +33,7 @@ pub mod table_ownership;
 pub mod table_ownership_analytics;
 pub mod table_ownership_sync;
 pub mod table_reports;
+pub mod table_rotation;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,

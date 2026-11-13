@@ -324,14 +324,14 @@ All `IDX_*` environment variables and the config file apply to every client,
 so `--offline` behaviour, cache location, TTLs and provider choice can be set
 per agent (`-e IDX_PROVIDER=yahoo` in the CLI forms, `env` in the files).
 `-e IDX_HISTORY_PROVIDER=stockbit` takes candles (`idx_history`,
-`idx_technical`, `idx_returns`, `idx_brief`) from your Stockbit session while
+`idx_technical`, `idx_returns`, `idx_rotation`, `idx_brief`) from your Stockbit session while
 every other tool stays on the free providers; the envelope's `provider` names
 the source the candles came from.
 
 ## HTTP transport
 
 `idx mcp --http ADDR` serves MCP streamable HTTP at `http://ADDR/mcp` and a
-plain `GET /healthz`. It is the same server and the same 47 tools; several
+plain `GET /healthz`. It is the same server and the same 48 tools; several
 local agents can share one process and one cache this way.
 
 - `--token T` (or `IDX_MCP_TOKEN`) requires `Authorization: Bearer T` on
@@ -364,6 +364,7 @@ local agents can share one process and one cache this way.
 | `idx_earnings` | `symbol`, `period?` (`annual` \| `quarterly`), `kind?` (`reported` \| `estimates`) | `idx.earnings.v1` |
 | `idx_dividends` | `symbol` | `idx.dividends.v1`: payments, splits, yearly totals, TTM total/yield, streak |
 | `idx_returns` | `symbols`, `benchmark?` (`^JKSE` default, `none`) | `idx.returns.v1`: windows, CAGR, volatility, drawdowns, 52-week, excess over the benchmark |
+| `idx_rotation` | `symbols`, `benchmark?` (`^JKSE` default), `interval?` (`1wk` default \| `1d`), `window?` (3 to 100, default 14), `tail?` (1 to 52, default 10) | `idx.rotation.v1`: a relative rotation graph, each symbol's RS-Ratio, RS-Momentum, quadrant (leading, weakening, lagging, improving), change over the tail and the tail itself; an open approximation of the JdK formulas (`method.approximation`, `method.formula`), so values differ from StockCharts and Optuma |
 | `idx_fundamental` | `symbol`, `lens?` (`growth` \| `valuation` \| `risk`) | `idx.fundamentals.v1` (verdict included; when `financial_currency` differs from `currency`, P/B, P/S and the EV multiples mix USD and IDR and P/B is not scored); with `lens`, `idx.growth.v1`, `idx.valuation.v1` or `idx.risk.v1`: a focused reading with every rule and its points |
 | `idx_technical` | `symbol`, `period?` | `idx.technical.v1` |
 | `idx_compare` | `symbols` | `idx.compare.v1` |
@@ -475,10 +476,10 @@ latest session). For the ownership register, let the GitHub mirror serve it.
 - The server exits cleanly when the client closes stdin.
 - Verdicts and signals are heuristics; the tool descriptions and the server
   instructions say so, and so should any agent that repeats them.
-- Tickers are IDX codes. The ten Yahoo-backed tools (`idx_quote`,
+- Tickers are IDX codes. The eleven Yahoo-backed tools (`idx_quote`,
   `idx_history`, `idx_profile`, `idx_financials`, `idx_earnings`,
-  `idx_dividends`, `idx_returns`, `idx_fundamental`, `idx_technical`,
-  `idx_compare`) also take a ticker from another Yahoo Finance market with its
+  `idx_dividends`, `idx_returns`, `idx_rotation`, `idx_fundamental`,
+  `idx_technical`, `idx_compare`) also take a ticker from another Yahoo Finance market with its
   suffix (`D05.SI`), returned with that suffix; every other tool refuses one
   with a `usage` error. The server does not use `IDX_EXCHANGE`, so a bare
   code always means IDX, though an invalid value fails startup like any

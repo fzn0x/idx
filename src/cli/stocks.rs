@@ -2,18 +2,20 @@
 
 use clap::Subcommand;
 
+use crate::analysis;
 use crate::analysis::screen::{parse_filters, Key, ScreenPreset};
 use crate::error::IdxError;
 use crate::error::Result;
 use crate::model::{
-    EarningsFilter, ForeignSource, Interval, Lens, Period, StatementPeriod, Symbol,
+    EarningsFilter, ForeignSource, Interval, Lens, Period, RotationInterval, StatementPeriod,
+    Symbol,
 };
 use crate::output::json::{
     SCHEMA_ACTIONS, SCHEMA_BRIEF, SCHEMA_COMPARE, SCHEMA_DIVIDENDS, SCHEMA_EARNINGS,
     SCHEMA_FINANCIALS, SCHEMA_FOREIGN, SCHEMA_FOREIGN_VALUE, SCHEMA_FUNDAMENTALS, SCHEMA_GROWTH,
     SCHEMA_HISTORY, SCHEMA_INSIGHTS, SCHEMA_INSTRUMENTS, SCHEMA_INTRADAY, SCHEMA_NEWS,
-    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_SCREEN, SCHEMA_SENTIMENT,
-    SCHEMA_TECHNICAL, SCHEMA_VALUATION,
+    SCHEMA_PROFILE, SCHEMA_QUOTES, SCHEMA_RETURNS, SCHEMA_RISK, SCHEMA_ROTATION, SCHEMA_SCREEN,
+    SCHEMA_SENTIMENT, SCHEMA_TECHNICAL, SCHEMA_VALUATION,
 };
 use crate::output::table;
 use crate::output::table_exchange as tx;
@@ -22,6 +24,7 @@ use crate::output::table_intraday as intraday_table;
 use crate::output::table_lenses as lenses;
 use crate::output::table_news as newstbl;
 use crate::output::table_reports::{self as reports, StatementFlags};
+use crate::output::table_rotation;
 use crate::service::{self, ScreenOptions};
 use crate::universe;
 
@@ -177,6 +180,29 @@ pub enum StocksCmd {
         /// Skip the benchmark fetch.
         #[arg(long)]
         no_benchmark: bool,
+    },
+
+    /// Relative rotation graph against IHSG: each ticker's RS-Ratio, RS-Momentum and quadrant (leading, weakening, lagging, improving), with its recent path.
+    #[command(
+        visible_alias = "rrg",
+        after_help = "Examples:\n  idx stocks rotation BBCA BBRI BMRI TLKM ASII\n  idx stocks rotation BBCA TLKM --benchmark ^JKLQ45\n  idx stocks rotation BBCA TLKM --interval 1d --window 20\n  idx -o json stocks rotation BBCA GOTO | jq '.data.rows[] | {symbol, quadrant}'\n  idx stocks rotation - < watchlist.txt                # tickers from stdin\n\nComputed by idx from five years of daily closes (the history `stocks returns` reads):\nRS = 100 x close / benchmark close on the dates both have; RS-Ratio = 100 + its z-score\nover the window; RS-Momentum = 100 + the z-score of RS-Ratio's rate of change. This is an\nopen approximation of the JdK RS-Ratio and RS-Momentum, whose formulas are proprietary, so\nthe values differ from StockCharts' and Optuma's. Both axes are in standard deviations\naround 100, not percent. Weekly bars are each week's last session (the current week counts\nwith its latest one). A first point needs 2 x window bars, a full tail 2 x window + tail - 1;\na shorter history leaves the values null with a warning. Rotation usually runs clockwise:\nimproving, leading, weakening, lagging. Index codes keep their caret: ^JKSE is IHSG."
+    )]
+    Rotation {
+        /// One or more tickers, comma or space separated: IDX codes, index codes (^JKLQ45), or another Yahoo Finance market's with its suffix (D05.SI); `-` reads them from stdin.
+        #[arg(required = true, value_name = "SYMBOLS")]
+        symbols: Vec<String>,
+        /// Index (or ticker) the symbols are measured against.
+        #[arg(long, default_value = "^JKSE", value_name = "INDEX")]
+        benchmark: String,
+        /// Bars to compute on: 1wk (each week's last session) or 1d (every session).
+        #[arg(long, value_enum, default_value = "1wk")]
+        interval: RotationInterval,
+        /// Bars in each rolling mean and standard deviation (3 to 100).
+        #[arg(long, default_value_t = analysis::rotation::DEFAULT_WINDOW as u32, value_parser = clap::value_parser!(u32).range(3..=100))]
+        window: u32,
+        /// Points of each symbol's recent path to keep (1 to 52).
+        #[arg(long, default_value_t = analysis::rotation::DEFAULT_TAIL as u32, value_parser = clap::value_parser!(u32).range(1..=52))]
+        tail: u32,
     },
 
     /// One-page research brief: quote, verdict, signal, returns vs IHSG, dividends, holders and headlines in one call.
@@ -431,6 +457,29 @@ pub async fn run(ctx: &Context, cmd: StocksCmd) -> Result<()> {
             benchmark,
             no_benchmark,
         } => returns(ctx, &symbols, &benchmark, no_benchmark).await,
+        StocksCmd::Rotation {
+            symbols,
+            benchmark,
+            interval,
+            window,
+            tail,
+        } => {
+            let list =
+                Symbol::parse_list_on(input::symbol_args(&symbols)?, &ctx.settings.exchange)?;
+            let bench = Symbol::parse_on(&benchmark, &ctx.settings.exchange)?;
+            let result = service::rotation(
+                ctx.provider.as_ref(),
+                &list,
+                &bench,
+                interval,
+                window as usize,
+                tail as usize,
+            )
+            .await?;
+            emit(ctx, SCHEMA_ROTATION, result, |d| {
+                table_rotation::rotation(d, ctx.color)
+            })
+        }
         StocksCmd::Fundamental {
             symbol,
             lens: Some(l),

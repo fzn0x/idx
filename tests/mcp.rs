@@ -97,6 +97,14 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
         "https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1d&interval=1m&includePrePost=false",
         "yahoo/chart_bbca_1d_1m.json",
     );
+    // The recorded one-year charts, served for idx_rotation's five-year requests.
+    for (sym, file) in [("^JKSE", "jkse"), ("BBCA.JK", "bbca"), ("ITMG.JK", "itmg")] {
+        seed(
+            dir.path(),
+            &format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=5y&interval=1d&includePrePost=false"),
+            &format!("yahoo/chart_{file}_1y_1d.json"),
+        );
+    }
     let mut child = spawn_server(dir.path());
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -150,7 +158,8 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"idx_quote"), "{names:?}");
     assert!(names.contains(&"idx_fundamental"), "{names:?}");
-    assert_eq!(names.len(), 47, "{names:?}");
+    assert_eq!(names.len(), 48, "{names:?}");
+    assert!(names.contains(&"idx_rotation"), "{names:?}");
     assert!(names.contains(&"idx_ownership_institutions"), "{names:?}");
     assert!(names.contains(&"idx_insights"), "{names:?}");
     assert!(names.contains(&"idx_intraday"), "{names:?}");
@@ -499,6 +508,53 @@ fn mcp_server_speaks_json_rpc_over_stdio() {
     let warnings = body["warnings"].to_string();
     assert!(warnings.contains("no quote for BBCA"), "{warnings}");
     assert!(warnings.contains("truncated to the last 30"), "{warnings}");
+
+    // A relative rotation graph against IHSG from the seeded charts.
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+        "params": {"name": "idx_rotation", "arguments": {"symbols": "BBCA,ITMG", "tail": 4}}
+    });
+    writeln!(stdin, "{call}").unwrap();
+    let r = next();
+    assert_eq!(r["id"], 40);
+    assert_ne!(r["result"]["isError"], true, "{r}");
+    let body: serde_json::Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["schema"], "idx.rotation.v1");
+    assert_eq!(body["data"]["benchmark"], "^JKSE");
+    assert_eq!(body["data"]["method"]["approximation"], true);
+    let rows = body["data"]["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["quadrant"], "leading");
+    assert_eq!(rows[1]["quadrant"], "weakening");
+    assert_eq!(rows[0]["tail"].as_array().unwrap().len(), 4);
+    for (id, args, needle) in [
+        (
+            41,
+            serde_json::json!({"symbols": "BBCA", "interval": "1mo"}),
+            "1wk or 1d",
+        ),
+        (
+            42,
+            serde_json::json!({"symbols": "BBCA", "window": 2}),
+            "window must be 3 to 100",
+        ),
+    ] {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "idx_rotation", "arguments": args}
+        });
+        writeln!(stdin, "{call}").unwrap();
+        let r = next();
+        assert_eq!(r["id"], id);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let body: serde_json::Value =
+            serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "usage", "{body}");
+        assert!(
+            body["error"]["message"].as_str().unwrap().contains(needle),
+            "{body}"
+        );
+    }
 
     // A Stockbit tool without a session: a usage error naming the login,
     // before any request (the sandbox has no session file).

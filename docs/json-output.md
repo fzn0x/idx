@@ -12,7 +12,7 @@ status|logout`) follow the same flag, `IDX_OUTPUT` and config file.
 
 Machine-readable schemas: `idx schema <name>` with `quotes`, `history`,
 `intraday`, `profile`, `fundamentals`, `growth`, `valuation`, `risk`,
-`compare`, `financials`, `earnings`, `dividends`, `returns`, `market`,
+`compare`, `financials`, `earnings`, `dividends`, `returns`, `rotation`, `market`,
 `brief`, `technical`, `screen`, `news`, `sentiment`, `insights`,
 `foreign-value`, `astro`, `ownership-holders`, `ownership-entity`, `ownership-changes`,
 `ownership-foreign`, `ownership-foreign-flow`, `ownership-releases`,
@@ -56,7 +56,7 @@ already documents.
 | `idx.intraday.v1` | `data.bars[]` (the quote and the summary stay in `-o json`) |
 | `idx.financials.v1` | `data.periods[]` |
 | `idx.dividends.v1` | `data.dividends[]` (yearly totals, splits and TTM figures stay in `-o json`) |
-| `idx.screen.v1`, `idx.bandar.screen.v1`, `idx.ownership.foreign-flow.v1`, `idx.ownership.concentration.v1` | `data.rows[]` |
+| `idx.screen.v1`, `idx.bandar.screen.v1`, `idx.rotation.v1`, `idx.ownership.foreign-flow.v1`, `idx.ownership.concentration.v1` | `data.rows[]` |
 | `idx.watchlist.v1` | `data.symbols[]`, JSON strings (`idx -o jsonl watch list \| jq -r .`) |
 | `idx.holidays.v1` | `data.holidays[]` |
 | `idx.instruments.v1` | `data.instruments[]` |
@@ -159,8 +159,8 @@ estimated. When `source` is `yahoo:chart`, expect `market_cap`, P/E, dividend
 and average-volume fields to be `null`.
 
 Other markets: the Yahoo-backed commands (`stocks quote`, `history`,
-`profile`, `financials`, `earnings`, `dividends`, `returns`, `fundamental`,
-`technical`, `compare`) also take a ticker with another Yahoo Finance suffix,
+`profile`, `financials`, `earnings`, `dividends`, `returns`, `rotation`,
+`fundamental`, `technical`, `compare`) also take a ticker with another Yahoo Finance suffix,
 or a bare one with `IDX_EXCHANGE` set. In every payload an IDX ticker stays
 bare (`BBCA`) and another market's keeps its suffix (`D05.SI`); `currency` is
 what Yahoo reports (`SGD`), and times are still given in WIB (`+07:00`): the
@@ -859,6 +859,39 @@ the history is too short), `cagr_3y_pct`, `cagr_5y_pct`, `volatility_1y_pct`
 `pct_from_52w_low`, `days_since_52w_high`, and `benchmark` (`symbol`, `name`,
 `returns`, `excess` in percentage points) or `null`. Everything is computed
 from five years of daily closes; dividends are excluded.
+
+## `idx.rotation.v1` (`stocks rotation`)
+
+A relative rotation graph against one benchmark, computed by idx from five
+years of daily closes on the dates each stock and the benchmark share:
+
+- `benchmark`, `benchmark_name`: e.g. `^JKSE`, `IDX COMPOSITE`.
+- `interval`: `1wk` (each week's last session, the current week with its
+  latest one) or `1d` (every session).
+- `method`: `approximation` (always `true`: an open approximation of the JdK
+  RS-Ratio and RS-Momentum, whose formulas are proprietary, so values differ
+  from StockCharts and Optuma), `window` (bars in each rolling mean and
+  sample standard deviation), `tail` (points kept per symbol), `centre`
+  (`100`), `formula` (the formulas in words).
+- `rows[]`, in the order requested: `symbol`, `name`, `as_of` (the latest
+  point's date), `rs_ratio` (100 + the z-score of RS = 100 x close /
+  benchmark close), `rs_momentum` (100 + the z-score of RS-Ratio's rate of
+  change), `quadrant` (`leading` both >= 100, `weakening` ratio >= 100 and
+  momentum < 100, `lagging` both < 100, `improving` ratio < 100 and
+  momentum >= 100), `rs_ratio_change` and `rs_momentum_change` (latest
+  minus the tail's first point, `null` under two points), `observations`
+  (bars shared with the benchmark after resampling) and `tail[]` (`date`,
+  `rs_ratio`, `rs_momentum`, `quadrant`, oldest first, ending at `as_of`).
+
+Both axes are in standard deviations around 100, not percent; values have
+two decimals. A first point needs `2 x window` bars: with a shorter history
+`as_of`, the values and the quadrant are `null` and `tail` is empty, with a
+warning; so are they when a symbol moved exactly with the benchmark (no
+spread to normalise). A symbol that cannot be read is left out with a
+warning; the call fails when the benchmark cannot be read. When the
+benchmark's latest bar is older than a symbol's (Yahoo's `^JKSE` daily bar
+often arrives a session after the shares'), a warning names the symbols
+whose newest close waits for it.
 
 ## `idx.market.v1` (`market overview`)
 

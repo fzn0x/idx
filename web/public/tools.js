@@ -1,4 +1,4 @@
-// The 47 MCP tools, each with its CLI command and, where the web terminal can
+// The 48 MCP tools, each with its CLI command and, where the web terminal can
 // run it, a web command. `web: null` marks the CLI-and-MCP-only tools: the
 // idx.co.id ones (idx.co.id refuses requests from this site's host), the KSEI
 // composition one (its archive is imported into the CLI's local database), the
@@ -24,6 +24,7 @@ export const TOOLS = [
   { tool: "idx_earnings", cli: "idx stocks earnings TLKM", web: "earnings TLKM", what: "EPS vs estimates, next earnings date" },
   { tool: "idx_dividends", cli: "idx stocks dividends TLKM", web: "dividends TLKM", what: "payments, yearly totals, TTM yield, streak" },
   { tool: "idx_returns", cli: "idx stocks returns BBCA BBRI BMRI", web: "returns BBCA BBRI BMRI", what: "1w..5y returns, CAGR, drawdown, excess over IHSG" },
+  { tool: "idx_rotation", cli: "idx stocks rotation BBCA BBRI TLKM", web: null, what: "relative rotation graph against IHSG: RS-Ratio, RS-Momentum, quadrant, recent path", why: "A relative rotation graph is a scatter chart with each stock's recent path, which the web terminal does not draw yet, so for now it runs in the CLI and the MCP server." },
   { tool: "idx_fundamental", cli: "idx stocks fundamental BBCA", web: "fundamental BBCA", what: "ratios with a plain-language verdict; lens growth, valuation or risk for a focused reading" },
   { tool: "idx_technical", cli: "idx stocks technical BBRI", web: "technical BBRI", what: "RSI, MACD, averages, levels, signal" },
   { tool: "idx_compare", cli: "idx stocks compare BBCA BBRI BMRI", web: "compare BBCA BBRI BMRI", what: "side-by-side fundamentals" },
@@ -71,6 +72,7 @@ const STOCKBIT_REASON_ID = "Alat Stockbit membawa sesi akun Anda sendiri (diambi
 
 /** What each CLI-and-MCP-only tool gives, as the Indonesian landing page says it. */
 const WHAT_ID = {
+  idx_rotation: "grafik rotasi relatif terhadap IHSG: RS-Ratio, RS-Momentum, kuadran, jejak terakhir",
   idx_indices: "semua indeks bursa untuk satu sesi",
   idx_calendar: "tanggal dividen dan rights, RUPS, paparan publik",
   idx_ownership_composition: "saham lokal dan asing menurut jenis investor (arsip bulanan KSEI)",
@@ -85,6 +87,7 @@ const WHAT_ID = {
 
 /** The tools' own reasons (`why`) in Bahasa Indonesia. */
 const WHY_ID = {
+  idx_rotation: "Grafik rotasi relatif adalah diagram sebar dengan jejak terakhir tiap saham, yang belum digambar terminal web, jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.",
   idx_ownership_composition: "Arsip komposisi KSEI diunduh dari ksei.co.id ke basis data kepemilikan lokal milik CLI, jadi untuk sementara alat ini hanya berjalan di CLI dan server MCP.",
   idx_ownership_snapshot: "Alat ini memasang dan memeriksa berkas basis data kepemilikan di komputer Anda sendiri; terminal web menyimpan salinan daftarnya sendiri yang mengikuti mirror GitHub yang sama, jadi tidak ada yang perlu disinkronkan di sini.",
 };

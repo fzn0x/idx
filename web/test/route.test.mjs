@@ -51,7 +51,7 @@ function runsHere(line, what) {
 }
 
 test("every CLI-and-MCP-only tool is reached from its CLI command, its JSON forms and its tool name", () => {
-  assert.equal(CLI_ONLY_TOOLS.length, 10);
+  assert.equal(CLI_ONLY_TOOLS.length, 11);
   for (const tool of CLI_ONLY_TOOLS) {
     const cli = bareCli(tool);
     const group = cli.replace(/^idx /, "");
@@ -127,7 +127,7 @@ test("a notice keeps the user's words: arguments, flags, tickers in the near com
 });
 
 test("words that can only mean a CLI-and-MCP-only command reach its notice, and none is a terminal command", () => {
-  const expect = { orderbook: "idx_orderbook", indices: "idx_indices", calendar: "idx_calendar", composition: "idx_ownership_composition", institutions: "idx_ownership_institutions", movements: "idx_stockbit_movements" };
+  const expect = { rotation: "idx_rotation", rrg: "idx_rotation", orderbook: "idx_orderbook", indices: "idx_indices", calendar: "idx_calendar", composition: "idx_ownership_composition", institutions: "idx_ownership_institutions", movements: "idx_stockbit_movements" };
   assert.deepEqual(Object.keys(BARE).sort(), Object.keys(expect).sort());
   for (const [word, tool] of Object.entries(expect)) {
     assert.ok(!COMMANDS.includes(word) && !(word in ALIASES), `${word} is not a terminal command`);
@@ -210,7 +210,7 @@ test("schema NAME offers the page's command that prints that shape, and none for
   const body = json.slice(json.indexOf("pub fn schema_for"), json.indexOf("_ =>", json.indexOf("pub fn schema_for")));
   const names = [...body.matchAll(/^\s+"([a-z-]+)" =>/gm)].map((m) => m[1]);
   assert.ok(names.length > 50, `${names.length} schema names`);
-  const cliOnly = ["foreign", "market-foreign", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
+  const cliOnly = ["foreign", "market-foreign", "rotation", "indices", "calendar", "orderbook", "stockbit-actions", "stockbit-movements", "stockbit-status",
     "watchlist", "error", "ownership-import", "ownership-discover", "ownership-resolve-candidates", "ownership-resolution", "ownership-resolutions",
     "ownership-composition", "ownership-snapshot-sync", "ownership-status", "ownership-snapshot", "ownership-institutions"];
   for (const name of names) {
@@ -502,6 +502,8 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
   for (const sub of variants("stocks.rs", "StocksCmd")) {
     // stocks foreign reads idx.co.id unless told --source ipot, the page's source.
     const r = routeLine(`stocks ${sub} BBCA${sub === "foreign" ? " --source ipot" : ""}`);
+    // A stocks command the page cannot run yet has its CLI-and-MCP notice.
+    if (Object.hasOwn(MCP_ONLY, `stocks ${sub}`)) { assert.equal(r.kind, "cli-mcp", sub); assert.equal(r.tool, MCP_ONLY[`stocks ${sub}`].tool, sub); continue; }
     assert.equal(r.kind, "web", sub);
     assert.equal(tokenize(r.line)[0], sub, sub);
     assert.ok(COMMANDS.includes(sub), `stocks ${sub} is the terminal's ${sub}`);
@@ -512,6 +514,8 @@ test("the router knows every subcommand of the CLI (src/cli/*.rs)", () => {
     else assert.equal(r.kind, "cli-mcp", sub);
   }
   assert.deepEqual(variants("market.rs", "MarketCmd").filter((s) => routeLine(`market ${s}`).kind !== "web"), ["indices", "calendar"]);
+  assert.deepEqual(variants("stocks.rs", "StocksCmd").filter((s) => routeLine(`stocks ${s} BBCA`).kind !== "web" && s !== "foreign"), ["rotation"]);
+  assert.equal(routeLine("stocks rrg BBCA TLKM").tool, "idx_rotation");
   // A subcommand the page runs is a CLI_FORM path the terminal handles; any other has a notice of its own.
   const pageRuns = (path) => Object.values(CLI_FORM).some(([p]) => p === path);
   const homes = (path) => [pageRuns(path), Object.hasOwn(MCP_ONLY, path), Object.hasOwn(CLI_ONLY, path)].filter(Boolean).length;

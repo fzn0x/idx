@@ -8,6 +8,7 @@ pub mod fundamental;
 pub mod intraday;
 pub mod lens;
 pub mod returns;
+pub mod rotation;
 pub mod screen;
 pub mod sentiment;
 pub mod stats;
