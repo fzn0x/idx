@@ -2152,6 +2152,12 @@ mod tests {
         let ranking: Accepted = cache.get_json(ACCEPTED_KEY, TTL_ACCEPTED).unwrap();
         let summary: Accepted = cache.get_json(SUMMARY.accepted_key, TTL_ACCEPTED).unwrap();
         assert_ne!(ranking.digest, summary.digest);
+        // The cache stamps a copy with the wall clock; date the summary's
+        // pair on Sunday, as read, so the test holds at any hour it runs.
+        for key in [SUMMARY.url, SUMMARY.dated_key.unwrap()] {
+            let body = cache.get(key, Duration::ZERO).unwrap().stored.body;
+            cache.put_fetched_at(key, 200, &body, sunday).unwrap();
+        }
         // A ranking's date page read in trading hours leaves the summary's
         // pair as it was: on Monday morning the summary's Sunday pair still
         // answers, and the ranking has none.
