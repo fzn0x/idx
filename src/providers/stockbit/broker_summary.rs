@@ -2,10 +2,12 @@
 //! bought a stock and every broker that sold it over a date range, with
 //! lots, value and average price.
 //!
-//! Recorded 2026-11-08 (`tests/fixtures/stockbit/marketdetectors_*.json`).
+//! Recorded 2026-11-08 and 2026-11-24
+//! (`tests/fixtures/stockbit/marketdetectors_*.json`).
 //! Query: `transaction_type` (`TRANSACTION_TYPE_GROSS` | `_NET`),
-//! `market_board` (`MARKET_BOARD_ALL` | `_REGULER`), `investor_type`
-//! (`INVESTOR_TYPE_ALL` | `_FOREIGN`), `from` and `to` (YYYY-MM-DD, one
+//! `market_board` (`MARKET_BOARD_ALL` | `_REGULER` | `_NEGO` | `_TUNAI`),
+//! `investor_type` (`INVESTOR_TYPE_ALL` | `_FOREIGN` | `_DOMESTIC`), `from`
+//! and `to` (YYYY-MM-DD, one
 //! aggregate over the range), `limit` (rows per side; 1000 was accepted and a
 //! year of BBCA, 92 brokers a side, came back whole).
 //! Reply: `data.broker_summary.brokers_buy[]` / `brokers_sell[]`, rows of
@@ -28,8 +30,9 @@
 //! totals (`bandar_detector.value`, `volume`, `average`) are the buy side's,
 //! at about eight significant digits, and are not used.
 //!
-//! The domestic investor type and the cash and negotiated boards have not
-//! been recorded, so [`serves`] leaves them to IPOT.
+//! Every filter adds up: on BBCA's 2026-11-06 the domestic side is all
+//! investors less the foreign side, and the negotiated and cash boards are
+//! all boards less the regular board, to the rupiah.
 
 use chrono::NaiveDate;
 use serde_json::Value;
@@ -46,15 +49,8 @@ use super::{EXODUS, NAME};
 /// Stockbit was seen to accept.
 pub const LIMIT: u32 = 1000;
 
-/// `true` for the filters whose replies have been recorded: all or foreign
-/// investors, all boards or the regular board.
-pub fn serves(investor: BrokerInvestor, board: BrokerBoard) -> bool {
-    investor != BrokerInvestor::Domestic && matches!(board, BrokerBoard::All | BrokerBoard::Regular)
-}
-
 /// The URL for `code` (Stockbit's code) over `from..=to`, gross figures,
 /// parameters in a fixed order so it is a stable cache key with no secret.
-/// Only for filters [`serves`] accepts.
 pub fn url(
     code: &str,
     from: NaiveDate,
@@ -63,12 +59,15 @@ pub fn url(
     board: BrokerBoard,
 ) -> String {
     let board = match board {
+        BrokerBoard::All => "MARKET_BOARD_ALL",
         BrokerBoard::Regular => "MARKET_BOARD_REGULER",
-        _ => "MARKET_BOARD_ALL",
+        BrokerBoard::Cash => "MARKET_BOARD_TUNAI",
+        BrokerBoard::Negotiated => "MARKET_BOARD_NEGO",
     };
     let investor = match investor {
+        BrokerInvestor::All => "INVESTOR_TYPE_ALL",
         BrokerInvestor::Foreign => "INVESTOR_TYPE_FOREIGN",
-        _ => "INVESTOR_TYPE_ALL",
+        BrokerInvestor::Domestic => "INVESTOR_TYPE_DOMESTIC",
     };
     format!(
         "{EXODUS}/marketdetectors/{code}?transaction_type=TRANSACTION_TYPE_GROSS\
@@ -287,6 +286,19 @@ mod tests {
         include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_regular.json");
     const FOREIGN: &str =
         include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json");
+    const DOMESTIC: &str = include_str!(
+        "../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_domestic.json"
+    );
+    const NEGO: &str =
+        include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_nego.json");
+    const NEGO_FOREIGN: &str = include_str!(
+        "../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_nego_foreign.json"
+    );
+    const CASH: &str =
+        include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_cash.json");
+    const CASH_FOREIGN: &str = include_str!(
+        "../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_cash_foreign.json"
+    );
     const CUT: &str =
         include_str!("../../../tests/fixtures/stockbit/marketdetectors_bbca_20261106_limit5.json");
     const THIN: &str =
@@ -339,11 +351,25 @@ mod tests {
             u.contains("&market_board=MARKET_BOARD_REGULER&investor_type=INVESTOR_TYPE_FOREIGN&"),
             "{u}"
         );
-        assert!(serves(BrokerInvestor::All, BrokerBoard::All));
-        assert!(serves(BrokerInvestor::Foreign, BrokerBoard::Regular));
-        assert!(!serves(BrokerInvestor::Domestic, BrokerBoard::All));
-        assert!(!serves(BrokerInvestor::All, BrokerBoard::Cash));
-        assert!(!serves(BrokerInvestor::All, BrokerBoard::Negotiated));
+        let u = url(
+            "BBCA",
+            d(2026, 11, 6),
+            d(2026, 11, 6),
+            BrokerInvestor::Domestic,
+            BrokerBoard::Negotiated,
+        );
+        assert!(
+            u.contains("&market_board=MARKET_BOARD_NEGO&investor_type=INVESTOR_TYPE_DOMESTIC&"),
+            "{u}"
+        );
+        let u = url(
+            "BBCA",
+            d(2026, 11, 6),
+            d(2026, 11, 6),
+            BrokerInvestor::All,
+            BrokerBoard::Cash,
+        );
+        assert!(u.contains("&market_board=MARKET_BOARD_TUNAI&"), "{u}");
     }
 
     #[test]
@@ -463,6 +489,61 @@ mod tests {
         assert_eq!(r.total_value, Some(817_283_116_500.0));
         assert_eq!(r.total_lots, Some(1_601_528.0));
         assert_eq!(codes(&r.buyers[..2]), ["AK", "KZ"]);
+    }
+
+    #[test]
+    fn the_domestic_side_is_all_investors_less_the_foreign_side() {
+        let all = all(DAY);
+        let f = day(FOREIGN, BrokerInvestor::Foreign, BrokerBoard::All);
+        let h = day(DOMESTIC, BrokerInvestor::Domestic, BrokerBoard::All);
+        assert_eq!(h.investor, BrokerInvestor::Domestic);
+        assert_eq!((h.buyer_count, h.seller_count), (Some(58), Some(65)));
+        assert!(h.buyers_complete && h.sellers_complete);
+        assert_eq!(
+            (h.total_value, h.total_lots, h.average_price),
+            (None, None, None)
+        );
+        assert_eq!(h.buy_value, Some(249_120_651_490.0));
+        assert_eq!(h.sell_value, Some(468_108_952_590.0));
+        let total = all.total_value.unwrap();
+        assert_eq!(h.buy_value.unwrap() + f.buy_value.unwrap(), total);
+        assert_eq!(h.sell_value.unwrap() + f.sell_value.unwrap(), total);
+        // Domestic investors sold on net what foreign investors bought.
+        assert_eq!(h.foreign_net_value, f.foreign_net_value);
+        assert_eq!(h.foreign_net_value, Some(218_988_301_100.0));
+    }
+
+    #[test]
+    fn the_negotiated_and_cash_boards_are_what_the_regular_board_leaves() {
+        let all = all(DAY);
+        let r = day(REGULAR, BrokerInvestor::All, BrokerBoard::Regular);
+        let n = day(NEGO, BrokerInvestor::All, BrokerBoard::Negotiated);
+        let c = day(CASH, BrokerInvestor::All, BrokerBoard::Cash);
+        assert_eq!(
+            (n.board, c.board),
+            (BrokerBoard::Negotiated, BrokerBoard::Cash)
+        );
+        assert_eq!(n.total_value, Some(218_353_874_952.0));
+        assert_eq!(n.total_lots, Some(426_021.79), "odd lots trade here too");
+        assert_eq!((n.buyers.len(), n.sellers.len()), (10, 10));
+        assert_eq!(c.total_value, Some(15_075_000.0));
+        assert_eq!(c.total_lots, Some(30.0));
+        assert_eq!(
+            r.total_value.unwrap() + n.total_value.unwrap() + c.total_value.unwrap(),
+            all.total_value.unwrap()
+        );
+        let lots = r.total_lots.unwrap() + n.total_lots.unwrap() + c.total_lots.unwrap();
+        assert!((lots - all.total_lots.unwrap()).abs() < 0.001, "{lots}");
+
+        let nf = day(
+            NEGO_FOREIGN,
+            BrokerInvestor::Foreign,
+            BrokerBoard::Negotiated,
+        );
+        assert_eq!(nf.foreign_net_value, Some(537_600.0));
+        let cf = day(CASH_FOREIGN, BrokerInvestor::Foreign, BrokerBoard::Cash);
+        assert!(cf.buyers.is_empty() && cf.sellers.is_empty());
+        assert_eq!(cf.foreign_net_value, Some(0.0), "no foreigner traded cash");
     }
 
     #[test]

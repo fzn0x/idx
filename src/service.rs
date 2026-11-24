@@ -1270,8 +1270,6 @@ pub async fn broker(
 
 /// The note `auto` adds when IPOT answered because no Stockbit session works.
 const IPOT_TOP_NOTE_LOGIN: &str = "IPOT lists only the top 10 buyers and sellers; sign in with `idx stockbit login` and idx lists every broker, from Stockbit";
-/// The note `auto` adds when IPOT answered for filters Stockbit is not read for.
-const IPOT_TOP_NOTE_FILTERS: &str = "IPOT lists only the top 10 buyers and sellers; Stockbit, which lists every broker, is not read for domestic investors or the cash and negotiated boards yet";
 
 /// Where [`broker_from`] reads.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1283,24 +1281,13 @@ enum BrokerPlan {
 }
 
 /// The plan for `source`: `auto` takes Stockbit when a working session is
-/// stored (as `idx stockbit status` says logged in) and the filters are ones
-/// Stockbit is read for, IPOT otherwise; `stockbit` without them is a usage
-/// error, before any request.
-fn broker_plan(
-    stockbit: Option<&Stockbit>,
-    q: BrokerQuery,
-    source: BrokerSummaryChoice,
-) -> Result<BrokerPlan> {
-    let serves = sb_provider::broker_summary::serves(q.investor, q.board);
+/// stored (as `idx stockbit status` says logged in), IPOT otherwise;
+/// `stockbit` without one is a usage error, before any request.
+fn broker_plan(stockbit: Option<&Stockbit>, source: BrokerSummaryChoice) -> Result<BrokerPlan> {
     let status = stockbit.map(|sb| sb.store().status(chrono::Utc::now().timestamp()));
     let working = status.as_ref().is_some_and(|s| s.logged_in);
     match source {
         BrokerSummaryChoice::Ipot => Ok(BrokerPlan::Ipot(None)),
-        BrokerSummaryChoice::Stockbit if !serves => Err(IdxError::Usage(
-            "Stockbit's broker summary is not read for domestic investors or the cash and \
-             negotiated boards yet (none of those replies has been recorded); use source ipot"
-                .into(),
-        )),
         BrokerSummaryChoice::Stockbit if !working => {
             let reason = status.and_then(|s| s.reason).unwrap_or_else(|| {
                 "no Stockbit session is stored; run `idx stockbit login` to sign in".into()
@@ -1310,7 +1297,6 @@ fn broker_plan(
             )))
         }
         BrokerSummaryChoice::Stockbit => Ok(BrokerPlan::Stockbit { fallback: false }),
-        BrokerSummaryChoice::Auto if !serves => Ok(BrokerPlan::Ipot(Some(IPOT_TOP_NOTE_FILTERS))),
         BrokerSummaryChoice::Auto if !working => Ok(BrokerPlan::Ipot(Some(IPOT_TOP_NOTE_LOGIN))),
         BrokerSummaryChoice::Auto => Ok(BrokerPlan::Stockbit { fallback: true }),
     }
@@ -1341,7 +1327,7 @@ pub async fn broker_from(
         )));
     }
     let range = explicit_range(q.from, q.to, today)?;
-    let plan = broker_plan(stockbit, q, source)?;
+    let plan = broker_plan(stockbit, source)?;
     let mut pending_warnings = Vec::new();
     let results: Vec<Result<Sourced<BrokerSummary>>> = match (plan, stockbit) {
         // One ticker after another: Stockbit's reads are paced anyway.
@@ -3196,6 +3182,13 @@ mod tests {
             include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106.json");
         const SB_FOREIGN: &str =
             include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json");
+        const SB_DOMESTIC: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106_domestic.json");
+        const SB_NEGO: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106_nego.json");
+        const SB_NEGO_FOREIGN: &str = include_str!(
+            "../tests/fixtures/stockbit/marketdetectors_bbca_20261106_nego_foreign.json"
+        );
         const SB_BLOCKED: &str = include_str!("../tests/fixtures/stockbit/blocked_403.html");
         const IPOT_DAY: &str =
             include_str!("../tests/fixtures/ipot/brokersummary_bbca_20261106.html");
@@ -3351,45 +3344,53 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn auto_leaves_unrecorded_filters_to_ipot_and_stockbit_refuses_them() {
+        async fn domestic_investors_and_every_board_come_from_stockbit_too() {
             let (f, sb, be, _d) = setup(
-                FixtureBackend::new().route("code=BBCA&start=11/06/2026", 200, IPOT_DAY),
+                FixtureBackend::new()
+                    .route("investor_type=INVESTOR_TYPE_DOMESTIC", 200, SB_DOMESTIC)
+                    .route(
+                        "market_board=MARKET_BOARD_NEGO&investor_type=INVESTOR_TYPE_ALL",
+                        200,
+                        SB_NEGO,
+                    )
+                    .route(
+                        "market_board=MARKET_BOARD_NEGO&investor_type=INVESTOR_TYPE_FOREIGN",
+                        200,
+                        SB_NEGO_FOREIGN,
+                    ),
                 true,
             );
             let today = d(2026, 11, 8);
-            let got = broker_from(
-                &f,
-                Some(&sb),
-                &[],
-                &bbca(),
-                day_query(BrokerInvestor::Domestic),
-                C::Auto,
-                today,
-            )
-            .await
-            .unwrap();
-            assert_eq!(got.provider, "ipot");
-            assert!(
-                got.warnings
-                    .iter()
-                    .any(|w| w.contains("top 10") && w.contains("domestic")),
-                "{:?}",
-                got.warnings
-            );
-            let e = broker_from(
-                &f,
-                Some(&sb),
-                &[],
-                &bbca(),
-                day_query(BrokerInvestor::Domestic),
-                C::Stockbit,
-                today,
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(e.exit_code(), 2, "{e}");
-            assert!(e.to_string().contains("use source ipot"), "{e}");
-            assert_eq!(be.calls_matching("marketdetectors"), 0);
+            for source in [C::Auto, C::Stockbit] {
+                let got = broker_from(
+                    &f,
+                    Some(&sb),
+                    &[],
+                    &bbca(),
+                    day_query(BrokerInvestor::Domestic),
+                    source,
+                    today,
+                )
+                .await
+                .unwrap();
+                assert_eq!(got.provider, "stockbit");
+                assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+                let s = &got.data[0];
+                assert_eq!(s.investor, BrokerInvestor::Domestic);
+                assert_eq!((s.buyers.len(), s.sellers.len()), (58, 65));
+                assert_eq!(s.foreign_net_value, Some(218_988_301_100.0));
+            }
+            let mut nego = day_query(BrokerInvestor::All);
+            nego.board = BrokerBoard::Negotiated;
+            let got = broker_from(&f, Some(&sb), &[], &bbca(), nego, C::Auto, today)
+                .await
+                .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            let s = &got.data[0];
+            assert_eq!(s.board, BrokerBoard::Negotiated);
+            assert_eq!(s.total_value, Some(218_353_874_952.0));
+            assert_eq!(s.foreign_net_value, Some(537_600.0), "from the second read");
+            assert_eq!(be.calls_matching("indopremier"), 0);
         }
 
         #[tokio::test]

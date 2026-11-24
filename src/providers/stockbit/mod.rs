@@ -428,9 +428,8 @@ impl Stockbit {
     /// that bought and every broker that sold, gross. For all investors the
     /// foreign net comes from a second read, foreign investors over the same
     /// range and board (a day without trades needs none); when that read
-    /// fails the net is `null` with a warning. Filters whose replies have not
-    /// been recorded ([`broker_summary::serves`]) and indices are refused
-    /// before any request. Paced; `today` decides the cache lifetime, as for
+    /// fails the net is `null` with a warning. Indices are refused before any
+    /// request. Paced; `today` decides the cache lifetime, as for
     /// IPOT's summaries: a range that ended before it is cached for a week,
     /// one that reaches it for five minutes under a key of its own, so it is
     /// read again once the range has closed.
@@ -448,12 +447,6 @@ impl Stockbit {
             return Err(IdxError::NotFound(format!(
                 "{symbol} is an index; broker summaries belong to stocks"
             )));
-        }
-        if !broker_summary::serves(investor, board) {
-            return Err(IdxError::unsupported(
-                NAME,
-                "broker summaries for domestic investors or the cash and negotiated boards (not recorded yet)",
-            ));
         }
         let mut out = self
             .broker_summary_read(symbol, from, to, investor, board, today)
@@ -1117,18 +1110,6 @@ pub(crate) mod tests {
             with_backend(FixtureBackend::new().route("marketdetectors/ZZZZ", 404, MD_ZZZZ));
         let day = ymd(2026, 11, 6);
         let today = ymd(2026, 11, 8);
-        let bbca = Symbol::parse("BBCA").unwrap();
-        for (investor, board) in [
-            (I::Domestic, B::All),
-            (I::All, B::Cash),
-            (I::Foreign, B::Negotiated),
-        ] {
-            let e = sb
-                .broker_summary(&bbca, day, day, investor, board, today)
-                .await
-                .unwrap_err();
-            assert!(matches!(e, IdxError::Unsupported { .. }), "{e}");
-        }
         let e = sb
             .broker_summary(
                 &Symbol::parse("^JKSE").unwrap(),

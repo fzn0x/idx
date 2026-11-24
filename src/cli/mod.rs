@@ -161,9 +161,8 @@ pub enum Command {
 --source auto (default): Stockbit when a working Stockbit session is stored (what `idx stockbit
 status` calls logged in), otherwise IPOT, with a note when IPOT's top 10 may leave brokers out.
 --source ipot: IPOT only, no login. --source stockbit: Stockbit only; without a working session
-it fails and names `idx stockbit login`. Stockbit is not read for --investor domestic or the
-cash and negotiated boards yet (no reply recorded), so auto takes IPOT there. Under auto a ticker
-Stockbit fails for is read from IPOT, with a warning.
+it fails and names `idx stockbit login`. Stockbit answers every --investor and --board. Under
+auto a ticker Stockbit fails for is read from IPOT, with a warning.
 
 IPOT (Indo Premier) publishes the top 10 buyers and sellers ranked by lots, with lots, value,
 average price and each broker's class (local, foreign, BUMN), and rounds figures of a million

@@ -74,6 +74,23 @@ HD local where Stockbit says `Asing`.
 | marketdetectors_bbca_20261107_no_trades.json | BBCA, Saturday 2026-11-07 | HTTP 200 with empty lists and zeros (as JSON numbers) |
 | marketdetectors_zzzz.json | ZZZZ, 2026-11-06 | HTTP 404 `{"message":"Perusahaan tidak ditemukan","error_type":"NOT_FOUND"}`; the fetcher caches 2xx replies only, so this one was copied from the body idx printed |
 
+## Domestic investors and the other boards, recorded by idx on 2026-11-24
+
+Recorded on Tuesday 2026-11-24 at 15:33 WIB the same way (the idx binary, a fresh cache
+directory, bodies copied out unchanged), five requests a few seconds apart, all for BBCA's
+closed session of 2026-11-06 so they add up against the files above. Checked the same way
+for user fields; there is none. Each request is the one above with the filter its row names.
+The figures add up to the rupiah: the domestic side is all investors less the foreign side
+on each side, and the regular, negotiated and cash boards sum to all boards.
+
+| file | request | notes |
+| --- | --- | --- |
+| marketdetectors_bbca_20261106_domestic.json | `investor_type=INVESTOR_TYPE_DOMESTIC` | 58 buyers for 249,120,651,490 IDR and 65 sellers for 468,108,952,590: 1,035,652,066,452 less the foreign side's 786,531,414,962 and 567,543,113,862. Their net sale, 218,988,301,100, is the foreign net |
+| marketdetectors_bbca_20261106_nego.json | `market_board=MARKET_BOARD_NEGO` | the negotiated board: 10 buyers and 10 sellers, 218,353,874,952 IDR, 426,021.79 lots (odd lots trade here) |
+| marketdetectors_bbca_20261106_nego_foreign.json | `market_board=MARKET_BOARD_NEGO&investor_type=INVESTOR_TYPE_FOREIGN` | foreign investors on the negotiated board, 6 a side: bought 216,970,426,462, sold 216,969,888,862, net 537,600 |
+| marketdetectors_bbca_20261106_cash.json | `market_board=MARKET_BOARD_TUNAI` | the cash board: one buyer, one seller, 30 lots for 15,075,000 IDR. With the regular board's 817,283,116,500 and the negotiated board's, all boards' 1,035,652,066,452 |
+| marketdetectors_bbca_20261106_cash_foreign.json | `market_board=MARKET_BOARD_TUNAI&investor_type=INVESTOR_TYPE_FOREIGN` | no foreigner traded on the cash board: empty lists, zeros as JSON numbers |
+
 ## Recorded by 0xrsydn/idx-cli
 
 The files in this table were recorded by the reference CLI 0xrsydn/idx-cli (MIT
