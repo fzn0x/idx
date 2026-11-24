@@ -325,9 +325,12 @@ naming `idx stockbit login`, when no session works. The schema stays IPOT's,
   no second read; when the second read fails the net is `null` with a warning.
 - A range is one read, aggregated by Stockbit, so no session is rebuilt one by
   one as IPOT's foreign net over a range is.
-- Domestic investors and the cash and negotiated boards have not been recorded
-  yet, so idx does not ask Stockbit for them: `auto` takes IPOT, with a note,
-  and `--source stockbit` is a usage error.
+- `--investor domestic`, `--board negotiated` and `--board cash` are read from
+  Stockbit too (recorded 2026-11-24). They add up: on BBCA's 2026-11-06 the
+  domestic side bought 249,120,651,490 IDR and sold 468,108,952,590, all
+  investors less the foreign side to the rupiah, and the negotiated
+  (218,353,874,952) and cash (15,075,000) boards are what the regular board
+  leaves of the day's 1,035,652,066,452.
 - Under `auto`, a ticker Stockbit fails for (its CDN refusing this network, a
   session Stockbit ended) is read from IPOT with a warning; after a failure no
   other read could get past, the rest of the call is read from IPOT too. Each
@@ -426,7 +429,7 @@ and browser-shaped `origin`/`referer` headers:
 | `GET /charts/{SYM}/daily?timeframe=..&chart_type=PRICE_CHART_TYPE_CANDLE` | OHLCV candles |
 | `GET /corpaction/{type}[?symbol={SYM}]` | corporate actions, one kind per request: `dividend`, `stock_dividend`, `bonus`, `rightissue`, `warrant`, `stocksplit`, `reversesplit`, `rups`, `pubex`, `ipo`, `tenderoffer` |
 | `GET /insider/company/majorholder?page=N[&symbol=][&date_start=][&date_end=][&insider=][&action_type=][&source_type=]` | insider and 5 % holder movements, 50 rows a page |
-| `GET /marketdetectors/{SYM}?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL\|_REGULER&investor_type=INVESTOR_TYPE_ALL\|_FOREIGN&from=..&to=..&limit=1000` | the broker summary: every broker that bought and sold over the range (`idx broker`) |
+| `GET /marketdetectors/{SYM}?transaction_type=TRANSACTION_TYPE_GROSS&market_board=MARKET_BOARD_ALL\|_REGULER\|_NEGO\|_TUNAI&investor_type=INVESTOR_TYPE_ALL\|_FOREIGN\|_DOMESTIC&from=..&to=..&limit=1000` | the broker summary: every broker that bought and sold over the range (`idx broker`) |
 | `GET /company-price-feed/market-time/session` | checks a session before `idx stockbit login` stores it (never from the cache) |
 | `POST /login/refresh` | rotate the session (bearer = refresh token, empty body) |
 

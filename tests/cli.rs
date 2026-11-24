@@ -931,21 +931,22 @@ fn broker_lists_every_broker_from_stockbit_once_logged_in() {
     let text = String::from_utf8(out.stdout).unwrap();
     assert_eq!(text.lines().count(), 1);
     assert!(text.contains(r#""buyer_count":59"#), "{text}");
-    // Domestic investors are not read from Stockbit yet.
-    idx(&sb.cache, &sb.config)
-        .args([
-            "broker",
-            "BBCA",
-            "--date",
-            "2026-11-06",
-            "--investor",
-            "domestic",
-            "--source",
-            "stockbit",
-        ])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("use source ipot"));
+    // Domestic investors come from Stockbit too, in one read.
+    seed(
+        &sb.cache,
+        &marketdetectors_url("DOMESTIC"),
+        "stockbit/marketdetectors_bbca_20261106_domestic.json",
+    );
+    let v = json(&["--investor", "domestic", "--source", "stockbit"]);
+    assert!(warnings(&v).is_empty(), "{:?}", warnings(&v));
+    let s = &v["data"][0];
+    assert_eq!(s["investor"], "domestic");
+    assert_eq!(s["source"], "stockbit");
+    assert_eq!(
+        (s["buyer_count"].as_u64(), s["seller_count"].as_u64()),
+        (Some(58), Some(65))
+    );
+    assert_eq!(s["foreign_net_value"].as_f64(), Some(218_988_301_100.0));
 }
 
 #[test]

@@ -472,8 +472,8 @@ over the shares (`total_lots` × 100), computed by idx. For all investors
 `foreign_net_value` comes from a second read of foreign investors over the same
 range and board, their buying less their selling (with a board filter it is
 that board's); for one investor side it is that side's buying less its selling
-(foreign) or the opposite (domestic). Stockbit is not read for domestic
-investors or the cash and negotiated boards yet: `auto` takes IPOT there.
+(foreign) or the opposite (domestic). Every `investor` and `board` is read
+from Stockbit.
 Stockbit's classes (`Asing`, `Lokal`, `Pemerintah`) can differ from IPOT's.
 
 With `-o csv` the rows are one broker per side: `symbol, from, to, investor,
