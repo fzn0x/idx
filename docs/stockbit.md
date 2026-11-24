@@ -445,3 +445,20 @@ an HTML 403 is reported as the block, and the token stays usable once it lifts.
 Indices use Stockbit's own code (`IHSG`, `LQ45`), mapped from idx's caret form
 (`^JKSE`, `^JKLQ45`). The token is never written to a log, an error message or a
 cache key.
+
+## Credits
+
+idx's Stockbit sign-in builds on
+[stockbit-mcp](https://github.com/INo-xious/stockbit-mcp) by INo-xious (MIT
+License), an MCP server for Stockbit:
+
+- The browser sign-in of 0.8.0 was a port of its `src/auth/login.ts`,
+  including `tokenUrlAllowed`, which picked the responses that may carry the
+  session. Since 0.8.2 idx reads only the cookie a sign-in leaves, so that
+  function is gone, but the approach started there.
+- The `credentialStorage` cookie idx reads, and its layout
+  (`{"state":{"access":..,"refresh":..},"version":0}`), are the ones
+  stockbit-mcp documented.
+- The rule behind **One refresher per session**, that `POST /login/refresh`
+  retires the refresh token it is given, is the rotation stockbit-mcp recorded
+  in its ADR-0009.

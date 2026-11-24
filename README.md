@@ -428,6 +428,13 @@ Prices from the free sources are delayed as published; Stockbit is realtime for
 your own account. This tool is for research and tooling; it is not investment
 advice and not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.
 
+idx's Stockbit sign-in builds on
+[stockbit-mcp](https://github.com/INo-xious/stockbit-mcp) by INo-xious (MIT),
+an MCP server for Stockbit. idx's first browser sign-in was ported from it, idx
+reads the session cookie in the layout it documented, and idx keeps one
+refresher per session because of the token rotation it recorded. Details in
+[docs/stockbit.md](docs/stockbit.md#credits).
+
 ## Web terminal
 
 **https://ihsg.midoriresearch.com** is the market page: IHSG and its session,
