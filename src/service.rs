@@ -1804,8 +1804,10 @@ async fn scan_candidates(
     Ok((candidates, q))
 }
 
-/// The latest session with trades, read from the first candidates. When
-/// every probe was an offline cache miss, that is the error.
+/// The latest session with trades, read from the first candidates. When no
+/// probe got an answer, the error is the first offline cache miss if every
+/// probe was one, otherwise the first failure (a source that is down is not
+/// a market without trades). "Not found" needs a probe that answered.
 async fn scan_end(
     fetcher: &Arc<Fetcher>,
     candidates: &[Symbol],
@@ -1818,18 +1820,24 @@ async fn scan_end(
         board: BrokerBoard::All,
     };
     let mut offline = None;
-    let mut all_offline = true;
+    let mut failure = None;
+    let mut answered = false;
     for sym in candidates.iter().take(3) {
         match latest_broker_day(fetcher, sym, bq, today).await {
             Ok(s) if !s.data.is_empty() => return Ok(s.data.to),
+            Ok(_) => answered = true,
             Err(e @ IdxError::OfflineMiss(_)) => {
                 offline.get_or_insert(e);
             }
-            _ => all_offline = false,
+            Err(e) => {
+                failure.get_or_insert(e);
+            }
         }
     }
-    if let (Some(e), true) = (offline, all_offline) {
-        return Err(e);
+    if !answered {
+        if let Some(e) = failure.or(offline) {
+            return Err(e);
+        }
     }
     Err(IdxError::NotFound(format!(
         "no session with trades in the {BROKER_LOOKBACK_DAYS} days to {today}"
@@ -3586,6 +3594,38 @@ mod tests {
                 CacheMode::Normal,
             ));
             (f, be, dir)
+        }
+
+        const BAD_GATEWAY: &str = "<html><head><title>502 Bad Gateway</title></head></html>";
+        const NO_TRADES: &str =
+            include_str!("../tests/fixtures/ipot/brokersummary_bbca_20261017_no_trades.html");
+
+        #[tokio::test]
+        async fn the_scan_says_the_source_is_down_rather_than_no_trades() {
+            let (f, be, _d) =
+                fetcher(FixtureBackend::new().route("data-brokersummary.php", 502, BAD_GATEWAY));
+            let err = scan_end(&f, &syms(&["BBCA", "BRPT", "TLKM"]), d(10, 19))
+                .await
+                .unwrap_err();
+            assert_eq!(err.exit_code(), 3, "{err}");
+            assert!(err.to_string().contains("HTTP 502"), "{err}");
+            assert!(be.calls_matching("code=BRPT") > 0);
+            assert!(be.calls_matching("code=TLKM") > 0);
+        }
+
+        #[tokio::test]
+        async fn the_scan_finds_no_session_only_from_answers() {
+            // BBCA answers with no trades every day, BRPT fails: not found.
+            let (f, _be, _d) = fetcher(
+                FixtureBackend::new()
+                    .route("code=BBCA", 200, NO_TRADES)
+                    .route("code=BRPT", 502, BAD_GATEWAY),
+            );
+            let err = scan_end(&f, &syms(&["BBCA", "BRPT"]), d(10, 19))
+                .await
+                .unwrap_err();
+            assert_eq!(err.exit_code(), 4, "{err}");
+            assert!(err.to_string().contains("no session with trades"), "{err}");
         }
 
         fn q(period: BandarPeriod) -> BandarQuery {
