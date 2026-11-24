@@ -114,7 +114,9 @@ the server answers, which takes longer than clients wait. `overlays.default`
 adds `pkgs.idx` for NixOS and home-manager configurations, and `nix develop` in
 a clone gives the toolchain from `rust-toolchain.toml` plus Node for `web/`. On
 NixOS, point `idx stockbit login` at a browser with
-`IDX_BROWSER=$(command -v chromium)`.
+`IDX_BROWSER=$(command -v chromium)`, or sign in with
+`idx stockbit login --page` in any browser; idx switches to the page by itself
+when it finds no Chromium-family browser.
 
 Shell completions:
 
@@ -427,6 +429,18 @@ idx -o json market astro --backtest --period 10y | jq '.data.backtest.factors[0]
 Prices from the free sources are delayed as published; Stockbit is realtime for
 your own account. This tool is for research and tooling; it is not investment
 advice and not affiliated with IDX, KSEI, Yahoo, Microsoft or Stockbit.
+
+Stockbit needs one sign-in: `idx stockbit login`. On a desktop it opens
+Chrome, Edge or Brave on stockbit.com with a profile only idx uses, and you
+sign in there. `idx stockbit login --page` serves a sign-in page on 127.0.0.1
+instead, for the browser you already use, Firefox included. Sign in at
+stockbit.com in a private window, then hand the session to idx with the
+page's **Send to idx** bookmark or by pasting the `credentialStorage` cookie.
+Use `--page` for Google sign-in, which refuses a browser idx drives. idx
+picks the page by itself over SSH, without a display, or when it finds no
+Chrome, Edge or Brave; `--port` pins its port for an SSH forward. Either way
+idx never sees your password. Details in
+[docs/stockbit.md](docs/stockbit.md#log-in-once).
 
 idx's Stockbit sign-in builds on
 [stockbit-mcp](https://github.com/INo-xious/stockbit-mcp) by INo-xious (MIT),
