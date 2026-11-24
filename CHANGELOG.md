@@ -6,6 +6,48 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-24
+
+### Added
+
+- `stocks rotation` (alias `rrg`) and the MCP tool `idx_rotation`: a
+  relative rotation graph against IHSG (or `--benchmark`). Each ticker's
+  RS-Ratio, RS-Momentum and quadrant (leading, weakening, lagging,
+  improving) with its recent path, weekly by default (`--interval 1wk|1d`,
+  `--window 14`, `--tail 10`). An open approximation of the proprietary JdK
+  formulas, marked as one in the new schema `idx.rotation.v1` (#127).
+- `broker` reads Stockbit for `--investor domestic` and for `--board
+  negotiated` and `--board cash` too (MCP `investor`, `board`): with a working
+  Stockbit session, `auto` and `stockbit` list every broker for those
+  filters instead of leaving them to IPOT's top 10 or refusing them (#135).
+
+### Fixed
+
+- `market foreign --source ipot`, `bandar screen` and `bandar broker` say
+  the source's error (`ipot: ... HTTP 502`, exit 3) when it cannot be
+  reached, instead of "not found: no session with trades" (exit 4) (#134).
+- Web terminal: flags, preset names and other hyphenated words in help,
+  notes, headings and the example buttons no longer break at their hyphens
+  (#126).
+
+### Changed
+
+- Release workflow: a dispatch with `npm_only` publishes an existing tag's
+  npm packages without rebuilding its binaries, and `npm publish` logs at
+  verbose level so a failed Trusted Publishing exchange says why (#125).
+  The npm packages are published by hand for now (#124).
+- README and `docs/stockbit.md` credit
+  [stockbit-mcp](https://github.com/INo-xious/stockbit-mcp), which idx's
+  Stockbit sign-in builds on (#137).
+
+### Notes
+
+- IPOT's data pages (`indopremier.com/module/saham/`) answer HTTP 502 since
+  2026-11-11, so `broker` without a Stockbit session, `bandar`, `market
+  brokers --source ipot`, `market foreign --source ipot`, `stocks foreign
+  --source ipot`, `stocks actions` and the web's bandar screen cannot read
+  it. Tracked for 0.8.5 (#119).
+
 ## [0.8.3] - 2026-11-13
 
 ### Fixed
