@@ -1003,7 +1003,7 @@ async function latestPage(env, page, now) {
 /** IPOT's ranking of its latest session with its date, like ipot::top_brokers (latestPage). */
 export async function topBrokers(env, now = new Date()) {
   const { d, cached, failure, fetched_at, notes } = await latestPage(env, RANKING_PAGE, now);
-  return { date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure, fetched_at, warnings: [...notes, ...d.warnings] };
+  return { date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure, failure, fetched_at, warnings: [...notes, ...d.warnings] };
 }
 
 const BROKER_SORTS = ["value", "volume", "frequency"];
@@ -1057,6 +1057,10 @@ export async function marketBrokers(env, dateRaw, topRaw, sortRaw, sourceRaw, no
     if (!BROKERS[b.code]) unlisted.push(b.name ? `${b.code} (${b.name})` : b.code);
     return { rank: 0, code: b.code, name: b.name, volume: b.volume, value: b.value, frequency: b.frequency, value_share_pct: null, buy_value: b.buy_value, sell_value: b.sell_value, net_value: b.net_value, kind: b.kind };
   });
+  if (!rows.length && s.failure) {
+    // A copy without trades stood in for a read that failed: IPOT is what failed (seen 2026-11-27, a copy of 2026-11-10's morning).
+    throw network(`IPOT could not be read (${s.failure}), and its copy of ${held}, read at ${wibClock(s.fetched_at)}, has no trades; while IPOT fails, the CLI and the MCP server read idx.co.id's summary of every session: \`idx market brokers\``);
+  }
   if (!rows.length) throw notFound(`IPOT's broker ranking for ${held} has no trades yet`);
   if (unlisted.length) warnings.push(`IPOT lists trades for codes that are not on the IDX member list: ${unlisted.join(", ")}`);
   if (source === "auto") {

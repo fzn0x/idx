@@ -402,6 +402,17 @@ test("a ranking without trades is not found, and a code off the member list is n
   assert.equal(out.warnings[1], "IPOT lists trades for codes that are not on the IDX member list: QQ (KB Valbury Sekuritas)");
 });
 
+test("a copy without trades standing in for a failed read says IPOT failed, not that nothing traded", async () => {
+  // As on 2026-11-27: IPOT's pages answer 502 and the copy kept is a morning's, before any trade.
+  const empty = TOP.slice(0, TOP.indexOf("<tbody>") + 7) + TOP.slice(TOP.indexOf("</tbody>"));
+  const env = memoryDb();
+  seed(env, "2026-11-06T08:00:00", empty);
+  const err = await withFetch(ipotFetch({ top: 502, statistic: 502 }).fn, () => failure(marketBrokers(env, null, null, null, null, SUNDAY)));
+  assert.deepEqual([err.code, err.exit], ["network", 3]);
+  assert.ok(err.message.startsWith("IPOT could not be read (broker ranking for the market: HTTP 502), and its copy of 2026-11-06, read at 08:00 WIB on 2026-11-06, has no trades; "), err.message);
+  assert.ok(err.message.endsWith("read idx.co.id's summary of every session: `idx market brokers`"), err.message);
+});
+
 test("the source, sort and top are the CLI's, and idx.co.id is named as out of reach", async () => {
   const env = memoryDb();
   const f = ipotFetch();
