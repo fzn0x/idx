@@ -1364,8 +1364,10 @@ pub async fn broker_from(
         }
     };
 
+    let hint = matches!(plan, BrokerPlan::Ipot(Some(_)));
     let mut out: Option<Sourced<Vec<BrokerSummary>>> = None;
     let mut first_err: Option<IdxError> = None;
+    let mut down = false;
     for (sym, r) in symbols.iter().zip(results) {
         match r {
             Ok(mut s) => {
@@ -1379,6 +1381,7 @@ pub async fn broker_from(
                 }
             }
             Err(e) => {
+                down |= ipot_failed(&e);
                 pending_warnings.push(match &e {
                     IdxError::NotFound(_) => format!("no broker summary for {sym}"),
                     other => format!("{sym}: {other}"),
@@ -1388,9 +1391,13 @@ pub async fn broker_from(
         }
     }
     let Some(mut result) = out else {
-        return Err(first_err.unwrap_or_else(|| IdxError::NotFound("no data".into())));
+        let e = first_err.unwrap_or_else(|| IdxError::NotFound("no data".into()));
+        return Err(if hint { with_login_hint(e) } else { e });
     };
     result.warnings.extend(pending_warnings);
+    if hint && down {
+        result.warnings.push(IPOT_FAILED_NOTE.into());
+    }
     if let BrokerPlan::Ipot(Some(note)) = plan {
         let full = |s: &BrokerSummary| {
             s.buyers.len() >= ipot::parse::ROWS || s.sellers.len() >= ipot::parse::ROWS
@@ -3682,6 +3689,46 @@ mod tests {
             assert_eq!(s.total_value, Some(218_353_874_952.0));
             assert_eq!(s.foreign_net_value, Some(537_600.0), "from the second read");
             assert_eq!(be.calls_matching("indopremier"), 0);
+        }
+
+        #[tokio::test]
+        async fn ipot_down_without_a_session_says_what_a_login_does() {
+            let bad = "<html><head><title>502 Bad Gateway</title></head></html>";
+            let (f, sb, _be, _d) = setup(
+                FixtureBackend::new()
+                    .route("code=BBCA&start=11/05/2026", 502, bad)
+                    .route("code=TRUK&start=11/05/2026", 200, IPOT_TRUK),
+                false,
+            );
+            let today = d(2026, 11, 8);
+            let day = Some(d(2026, 11, 5));
+            let thursday = BrokerQuery {
+                from: day,
+                to: day,
+                investor: BrokerInvestor::All,
+                board: BrokerBoard::All,
+            };
+            let e = broker_from(&f, Some(&sb), &[], &bbca(), thursday, C::Auto, today)
+                .await
+                .unwrap_err();
+            assert_eq!(e.exit_code(), 3, "{e}");
+            assert!(e.to_string().contains("`idx stockbit login`"), "{e}");
+            // One of two failing: the call answers, with the hint once.
+            let both = [bbca()[0].clone(), Symbol::parse("TRUK").unwrap()];
+            let got = broker_from(&f, Some(&sb), &[], &both, thursday, C::Auto, today)
+                .await
+                .unwrap();
+            let hints = got
+                .warnings
+                .iter()
+                .filter(|w| w.starts_with("IPOT is failing") && w.contains("`idx stockbit login`"))
+                .count();
+            assert_eq!(hints, 1, "{:?}", got.warnings);
+            // Chosen by name, no hint.
+            let e = broker_from(&f, Some(&sb), &[], &bbca(), thursday, C::Ipot, today)
+                .await
+                .unwrap_err();
+            assert!(!e.to_string().contains("stockbit login"), "{e}");
         }
 
         #[tokio::test]
