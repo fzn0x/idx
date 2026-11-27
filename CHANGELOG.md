@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-27
+
+### Added
+
+- `bandar detect`, `bandar screen` and `bandar broker` take `--source
+  auto|ipot|stockbit` (MCP `source`), as `broker` does. `auto` reads
+  Stockbit while a stored session works and IPOT otherwise. Stockbit lists
+  every broker that bought and sold, so `bandar broker` finds a broker below
+  tenth place, and a period is one range read plus one of foreign investors
+  for the net. Under `auto` a ticker Stockbit fails for is read from IPOT
+  with a warning, and `provider` names the source read (#142).
+
+### Fixed
+
+- `broker` and `bandar` under `--source auto` without a working Stockbit
+  session: an IPOT failure now says that `idx stockbit login` makes idx read
+  Stockbit instead, in the error when every ticker failed and once in the
+  warnings when some did (#142).
+- Web: while IPOT answers no check, the bandar scan tries again every 3
+  hours instead of every few minutes, the sessions it could not read share
+  one note, and the screen, broker activity, `broker`, `bandar` and `market
+  foreign` say what the CLI and the MCP server read meanwhile (#143).
+- Web: `market brokers` says IPOT could not be read (exit 3) when the copy
+  standing in for a failed read has no trades, instead of "no trades yet"
+  (#143).
+
+### Changed
+
+- README explains `idx stockbit login --page`: when the local sign-in page
+  fits (any browser, Google sign-in, SSH, no display) and how it takes the
+  cookie (#140).
+
+### Notes
+
+- IPOT's data pages still answer HTTP 502 (since 2026-11-11). `bandar` and
+  `broker` read Stockbit on your own session; `market brokers` and `market
+  foreign` read idx.co.id by default. `stocks actions` and the `--source
+  ipot` reads stay unavailable until IPOT answers again (#119). Measuring
+  IPOT's page rollover (#120) was closed as not planned.
+
 ## [0.8.4] - 2026-11-24
 
 ### Added
