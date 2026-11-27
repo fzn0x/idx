@@ -2,7 +2,8 @@
 //! provider call with local analysis lives here so both front ends behave
 //! identically.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use futures::future::join_all;
@@ -17,11 +18,11 @@ use crate::holidays;
 use crate::http::Fetcher;
 use crate::model::{
     BandarPeriod, BandarReport, BandarScreen, BenchmarkReturns, Brief, BrokerActivity, BrokerBoard,
-    BrokerInvestor, BrokerStockRow, BrokerSummary, BrokerSummaryChoice, DividendHistory,
-    DividendSummary, Earnings, EarningsFilter, Fundamentals, History, Interval, Intraday,
-    MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary, OwnershipSummary, Performance,
-    Period, Quote, Rotation, RotationInterval, RotationMethod, ScreenReport, ScreenRow,
-    SentimentReport, StaleReason, Symbol, Technical,
+    BrokerInvestor, BrokerStockRow, BrokerSummary, BrokerSummaryChoice, BrokerSummarySource,
+    DividendHistory, DividendSummary, Earnings, EarningsFilter, Fundamentals, History, Interval,
+    Intraday, MarketOverview, MarketRow, NewsItem, NewsReport, NewsSummary, OwnershipSummary,
+    Performance, Period, Quote, Rotation, RotationInterval, RotationMethod, ScreenReport,
+    ScreenRow, SentimentReport, StaleReason, Symbol, Technical,
 };
 use crate::providers::ipot;
 use crate::providers::news as newsfeed;
@@ -1401,6 +1402,259 @@ pub async fn broker_from(
     Ok(result)
 }
 
+/// What `auto` says when IPOT failed and no Stockbit session works.
+const IPOT_FAILED_LOGIN: &str = "sign in with `idx stockbit login` and idx reads Stockbit instead";
+/// [`IPOT_FAILED_LOGIN`] as a warning, when some tickers failed.
+const IPOT_FAILED_NOTE: &str =
+    "IPOT is failing; sign in with `idx stockbit login` and idx reads Stockbit instead";
+
+/// `true` when `e` is IPOT itself failing (an HTTP error, a page it could
+/// not serve), not an unknown code or an offline cache miss.
+fn ipot_failed(e: &IdxError) -> bool {
+    matches!(e, IdxError::Provider { provider, .. } if *provider == ipot::NAME)
+}
+
+/// `e` with [`IPOT_FAILED_LOGIN`] when it is IPOT failing.
+fn with_login_hint(e: IdxError) -> IdxError {
+    match e {
+        IdxError::Provider { provider, message } if provider == ipot::NAME => IdxError::Provider {
+            provider,
+            message: format!("{message}; {IPOT_FAILED_LOGIN}"),
+        },
+        e => e,
+    }
+}
+
+/// One source of broker summaries, for the reads of one ticker.
+#[derive(Clone, Copy)]
+enum SummarySource<'a> {
+    /// IPOT's public pages: the top 10 per side.
+    Ipot(&'a Arc<Fetcher>),
+    /// Stockbit through the user's own session: every broker.
+    Stockbit(&'a Stockbit),
+}
+
+impl SummarySource<'_> {
+    /// One session, with its foreign net.
+    async fn day(
+        self,
+        symbol: &Symbol,
+        day: NaiveDate,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+    ) -> Result<Sourced<BrokerSummary>> {
+        match self {
+            Self::Ipot(f) => {
+                ipot::broker_summary(f, symbol, day, day, investor, board, today).await
+            }
+            Self::Stockbit(sb) => {
+                sb.broker_summary(symbol, day, day, investor, board, today)
+                    .await
+            }
+        }
+    }
+
+    /// `from..=to` as one summary. `foreign_net`: with the range's foreign
+    /// net (IPOT rebuilds it from single sessions, see
+    /// `ipot::broker_summary_range`; Stockbit reads foreign investors over
+    /// the range); without it, the lists and totals alone.
+    #[allow(clippy::too_many_arguments)]
+    async fn range(
+        self,
+        symbol: &Symbol,
+        from: NaiveDate,
+        to: NaiveDate,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+        foreign_net: bool,
+    ) -> Result<Sourced<BrokerSummary>> {
+        match (self, foreign_net) {
+            (Self::Ipot(f), true) => {
+                ipot::broker_summary_range(f, symbol, from, to, investor, board, today).await
+            }
+            (Self::Ipot(f), false) => {
+                ipot::broker_summary(f, symbol, from, to, investor, board, today).await
+            }
+            (Self::Stockbit(sb), true) => {
+                sb.broker_summary(symbol, from, to, investor, board, today)
+                    .await
+            }
+            (Self::Stockbit(sb), false) => {
+                sb.broker_summary_lists(symbol, from, to, investor, board, today)
+                    .await
+            }
+        }
+    }
+
+    /// The latest session with trades (see [`latest_broker_day_by`]): its
+    /// lists and totals, without the foreign net.
+    async fn latest(
+        self,
+        symbol: &Symbol,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+    ) -> Result<Sourced<BrokerSummary>> {
+        latest_broker_day_by(symbol, today, |day| {
+            self.range(symbol, day, day, investor, board, today, false)
+        })
+        .await
+    }
+}
+
+/// Where the bandar commands read, as [`broker_plan`] decides for their
+/// `source`: IPOT, or Stockbit. Under `auto` a ticker Stockbit fails for
+/// (an unknown code aside) is read again from IPOT with a warning, and after
+/// a failure no later read could get past (a refused session, a block) so
+/// is every ticker after it. Shared by the reads of one call, which may run
+/// a few at a time.
+struct SummaryPlan<'a> {
+    fetcher: &'a Arc<Fetcher>,
+    /// Set when the plan reads Stockbit.
+    stockbit: Option<&'a Stockbit>,
+    /// Under `auto`: IPOT answers where Stockbit fails.
+    fallback: bool,
+    /// `auto` without a working session: an IPOT failure says what a
+    /// login does.
+    login_hint: bool,
+    /// Stockbit failed in a way no later read gets past.
+    stopped: AtomicBool,
+    /// An IPOT read failed (see [`ipot_failed`]).
+    ipot_down: AtomicBool,
+    /// Warnings about the fallbacks, each once.
+    notes: Mutex<Vec<String>>,
+}
+
+impl<'a> SummaryPlan<'a> {
+    /// The plan for `source`; `stockbit` without a working session is a
+    /// usage error, before any request.
+    fn new(
+        fetcher: &'a Arc<Fetcher>,
+        stockbit: Option<&'a Stockbit>,
+        source: BrokerSummaryChoice,
+    ) -> Result<Self> {
+        let (stockbit, fallback, login_hint) = match broker_plan(stockbit, source)? {
+            BrokerPlan::Ipot(note) => (None, false, note.is_some()),
+            BrokerPlan::Stockbit { fallback } => (stockbit, fallback, false),
+        };
+        Ok(SummaryPlan {
+            stockbit,
+            fallback,
+            login_hint,
+            ..Self::ipot(fetcher)
+        })
+    }
+
+    /// IPOT alone, for a caller that only reads IPOT (`market foreign
+    /// --source ipot`).
+    fn ipot(fetcher: &'a Arc<Fetcher>) -> Self {
+        SummaryPlan {
+            fetcher,
+            stockbit: None,
+            fallback: false,
+            login_hint: false,
+            stopped: AtomicBool::new(false),
+            ipot_down: AtomicBool::new(false),
+            notes: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn note(&self, w: String) {
+        let mut notes = self.notes.lock().unwrap_or_else(|p| p.into_inner());
+        if !notes.contains(&w) {
+            notes.push(w);
+        }
+    }
+
+    /// `read` for `symbol` from the plan's source, and from IPOT again
+    /// under `auto` when Stockbit fails (see [`SummaryPlan`]).
+    async fn run<T, F, Fut>(&self, symbol: &Symbol, read: F) -> Result<T>
+    where
+        F: Fn(SummarySource<'a>) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let ipot = SummarySource::Ipot(self.fetcher);
+        let r = match self.stockbit {
+            Some(sb) if !self.stopped.load(Ordering::Relaxed) => {
+                match read(SummarySource::Stockbit(sb)).await {
+                    Err(e) if self.fallback && !matches!(e, IdxError::NotFound(_)) => {
+                        if !sb_provider::is_fatal(&e) {
+                            self.note(format!(
+                                "{symbol}: Stockbit failed ({e}); IPOT's top 10 per side instead"
+                            ));
+                        } else if !self.stopped.swap(true, Ordering::Relaxed) {
+                            self.note(format!(
+                                "Stockbit failed ({e}); IPOT's top 10 per side for {symbol} and the rest"
+                            ));
+                        }
+                        read(ipot).await
+                    }
+                    r => return r,
+                }
+            }
+            _ => read(ipot).await,
+        };
+        if matches!(&r, Err(e) if ipot_failed(e)) {
+            self.ipot_down.store(true, Ordering::Relaxed);
+        }
+        r
+    }
+
+    /// The provider a call names: Stockbit when it answered any of the
+    /// summaries, or when it was read and nothing fell back; IPOT otherwise.
+    fn provider(&self, sources: impl IntoIterator<Item = BrokerSummarySource>) -> &'static str {
+        let read_stockbit = self.stockbit.is_some() && !self.stopped.load(Ordering::Relaxed);
+        if read_stockbit
+            || sources
+                .into_iter()
+                .any(|s| s == BrokerSummarySource::Stockbit)
+        {
+            sb_provider::NAME
+        } else {
+            ipot::NAME
+        }
+    }
+
+    /// The fallback warnings into `warnings`, then the login hint when an
+    /// IPOT read failed under `auto` without a session.
+    fn finish(&self, warnings: &mut Vec<String>) {
+        let notes = std::mem::take(&mut *self.notes.lock().unwrap_or_else(|p| p.into_inner()));
+        for w in notes {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
+        if self.login_hint && self.ipot_down.load(Ordering::Relaxed) {
+            warnings.push(IPOT_FAILED_NOTE.into());
+        }
+    }
+
+    /// The error a call ends with: with the login hint where it applies, and
+    /// after a fallback with the first Stockbit failure, which a failing IPOT
+    /// would otherwise hide.
+    fn fail(&self, e: IdxError) -> IdxError {
+        let e = if self.login_hint {
+            with_login_hint(e)
+        } else {
+            e
+        };
+        let notes = self.notes.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(first) = notes.first() else {
+            return e;
+        };
+        match e {
+            IdxError::Provider { provider, message } => IdxError::Provider {
+                provider,
+                message: format!("{message}; {first}"),
+            },
+            IdxError::Network(m) => IdxError::Network(format!("{m}; {first}")),
+            e => e,
+        }
+    }
+}
+
 // ---- bandarmology ---------------------------------------------------------------
 
 /// Range, tier and filters for [`bandar`]. Explicit dates win over `period`.
@@ -1414,6 +1668,8 @@ pub struct BandarQuery {
     pub board: BrokerBoard,
     /// Add the session-by-session series (one request per session).
     pub daily: bool,
+    /// Where the summaries come from (see [`broker_plan`]).
+    pub source: BrokerSummaryChoice,
 }
 
 /// Most tickers one `bandar --daily` call takes: the series costs one
@@ -1479,40 +1735,42 @@ pub async fn price_move(
     Ok((price, bd::change_pct(base, price)))
 }
 
-/// One ticker's summary for the query: the explicit range, or the period
-/// ending on the ticker's latest session with trades. With `daily`, every
-/// weekday of the range as well.
+/// One ticker's summary for the query from `src`: the explicit range, or
+/// the period ending on the ticker's latest session with trades. With
+/// `daily`, every weekday of the range as well.
 async fn bandar_one(
-    fetcher: &Arc<Fetcher>,
+    src: SummarySource<'_>,
     symbol: Symbol,
     range: Option<(NaiveDate, NaiveDate)>,
     q: BandarQuery,
     today: NaiveDate,
 ) -> Result<(Sourced<BrokerSummary>, Vec<BrokerSummary>)> {
-    let bq = BrokerQuery {
-        from: None,
-        to: None,
-        investor: q.investor,
-        board: q.board,
-    };
     let mut s = match range {
-        Some(r) => broker_one(fetcher, symbol.clone(), Some(r), bq, today).await?,
+        Some((from, to)) => {
+            let s = src
+                .range(&symbol, from, to, q.investor, q.board, today, true)
+                .await?;
+            note_no_trades(s, &symbol, from, to)
+        }
         None => {
-            let latest = latest_broker_day(fetcher, &symbol, bq, today).await?;
-            if q.period == BandarPeriod::Day1 || latest.data.is_empty() {
+            let latest = src.latest(&symbol, q.investor, q.board, today).await?;
+            if latest.data.is_empty() {
                 latest
             } else {
+                // The latest session's page again for one session (cached),
+                // now with its foreign net.
                 let end = latest.data.to;
-                let mut r = ipot::broker_summary_range(
-                    fetcher,
-                    &symbol,
-                    q.period.start(end),
-                    end,
-                    q.investor,
-                    q.board,
-                    today,
-                )
-                .await?;
+                let mut r = src
+                    .range(
+                        &symbol,
+                        q.period.start(end),
+                        end,
+                        q.investor,
+                        q.board,
+                        today,
+                        true,
+                    )
+                    .await?;
                 r.absorb(&latest);
                 r
             }
@@ -1520,8 +1778,7 @@ async fn bandar_one(
     };
     if q.investor != BrokerInvestor::All && !s.data.is_empty() {
         let (from, to) = (s.data.from, s.data.to);
-        if let Err(e) = with_value_traded(fetcher, &symbol, from, to, q.board, today, &mut s).await
-        {
+        if let Err(e) = with_value_traded(src, &symbol, from, to, q.board, today, &mut s).await {
             s.warnings.push(format!(
                 "{symbol}: no value traded from {from} to {to}, so no percentages ({e})"
             ));
@@ -1531,7 +1788,7 @@ async fn bandar_one(
     if q.daily {
         let days = bd::weekdays(s.data.from, s.data.to);
         let got: Vec<Result<Sourced<BrokerSummary>>> = stream::iter(days)
-            .map(|d| bandar_session(fetcher, &symbol, d, q, today))
+            .map(|d| bandar_session(src, &symbol, d, q, today))
             .buffered(3)
             .collect()
             .await;
@@ -1555,7 +1812,7 @@ async fn bandar_one(
 /// traded: take `total_value` and `total_lots` from the all-investor summary
 /// of the same range and board (one more request, cached).
 async fn with_value_traded(
-    fetcher: &Arc<Fetcher>,
+    src: SummarySource<'_>,
     symbol: &Symbol,
     from: NaiveDate,
     to: NaiveDate,
@@ -1563,8 +1820,9 @@ async fn with_value_traded(
     today: NaiveDate,
     side: &mut Sourced<BrokerSummary>,
 ) -> Result<()> {
-    let all =
-        ipot::broker_summary(fetcher, symbol, from, to, BrokerInvestor::All, board, today).await?;
+    let all = src
+        .range(symbol, from, to, BrokerInvestor::All, board, today, false)
+        .await?;
     side.absorb(&all);
     side.data.total_value = all.data.total_value;
     side.data.total_lots = all.data.total_lots;
@@ -1573,15 +1831,15 @@ async fn with_value_traded(
 
 /// One session of the daily series, with the value traded for one side.
 async fn bandar_session(
-    fetcher: &Arc<Fetcher>,
+    src: SummarySource<'_>,
     symbol: &Symbol,
     day: NaiveDate,
     q: BandarQuery,
     today: NaiveDate,
 ) -> Result<Sourced<BrokerSummary>> {
-    let mut s = ipot::broker_summary(fetcher, symbol, day, day, q.investor, q.board, today).await?;
+    let mut s = src.day(symbol, day, q.investor, q.board, today).await?;
     if q.investor != BrokerInvestor::All && !s.data.is_empty() {
-        with_value_traded(fetcher, symbol, day, day, q.board, today, &mut s).await?;
+        with_value_traded(src, symbol, day, day, q.board, today, &mut s).await?;
     }
     Ok(s)
 }
@@ -1589,11 +1847,13 @@ async fn bandar_session(
 /// Bandarmology for each ticker: the top 1/3/5/10 buyers against the top
 /// sellers over the range, the headline signal and phase, the top buyers'
 /// average against the price, foreign flow, and with `daily` the session
-/// series. Tickers that fail become warnings; the call fails only when all
-/// of them do.
+/// series. The summaries come from `q.source` (see [`SummaryPlan`]).
+/// Tickers that fail become warnings; the call fails only when all of them
+/// do.
 pub async fn bandar(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
+    stockbit: Option<&Stockbit>,
     universe: &[Issuer],
     symbols: &[Symbol],
     q: BandarQuery,
@@ -1620,9 +1880,15 @@ pub async fn bandar(
         q.period.as_str()
     };
 
+    let plan = SummaryPlan::new(fetcher, stockbit, q.source)?;
+    let plan = &plan;
     let results: Vec<Result<(Sourced<BrokerSummary>, Vec<BrokerSummary>)>> =
         stream::iter(symbols.to_vec())
-            .map(|s| bandar_one(fetcher, s, range, q, today))
+            .map(|sym| async move {
+                let s = &sym;
+                plan.run(s, move |src| bandar_one(src, s.clone(), range, q, today))
+                    .await
+            })
             .buffered(3)
             .collect()
             .await;
@@ -1641,6 +1907,7 @@ pub async fn bandar(
     let mut out: Option<Sourced<Vec<BandarReport>>> = None;
     let mut pending = Vec::new();
     let mut first_err: Option<IdxError> = None;
+    let mut sources = Vec::new();
     for (sym, r) in symbols.iter().zip(results) {
         let (mut s, mut sessions) = match r {
             Ok(v) => v,
@@ -1653,6 +1920,7 @@ pub async fn bandar(
                 continue;
             }
         };
+        sources.push(s.data.source);
         fill_names(&mut s.data, universe);
         let quote = quotes.iter().find(|x| &x.symbol == sym);
         let (price, chg) = if s.data.is_empty() {
@@ -1682,9 +1950,12 @@ pub async fn bandar(
         }
     }
     let Some(mut result) = out else {
-        return Err(first_err.unwrap_or_else(|| IdxError::NotFound("no data".into())));
+        let e = first_err.unwrap_or_else(|| IdxError::NotFound("no data".into()));
+        return Err(plan.fail(e));
     };
     result.warnings.extend(pending);
+    plan.finish(&mut result.warnings);
+    result.provider = plan.provider(sources);
     Ok(result)
 }
 
@@ -1706,14 +1977,16 @@ pub struct BandarScreenOptions {
     pub scan: usize,
     /// Scan these instead of the most traded.
     pub symbols: Vec<Symbol>,
+    /// Where the summaries come from (see [`broker_plan`]).
+    pub source: BrokerSummaryChoice,
 }
 
-/// One scanned ticker's range summary; owned arguments keep the stream's
-/// future general over lifetimes. `foreign_net`: rebuild the range's foreign
-/// net from single sessions (see `ipot::broker_summary_range`); a caller
-/// that never shows the net reads the range page alone.
+/// One scanned ticker's range summary from the plan; owned arguments keep
+/// the stream's future general over lifetimes. `foreign_net`: with the
+/// range's foreign net (see [`SummarySource::range`]); a caller that never
+/// shows the net reads the lists and totals alone.
 async fn screen_summary(
-    fetcher: &Arc<Fetcher>,
+    plan: &SummaryPlan<'_>,
     symbol: Symbol,
     from: NaiveDate,
     to: NaiveDate,
@@ -1721,11 +1994,12 @@ async fn screen_summary(
     foreign_net: bool,
 ) -> (Symbol, Result<Sourced<BrokerSummary>>) {
     let (investor, board) = (BrokerInvestor::All, BrokerBoard::All);
-    let r = if foreign_net {
-        ipot::broker_summary_range(fetcher, &symbol, from, to, investor, board, today).await
-    } else {
-        ipot::broker_summary(fetcher, &symbol, from, to, investor, board, today).await
-    };
+    let sym = &symbol;
+    let r = plan
+        .run(sym, move |src| {
+            src.range(sym, from, to, investor, board, today, foreign_net)
+        })
+        .await;
     (symbol, r)
 }
 
@@ -1795,21 +2069,19 @@ async fn scan_candidates(
 /// probe was one, otherwise the first failure (a source that is down is not
 /// a market without trades). "Not found" needs a probe that answered.
 async fn scan_end(
-    fetcher: &Arc<Fetcher>,
+    plan: &SummaryPlan<'_>,
     candidates: &[Symbol],
     today: NaiveDate,
 ) -> Result<NaiveDate> {
-    let bq = BrokerQuery {
-        from: None,
-        to: None,
-        investor: BrokerInvestor::All,
-        board: BrokerBoard::All,
-    };
+    let (investor, board) = (BrokerInvestor::All, BrokerBoard::All);
     let mut offline = None;
     let mut failure = None;
     let mut answered = false;
     for sym in candidates.iter().take(3) {
-        match latest_broker_day(fetcher, sym, bq, today).await {
+        let latest = plan
+            .run(sym, move |src| src.latest(sym, investor, board, today))
+            .await;
+        match latest {
             Ok(s) if !s.data.is_empty() => return Ok(s.data.to),
             Ok(_) => answered = true,
             Err(e @ IdxError::OfflineMiss(_)) => {
@@ -1834,7 +2106,7 @@ async fn scan_end(
 /// sequential pass over provider failures (not unknown codes). `foreign_net`
 /// as for [`screen_summary`].
 async fn scan_summaries(
-    fetcher: &Arc<Fetcher>,
+    plan: &SummaryPlan<'_>,
     candidates: &[Symbol],
     from: NaiveDate,
     end: NaiveDate,
@@ -1843,7 +2115,7 @@ async fn scan_summaries(
 ) -> Vec<(Symbol, Result<Sourced<BrokerSummary>>)> {
     let mut fetched: Vec<(Symbol, Result<Sourced<BrokerSummary>>)> =
         stream::iter(candidates.to_vec())
-            .map(|s| screen_summary(fetcher, s, from, end, today, foreign_net))
+            .map(|s| screen_summary(plan, s, from, end, today, foreign_net))
             .buffer_unordered(3)
             .collect()
             .await;
@@ -1855,7 +2127,7 @@ async fn scan_summaries(
     if !retry.is_empty() {
         tokio::time::sleep(ipot::RECOVER_PAUSE).await;
         for sym in retry {
-            let again = screen_summary(fetcher, sym.clone(), from, end, today, foreign_net).await;
+            let again = screen_summary(plan, sym.clone(), from, end, today, foreign_net).await;
             if let Some(slot) = fetched.iter_mut().find(|(s, _)| *s == sym) {
                 *slot = again;
             }
@@ -1866,14 +2138,16 @@ async fn scan_summaries(
 
 /// Bandarmology screener: reads the most traded stocks (or the given ones)
 /// over the period ending on the latest session and keeps those matching
-/// the preset and filters. One broker-summary request per scanned ticker;
-/// on multi-day periods usually three more for the rebuilt foreign net (up
-/// to six when the latest sessions had no trades; see
-/// `ipot::broker_summary_range`) and one history request per row the other
-/// filters left.
+/// the preset and filters, from `opts.source` (see [`SummaryPlan`]). From
+/// IPOT one broker-summary request per scanned ticker, and on multi-day
+/// periods usually three more for the rebuilt foreign net (up to six when
+/// the latest sessions had no trades; see `ipot::broker_summary_range`);
+/// from Stockbit two (all investors, then foreign investors for the net),
+/// paced. Then one history request per row the other filters left.
 pub async fn bandar_screen(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
+    stockbit: Option<&Stockbit>,
     universe: &[Issuer],
     opts: &BandarScreenOptions,
     today: NaiveDate,
@@ -1884,15 +2158,18 @@ pub async fn bandar_screen(
         None => Vec::new(),
     };
     filters.extend(opts.filters.iter().cloned());
+    let plan = SummaryPlan::new(fetcher, stockbit, opts.source)?;
 
     // Candidates and their quotes.
     let (candidates, mut out) = scan_candidates(p, universe, &opts.symbols, opts.scan).await?;
     let quotes = std::mem::take(&mut out.data);
     out.warnings.retain(|w| !w.contains("returned no quote"));
-    let end = scan_end(fetcher, &candidates, today).await?;
+    let end = scan_end(&plan, &candidates, today)
+        .await
+        .map_err(|e| plan.fail(e))?;
     let from = opts.period.start(end);
     let period = opts.period.as_str();
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today, true).await;
+    let fetched = scan_summaries(&plan, &candidates, from, end, today, true).await;
     let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
     let mut failed = 0usize;
     let mut reports: Vec<BandarReport> = Vec::new();
@@ -1970,6 +2247,8 @@ pub async fn bandar_screen(
             candidates.len()
         ));
     }
+    plan.finish(&mut out.warnings);
+    let provider = plan.provider(summaries.iter().map(|s| s.source));
     let mut out = out.map(|_| BandarScreen {
         period: opts.period,
         from,
@@ -1984,7 +2263,7 @@ pub async fn bandar_screen(
         total_matches: total,
         rows,
     });
-    out.provider = ipot::NAME;
+    out.provider = provider;
     Ok(out)
 }
 
@@ -2000,6 +2279,8 @@ pub struct BrokerActivityOptions {
     pub symbols: Vec<Symbol>,
     /// Rows per side; 0 = all.
     pub limit: usize,
+    /// Where the summaries come from (see [`broker_plan`]).
+    pub source: BrokerSummaryChoice,
 }
 
 fn stock_row(
@@ -2030,13 +2311,16 @@ fn stock_row(
     }
 }
 
-/// Broker activity: where one exchange member shows up among the top ten
-/// buyers and sellers of the most traded stocks (or the given ones) over
-/// the period ending on the latest session. One broker-summary request per
-/// scanned ticker, shared with the bandar screen's cache.
+/// Broker activity: where one exchange member shows up among the buyers and
+/// sellers of the most traded stocks (or the given ones) over the period
+/// ending on the latest session, from `opts.source` (see [`SummaryPlan`]):
+/// IPOT's top ten per side, or every broker from Stockbit. One
+/// broker-summary request per scanned ticker, shared with the bandar
+/// screen's cache.
 pub async fn bandar_broker(
     p: &dyn Provider,
     fetcher: &Arc<Fetcher>,
+    stockbit: Option<&Stockbit>,
     universe: &[Issuer],
     opts: &BrokerActivityOptions,
     today: NaiveDate,
@@ -2048,6 +2332,7 @@ pub async fn bandar_broker(
             opts.code
         )));
     }
+    let plan = SummaryPlan::new(fetcher, stockbit, opts.source)?;
     let (candidates, mut out) = scan_candidates(p, universe, &opts.symbols, opts.scan).await?;
     let quotes = std::mem::take(&mut out.data);
     out.warnings.retain(|w| !w.contains("returned no quote"));
@@ -2056,13 +2341,16 @@ pub async fn bandar_broker(
         out.warnings
             .push(format!("{code} is not on the bundled exchange-member list"));
     }
-    let end = scan_end(fetcher, &candidates, today).await?;
+    let end = scan_end(&plan, &candidates, today)
+        .await
+        .map_err(|e| plan.fail(e))?;
     let from = opts.period.start(end);
-    // The rows carry no foreign net: the range pages alone.
-    let fetched = scan_summaries(fetcher, &candidates, from, end, today, false).await;
+    // The rows carry no foreign net: the lists alone.
+    let fetched = scan_summaries(&plan, &candidates, from, end, today, false).await;
 
     let mut failed = 0usize;
     let mut checked = 0usize;
+    let mut sources = Vec::new();
     let mut bought = Vec::new();
     let mut sold = Vec::new();
     for (sym, r) in fetched {
@@ -2070,6 +2358,7 @@ pub async fn bandar_broker(
             Ok(mut s) if !s.data.is_empty() => {
                 out.absorb(&s);
                 checked += 1;
+                sources.push(s.data.source);
                 fill_names(&mut s.data, universe);
                 if s.data.name.is_none() {
                     s.data.name = quotes
@@ -2112,6 +2401,8 @@ pub async fn bandar_broker(
             candidates.len()
         ));
     }
+    plan.finish(&mut out.warnings);
+    let provider = plan.provider(sources);
     let mut out = out.map(|_| BrokerActivity {
         code,
         name,
@@ -2126,7 +2417,7 @@ pub async fn bandar_broker(
         bought,
         sold,
     });
-    out.provider = ipot::NAME;
+    out.provider = provider;
     Ok(out)
 }
 
@@ -3204,7 +3495,7 @@ mod tests {
 
         /// The fetcher, a Stockbit provider on it (with a working session or
         /// none) and the backend both read from.
-        fn setup(
+        pub(super) fn setup(
             be: FixtureBackend,
             session: bool,
         ) -> (
@@ -3605,9 +3896,13 @@ mod tests {
         async fn the_scan_says_the_source_is_down_rather_than_no_trades() {
             let (f, be, _d) =
                 fetcher(FixtureBackend::new().route("data-brokersummary.php", 502, BAD_GATEWAY));
-            let err = scan_end(&f, &syms(&["BBCA", "BRPT", "TLKM"]), d(10, 19))
-                .await
-                .unwrap_err();
+            let err = scan_end(
+                &SummaryPlan::ipot(&f),
+                &syms(&["BBCA", "BRPT", "TLKM"]),
+                d(10, 19),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(err.exit_code(), 3, "{err}");
             assert!(err.to_string().contains("HTTP 502"), "{err}");
             assert!(be.calls_matching("code=BRPT") > 0);
@@ -3622,7 +3917,7 @@ mod tests {
                     .route("code=BBCA", 200, NO_TRADES)
                     .route("code=BRPT", 502, BAD_GATEWAY),
             );
-            let err = scan_end(&f, &syms(&["BBCA", "BRPT"]), d(10, 19))
+            let err = scan_end(&SummaryPlan::ipot(&f), &syms(&["BBCA", "BRPT"]), d(10, 19))
                 .await
                 .unwrap_err();
             assert_eq!(err.exit_code(), 4, "{err}");
@@ -3638,6 +3933,7 @@ mod tests {
                 investor: BrokerInvestor::All,
                 board: BrokerBoard::All,
                 daily: false,
+                source: BrokerSummaryChoice::Ipot,
             }
         }
 
@@ -3730,6 +4026,7 @@ mod tests {
             let got = super::super::bandar(
                 &Prices,
                 &f,
+                None,
                 &[],
                 &syms(&["BBCA"]),
                 q(BandarPeriod::Week1),
@@ -3773,6 +4070,7 @@ mod tests {
             let got = super::super::bandar(
                 &Prices,
                 &f,
+                None,
                 &[],
                 &syms(&["BBCA"]),
                 q(BandarPeriod::Day1),
@@ -3792,9 +4090,10 @@ mod tests {
             query.from = Some(d(10, 12));
             query.to = Some(d(10, 16));
             query.daily = true;
-            let got = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), query, d(10, 17))
-                .await
-                .unwrap();
+            let got =
+                super::super::bandar(&Prices, &f, None, &[], &syms(&["BBCA"]), query, d(10, 17))
+                    .await
+                    .unwrap();
             let r = &got.data[0];
             assert_eq!(r.period, "custom");
             let daily = r.daily.as_ref().unwrap();
@@ -3831,9 +4130,10 @@ mod tests {
             let mut query = q(BandarPeriod::Day1);
             query.investor = BrokerInvestor::Foreign;
             query.daily = true;
-            let got = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), query, d(10, 17))
-                .await
-                .unwrap();
+            let got =
+                super::super::bandar(&Prices, &f, None, &[], &syms(&["BBCA"]), query, d(10, 17))
+                    .await
+                    .unwrap();
             let r = &got.data[0];
             assert_eq!(r.investor, BrokerInvestor::Foreign);
             // The foreign page's T. Val (1.7 T) is their buying; the
@@ -3863,15 +4163,17 @@ mod tests {
             let (f, be, _d) = fetcher(FixtureBackend::new());
             let mut bad = q(BandarPeriod::Week1);
             bad.top = 4;
-            let err = super::super::bandar(&Prices, &f, &[], &syms(&["BBCA"]), bad, d(10, 17))
-                .await
-                .unwrap_err();
+            let err =
+                super::super::bandar(&Prices, &f, None, &[], &syms(&["BBCA"]), bad, d(10, 17))
+                    .await
+                    .unwrap_err();
             assert_eq!(err.exit_code(), 2);
             let mut daily = q(BandarPeriod::Week1);
             daily.daily = true;
             let err = super::super::bandar(
                 &Prices,
                 &f,
+                None,
                 &[],
                 &syms(&["BBCA", "BBRI", "BMRI", "BBNI"]),
                 daily,
@@ -3896,8 +4198,9 @@ mod tests {
                 limit: 0,
                 scan: 100,
                 symbols: syms(&["BBCA", "BRPT", "TLKM", "ZZZZ"]),
+                source: BrokerSummaryChoice::Ipot,
             };
-            let got = bandar_screen(&Prices, &f, &[], &opts, d(10, 17))
+            let got = bandar_screen(&Prices, &f, None, &[], &opts, d(10, 17))
                 .await
                 .unwrap();
             let s = &got.data;
@@ -3931,6 +4234,7 @@ mod tests {
             let err = bandar_screen(
                 &Prices,
                 &f,
+                None,
                 &[],
                 &BandarScreenOptions { top: 2, ..opts },
                 d(10, 17),
@@ -3949,8 +4253,9 @@ mod tests {
                 scan: 100,
                 symbols: syms(&["BBCA", "BRPT", "TLKM"]),
                 limit: 0,
+                source: BrokerSummaryChoice::Ipot,
             };
-            let got = bandar_broker(&Prices, &f, &[], &opts, d(10, 18))
+            let got = bandar_broker(&Prices, &f, None, &[], &opts, d(10, 18))
                 .await
                 .unwrap();
             assert_eq!(got.provider, "ipot");
@@ -4001,14 +4306,14 @@ mod tests {
                 ..opts.clone()
             };
             assert_eq!(
-                bandar_broker(&Prices, &f, &[], &bad, d(10, 18))
+                bandar_broker(&Prices, &f, None, &[], &bad, d(10, 18))
                     .await
                     .unwrap_err()
                     .exit_code(),
                 2
             );
             let limited = BrokerActivityOptions { limit: 1, ..opts };
-            let got = bandar_broker(&Prices, &f, &[], &limited, d(10, 18))
+            let got = bandar_broker(&Prices, &f, None, &[], &limited, d(10, 18))
                 .await
                 .unwrap();
             assert_eq!((got.data.bought.len(), got.data.sold.len()), (1, 1));
@@ -4016,6 +4321,349 @@ mod tests {
                 (got.data.bought_value - total).abs() < 1e-6,
                 "sums cover every row"
             );
+        }
+
+        // ---- from Stockbit ---------------------------------------------------
+
+        use super::broker_source::setup as stockbit_setup;
+        use crate::model::BrokerSummaryChoice as C;
+
+        const SB_DAY: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106.json");
+        const SB_FOREIGN: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261106_foreign.json");
+        const SB_WEEK: &str =
+            include_str!("../tests/fixtures/stockbit/marketdetectors_bbca_20261102_20261106.json");
+        const SB_BLOCKED: &str = include_str!("../tests/fixtures/stockbit/blocked_403.html");
+        const IPOT_1106: &str =
+            include_str!("../tests/fixtures/ipot/brokersummary_bbca_20261106.html");
+
+        /// Stockbit's BBCA on Friday 6 November: all investors, foreign investors.
+        fn stockbit_day() -> FixtureBackend {
+            FixtureBackend::new()
+                .route(
+                    "investor_type=INVESTOR_TYPE_ALL&from=2026-11-06&to=2026-11-06",
+                    200,
+                    SB_DAY,
+                )
+                .route(
+                    "investor_type=INVESTOR_TYPE_FOREIGN&from=2026-11-06&to=2026-11-06",
+                    200,
+                    SB_FOREIGN,
+                )
+        }
+
+        /// Sunday 8 November: the latest session is Friday the 6th.
+        fn sunday() -> NaiveDate {
+            d(11, 8)
+        }
+
+        fn from(source: C, period: BandarPeriod) -> BandarQuery {
+            BandarQuery {
+                source,
+                ..q(period)
+            }
+        }
+
+        #[tokio::test]
+        async fn auto_reads_every_broker_from_stockbit_when_the_session_works() {
+            let (f, sb, be, _d) = stockbit_setup(stockbit_day(), true);
+            let got = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Auto, BandarPeriod::Day1),
+                sunday(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+            let r = &got.data[0];
+            assert_eq!((r.from, r.to), (d(11, 6), d(11, 6)));
+            assert_eq!(r.foreign_net_value, Some(218_988_301_100.0));
+            // Stockbit's lists run past ten, so the top-10 tier sums ten rows
+            // and the headline buyers are the top five by lots.
+            assert_eq!(r.buyers.len(), 5);
+            assert_eq!(
+                r.tiers.iter().map(|t| t.top).collect::<Vec<_>>(),
+                [1, 3, 5, 10]
+            );
+            assert!(r.total_value.is_some_and(|v| v > 0.0));
+            assert_eq!(be.calls_matching("indopremier"), 0);
+            assert_eq!(
+                be.calls_matching("INVESTOR_TYPE_FOREIGN"),
+                1,
+                "the foreign net: one more read"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_week_from_stockbit_is_one_read_and_a_missing_net_stays_null() {
+            let (f, sb, be, _d) = stockbit_setup(
+                stockbit_day().route(
+                    "investor_type=INVESTOR_TYPE_ALL&from=2026-11-02&to=2026-11-06",
+                    200,
+                    SB_WEEK,
+                ),
+                true,
+            );
+            let got = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Stockbit, BandarPeriod::Week1),
+                sunday(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            let r = &got.data[0];
+            assert_eq!(
+                (r.from, r.to, r.period.as_str()),
+                (d(11, 2), d(11, 6), "1w")
+            );
+            // No foreign read of the week was recorded: the net is null, said so.
+            assert_eq!(r.foreign_net_value, None);
+            assert!(
+                got.warnings.iter().any(|w| w.contains("no foreign net")),
+                "{:?}",
+                got.warnings
+            );
+            assert_eq!(be.calls_matching("from=2026-11-02&to=2026-11-06"), 2);
+            assert_eq!(be.calls_matching("indopremier"), 0);
+        }
+
+        #[tokio::test]
+        async fn auto_reads_ipot_for_the_rest_after_stockbit_is_blocked() {
+            let (f, sb, be, _d) = stockbit_setup(
+                FixtureBackend::new()
+                    .route("marketdetectors/", 403, SB_BLOCKED)
+                    .route("code=BBCA&start=11/06/2026&end=11/06/2026", 200, IPOT_1106),
+                true,
+            );
+            let got = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Auto, BandarPeriod::Day1),
+                sunday(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.provider, "ipot");
+            assert_eq!(got.data[0].to, d(11, 6));
+            assert!(
+                got.warnings
+                    .iter()
+                    .any(|w| w.starts_with("Stockbit failed (")
+                        && w.ends_with("IPOT's top 10 per side for BBCA and the rest")),
+                "{:?}",
+                got.warnings
+            );
+            assert_eq!(
+                be.calls_matching("marketdetectors/"),
+                1,
+                "no read after the block"
+            );
+        }
+
+        #[tokio::test]
+        async fn when_both_sources_fail_the_error_names_stockbit_too() {
+            let (f, sb, _be, _d) = stockbit_setup(
+                FixtureBackend::new()
+                    .route("marketdetectors/", 502, BAD_GATEWAY)
+                    .route("data-brokersummary.php", 502, BAD_GATEWAY),
+                true,
+            );
+            let e = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Auto, BandarPeriod::Week1),
+                sunday(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 3, "{e}");
+            let msg = e.to_string();
+            assert!(msg.starts_with("ipot: "), "{msg}");
+            assert!(
+                msg.contains("BBCA: Stockbit failed (") && msg.contains("HTTP 502"),
+                "{msg}"
+            );
+            assert!(!msg.contains("stockbit login"), "a session works: {msg}");
+        }
+
+        #[tokio::test]
+        async fn stockbit_by_name_needs_a_session_before_any_request() {
+            let (f, sb, be, _d) = stockbit_setup(stockbit_day(), false);
+            let e = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Stockbit, BandarPeriod::Week1),
+                sunday(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{e}");
+            assert!(e.to_string().contains("idx stockbit login"), "{e}");
+            let screen = BandarScreenOptions {
+                period: BandarPeriod::Day1,
+                top: 5,
+                preset: None,
+                filters: Vec::new(),
+                sort: None,
+                descending: None,
+                limit: 0,
+                scan: 100,
+                symbols: syms(&["BBCA"]),
+                source: C::Stockbit,
+            };
+            let e = bandar_screen(&Prices, &f, Some(&sb), &[], &screen, sunday())
+                .await
+                .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{e}");
+            let activity = BrokerActivityOptions {
+                code: "BB".into(),
+                period: BandarPeriod::Day1,
+                scan: 100,
+                symbols: syms(&["BBCA"]),
+                limit: 0,
+                source: C::Stockbit,
+            };
+            let e = bandar_broker(&Prices, &f, Some(&sb), &[], &activity, sunday())
+                .await
+                .unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{e}");
+            assert_eq!(be.call_count(), 0);
+        }
+
+        #[tokio::test]
+        async fn ipot_down_without_a_session_says_what_a_login_does() {
+            let (f, sb, _be, _d) = stockbit_setup(
+                FixtureBackend::new().route("data-brokersummary.php", 502, BAD_GATEWAY),
+                false,
+            );
+            let e = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Auto, BandarPeriod::Week1),
+                sunday(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 3, "{e}");
+            let msg = e.to_string();
+            assert!(
+                msg.contains("HTTP 502") && msg.contains("`idx stockbit login`"),
+                "{msg}"
+            );
+            // Chosen by name, IPOT's failure carries no such hint.
+            let e = super::super::bandar(
+                &Prices,
+                &f,
+                Some(&sb),
+                &[],
+                &syms(&["BBCA"]),
+                from(C::Ipot, BandarPeriod::Week1),
+                sunday(),
+            )
+            .await
+            .unwrap_err();
+            assert!(!e.to_string().contains("stockbit login"), "{e}");
+            // The screen says it too.
+            let screen = BandarScreenOptions {
+                period: BandarPeriod::Week1,
+                top: 5,
+                preset: None,
+                filters: Vec::new(),
+                sort: None,
+                descending: None,
+                limit: 0,
+                scan: 100,
+                symbols: syms(&["BBCA"]),
+                source: C::Auto,
+            };
+            let e = bandar_screen(&Prices, &f, Some(&sb), &[], &screen, sunday())
+                .await
+                .unwrap_err();
+            assert!(e.to_string().contains("`idx stockbit login`"), "{e}");
+        }
+
+        #[tokio::test]
+        async fn the_screen_and_broker_activity_read_stockbit() {
+            let (f, sb, be, _d) = stockbit_setup(stockbit_day(), true);
+            let screen = BandarScreenOptions {
+                period: BandarPeriod::Day1,
+                top: 5,
+                preset: None,
+                filters: Vec::new(),
+                sort: None,
+                descending: None,
+                limit: 0,
+                scan: 100,
+                symbols: syms(&["BBCA"]),
+                source: C::Auto,
+            };
+            let got = bandar_screen(&Prices, &f, Some(&sb), &[], &screen, sunday())
+                .await
+                .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+            assert_eq!((got.data.from, got.data.to), (d(11, 6), d(11, 6)));
+            assert_eq!(got.data.rows[0].foreign_net_value, Some(218_988_301_100.0));
+
+            // BB is the 11th buyer by lots: below IPOT's top ten, listed here.
+            let activity = BrokerActivityOptions {
+                code: "bb".into(),
+                period: BandarPeriod::Day1,
+                scan: 100,
+                symbols: syms(&["BBCA"]),
+                limit: 0,
+                source: C::Auto,
+            };
+            let foreign_reads = be.calls_matching("INVESTOR_TYPE_FOREIGN");
+            let got = bandar_broker(&Prices, &f, Some(&sb), &[], &activity, sunday())
+                .await
+                .unwrap();
+            assert_eq!(got.provider, "stockbit");
+            assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+            let a = &got.data;
+            assert_eq!((a.scanned, a.checked, a.failed), (1, 1, 0));
+            let bought = &a.bought[0];
+            assert_eq!((bought.symbol.as_str(), bought.rank), ("BBCA", 11));
+            assert_eq!(a.sold.len(), 1, "BB sold BBCA too");
+            assert_eq!(
+                bought.net_value,
+                Some(bought.value.unwrap() - a.sold[0].value.unwrap())
+            );
+            assert_eq!(
+                be.calls_matching("INVESTOR_TYPE_FOREIGN"),
+                foreign_reads,
+                "no foreign net for broker activity"
+            );
+            let table = crate::output::table_bandar::broker_activity(a, got.provider, false);
+            assert!(
+                table.contains("Buyer of") && table.contains("Source: Stockbit"),
+                "{table}"
+            );
+            assert!(!table.contains("top ten"), "{table}");
+            assert_eq!(be.calls_matching("indopremier"), 0);
         }
     }
 }

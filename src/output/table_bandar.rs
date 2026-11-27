@@ -157,16 +157,30 @@ fn daily(out: &mut String, d: &BandarDaily, top: u32, color: bool) {
     ));
 }
 
-const RULE: &str = "Bandarmology from the IPOT broker summary: the top N buyers against the top N sellers, net as a share of the value traded";
+/// `true` when `source` (the envelope's provider) is Stockbit, which lists
+/// every broker; IPOT publishes the top ten per side.
+fn every_broker(source: &str) -> bool {
+    source == crate::providers::stockbit::NAME
+}
 
-fn rule_note() -> String {
+/// The source as the notes name it.
+fn source_name(source: &str) -> &'static str {
+    if every_broker(source) {
+        "Stockbit"
+    } else {
+        "IPOT"
+    }
+}
+
+fn rule_note(source: &str) -> String {
     format!(
-        "{RULE} (+{BIG_PCT:.0}% big accumulation, +{ACCUMULATION_PCT:.0}% accumulation, -{ACCUMULATION_PCT:.0}% distribution, -{BIG_PCT:.0}% big distribution). Heuristic, not advice."
+        "Bandarmology from the {} broker summary: the top N buyers against the top N sellers, net as a share of the value traded (+{BIG_PCT:.0}% big accumulation, +{ACCUMULATION_PCT:.0}% accumulation, -{ACCUMULATION_PCT:.0}% distribution, -{BIG_PCT:.0}% big distribution). Heuristic, not advice.",
+        source_name(source)
     )
 }
 
-/// One block per ticker.
-pub fn bandar(list: &[BandarReport], color: bool) -> String {
+/// One block per ticker; `source` is the envelope's provider.
+pub fn bandar(list: &[BandarReport], source: &str, color: bool) -> String {
     let mut out = String::new();
     for (i, r) in list.iter().enumerate() {
         if i > 0 {
@@ -255,16 +269,27 @@ pub fn bandar(list: &[BandarReport], color: bool) -> String {
             out.push_str(&format!("· {line}\n"));
         }
     }
-    out.push_str(&rule_note());
+    out.push_str(&rule_note(source));
     out.push('\n');
     out
 }
 
-fn activity_side(out: &mut String, title: &str, rows: &[BrokerStockRow], buy: bool, color: bool) {
+fn activity_side(
+    out: &mut String,
+    title: &str,
+    rows: &[BrokerStockRow],
+    buy: bool,
+    every: bool,
+    color: bool,
+) {
     out.push_str(title);
     out.push('\n');
     if rows.is_empty() {
-        out.push_str("Not among the top ten in any scanned stock.\n");
+        out.push_str(if every {
+            "Not on this side in any scanned stock.\n"
+        } else {
+            "Not among the top ten in any scanned stock.\n"
+        });
         return;
     }
     let mut t = base_table(color);
@@ -304,8 +329,10 @@ fn activity_side(out: &mut String, title: &str, rows: &[BrokerStockRow], buy: bo
     out.push('\n');
 }
 
-/// One broker's appearances across the scanned stocks.
-pub fn broker_activity(a: &BrokerActivity, color: bool) -> String {
+/// One broker's appearances across the scanned stocks; `source` is the
+/// envelope's provider.
+pub fn broker_activity(a: &BrokerActivity, source: &str, color: bool) -> String {
+    let every = every_broker(source);
     let mut out = format!(
         "{}{} · {} ({} to {}) · {} scanned, {} with trades\n",
         a.code,
@@ -320,19 +347,31 @@ pub fn broker_activity(a: &BrokerActivity, color: bool) -> String {
         a.checked,
     );
     out.push_str(&format!(
-        "Visible buying {} in {} stocks · visible selling {} in {} stocks\n",
+        "{} {} in {} stocks · {} {} in {} stocks\n",
+        if every { "Buying" } else { "Visible buying" },
         f::compact(Some(a.bought_value)),
         a.bought.len(),
+        if every { "selling" } else { "visible selling" },
         f::compact(Some(a.sold_value)),
         a.sold.len(),
     ));
-    activity_side(&mut out, "Top-ten buyer of", &a.bought, true, color);
-    activity_side(&mut out, "Top-ten seller of", &a.sold, false, color);
-    out.push_str("Only the top ten buyers and sellers per stock are published; net shows where both sides are visible. Source: IPOT.\n");
+    let (buyer, seller) = if every {
+        ("Buyer of", "Seller of")
+    } else {
+        ("Top-ten buyer of", "Top-ten seller of")
+    };
+    activity_side(&mut out, buyer, &a.bought, true, every, color);
+    activity_side(&mut out, seller, &a.sold, false, every, color);
+    out.push_str(if every {
+        "Every broker that bought or sold is listed per stock. Source: Stockbit.\n"
+    } else {
+        "Only the top ten buyers and sellers per stock are published; net shows where both sides are visible. Source: IPOT.\n"
+    });
     out
 }
 
-pub fn screen(s: &BandarScreen, color: bool) -> String {
+/// The screen's rows; `source` is the envelope's provider.
+pub fn screen(s: &BandarScreen, source: &str, color: bool) -> String {
     let mut out = format!(
         "Bandar screen{} · {} {} to {} · top {} · scanned {} · {} with trades · {} match{}\n",
         s.preset
@@ -404,7 +443,7 @@ pub fn screen(s: &BandarScreen, color: bool) -> String {
             ));
         }
     }
-    out.push_str(&rule_note());
+    out.push_str(&rule_note(source));
     out.push('\n');
     out
 }
@@ -438,7 +477,7 @@ mod tests {
         let mut s = week();
         s.name = Some("Bank Central Asia Tbk".into());
         let r = bd::report(&s, "1w", 5, Some(5_175.0), Some(-14.46));
-        let out = bandar(&[r], false);
+        let out = bandar(&[r], "ipot", false);
         assert!(
             out.starts_with("BBCA · Bank Central Asia Tbk · 2026-10-12 to 2026-10-16 (1w) · all investors · all boards\n"),
             "{out}"
@@ -473,7 +512,7 @@ mod tests {
             total_matches: 2,
             rows: vec![row],
         };
-        let out = screen(&screen_, false);
+        let out = screen(&screen_, "ipot", false);
         assert!(out.starts_with("Bandar screen · big-distribution · 1w 2026-10-12 to 2026-10-16 · top 5 · scanned 100 · 98 with trades · 2 matches\n"), "{out}");
         assert!(out.contains("Filters: acc<=-15 · sorted by acc ascending"));
         assert!(out.contains("markdown"));
