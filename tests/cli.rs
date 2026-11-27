@@ -950,6 +950,85 @@ fn broker_lists_every_broker_from_stockbit_once_logged_in() {
 }
 
 #[test]
+fn bandar_reads_stockbit_once_logged_in() {
+    let sb = sandbox();
+    seed(
+        &sb.cache,
+        &marketdetectors_url("ALL"),
+        "stockbit/marketdetectors_bbca_20261106.json",
+    );
+    seed(
+        &sb.cache,
+        &marketdetectors_url("FOREIGN"),
+        "stockbit/marketdetectors_bbca_20261106_foreign.json",
+    );
+    seed(
+        &sb.cache,
+        "https://www.indopremier.com/module/saham/include/data-brokersummary.php?code=BBCA&start=11/06/2026&end=11/06/2026&fd=all&board=all",
+        "ipot/brokersummary_bbca_20261106.html",
+    );
+    let json = |extra: &[&str]| -> serde_json::Value {
+        let mut args = vec![
+            "-o",
+            "json",
+            "bandar",
+            "detect",
+            "BBCA",
+            "--date",
+            "2026-11-06",
+        ];
+        args.extend_from_slice(extra);
+        let out = idx(&sb.cache, &sb.config).args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    // No session: IPOT, and stockbit by name is a usage error.
+    let v = json(&[]);
+    assert_eq!(v["schema"], "idx.bandar.v1");
+    assert_eq!(v["provider"], "ipot");
+    idx(&sb.cache, &sb.config)
+        .args([
+            "bandar",
+            "detect",
+            "BBCA",
+            "--date",
+            "2026-11-06",
+            "--source",
+            "stockbit",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("idx stockbit login"));
+
+    // A dummy access token fresh until 2100; the harness is offline.
+    std::fs::write(
+        sb.config.parent().unwrap().join("stockbit-session.json"),
+        r#"{"access":"eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig","refresh":"d.e.f"}"#,
+    )
+    .unwrap();
+    let v = json(&[]);
+    assert_eq!(v["provider"], "stockbit");
+    let r = &v["data"][0];
+    assert_eq!(r["foreign_net_value"], 218_988_301_100.0);
+    assert_eq!(r["total_value"], 1_035_652_066_452.0);
+    assert_eq!(r["rounded"], false);
+    // Asked for by name, IPOT answers.
+    assert_eq!(json(&["--source", "ipot"])["provider"], "ipot");
+    idx(&sb.cache, &sb.config)
+        .args(["bandar", "detect", "BBCA", "--date", "2026-11-06"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Bandarmology from the Stockbit broker summary",
+        ));
+}
+
+#[test]
 fn broker_command_surface() {
     let sb = sandbox();
     idx(&sb.cache, &sb.config)
@@ -2178,7 +2257,8 @@ fn bandar_broker_surface() {
         .stdout(predicate::str::contains(
             "idx bandar broker CC --period 1m --scan 200",
         ))
-        .stdout(predicate::str::contains("top ten"));
+        .stdout(predicate::str::contains("top ten"))
+        .stdout(predicate::str::contains("--source <SOURCE>"));
     let out = idx(&sb.cache, &sb.config)
         .args(["schema", "bandar-broker"])
         .output()
@@ -2194,6 +2274,7 @@ fn bandar_broker_surface() {
         vec!["bandar", "broker"],
         vec!["bandar", "broker", "MIRAE", "--symbols", "BBCA"],
         vec!["bandar", "broker", "YP", "--period", "2w"],
+        vec!["bandar", "broker", "YP", "--source", "rti"],
     ] {
         idx(&sb.cache, &sb.config).args(&args).assert().code(2);
     }
@@ -2207,13 +2288,18 @@ fn bandar_command_surface() {
         .assert()
         .success()
         .stdout(predicate::str::contains("idx bandar detect BBCA --daily"))
-        .stdout(predicate::str::contains("big accumulation"));
+        .stdout(predicate::str::contains("big accumulation"))
+        .stdout(predicate::str::contains("--source <SOURCE>"))
+        .stdout(predicate::str::contains(
+            "idx bandar detect BBCA --source stockbit",
+        ));
     idx(&sb.cache, &sb.config)
         .args(["bandar", "screen", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("quiet-accumulation"))
-        .stdout(predicate::str::contains("below-bandar"));
+        .stdout(predicate::str::contains("below-bandar"))
+        .stdout(predicate::str::contains("--source <SOURCE>"));
     for name in ["bandar", "bandar-screen"] {
         let out = idx(&sb.cache, &sb.config)
             .args(["schema", name])
@@ -2261,6 +2347,8 @@ fn bandar_command_surface() {
         vec!["bandar", "screen", "-f", "pe<10"],
         vec!["bandar", "screen", "--sort", "phase"],
         vec!["bandar", "screen", "--asc", "--desc"],
+        vec!["bandar", "detect", "BBCA", "--source", "idx"],
+        vec!["bandar", "screen", "--source", "stockbit"],
     ] {
         idx(&sb.cache, &sb.config).args(&args).assert().code(2);
     }

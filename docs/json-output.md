@@ -483,8 +483,10 @@ that side's `buyer_count` or `seller_count` and completeness).
 
 ## `idx.bandar.v1` (`bandar detect`)
 
-Array, one reading per requested ticker, derived from the IPOT broker summary
-(see `idx.broker.v1`) and the price; the rules are in `src/analysis/bandar.rs`.
+Array, one reading per requested ticker, derived from the broker summary
+(see `idx.broker.v1`: Stockbit's once logged in under `--source auto`, IPOT's
+otherwise; the envelope's `provider` says which) and the price; the rules are
+in `src/analysis/bandar.rs`.
 `symbol`, `name`, `period` (`1d` | `1w` | `1m` | `3m`, or `custom` for
 explicit dates), `from`, `to`, `investor`, `board`, `top` (N behind the
 headline: 1, 3, 5 or 10), `signal` (`big_accumulation` | `accumulation` |
@@ -507,9 +509,10 @@ top N, shaped as in `idx.broker.v1`), `daily` (`null` unless `--daily`:
 sessions in a row, -2 = two distribution sessions) and
 `cumulative_net_value`), `reasons[]` and `rounded`. A range without trades
 reads `neutral` with a single reason. `foreign_net_value` over several
-sessions is rebuilt from single sessions as described for `idx.broker.v1`;
-`bandar screen` reads its ranges the same way, while `bandar broker`, which
-shows no foreign net, reads only the range pages. With an
+sessions is rebuilt from single sessions as described for `idx.broker.v1`
+when IPOT answers, and read over the range from foreign investors when
+Stockbit does; `bandar screen` reads its ranges the same way, while `bandar
+broker`, which shows no foreign net, reads only the range's lists. With an
 `investor` filter the brokers are that side's, while `total_value`,
 `total_lots` and every percentage stay those of the stock's value traded,
 read from the all-investor summary of the same range and board (one more
@@ -534,13 +537,14 @@ the screen rows.
 An object: `code`, `name` (bundled member list), `period`, `from`, `to`,
 `scanned`, `checked` (scanned stocks with trades), `failed`, `bought_value`
 and `sold_value` (sums of `value` over every row, before `--limit`), then
-`bought[]` (stocks where the broker is a top-10 buyer) and `sold[]` (top-10
-seller), largest value first: `symbol`, `name`, `rank` on that side, `lots`,
-`value`, `average_price`, `share_pct` (of all value traded in the stock),
-`opposite_value` (the broker's value on the other side when it is also top 10
-there, else `null`) and `net_value` (buy minus sell, in both lists, when both
-sides are visible). Only the top 10 per side are published, so a broker below
-tenth place in a stock is absent; nothing is estimated for it.
+`bought[]` (stocks where the broker bought) and `sold[]` (where it sold),
+largest value first: `symbol`, `name`, `rank` on that side, `lots`, `value`,
+`average_price`, `share_pct` (of all value traded in the stock),
+`opposite_value` (the broker's value on the other side when it shows there
+too, else `null`) and `net_value` (buy minus sell, in both lists, when both
+sides are visible). From Stockbit every broker is listed. IPOT publishes only
+the top 10 per side, so from IPOT a broker below tenth place in a stock is
+absent; nothing is estimated for it.
 
 The web terminal answers `bandar screen` and `bandar broker` from the Worker's
 scan of the last session instead of scanning live: from 16:45 WIB after each

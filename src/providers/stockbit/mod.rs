@@ -478,6 +478,29 @@ impl Stockbit {
         Ok(out)
     }
 
+    /// [`broker_summary`](Self::broker_summary) without the second read: the
+    /// lists and totals alone, for a caller that never shows the foreign net
+    /// (for all investors `foreign_net_value` stays `null`, 0 without
+    /// trades).
+    pub async fn broker_summary_lists(
+        &self,
+        symbol: &Symbol,
+        from: NaiveDate,
+        to: NaiveDate,
+        investor: BrokerInvestor,
+        board: BrokerBoard,
+        today: NaiveDate,
+    ) -> Result<Sourced<BrokerSummary>> {
+        idx_only(symbol)?;
+        if symbol.is_index() {
+            return Err(IdxError::NotFound(format!(
+                "{symbol} is an index; broker summaries belong to stocks"
+            )));
+        }
+        self.broker_summary_read(symbol, from, to, investor, board, today)
+            .await
+    }
+
     /// One `/marketdetectors/` read (see [`broker_summary`](Self::broker_summary)).
     async fn broker_summary_read(
         &self,

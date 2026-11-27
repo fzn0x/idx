@@ -4,13 +4,13 @@ use chrono::NaiveDate;
 
 use crate::analysis::bandar::{self as bd, Preset};
 use crate::error::Result;
-use crate::model::{BandarPeriod, BrokerBoard, BrokerInvestor, Symbol};
+use crate::model::{BandarPeriod, BrokerBoard, BrokerInvestor, BrokerSummaryChoice, Symbol};
 use crate::output::json::{SCHEMA_BANDAR, SCHEMA_BANDAR_BROKER, SCHEMA_BANDAR_SCREEN};
 use crate::output::table_bandar as tb;
 use crate::service::{self, BandarQuery, BandarScreenOptions, BrokerActivityOptions};
 use crate::universe;
 
-use super::{emit, input, Context};
+use super::{emit, input, stockbit, Context};
 
 const DETECT_HELP: &str = "Examples:
   idx bandar detect BBCA                     # last week, top 5 buyers vs top 5 sellers
@@ -19,6 +19,7 @@ const DETECT_HELP: &str = "Examples:
   idx bandar detect ASII --top 3 --period 1d
   idx bandar detect BBCA --from 2026-09-01 --to 2026-09-30
   idx bandar detect TLKM --investor foreign
+  idx bandar detect BBCA --source stockbit   # every broker, from your own Stockbit session
   idx -o json bandar detect BBCA | jq '.data[0] | {signal, phase, net_pct}'
   idx -o json market foreign | jq -r '.data.net_buy[:5][].symbol' | idx bandar detect -
 
@@ -29,7 +30,12 @@ that against the price move: accumulation with the price within +2% is quiet acc
 distribution with the price within -2% quiet distribution. The top buyers' average price
 against the last price says whether they sit on a gain. With --investor foreign or domestic the
 brokers are that side's, and the percentages stay shares of the stock's value traded (one more
-request). Heuristic, not advice.";
+request). Heuristic, not advice.
+
+Source: --source auto (default) reads Stockbit when `idx stockbit status` says logged in (every
+broker, exact figures, the foreign net from one more read of foreign investors), IPOT otherwise
+(the top 10 per side); a ticker Stockbit fails for is read from IPOT with a warning. Stockbit's
+reads are paced a second apart, so --daily costs two seconds a session there.";
 
 const SCREEN_HELP: &str = "Examples:
   idx bandar screen --preset big-accumulation          # last week, 100 most traded stocks
@@ -50,10 +56,13 @@ fpct (foreign net, % of value), gain (price vs top buyers' average, %), chg (pri
 turnover (value traded), conc (top buyers' share of value, %), price, signal=..., phase=...
 Operators < <= > >= = !=; numbers accept K/M/B/T and %.
 
-One broker-summary request per scanned stock (cached; closed sessions for a week), and on
-1w/1m/3m usually three more for its foreign net, up to six when the latest sessions had no
-trades (the source counts its latest session twice over a range, so the net is rebuilt from
-single sessions), and one history request per row the other filters leave.";
+Source: --source auto (default) reads Stockbit when `idx stockbit status` says logged in, IPOT
+otherwise; ipot or stockbit picks one. From IPOT: one broker-summary request per scanned stock
+(cached; closed sessions for a week), and on 1w/1m/3m usually three more for its foreign net, up
+to six when the latest sessions had no trades (IPOT counts its latest session twice over a
+range, so the net is rebuilt from single sessions). From Stockbit: two per stock (all investors,
+then foreign investors for the net), paced a second apart, so 100 stocks take about three
+minutes the first time. Then one history request per row the other filters leave.";
 
 const BROKER_HELP: &str = "Examples:
   idx bandar broker YP                       # last week, the 100 most traded stocks
@@ -61,13 +70,17 @@ const BROKER_HELP: &str = "Examples:
   idx bandar broker AK --symbols BBCA,BBRI,BMRI,TLKM
   idx -o json bandar broker ZP | jq '.data.bought[] | {symbol, value, share_pct}'
 
-Where one exchange member sits among the top ten buyers or sellers (IPOT broker summary) of the
-scanned stocks over the period ending on the latest session: rank, lots, value, average price
-and its share of the stock's value. Only the top ten per side are published, so a stock where
-the broker traded below tenth place does not show, and net is given only where both sides are
-visible. Codes: `idx market members`; each member's whole-day totals: `idx market brokers`.
+Where one exchange member sits among the buyers or sellers of the scanned stocks over the
+period ending on the latest session: rank, lots, value, average price and its share of the
+stock's value. Codes: `idx market members`; each member's whole-day totals: `idx market brokers`.
 
-One broker-summary request per scanned stock, shared with `idx bandar screen` (cached).";
+Source: --source auto (default) reads Stockbit when `idx stockbit status` says logged in: every
+broker that bought or sold, so every stock the broker traded shows, with its net. IPOT otherwise:
+only the top ten per side are published there, so a stock where the broker traded below tenth
+place does not show, and net is given only where both sides are visible.
+
+One broker-summary request per scanned stock, shared with `idx bandar screen` (cached; Stockbit's
+paced a second apart).";
 
 #[derive(Debug, clap::Subcommand)]
 pub enum BandarCmd {
@@ -99,6 +112,9 @@ pub struct BrokerArgs {
     /// Scan these tickers instead of the most traded (`-` reads them from stdin).
     #[arg(long, value_name = "SYMBOLS", value_delimiter = ',')]
     pub symbols: Vec<String>,
+    /// Where the summaries come from: auto (Stockbit when a working Stockbit session is stored, else IPOT), ipot or stockbit.
+    #[arg(long, value_enum, default_value_t = BrokerSummaryChoice::Auto)]
+    pub source: BrokerSummaryChoice,
 }
 
 #[derive(Debug, clap::Args)]
@@ -130,6 +146,9 @@ pub struct DetectArgs {
     /// Add the session-by-session movement (one request per session).
     #[arg(long)]
     pub daily: bool,
+    /// Where the summaries come from: auto (Stockbit when a working Stockbit session is stored, else IPOT), ipot or stockbit.
+    #[arg(long, value_enum, default_value_t = BrokerSummaryChoice::Auto)]
+    pub source: BrokerSummaryChoice,
 }
 
 #[derive(Debug, clap::Args)]
@@ -164,11 +183,15 @@ pub struct ScreenArgs {
     /// Scan these tickers instead of the most traded (`-` reads them from stdin).
     #[arg(long, value_name = "SYMBOLS", value_delimiter = ',')]
     pub symbols: Vec<String>,
+    /// Where the summaries come from: auto (Stockbit when a working Stockbit session is stored, else IPOT), ipot or stockbit.
+    #[arg(long, value_enum, default_value_t = BrokerSummaryChoice::Auto)]
+    pub source: BrokerSummaryChoice,
 }
 
 pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
     let list = universe::load(None).unwrap_or_default();
     let today = service::today_wib();
+    let sb = stockbit::provider(ctx, stockbit::store(ctx));
     match cmd {
         BandarCmd::Detect(a) => {
             let symbols = Symbol::parse_list(input::symbol_args(&a.symbols)?)?;
@@ -184,17 +207,22 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
                 investor: a.investor,
                 board: a.board,
                 daily: a.daily,
+                source: a.source,
             };
             let result = service::bandar(
                 ctx.provider.as_ref(),
                 &ctx.fetcher,
+                Some(&sb),
                 &list,
                 &symbols,
                 q,
                 today,
             )
             .await?;
-            emit(ctx, SCHEMA_BANDAR, result, |d| tb::bandar(d, ctx.color))
+            let source = result.provider;
+            emit(ctx, SCHEMA_BANDAR, result, |d| {
+                tb::bandar(d, source, ctx.color)
+            })
         }
         BandarCmd::Screen(a) => {
             let opts = BandarScreenOptions {
@@ -217,12 +245,20 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
                 } else {
                     Symbol::parse_list(input::symbol_args(&a.symbols)?)?
                 },
+                source: a.source,
             };
-            let result =
-                service::bandar_screen(ctx.provider.as_ref(), &ctx.fetcher, &list, &opts, today)
-                    .await?;
+            let result = service::bandar_screen(
+                ctx.provider.as_ref(),
+                &ctx.fetcher,
+                Some(&sb),
+                &list,
+                &opts,
+                today,
+            )
+            .await?;
+            let source = result.provider;
             emit(ctx, SCHEMA_BANDAR_SCREEN, result, |d| {
-                tb::screen(d, ctx.color)
+                tb::screen(d, source, ctx.color)
             })
         }
         BandarCmd::Broker(a) => {
@@ -236,12 +272,20 @@ pub async fn run(ctx: &Context, cmd: BandarCmd) -> Result<()> {
                     Symbol::parse_list(input::symbol_args(&a.symbols)?)?
                 },
                 limit: a.limit,
+                source: a.source,
             };
-            let result =
-                service::bandar_broker(ctx.provider.as_ref(), &ctx.fetcher, &list, &opts, today)
-                    .await?;
+            let result = service::bandar_broker(
+                ctx.provider.as_ref(),
+                &ctx.fetcher,
+                Some(&sb),
+                &list,
+                &opts,
+                today,
+            )
+            .await?;
+            let source = result.provider;
             emit(ctx, SCHEMA_BANDAR_BROKER, result, |d| {
-                tb::broker_activity(d, ctx.color)
+                tb::broker_activity(d, source, ctx.color)
             })
         }
     }

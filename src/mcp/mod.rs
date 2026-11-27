@@ -665,6 +665,9 @@ pub struct BandarArgs {
     /// Add the session-by-session movement (default false; one request per session).
     #[serde(default)]
     pub daily: Option<bool>,
+    /// Where the summaries come from: auto (default; Stockbit, every broker, when the user's Stockbit session works, else IPOT's top 10 per side), ipot, or stockbit (needs that session; idx_stockbit_status says whether it works).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -683,6 +686,9 @@ pub struct BandarBrokerArgs {
     /// Scan these tickers instead of the most traded, comma or space separated.
     #[serde(default)]
     pub symbols: Option<String>,
+    /// Where the summaries come from: auto (default; Stockbit, every broker, when the user's Stockbit session works, else IPOT's top 10 per side), ipot, or stockbit (needs that session; idx_stockbit_status says whether it works).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -714,6 +720,9 @@ pub struct BandarScreenArgs {
     /// Scan these tickers instead of the most traded, comma or space separated.
     #[serde(default)]
     pub symbols: Option<String>,
+    /// Where the summaries come from: auto (default; Stockbit, every broker, when the user's Stockbit session works, else IPOT's top 10 per side), ipot, or stockbit (needs that session; idx_stockbit_status says whether it works).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// What the Stockbit tools need: the session file + env seeds, and the TTLs for
@@ -1644,7 +1653,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_bandar",
-        description = "Bandarmology (bandar detector) for one or more IDX tickers, from the IPOT broker summary: are the top brokers accumulating or distributing? For N = 1, 3, 5 and 10 the top N buyers' value minus the top N sellers' value (bandar value; in lots bandar volume) as a percent of all value traded: +15% or more big_accumulation, +5% accumulation, -5% distribution, -15% or less big_distribution, otherwise neutral. The headline signal uses top (default 5). phase reads it against the price move over the range (accumulation with the price within +2% = quiet_accumulation, distribution with the price within -2% = quiet_distribution, else markup/markdown). bandar_average is the top buyers' average price and bandar_gain_pct the last price against it; foreign_net_pct the foreign flow. With investor foreign or domestic the brokers are that side's and every percentage stays a share of the stock's value traded. Default period 1w ending at the latest session; daily=true adds the session-by-session movement and streak. reasons explain the reading. Heuristic, not advice. Returns the idx.bandar.v1 envelope; failed tickers are listed in warnings."
+        description = "Bandarmology (bandar detector) for one or more IDX tickers, from the broker summary: are the top brokers accumulating or distributing? For N = 1, 3, 5 and 10 the top N buyers' value minus the top N sellers' value (bandar value; in lots bandar volume) as a percent of all value traded: +15% or more big_accumulation, +5% accumulation, -5% distribution, -15% or less big_distribution, otherwise neutral. The headline signal uses top (default 5). phase reads it against the price move over the range (accumulation with the price within +2% = quiet_accumulation, distribution with the price within -2% = quiet_distribution, else markup/markdown). bandar_average is the top buyers' average price and bandar_gain_pct the last price against it; foreign_net_pct the foreign flow. With investor foreign or domestic the brokers are that side's and every percentage stays a share of the stock's value traded. Default period 1w ending at the latest session; daily=true adds the session-by-session movement and streak. reasons explain the reading. source auto (default) reads Stockbit when the user's Stockbit session works (as idx_stockbit_status says logged_in), otherwise IPOT; ipot and stockbit pick one, and stockbit without a working session is a usage error naming `idx stockbit login`. Stockbit lists every broker, exact, and its foreign net comes from a second read of foreign investors; its reads are paced a second apart, so daily costs about two seconds a session. Under auto a ticker Stockbit fails for is read from IPOT with a warning, and an IPOT failure without a session says to run `idx stockbit login`. The envelope's provider says which answered. Heuristic, not advice. Returns the idx.bandar.v1 envelope; failed tickers are listed in warnings."
     )]
     async fn bandar(
         &self,
@@ -1671,13 +1680,16 @@ impl IdxServer {
                     investor: parse_opt(&a.investor, BrokerInvestor::All)?,
                     board: parse_opt(&a.board, BrokerBoard::All)?,
                     daily: a.daily.unwrap_or(false),
+                    source: parse_opt(&a.source, BrokerSummaryChoice::Auto)?,
                 };
                 let list = universe::load(None).unwrap_or_default();
+                let sb = self.stockbit_provider();
                 ok(
                     SCHEMA_BANDAR,
                     service::bandar(
                         self.provider.as_ref(),
                         &self.fetcher,
+                        Some(&sb),
                         &list,
                         &symbols,
                         query,
@@ -1692,7 +1704,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_bandar_broker",
-        description = "Broker activity: where one IDX exchange member (e.g. YP, CC, AK) sits among the top ten buyers or sellers of the most traded stocks (default 100, or the given symbols) over a period ending at the latest session, from the IPOT broker summary. For each stock: the broker's rank on that side, lots, value, average price, share of the stock's value traded, and its value on the other side and the net (buy minus sell) when it is also top ten there. Only the top ten per side are published, so stocks where the broker traded below tenth place do not show. Totals of the visible buying and selling. One broker-summary request per scanned stock, shared with idx_bandar_screen (cached). Returns the idx.bandar.broker.v1 envelope."
+        description = "Broker activity: where one IDX exchange member (e.g. YP, CC, AK) sits among the buyers or sellers of the most traded stocks (default 100, or the given symbols) over a period ending at the latest session, from the broker summary. For each stock: the broker's rank on that side, lots, value, average price, share of the stock's value traded, and its value on the other side and the net (buy minus sell) when it shows there too. source auto (default) reads Stockbit when the user's Stockbit session works (as idx_stockbit_status says logged_in): every broker that bought or sold, so every stock the broker traded shows, with its net. Otherwise IPOT, which publishes only the top ten per side, so stocks where the broker traded below tenth place do not show. ipot and stockbit pick one; stockbit without a working session is a usage error. The envelope's provider says which answered. Totals of the listed buying and selling. One broker-summary request per scanned stock, shared with idx_bandar_screen (cached; Stockbit's paced a second apart). Returns the idx.bandar.broker.v1 envelope."
     )]
     async fn bandar_broker(
         &self,
@@ -1716,14 +1728,17 @@ impl IdxServer {
                     scan: a.scan.unwrap_or(service::BANDAR_SCAN_DEFAULT as u32) as usize,
                     symbols,
                     limit: a.limit.unwrap_or(20) as usize,
+                    source: parse_opt(&a.source, BrokerSummaryChoice::Auto)?,
                 };
                 let mut list = universe::load(None)?;
                 universe::extend_from_ownership(&mut list, &self.ownership_db);
+                let sb = self.stockbit_provider();
                 ok(
                     SCHEMA_BANDAR_BROKER,
                     service::bandar_broker(
                         self.provider.as_ref(),
                         &self.fetcher,
+                        Some(&sb),
                         &list,
                         &opts,
                         service::today_wib(),
@@ -1737,7 +1752,7 @@ impl IdxServer {
 
     #[tool(
         name = "idx_bandar_screen",
-        description = "Bandarmology screener: scans the most traded IDX stocks by value (default 100, or the given symbols) over a period ending at the latest session and returns the ones whose top brokers accumulate or distribute, as defined by idx_bandar. Presets: big-accumulation (acc>=15), accumulation (acc>=5), distribution (acc<=-5), big-distribution (acc<=-15), quiet-accumulation (top brokers buying while the price is flat or down), quiet-distribution, foreign-accumulation (acc>=5 and foreign net >=5% of value), below-bandar (accumulation with the price under the top buyers' average). filter adds clauses on acc, net, lots, fnet, fpct, gain, chg, turnover, conc, price, signal, phase. Rows carry signal, phase, net_pct, net_value, price move, foreign flow, bandar average and gain, and the top buyer codes. One broker-summary request per scanned stock, and on 1w/1m/3m usually three more for its foreign net (up to six when the latest sessions had no trades), which is rebuilt from single sessions because the source counts its latest session twice over a range (cached). Heuristic, not advice. Returns the idx.bandar.screen.v1 envelope."
+        description = "Bandarmology screener: scans the most traded IDX stocks by value (default 100, or the given symbols) over a period ending at the latest session and returns the ones whose top brokers accumulate or distribute, as defined by idx_bandar. Presets: big-accumulation (acc>=15), accumulation (acc>=5), distribution (acc<=-5), big-distribution (acc<=-15), quiet-accumulation (top brokers buying while the price is flat or down), quiet-distribution, foreign-accumulation (acc>=5 and foreign net >=5% of value), below-bandar (accumulation with the price under the top buyers' average). filter adds clauses on acc, net, lots, fnet, fpct, gain, chg, turnover, conc, price, signal, phase. Rows carry signal, phase, net_pct, net_value, price move, foreign flow, bandar average and gain, and the top buyer codes. source auto (default) reads Stockbit when the user's Stockbit session works (as idx_stockbit_status says logged_in), otherwise IPOT; ipot and stockbit pick one, and stockbit without a working session is a usage error. From IPOT one broker-summary request per scanned stock, and on 1w/1m/3m usually three more for its foreign net (up to six when the latest sessions had no trades), which is rebuilt from single sessions because IPOT counts its latest session twice over a range; from Stockbit two per stock (all investors, then foreign investors), paced a second apart, so 100 stocks take about three minutes uncached. Under auto a stock Stockbit fails for is read from IPOT with a warning. The envelope's provider says which answered. Heuristic, not advice. Returns the idx.bandar.screen.v1 envelope."
     )]
     async fn bandar_screen(
         &self,
@@ -1773,14 +1788,17 @@ impl IdxServer {
                         .map(|n| n as usize)
                         .unwrap_or(service::BANDAR_SCAN_DEFAULT),
                     symbols,
+                    source: parse_opt(&a.source, BrokerSummaryChoice::Auto)?,
                 };
                 let mut list = universe::load(None)?;
                 universe::extend_from_ownership(&mut list, &self.ownership_db);
+                let sb = self.stockbit_provider();
                 ok(
                     SCHEMA_BANDAR_SCREEN,
                     service::bandar_screen(
                         self.provider.as_ref(),
                         &self.fetcher,
+                        Some(&sb),
                         &list,
                         &opts,
                         service::today_wib(),
@@ -2849,11 +2867,20 @@ mod tests {
             investor: None,
             board: None,
             daily: None,
+            source: None,
         };
         for bad in [
             detect(Some("2w"), None, None, None),
             detect(None, Some(4), None, None),
             detect(None, None, Some("2026-10-16"), Some("2026-10-01")),
+            BandarArgs {
+                source: Some("rti".into()),
+                ..detect(None, None, None, None)
+            },
+            BandarArgs {
+                source: Some("stockbit".into()),
+                ..detect(None, None, None, None)
+            },
         ] {
             let r = s.bandar(Parameters(bad)).await.unwrap();
             assert_eq!(r.is_error, Some(true));
@@ -2878,6 +2905,7 @@ mod tests {
                 limit: None,
                 scan: None,
                 symbols: Some("BBCA".into()),
+                source: None,
             };
         for bad in [
             screen(Some("bandar-everything"), None, None),

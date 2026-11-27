@@ -9,8 +9,9 @@ The same session also reads what only Stockbit has in one place: every corporate
 action of a stock since its listing, the market's corporate-action calendar, and
 the insider and 5 % holder movements filed with IDX and KSEI (`idx stockbit
 actions`, `idx stockbit calendar`, `idx stockbit movements`). And `idx broker`
-lists every broker that bought and sold a stock from it, by itself once you are
-logged in (see **Broker summary**).
+and `idx bandar` read every broker that bought and sold a stock from it, by
+themselves once you are logged in (see **Broker summary** and
+**Bandarmology**).
 
 > This uses an unofficial, undocumented API with your personal account. It may
 > conflict with Stockbit's Terms of Use, and automated access could get an
@@ -342,7 +343,43 @@ naming `idx stockbit login`, when no session works. The schema stays IPOT's,
 
 Without a working session, or with `--source ipot`, the summary is IPOT's top 10
 as before; under `auto` a note then says a login lists every broker, when a list
-reached IPOT's ten rows.
+reached IPOT's ten rows, and an IPOT failure says to run `idx stockbit login`.
+
+## Bandarmology
+
+```sh
+idx bandar detect BBCA                     # Stockbit once logged in, IPOT otherwise
+idx bandar detect BBRI --period 1m --daily --source stockbit
+idx bandar screen --preset quiet-accumulation
+idx bandar broker YP --source stockbit     # every stock YP bought or sold
+```
+
+`idx bandar detect`, `screen` and `broker` take the same `--source` as
+`idx broker`, with the same rules: `auto` (the default) reads Stockbit while a
+stored session works and IPOT otherwise, and `stockbit` without a working
+session is a usage error before any request. The readings are the same rules
+on either source; the JSON shapes stay `idx.bandar.v1`, `idx.bandar.screen.v1`
+and `idx.bandar.broker.v1`, and the envelope's `provider` says which answered.
+
+- The tiers (top 1, 3, 5 and 10) read the first ten brokers by lots, which on
+  the days recorded were IPOT's top 10, so a reading from either source names
+  the same brokers.
+- A period is one read of the range plus one of foreign investors for the
+  foreign net, instead of IPOT's rebuild from single sessions. When the foreign
+  read fails the net is `null` with a warning; nothing stands in for it.
+- `bandar broker` sees every broker that traded a stock, not only the top ten
+  per side, so a broker in eleventh place shows, with its net. It reads no
+  foreign net, so one read per stock.
+- `--daily` reads each session with its foreign net: two reads a session,
+  paced a second apart, so a month of three tickers takes about two minutes the
+  first time.
+- A screen of the 100 most traded stocks is about 200 reads, three minutes or
+  so uncached; ranges that ended before today stay cached for a week.
+- Under `auto`, a ticker Stockbit fails for is read from IPOT with a warning,
+  and after a refused session or a block the rest of the call is read from IPOT
+  too. An IPOT failure without a session says to run `idx stockbit login`.
+
+The web terminal has no Stockbit session: its bandar pages read IPOT only.
 
 ## MCP
 
@@ -369,9 +406,10 @@ The MCP server exposes five Stockbit tools alongside the rest:
   the chat. Prefer telling the user to run `idx stockbit login` in a terminal
   themselves.
 
-`idx_broker` reads the same session: its `source` (`auto`, `ipot`,
-`stockbit`) works as `--source` does on the CLI, so an agent gets every broker
-once the user is logged in.
+`idx_broker`, `idx_bandar`, `idx_bandar_screen` and `idx_bandar_broker` read
+the same session: their `source` (`auto`, `ipot`, `stockbit`) works as
+`--source` does on the CLI, so an agent gets every broker once the user is
+logged in.
 
 To serve realtime quotes/history over MCP, run the server with the Stockbit
 provider: `idx --provider stockbit mcp`. For Stockbit candles with the free

@@ -1021,7 +1021,8 @@ pub async fn market_foreign_ipot(
         super::scan_candidates(p, universe, &[], super::BANDAR_SCAN_DEFAULT).await?;
     let quotes = std::mem::take(&mut out.data);
     out.warnings.retain(|w| !w.contains("returned no quote"));
-    let end = super::scan_end(fetcher, &candidates, today).await?;
+    let plan = super::SummaryPlan::ipot(fetcher);
+    let end = super::scan_end(&plan, &candidates, today).await?;
     match date {
         Some(d) if d < end => {
             return Err(IdxError::Usage(format!(
@@ -1035,7 +1036,7 @@ pub async fn market_foreign_ipot(
         }
         _ => {}
     }
-    let fetched = super::scan_summaries(fetcher, &candidates, end, end, today, true).await;
+    let fetched = super::scan_summaries(&plan, &candidates, end, end, today, true).await;
     let quote_of = |sym: &Symbol| quotes.iter().find(|x| &x.symbol == sym);
     let (mut failed, mut checked, mut rounded) = (0usize, 0usize, false);
     let mut rows: Vec<ForeignValueRow> = Vec::new();
