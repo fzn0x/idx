@@ -10,7 +10,8 @@
 // shows the totals without them until then, so the scan waits and probes
 // again, every 10 minutes until 21:00 WIB, every 30 after and every hour once
 // a day has passed (a probe that failed after 5 minutes, doubling up to that
-// gap); only a page without trades, on a day the quote board (refreshed
+// gap; every 3 hours while IPOT answered none of the checks of the session
+// before either); only a page without trades, on a day the quote board (refreshed
 // after that session) shows no trade either, closes the session unscanned.
 // Then PER_TICK stocks a minute: for each, the IPOT broker summary over 1d,
 // 1w, 1m and 3m ending on that session and the daily candles for the price
@@ -74,6 +75,14 @@ const READY_MIN = 16 * 60 + 45;
  * the same schedule, the day counted from when the scan started reading.
  */
 const PROBE_GAP_MIN = { early: 10, late: 30, stale: 60 };
+/**
+ * Minutes before a failed probe is tried again while IPOT is down: the
+ * newest session filed before this one was unreachable (IPOT answered none
+ * of its checks) and this one has had no answer either. Eight checks a day
+ * instead of about 66; the first check of each session still goes out at
+ * 16:45 WIB, and the scan picks up as before once one is answered.
+ */
+const PROBE_DOWN_MIN = 180;
 const LATE_MIN = 21 * 60;
 /**
  * Minutes before a probe that failed (an error, not an answer) is tried
@@ -372,6 +381,19 @@ function waitGap(session, since, now) {
 const probeGap = (st, now) => waitGap(st.session, st.first_probe_at, now);
 
 /**
+ * The records filed before `st`'s session, newest first, without the
+ * sessions the market was closed.
+ */
+const filedBefore = (st) => (st?.runs || []).filter((r) => r.session < st.session && r.reason !== "closed").sort((a, b) => (a.session < b.session ? 1 : -1));
+
+/**
+ * `true` while IPOT answers none of the scan's checks: the newest session
+ * filed before `st`'s was unreachable and `st`'s probes have had no answer
+ * yet. Pure, tested through the scan.
+ */
+export const ipotDown = (st) => !!st && !st.probes && filedBefore(st)[0]?.reason === "unreachable";
+
+/**
  * Reads a probe stock's one-day page and moves the state on; returns the
  * verdict, "error" or "budget". The probe turns among the PROBE_STOCKS most
  * traded: one that did not trade that session shows no trades however long
@@ -399,7 +421,7 @@ async function probe(st, now, fetchPage) {
       st.probe_error = short(e);
       st.failing_since ??= at;
       st.failures = (st.failures || 0) + 1;
-      st.next_probe_at = after(now, Math.min(PROBE_RETRY_MIN * 2 ** (st.failures - 1), probeGap(st, now)));
+      st.next_probe_at = after(now, ipotDown(st) ? PROBE_DOWN_MIN : Math.min(PROBE_RETRY_MIN * 2 ** (st.failures - 1), probeGap(st, now)));
       const alarmed = st.alarmed_at ? now.getTime() - Date.parse(st.alarmed_at) : Infinity;
       if (now.getTime() - Date.parse(st.failing_since) >= PROBE_ALARM_MS && alarmed >= PROBE_ALARM_MS) {
         st.alarmed_at = at;
@@ -708,6 +730,21 @@ export function scanProgress(st, shown = null, now = new Date()) {
   return null;
 }
 
+/** "a", "a and b", "a, b and c". */
+const listed = (items) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+/**
+ * One note for `down`, the finished sessions newer than the one shown whose
+ * checks IPOT answered none of, newest first (each one's own note says the
+ * same for one session).
+ */
+function downNote(down, shown) {
+  const checks = down.reduce((n, r) => n + (r.probe_errors || 0), 0);
+  const last = down[0].probe_error ? ` (the last failed: ${down[0].probe_error})` : "";
+  const sessions = listed(down.map((r) => r.session).reverse());
+  return `IPOT answered none of the scan's ${checks} checks of the ${down.length} sessions ${sessions}${last}; showing ${shown}`;
+}
+
 /** Why a finished session newer than the one shown is not the one shown. */
 function runNote(r, shown) {
   if (r.reason === "closed") return `${r.session} had no trades at IPOT or on the quote board, so it was not scanned`;
@@ -731,9 +768,11 @@ function runNote(r, shown) {
  * the scan's stocks counts once: by its row when it has one (a stock a
  * forced rescan failed keeps its row from the first scan), else by why it
  * has none; while the state is the shown session's, a row of a stock outside
- * its stocks does not count. Returns the warnings, the failed and
- * unpublished counts, the stocks scanned and when the shown session was
- * read. Pure, tested through the API.
+ * its stocks does not count. Two or more sessions IPOT answered no check of
+ * share one note. Returns the warnings, the failed and unpublished counts,
+ * the stocks scanned, when the shown session was read, and `ipot_down`:
+ * IPOT answers none of the scan's checks now (see ipotDown), for the API to
+ * say where the answer comes from meanwhile. Pure, tested through the API.
  */
 export function scanNotes(st, shown, rows, now = new Date()) {
   const warnings = [];
@@ -747,7 +786,13 @@ export function scanNotes(st, shown, rows, now = new Date()) {
     warnings.push(hol.wibDate(now) === latest && wibMinutes(now) < READY_MIN ? `the scan of ${latest} starts at 16:45 WIB; showing ${shown}` : `the scan has not reached ${latest} yet; showing ${shown}`);
   }
   if (st && st.session > shown && underWay(st)) warnings.push(scanProgress(st, shown, now));
-  for (const r of runs) if (r.session > shown && !(underWay(st) && r.session === st.session)) warnings.push(runNote(r, shown));
+  const newer = runs.filter((r) => r.session > shown && !(underWay(st) && r.session === st.session));
+  const down = newer.filter((r) => r.reason === "unreachable");
+  let grouped = false;
+  for (const r of newer) {
+    if (down.length < 2 || r.reason !== "unreachable") warnings.push(runNote(r, shown));
+    else if (!grouped) { warnings.push(downNote(down, shown)); grouped = true; }
+  }
   const behind = sessionsAfter(shown, latest) - runs.filter((r) => r.reason === "closed" && r.session > shown && r.session <= latest).length;
   if (behind > 1) warnings.push(`${shown} is ${behind} sessions behind ${latest}`);
   // While the shown session's scan reads, its numbers come from the state,
@@ -791,7 +836,7 @@ export function scanNotes(st, shown, rows, now = new Date()) {
   // when it started; for a session kept from before these records, the
   // earliest its scan could have read it.
   const fetched_at = rec?.stored_at || run?.done_at || (st?.session === shown ? st.started_at : null) || readyAt(shown);
-  return { warnings, failed, unpublished, scanned, fetched_at };
+  return { warnings, failed, unpublished, scanned, fetched_at, ipot_down: st?.session > shown && ipotDown(st) };
 }
 
 /**

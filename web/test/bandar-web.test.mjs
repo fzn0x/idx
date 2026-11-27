@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { bandar, bandarScreen, bandarBroker } from "../src/api.js";
+import { bandar, bandarScreen, bandarBroker, broker, foreignFlow } from "../src/api.js";
 import { targetSession, mostTraded, ranking, bandarScanStep, scanStatus, scanNotes } from "../src/bandar-scan.js";
 import { budget } from "../src/budget.js";
 import worker from "../src/worker.js";
@@ -857,6 +857,71 @@ test("a session IPOT never answered for is filed as unreachable, not as unpublis
   const out = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-20T16:50:00+07:00"));
   assert.ok(out.warnings.includes(`IPOT did not answer the scan's ${st.last.probe_errors} checks of 2026-10-19 (the last failed: HTTP 502); showing 2026-10-16`), out.warnings.join("\n"));
   assert.ok(!out.warnings.some((w) => w.includes("had not published")), out.warnings.join("\n"));
+});
+
+test("while IPOT answers no check, the scan checks every 3 hours and says so in one note", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8), quote("TLKM", 2690, 3e8)] }));
+  const recorded = recordedFetch();
+  let down = false;
+  const fetchFn = async (u, init) => (down && String(u).includes("indopremier") ? new Response("bad gateway", { status: 502 }) : recorded(u, init));
+  const steps = async (from, to) => {
+    for (let t = Date.parse(from); t <= Date.parse(to); t += 5 * 60e3) await bandarScanStep(env, { now: new Date(t), stocks: false });
+  };
+  await withFetch(fetchFn, async () => {
+    await scanAll(env, new Date("2026-10-17T03:00:00Z"));
+    down = true;
+    // 10-19: the session before answered, so a failure is tried again after 5 minutes, doubling.
+    await steps("2026-10-19T16:45:00+07:00", "2026-10-20T16:45:00+07:00");
+    let st = await scanStatus(env);
+    assert.equal(st.last.reason, "unreachable");
+    const first = st.last.probe_errors;
+    assert.ok(first > 20, `${first}`);
+    // 10-20: the session before was unreachable: 16:45 WIB, then every 3 hours.
+    await steps("2026-10-20T16:50:00+07:00", "2026-10-21T16:45:00+07:00");
+    st = await scanStatus(env);
+    assert.deepEqual([st.last.session, st.last.reason, st.last.probe_errors], ["2026-10-20", "unreachable", 8]);
+    await steps("2026-10-21T16:50:00+07:00", "2026-10-22T16:45:00+07:00");
+    st = await scanStatus(env);
+    assert.deepEqual([st.session, st.last.session, st.probe_errors], ["2026-10-22", "2026-10-21", 1]);
+    const now = new Date("2026-10-22T16:50:00+07:00");
+    const out = await bandarScreen(env, null, null, "1w", null, null, null, null, now);
+    assert.equal(out.data.to, "2026-10-16");
+    const note = `IPOT answered none of the scan's ${first + 16} checks of the 3 sessions 2026-10-19, 2026-10-20 and 2026-10-21 (the last failed: HTTP 502); showing 2026-10-16`;
+    assert.ok(out.warnings.includes(note), out.warnings.join("\n"));
+    assert.ok(!out.warnings.some((w) => w.startsWith("IPOT did not answer")), out.warnings.join("\n"));
+    assert.equal(out.warnings.at(-1), "while IPOT fails, the CLI and the MCP server read every broker from Stockbit with your own session: run `idx stockbit login`, then `idx bandar screen`");
+    const activity = await bandarBroker(env, "YP", "1w", null, now);
+    assert.ok(activity.warnings.includes("while IPOT fails, the CLI and the MCP server read every broker from Stockbit with your own session: run `idx stockbit login`, then `idx bandar broker YP`"), activity.warnings.join("\n"));
+    // IPOT answers again: the next check goes out on the old schedule, and the pointer goes.
+    down = false;
+    await steps("2026-10-22T19:45:00+07:00", "2026-10-22T19:45:00+07:00");
+    st = await scanStatus(env);
+    assert.ok(st.probes >= 1, JSON.stringify(st));
+    const back = await bandarScreen(env, null, null, "1w", null, null, null, null, new Date("2026-10-22T19:50:00+07:00"));
+    assert.ok(!back.warnings.some((w) => w.startsWith("while IPOT fails")), back.warnings.join("\n"));
+  });
+});
+
+test("while IPOT fails, the live commands say where the CLI reads instead", async () => {
+  const env = memoryDb();
+  env.kv.set("board", JSON.stringify({ ts: 0, quotes: [quote("BBCA", 5175, 9e8)] }));
+  const fetchFn = async (u) => (String(u).includes("indopremier") ? new Response("bad gateway", { status: 502 }) : new Response(CHART, { status: 200 }));
+  await withFetch(fetchFn, async () => {
+    const e1 = await bandar(env, "BBCA", null, "2026-10-16").then(() => null, (e) => e);
+    assert.equal(e1?.code, "provider");
+    assert.equal(e1.message, "ipot: broker summary for BBCA: HTTP 502; while IPOT fails, the CLI and the MCP server read every broker from Stockbit with your own session: run `idx stockbit login`, then `idx bandar detect BBCA`");
+    const e2 = await broker(env, "BBCA,TLKM", "2026-10-16").then(() => null, (e) => e);
+    assert.ok(e2.message.endsWith("then `idx broker BBCA,TLKM`"), e2.message);
+    const e3 = await foreignFlow(env, "BBCA", "5").then(() => null, (e) => e);
+    assert.ok(e3.message.endsWith("read idx.co.id's foreign flow: `idx stocks foreign BBCA`"), e3.message);
+  });
+  // An unknown code is not IPOT failing: no pointer.
+  await withFetch(recordedFetch(), async () => {
+    const e = await bandar(env, "ZZZZ", null, "2026-10-16").then(() => null, (e) => e);
+    assert.equal(e?.code, "not_found");
+    assert.ok(!e.message.includes("while IPOT fails"), e.message);
+  });
 });
 
 test("a scan that read too few of its stocks is filed, and the session before it stays shown", async () => {
