@@ -29,6 +29,19 @@ const notFound = (m) => new ApiError("not_found", m, 404, 4);
 const usage = (m) => new ApiError("usage", m, 400, 2);
 const provider = (m) => new ApiError("provider", m, 502, 3);
 
+/** Where the CLI and the MCP server get a broker summary while IPOT fails: each user's own Stockbit session. */
+const STOCKBIT_INSTEAD = (cli) => `the CLI and the MCP server read every broker from Stockbit with your own session: run \`idx stockbit login\`, then \`${cli}\``;
+
+/**
+ * `err` with where the answer comes from while IPOT fails, when it is IPOT
+ * answering an HTTP 5xx (its data pages have answered 502 since 2026-11-11);
+ * any other error as it is.
+ */
+function whileIpotFails(err, instead) {
+  if (err?.code !== "provider" || !/^ipot: .*HTTP 5\d\d\b/.test(err.message ?? "")) return err;
+  return provider(`${err.message}; while IPOT fails, ${instead}`);
+}
+
 // `stale_reason` says why a stale copy was served, as in the CLI. The Worker
 // has no offline mode: every stale copy follows a failed fetch or a board the
 // minute refresh stopped updating, so the reason defaults to fetch_failed.
@@ -811,7 +824,7 @@ export async function broker(env, symbolsRaw, dateRaw, fromRaw, toRaw, investor 
     if (r.ok) { data.push(r.ok.data); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, r.ok.fetched_at); warnings.push(...r.ok.warnings); }
     else warnings.push(r.err.code === "not_found" ? `no broker summary for ${r.s}` : `${r.s}: ${r.err.message}`);
   }
-  if (!data.length) throw results[0].err;
+  if (!data.length) throw whileIpotFails(results[0].err, STOCKBIT_INSTEAD(`idx broker ${symbols.join(",")}`));
   return envelope("idx.broker.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
@@ -889,7 +902,7 @@ export async function foreignFlow(env, symbolRaw, daysRaw, fromRaw, toRaw, sourc
   }
   if (!days.length) {
     // A session that failed may have traded: say it failed, like the CLI.
-    if (firstErr) throw firstErr;
+    if (firstErr) throw whileIpotFails(firstErr, `the CLI and the MCP server read idx.co.id's foreign flow: \`idx stocks foreign ${symbol}\``);
     const span = `for ${symbol} from ${candidates[0]} to ${candidates[candidates.length - 1]}`;
     if (pending) throw notFound(`no published session with trades ${span}: ${pending >= today ? `today's session (${pending}) is published after the close` : `the source has not published the session of ${pending} yet`}`);
     throw notFound(`no sessions with trades ${span}`);
@@ -990,7 +1003,7 @@ async function latestPage(env, page, now) {
 /** IPOT's ranking of its latest session with its date, like ipot::top_brokers (latestPage). */
 export async function topBrokers(env, now = new Date()) {
   const { d, cached, failure, fetched_at, notes } = await latestPage(env, RANKING_PAGE, now);
-  return { date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure, fetched_at, warnings: [...notes, ...d.warnings] };
+  return { date: d.date, brokers: d.brokers, rounded: d.rounded, cached, stale: !!failure, failure, fetched_at, warnings: [...notes, ...d.warnings] };
 }
 
 const BROKER_SORTS = ["value", "volume", "frequency"];
@@ -1044,6 +1057,10 @@ export async function marketBrokers(env, dateRaw, topRaw, sortRaw, sourceRaw, no
     if (!BROKERS[b.code]) unlisted.push(b.name ? `${b.code} (${b.name})` : b.code);
     return { rank: 0, code: b.code, name: b.name, volume: b.volume, value: b.value, frequency: b.frequency, value_share_pct: null, buy_value: b.buy_value, sell_value: b.sell_value, net_value: b.net_value, kind: b.kind };
   });
+  if (!rows.length && s.failure) {
+    // A copy without trades stood in for a read that failed: IPOT is what failed (seen 2026-11-27, a copy of 2026-11-10's morning).
+    throw network(`IPOT could not be read (${s.failure}), and its copy of ${held}, read at ${wibClock(s.fetched_at)}, has no trades; while IPOT fails, the CLI and the MCP server read idx.co.id's summary of every session: \`idx market brokers\``);
+  }
   if (!rows.length) throw notFound(`IPOT's broker ranking for ${held} has no trades yet`);
   if (unlisted.length) warnings.push(`IPOT lists trades for codes that are not on the IDX member list: ${unlisted.join(", ")}`);
   if (source === "auto") {
@@ -1256,7 +1273,7 @@ export async function bandar(env, symbolsRaw, periodRaw, dateRaw, fromRaw, toRaw
     if (r.ok) { data.push(r.ok.rep); cachedAll &&= r.ok.cached; stale ||= r.ok.stale; fetched = Math.min(fetched, r.ok.fetched_at); warnings.push(...r.ok.warnings); }
     else warnings.push(r.err.code === "not_found" ? `no broker summary for ${r.s}` : `${r.s}: ${r.err.message}`);
   }
-  if (!data.length) throw results[0].err;
+  if (!data.length) throw whileIpotFails(results[0].err, STOCKBIT_INSTEAD(`idx bandar detect ${symbols.join(",")}`));
   return envelope("idx.bandar.v1", data, { provider: ipot.NAME, cached: cachedAll, stale, fetched_at: fetched, warnings });
 }
 
@@ -1294,7 +1311,9 @@ export async function bandarScreen(env, presetRaw, filterRaw, periodRaw, topRaw,
     period, from: traded[0]?.summary.from || bd.periodStart(period, scan.session), to: scan.session, top, preset: pr?.name ?? null,
     filters: filters.map((f) => f.raw), sort, descending, scanned: notes.scanned, checked: traded.length, total_matches: total, rows,
   };
-  return envelope("idx.bandar.screen.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings: notes.warnings });
+  const warnings = [...notes.warnings];
+  if (notes.ipot_down) warnings.push(`while IPOT fails, ${STOCKBIT_INSTEAD("idx bandar screen")}`);
+  return envelope("idx.bandar.screen.v1", data, { provider: ipot.NAME, cached: true, fetched_at: new Date(notes.fetched_at), warnings });
 }
 
 /** One stock where the broker is top ten on a side, like service::stock_row. */
@@ -1320,6 +1339,7 @@ export async function bandarBroker(env, codeRaw, periodRaw, limitRaw, now = new 
   const warnings = [];
   if (!BROKERS[code]) warnings.push(`${code} is not on the bundled exchange-member list`);
   warnings.push(...notes.warnings);
+  if (notes.ipot_down) warnings.push(`while IPOT fails, ${STOCKBIT_INSTEAD(`idx bandar broker ${code}`)}`);
   const failed = notes.failed;
   const traded = scan.rows.filter((r) => r.summary.buyers.length || r.summary.sellers.length);
   const bought = [], sold = [];
@@ -1396,6 +1416,7 @@ export async function marketForeign(env, dateRaw, topRaw, sortRaw, sourceRaw, no
   const buy = rows.filter((r) => net(r) > 0).sort((a, b) => net(b) - net(a));
   const sell = rows.filter((r) => net(r) < 0).sort((a, b) => net(a) - net(b));
   const warnings = [...notes.warnings];
+  if (notes.ipot_down) warnings.push("while IPOT fails, the CLI and the MCP server read idx.co.id's foreign flow of every stock: `idx market foreign`");
   let market = null, cachedAll = true, stale = false, fetched = new Date(notes.fetched_at);
   try {
     const m = await marketSummary(env, now);

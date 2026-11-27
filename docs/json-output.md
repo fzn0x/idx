@@ -558,8 +558,14 @@ session's stocks without a broker summary or not published by IPOT and say
 when the scan reads those again or, when that would be at or after the next
 session's 16:45 WIB, that they count as failed or not published then. They
 also say when its stocks were picked from the quote board of another session
-(a scan that started after the next open). Each stock counts once in
-`scanned`. `fetched_at` is when the shown session's scan last stored a stock.
+(a scan that started after the next open). Two or more sessions IPOT answered
+none of the checks of share one warning, which lists them. While IPOT answers
+none (the session before was filed so, and this one has had no answer yet),
+the scan checks every 3 hours instead of every few minutes, and a last warning
+says where the CLI and the MCP server read meanwhile: Stockbit on the user's
+own session (`idx bandar screen`, `idx bandar broker`) or idx.co.id (`idx
+market foreign`). The live commands (`broker`, `bandar`, `foreign`) end an
+IPOT HTTP 5xx error the same way. Each stock counts once in `scanned`. `fetched_at` is when the shown session's scan last stored a stock.
 Before it stored one, it is when the session's record was filed, or when the
 scan started while it has no record yet. For a session the Worker's earlier
 code scanned to the end, it is when that scan ended; for one it kept no record

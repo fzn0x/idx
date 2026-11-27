@@ -489,7 +489,11 @@ own arguments, and the nearest command the page has. A line pasted from the CLI,
 The web `bandar screen` and `bandar broker` read a scan the Worker runs after
 each close, once IPOT publishes the session's broker lists, over the session's
 100 most traded stocks; their warnings say when an older session is shown. The
-CLI scans live.
+CLI scans live. While IPOT answers none of the scan's checks (its data pages
+have answered HTTP 502 since 2026-11-11), the scan checks every 3 hours, one
+warning lists the sessions it missed, and the IPOT commands say where the CLI
+and the MCP server read instead: Stockbit on your own session (`idx stockbit
+login`) or idx.co.id.
 A Cloudflare Worker refreshes a D1 snapshot of the whole
 IDX board every minute in trading hours and serves `/api/*` with the exact JSON
 envelopes the CLI prints; everything else is fetched on demand and cached. The
